@@ -15,18 +15,16 @@ type=expr
 # EXPECTED
 TOO MANY ARGS - test_instantiation_arity_mismatch.md:5:5:5:19
 # PROBLEMS
+── ✗ too many args ──────────────────── test_instantiation_arity_mismatch.md:5:5
 
-┌───────────────┐
-│ TOO MANY ARGS ├─ The `identity` function expects 1 argument, but it got 2 ──┐
-└┬──────────────┘  instead.                                                   │
- │                                                                            │
- │  identity(1, 2)                                                            │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                            │
- └────────────────────────────────── test_instantiation_arity_mismatch.md:5:5 ┘
+The identity function expects 1 argument, but it got 2 instead.
 
-    The `identity` function has the type:
+identity(1, 2)
+^^^^^^^^^^^^^^
 
-        (a, b) -> (a, b)
+The identity function has the type:
+
+    (a, b) -> (a, b)
 
 # TOKENS
 ~~~zig
@@ -79,7 +77,7 @@ EndOfFile,
 				(p-assign (ident "pair")))
 			(e-lookup-local
 				(p-assign (ident "pair")))))
-	(e-call (constraint-fn-var 234)
+	(e-call (constraint-fn-var 244)
 		(e-lookup-local
 			(p-assign (ident "identity")))
 		(e-num (value "1"))

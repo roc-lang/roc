@@ -1,7 +1,7 @@
 //! ANSI terminal escape sequence utilities for cursor control and screen manipulation.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const control_code = std.ascii.control_code;
+const unicode = @import("unicode.zig");
 
 const CSI = "\x1B[";
 
@@ -11,6 +11,12 @@ pub const green = "\x1B[32m";
 pub const red = "\x1B[31m";
 /// ANSI escape sequence to set foreground color to yellow.
 pub const yellow = "\x1B[33m";
+/// ANSI escape sequence to set foreground color to cyan.
+pub const cyan = "\x1B[36m";
+/// ANSI escape sequence to set foreground color to bright black (gray).
+pub const bright_black = "\x1B[90m";
+/// ANSI escape sequence to set foreground color to light purple.
+pub const light_purple = "\x1B[95m";
 /// ANSI escape sequence to reset all text attributes.
 pub const reset = "\x1B[0m";
 
@@ -66,30 +72,37 @@ pub fn queryCursorPosition(out: *std.Io.Writer) Allocator.Error!void {
     try out.writeAll(CSI ++ "6n");
 }
 
-/// Computes the display width of a UTF-8 string by counting codepoints, skipping
-/// ANSI CSI escape sequences (e.g. color codes) since they occupy no columns.
+/// Computes the terminal-cell width of a UTF-8 string, skipping ANSI CSI escape
+/// sequences (e.g. color codes) since they occupy no columns.
 pub fn computeDisplayWidth(prompt: []const u8) (Allocator.Error || error{InvalidUtf8})!usize {
-    var utf8 = try std.unicode.Utf8View.init(prompt);
-    var it = utf8.iterator();
+    if (!std.unicode.utf8ValidateSlice(prompt)) return error.InvalidUtf8;
+
     var width: usize = 0;
-    while (it.nextCodepointSlice()) |slice| {
-        if (slice.len == 1 and slice[0] == control_code.esc) {
-            // Skip a CSI sequence: ESC '[' params... final-byte (0x40-0x7E).
-            if (it.nextCodepointSlice()) |bracket| {
-                if (bracket.len == 1 and bracket[0] == '[') {
-                    while (it.nextCodepointSlice()) |seq| {
-                        if (seq.len == 1 and seq[0] >= 0x40 and seq[0] <= 0x7E) break;
-                    }
-                    continue;
-                }
-                // Not a CSI sequence; count the consumed codepoint normally.
-                width += 1;
-                continue;
-            }
+    var text_start: usize = 0;
+    var index: usize = 0;
+    while (index < prompt.len) {
+        if (prompt[index] != std.ascii.control_code.esc) {
+            index += 1;
             continue;
         }
-        width += 1;
+
+        width += try unicode.displayWidth(prompt[text_start..index], width);
+        index += 1;
+
+        // Skip a CSI sequence: ESC '[' params... final-byte (0x40-0x7E).
+        if (index < prompt.len and prompt[index] == '[') {
+            index += 1;
+            while (index < prompt.len) : (index += 1) {
+                if (prompt[index] >= 0x40 and prompt[index] <= 0x7e) {
+                    index += 1;
+                    break;
+                }
+            }
+        }
+        text_start = index;
     }
+
+    width += try unicode.displayWidth(prompt[text_start..], width);
     return width;
 }
 
@@ -107,4 +120,10 @@ test "computeDisplayWidth: skips ANSI color codes" {
 
 test "computeDisplayWidth: lone ESC not followed by bracket counts following codepoint" {
     try testing.expectEqual(@as(usize, 1), try computeDisplayWidth("\x1bx"));
+}
+
+test "computeDisplayWidth: uses graphemes and terminal cells" {
+    try testing.expectEqual(@as(usize, 1), try computeDisplayWidth("e\u{301}"));
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("界"));
+    try testing.expectEqual(@as(usize, 2), try computeDisplayWidth("👩‍👩‍👦‍👦"));
 }

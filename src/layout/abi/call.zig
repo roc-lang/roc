@@ -26,6 +26,13 @@ const Idx = layout.Idx;
 /// Which register file a piece of a value travels in.
 pub const RegClass = enum { integer, float, vector };
 
+/// How a caller must widen a value into the argument register that carries it.
+/// C promotes integer types narrower than `int` at a call boundary, which clang
+/// expresses as the `zeroext`/`signext` parameter attributes and which an
+/// ABI-correct callee is entitled to rely on. Every other value leaves the
+/// register's remaining bits unspecified.
+pub const RegExtension = enum { none, zero, sign };
+
 /// One register's worth of a value: which register file, the byte offset within the value's
 /// in-memory representation that this register carries, and how many bytes (1..16; >8 only for
 /// a 128-bit value in a single SSE register).
@@ -37,6 +44,10 @@ pub const RegPiece = struct {
     /// lowering prevents consumers from reconstructing vector type information
     /// from byte size, which would lose the natural C signature.
     vector_kind: ?layout.Vector = null,
+    /// Widening this piece's bytes must receive on their way into the register.
+    /// Only a narrow integer scalar carries one; a piece of an aggregate does
+    /// not, exactly as in the C signature the platform host is compiled from.
+    extend: RegExtension = .none,
 };
 
 /// How LLVM must preserve the logical register pieces as one C-ABI carrier.
@@ -99,6 +110,9 @@ pub const StackValue = struct {
     offset: u16,
     size: u32,
     alignment: u8,
+    /// Widening the slot's contents must receive, for an ABI whose overflow
+    /// slots carry a promoted C scalar rather than the value's own bytes.
+    extend: RegExtension = .none,
 };
 
 /// Where an ABI-mandated pointer to an indirectly passed argument travels.
@@ -404,6 +418,7 @@ pub fn assignPhysicalArgs(
                             .offset = assignWinStackSlot(&stack_size, win_position),
                             .size = size_align.size,
                             .alignment = 8,
+                            .extend = pieces[0].extend,
                         } };
                     }
                     win_position += 1;
@@ -442,12 +457,16 @@ pub fn assignPhysicalArgs(
                         // SysV and AAPCS64 allocate every register piece of one
                         // argument atomically. If either register pool cannot
                         // hold the complete argument, no registers are consumed.
-                        assigned.* = .{ .stack_value = assignStackValue(
+                        var overflow = assignStackValue(
                             &stack_size,
                             size_align.size,
                             value_alignment,
                             stack_slot_alignment,
-                        ) };
+                        );
+                        // Apple's packed overflow slot holds exactly the
+                        // value's own bytes, so nothing is promoted into it.
+                        if (target != .aarch64_macho and pieces.len == 1) overflow.extend = pieces[0].extend;
+                        assigned.* = .{ .stack_value = overflow };
                         if (aarch64_target and counts.sse != 0) {
                             // AAPCS64 rule C.5 closes the SIMD register pool once
                             // an HFA cannot be allocated in full.
@@ -503,17 +522,59 @@ fn placementFor(
     const lay = store.getLayout(idx);
     if (store.layoutSize(lay) == 0) return .none;
 
+    const extend = narrowScalarExtension(store, idx);
     return switch (target) {
-        .aarch64, .aarch64_macho, .aarch64_windows => placementAarch64(arena, store, target, idx, ctx),
-        .x86_64_sysv => placementSysV(arena, store, idx, ctx),
-        .x86_64_windows => placementWin64(arena, store, idx, ctx),
+        .aarch64, .aarch64_macho, .aarch64_windows => placementAarch64(arena, store, target, idx, ctx, extend),
+        .x86_64_sysv => placementSysV(arena, store, idx, ctx, extend),
+        .x86_64_windows => placementWin64(arena, store, idx, ctx, extend),
         .wasm32, .wasm64 => placementWasm(arena, store, idx),
     };
 }
 
-fn onePiece(arena: std.mem.Allocator, class: RegClass, offset: u16, size: u8) std.mem.Allocator.Error!Placement {
+/// The widening a C caller owes `idx`'s value. C integer types narrower than
+/// `int` are promoted at the call boundary, so a host compiled from the
+/// generated C signature reads the complete register and needs its upper bits
+/// to carry the promotion rather than whatever the caller happened to leave
+/// there. Aggregates keep C's "unspecified upper bits" rule; glue exposes them
+/// as structs, which clang never marks `zeroext`/`signext`.
+fn narrowScalarExtension(store: *const Store, idx: Idx) RegExtension {
+    const lay = store.getLayout(idx);
+    if (store.layoutSize(lay) >= 4) return .none;
+
+    return switch (lay.tag) {
+        .scalar => switch (lay.getScalar().tag) {
+            .int => switch (lay.getScalar().getInt()) {
+                .i8, .i16 => .sign,
+                .u8, .u16 => .zero,
+                .u32, .i32, .u64, .i64, .u128, .i128 => .none,
+            },
+            .frac, .vector, .str, .opaque_ptr => .none,
+        },
+        .tag_union => blk: {
+            const info = store.getTagUnionInfo(lay);
+            if (info.variants.len == 1 and info.data.discriminant_size == 0) {
+                break :blk narrowScalarExtension(store, info.variants.get(0).payload_layout);
+            }
+            // Glue exposes a payload-free tag union as its unsigned
+            // discriminant integer; anything carrying a payload is a struct.
+            for (0..info.variants.len) |i| {
+                if (store.layoutSize(store.getLayout(info.variants.get(i).payload_layout)) != 0) break :blk .none;
+            }
+            break :blk .zero;
+        },
+        .struct_, .closure, .erased_callable, .box, .box_of_zst, .list, .list_of_zst, .zst, .ptr => .none,
+    };
+}
+
+fn onePiece(
+    arena: std.mem.Allocator,
+    class: RegClass,
+    offset: u16,
+    size: u8,
+    extend: RegExtension,
+) std.mem.Allocator.Error!Placement {
     const pieces = try arena.alloc(RegPiece, 1);
-    pieces[0] = .{ .class = class, .offset = offset, .size = size };
+    pieces[0] = .{ .class = class, .offset = offset, .size = size, .extend = extend };
     return .{ .registers = .{ .pieces = pieces } };
 }
 
@@ -522,8 +583,12 @@ fn integerPieces(
     arena: std.mem.Allocator,
     size: u32,
     carrier: RegisterCarrier,
+    extend: RegExtension,
 ) std.mem.Allocator.Error!Placement {
     const count = (size + 7) / 8;
+    // Only a value narrower than one register can owe a promotion, and such a
+    // value is always a single piece.
+    std.debug.assert(extend == .none or count == 1);
     const pieces = try arena.alloc(RegPiece, count);
     var i: u32 = 0;
     while (i < count) : (i += 1) {
@@ -531,6 +596,7 @@ fn integerPieces(
             .class = .integer,
             .offset = @intCast(i * 8),
             .size = @intCast(@min(8, size - i * 8)),
+            .extend = extend,
         };
     }
     return .{ .registers = .{ .pieces = pieces, .carrier = carrier } };
@@ -542,13 +608,14 @@ fn placementAarch64(
     target: Target,
     idx: Idx,
     ctx: Context,
+    extend: RegExtension,
 ) std.mem.Allocator.Error!Placement {
     const lay = store.getLayout(idx);
     const size = store.layoutSize(lay);
     switch (aarch64.classifyType(store, idx)) {
         .memory => return .indirect,
-        .integer => return onePiece(arena, .integer, 0, @intCast(size)),
-        .double_integer => return integerPieces(arena, size, .{ .array = null }),
+        .integer => return onePiece(arena, .integer, 0, @intCast(size), extend),
+        .double_integer => return integerPieces(arena, size, .{ .array = null }, .none),
         .float_array => |fa| {
             const elem_bytes: u8 = @intCast(fa.elem_bits / 8);
             const pieces = try arena.alloc(RegPiece, fa.count);
@@ -584,9 +651,9 @@ fn placementAarch64(
                 const scalar = lay.getScalar();
                 if (scalar.tag == .frac) {
                     return switch (scalar.getFrac()) {
-                        .f32 => onePiece(arena, .float, 0, 4),
-                        .f64 => onePiece(arena, .float, 0, 8),
-                        .dec => integerPieces(arena, size, .integer),
+                        .f32 => onePiece(arena, .float, 0, 4, .none),
+                        .f64 => onePiece(arena, .float, 0, 8, .none),
+                        .dec => integerPieces(arena, size, .integer, .none),
                     };
                 }
                 if (scalar.tag == .vector) {
@@ -594,20 +661,26 @@ fn placementAarch64(
                     pieces[0] = .{ .class = .vector, .offset = 0, .size = 16, .vector_kind = scalar.getVector() };
                     return .{ .registers = .{ .pieces = pieces } };
                 }
-                return integerPieces(arena, size, if (size == 16) .integer else .piecewise);
+                return integerPieces(arena, size, if (size == 16) .integer else .piecewise, extend);
             },
-            .box, .box_of_zst, .ptr => return integerPieces(arena, size, .piecewise),
+            .box, .box_of_zst, .ptr => return integerPieces(arena, size, .piecewise, .none),
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
                 std.debug.assert(info.variants.len == 1 and info.data.discriminant_size == 0);
-                return placementAarch64(arena, store, target, info.variants.get(0).payload_layout, ctx);
+                return placementAarch64(arena, store, target, info.variants.get(0).payload_layout, ctx, extend);
             },
             .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst => unreachable,
         },
     }
 }
 
-fn placementSysV(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: Context) std.mem.Allocator.Error!Placement {
+fn placementSysV(
+    arena: std.mem.Allocator,
+    store: *const Store,
+    idx: Idx,
+    ctx: Context,
+    extend: RegExtension,
+) std.mem.Allocator.Error!Placement {
     const size = store.layoutSize(store.getLayout(idx));
     const classes = x86_64.classifySystemV(store, idx, if (ctx == .ret) .ret else .arg);
     if (classes[0] == .memory) return .indirect;
@@ -619,7 +692,12 @@ fn placementSysV(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: C
         const offset: u16 = @intCast(i * 8);
         const piece_size: u8 = @intCast(@min(@as(u32, 8), size - offset));
         switch (classes[i]) {
-            .integer => try pieces.append(arena, .{ .class = .integer, .offset = offset, .size = piece_size }),
+            .integer => try pieces.append(arena, .{
+                .class = .integer,
+                .offset = offset,
+                .size = piece_size,
+                .extend = if (offset == 0) extend else .none,
+            }),
             .sse, .float, .float_combine => {
                 if (i + 1 < classes.len and classes[i + 1] == .sseup) {
                     try pieces.append(arena, .{
@@ -643,12 +721,18 @@ fn placementSysV(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: C
     } };
 }
 
-fn placementWin64(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: Context) std.mem.Allocator.Error!Placement {
+fn placementWin64(
+    arena: std.mem.Allocator,
+    store: *const Store,
+    idx: Idx,
+    ctx: Context,
+    extend: RegExtension,
+) std.mem.Allocator.Error!Placement {
     const size = store.layoutSize(store.getLayout(idx));
     switch (x86_64.classifyWindows(store, idx)) {
         .memory => return .indirect,
-        .integer => return onePiece(arena, .integer, 0, @intCast(size)),
-        .sse => return onePiece(arena, .float, 0, @intCast(@min(@as(u32, 16), size))),
+        .integer => return onePiece(arena, .integer, 0, @intCast(size), extend),
+        .sse => return onePiece(arena, .float, 0, @intCast(@min(@as(u32, 16), size)), .none),
         // Win64 passes a scalar 128-bit integer in memory but returns it in
         // XMM0 as <2 x i64>. Generated RocDec is a C aggregate instead, so it
         // is indirect in both directions.
@@ -682,14 +766,16 @@ fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.me
             const class: RegClass = if (is_vector) .vector else if (is_float) .float else .integer;
             if (wasm.lowerAsDoubleI64(store, direct_idx)) {
                 // A value wider than 64 bits is passed as two i64s.
-                return integerPieces(arena, size, .piecewise);
+                return integerPieces(arena, size, .piecewise, .none);
             }
             if (is_vector) {
                 const pieces = try arena.alloc(RegPiece, 1);
                 pieces[0] = .{ .class = .vector, .offset = 0, .size = @intCast(size), .vector_kind = dlay.getScalar().getVector() };
                 return .{ .registers = .{ .pieces = pieces } };
             }
-            return onePiece(arena, class, 0, @intCast(size));
+            // Wasm classification unwraps transparent aggregates, so the
+            // promotion follows the type actually passed.
+            return onePiece(arena, class, 0, @intCast(size), narrowScalarExtension(store, direct_idx));
         },
     }
 }

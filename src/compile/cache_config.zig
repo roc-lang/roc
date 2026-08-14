@@ -137,7 +137,14 @@ pub const Constants = struct {
     /// 55: Record constructors retain exact checker-selected omitted defaults.
     /// 56: Record field presence uses an explicit sentinel representation.
     /// 57: Field-default roots can own their literal-conversion evaluation.
-    pub const CACHE_VERSION = 57;
+    /// 58: Checked iterator procedure identity includes List.iter_rev, the
+    ///     numeric to/until ranges, and the F32/F64 range helpers, with
+    ///     to/until carrying producer-specific representations distinct from
+    ///     the range helpers they do not delegate to.
+    /// 59: Range syntax produces Builtin.Num.Range values, range dispatch uses
+    ///     `_to` methods, and stored ranges mint iterator representations while
+    ///     numeric range hooks explicitly delegate to that representation.
+    pub const CACHE_VERSION = 59;
 };
 
 /// Configuration for the Roc cache system.
@@ -253,6 +260,14 @@ pub const CacheConfig = struct {
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
+    }
+
+    /// Get the prepared Wasm host cache directory.
+    pub fn getWasmHostCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "wasm-host" });
     }
 
     /// Get the cache entries directory (alias for module cache dir).

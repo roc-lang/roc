@@ -14,16 +14,14 @@ main! = |_| Stdout.line!("Hello, world!")
 # EXPECTED
 NAME NOT IN SCOPE - hello_world.md:5:13:5:25
 # PROBLEMS
+── ✗ name not in scope ───────────────────────────────────── hello_world.md:5:13
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  main! = |_| Stdout.line!("Hello, world!")                                 │
- │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
- └─────────────────────────────────────────────────────── hello_world.md:5:13 ┘
+Nothing is named line! in this scope.
 
-    Is it misspelled, or is there an import missing?
+main! = |_| Stdout.line!("Hello, world!")
+            ^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

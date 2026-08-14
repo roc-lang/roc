@@ -31,37 +31,33 @@ result2 = c.plus(d)
 MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
 # PROBLEMS
+── ✗ missing method ─────────────────────────── plus_operator_vs_method.md:11:11
 
-┌────────────────┐
-│ MISSING METHOD ├─ The value before this `+` operator has a type that ───────┐
-└┬───────────────┘  doesn't have a `plus` method.                             │
- │                                                                            │
- │  result1 = a + b                                                           │
- │            ‾‾‾‾‾                                                           │
- └────────────────────────────────────────── plus_operator_vs_method.md:11:11 ┘
+The value before this + operator has a type that doesn't have a plus method.
 
-    The value's type, which does not have a method named `plus`, is:
+result1 = a + b
+          ^^^^^
 
-        MyType
+The value's type, which does not have a method named plus, is:
 
-    Hint: The `+` operator calls a method named `plus` on the value preceding
-    it, passing the value after the operator as the one argument.
+    MyType
 
+Hint: The + operator calls a method named plus on the value preceding it,
+passing the value after the operator as the one argument.
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `plus` method is being called on a value whose ──────┐
-└┬───────────────┘  type doesn't have that method.                            │
- │                                                                            │
- │  result2 = c.plus(d)                                                       │
- │              ‾‾‾‾                                                          │
- └────────────────────────────────────────── plus_operator_vs_method.md:21:13 ┘
+── ✗ missing method ─────────────────────────── plus_operator_vs_method.md:21:13
 
-    The value's type, which does not have a method named `plus`, is:
+This plus method is being called on a value whose type doesn't have that method.
 
-        MyType
+result2 = c.plus(d)
+            ^^^^
 
-    Hint: For this to work, the type would need to have a method named `plus`
-    associated with it in the type's declaration.
+The value's type, which does not have a method named plus, is:
+
+    MyType
+
+Hint: For this to work, the type would need to have a method named plus
+associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

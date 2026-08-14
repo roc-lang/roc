@@ -308,6 +308,12 @@ pub const MonoLlvmCodeGen = struct {
     loop_break_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
     local_slots: []LocalSlot = &.{},
     deferred_str_captures: []?DeferredStrCapture = &.{},
+    /// Indices of `deferred_str_captures` slots that may be non-null. The
+    /// slot array spans every LIR local, so the clear-all and scan-all
+    /// operations that run per jump and per call must touch only the handful
+    /// of live captures rather than the whole program's local space. Entries
+    /// go stale when a single capture is cleared; readers skip null slots.
+    deferred_str_capture_actives: std.ArrayList(u32) = .empty,
     string_counter: u32 = 0,
     /// When true the module is built with DWARF debug info: a compile unit,
     /// one subprogram per proc, and per-statement line locations from the
@@ -1695,7 +1701,10 @@ pub const MonoLlvmCodeGen = struct {
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
         const outer_deferred_str_captures = self.deferred_str_captures;
+        const outer_deferred_str_capture_actives = self.deferred_str_capture_actives;
         defer {
+            self.deferred_str_capture_actives.deinit(self.allocator);
+            self.deferred_str_capture_actives = outer_deferred_str_capture_actives;
             self.wip = outer_wip;
             self.rc_arg_scratch = outer_rc_scratch;
             self.roc_ops_arg = outer_roc_ops;
@@ -1814,7 +1823,8 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(self.local_slots);
         self.deferred_str_captures = try self.allocator.alloc(?DeferredStrCapture, self.store.localCount());
         defer self.allocator.free(self.deferred_str_captures);
-        self.clearDeferredStrCaptures();
+        self.deferred_str_capture_actives = .empty;
+        @memset(self.deferred_str_captures, null);
         try self.allocProcLocalSlots(proc);
         try self.unpackProcArgs(proc);
         if (proc.boxy_runtime_entry) try self.emitBoxyRuntimeInit();
@@ -4632,7 +4642,6 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_i64_trunc,
             .dec_to_i64_try_unsafe,
             .dec_to_i128_trunc,
-            .dec_to_i128_try_unsafe,
             .dec_to_u8_trunc,
             .dec_to_u8_try_unsafe,
             .dec_to_u16_trunc,
@@ -6196,7 +6205,6 @@ pub const MonoLlvmCodeGen = struct {
             dec_to_i16_try_unsafe,
             dec_to_i32_try_unsafe,
             dec_to_i64_try_unsafe,
-            dec_to_i128_try_unsafe,
             dec_to_u8_try_unsafe,
             dec_to_u16_try_unsafe,
             dec_to_u32_try_unsafe,
@@ -6248,7 +6256,6 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_i16_try_unsafe,
             .dec_to_i32_try_unsafe,
             .dec_to_i64_try_unsafe,
-            .dec_to_i128_try_unsafe,
             .dec_to_u8_try_unsafe,
             .dec_to_u16_try_unsafe,
             .dec_to_u32_try_unsafe,
@@ -7578,15 +7585,20 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn clearDeferredStrCaptures(self: *MonoLlvmCodeGen) void {
-        for (self.deferred_str_captures) |*capture| {
-            capture.* = null;
+        for (self.deferred_str_capture_actives.items) |index| {
+            self.deferred_str_captures[index] = null;
         }
+        self.deferred_str_capture_actives.clearRetainingCapacity();
     }
 
     fn installDeferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId, capture: DeferredStrCapture) Error!void {
         if (!self.isStrLocal(local)) return error.CompilationFailed;
         try self.prepareLocalWrite(local);
-        self.deferred_str_captures[@intFromEnum(local)] = capture;
+        const capture_slot = &self.deferred_str_captures[@intFromEnum(local)];
+        if (capture_slot.* == null) {
+            self.deferred_str_capture_actives.append(self.allocator, @intFromEnum(local)) catch return error.OutOfMemory;
+        }
+        capture_slot.* = capture;
     }
 
     fn deferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId) ?DeferredStrCapture {
@@ -7622,9 +7634,10 @@ pub const MonoLlvmCodeGen = struct {
 
     fn materializeAllDeferredStrCaptures(self: *MonoLlvmCodeGen) Error!void {
         var index: usize = 0;
-        while (index < self.deferred_str_captures.len) : (index += 1) {
-            if (self.deferred_str_captures[index] != null) {
-                try self.materializeLocalIfDeferred(@enumFromInt(@as(u32, @intCast(index))));
+        while (index < self.deferred_str_capture_actives.items.len) : (index += 1) {
+            const local_index = self.deferred_str_capture_actives.items[index];
+            if (self.deferred_str_captures[local_index] != null) {
+                try self.materializeLocalIfDeferred(@enumFromInt(local_index));
             }
         }
     }
@@ -7640,10 +7653,11 @@ pub const MonoLlvmCodeGen = struct {
 
     fn materializeDeferredCapturesUsingSource(self: *MonoLlvmCodeGen, source: LocalId) Error!void {
         var index: usize = 0;
-        while (index < self.deferred_str_captures.len) : (index += 1) {
-            const capture = self.deferred_str_captures[index] orelse continue;
-            if (capture.source_local == source and index != @intFromEnum(source)) {
-                try self.materializeLocalIfDeferred(@enumFromInt(@as(u32, @intCast(index))));
+        while (index < self.deferred_str_capture_actives.items.len) : (index += 1) {
+            const local_index = self.deferred_str_capture_actives.items[index];
+            const capture = self.deferred_str_captures[local_index] orelse continue;
+            if (capture.source_local == source and local_index != @intFromEnum(source)) {
+                try self.materializeLocalIfDeferred(@enumFromInt(local_index));
             }
         }
     }
@@ -11985,6 +11999,15 @@ pub const MonoLlvmCodeGen = struct {
                 const src = try self.offsetPtr(arg_ptr, piece.offset);
                 const val = wip.load(.normal, piece_ty, src, self.alignmentForLayoutOffset(arg_layout, piece.offset), "") catch return error.OutOfMemory;
                 const carrier_ty = try self.cAbiPieceLlvmType(builder, piece);
+                // A narrow C scalar owes its argument register a promotion, and
+                // LLVM performs it only for a parameter marked with it. A
+                // widened carrier already carries the promotion in its own
+                // conversion below.
+                if (carrier_ty == piece_ty) switch (piece.extend) {
+                    .none => {},
+                    .zero => try attrs.addParamAttr(param_types.items.len, .zeroext, builder),
+                    .sign => try attrs.addParamAttr(param_types.items.len, .signext, builder),
+                };
                 try param_types.append(self.allocator, carrier_ty);
                 try call_args.append(self.allocator, try self.coerceCAbiPiece(val, carrier_ty, piece, self.cAbiPieceIsSigned(arg_layout)));
             },

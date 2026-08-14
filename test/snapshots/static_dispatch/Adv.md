@@ -48,50 +48,46 @@ TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
 MISSING METHOD - Adv.md:28:21:28:27
 # PROBLEMS
+── ✗ type mismatch ──────────────────────────────────────────────── Adv.md:17:28
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This number is being used where a non-number type is ──────┐
-└┬──────────────┘  needed.                                                    │
- │                                                                            │
- │  next_val = val.update_str(100)                                            │
- │                            ‾‾‾                                             │
- └────────────────────────────────────────────────────────────── Adv.md:17:28 ┘
+This number is being used where a non-number type is needed.
 
-    Other code expects this to have the type:
+next_val = val.update_str(100)
+                          ^^^
 
-        Str
+Other code expects this to have the type:
 
+    Str
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `update_strr` method is being called on a value ─────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  next_val = val.update_strr(100)                                           │
- │                 ‾‾‾‾‾‾‾‾‾‾‾                                                │
- └────────────────────────────────────────────────────────────── Adv.md:23:17 ┘
+── ✗ missing method ─────────────────────────────────────────────── Adv.md:23:17
 
-    The value's type, which does not have a method named `update_strr`, is:
+This update_strr method is being called on a value whose type doesn't have that
+method.
 
-        Adv
+next_val = val.update_strr(100)
+               ^^^^^^^^^^^
 
-    Hint: For this to work, the type would need to have a method named
-    `update_strr` associated with it in the type's declaration.
+The value's type, which does not have a method named update_strr, is:
 
+    Adv
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `update` method is being called on a value whose ────┐
-└┬───────────────┘  type doesn't have that method.                            │
- │                                                                            │
- │  next_val = "Hello".update(100)                                            │
- │                     ‾‾‾‾‾‾                                                 │
- └────────────────────────────────────────────────────────────── Adv.md:28:21 ┘
+Hint: For this to work, the type would need to have a method named update_strr
+associated with it in the type's declaration.
 
-    The value's type, which does not have a method named `update`, is:
+── ✗ missing method ─────────────────────────────────────────────── Adv.md:28:21
 
-        Str
+This update method is being called on a value whose type doesn't have that
+method.
 
-    Hint: For this to work, the type would need to have a method named `update`
-    associated with it in the type's declaration.
+next_val = "Hello".update(100)
+                   ^^^^^^
+
+The value's type, which does not have a method named update, is:
+
+    Str
+
+Hint: For this to work, the type would need to have a method named update
+associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -406,7 +402,7 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_str") (constraint-fn-var 454)
+				(e-dispatch-call (method "update_str") (constraint-fn-var 464)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
@@ -450,9 +446,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_u64") (constraint-fn-var 554)
+				(e-dispatch-call (method "update_u64") (constraint-fn-var 564)
 					(receiver
-						(e-dispatch-call (method "update_str") (constraint-fn-var 545)
+						(e-dispatch-call (method "update_str") (constraint-fn-var 555)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -463,12 +459,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dispatch-call (method "to_str") (constraint-fn-var 560)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 570)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dispatch-call (method "to_u64") (constraint-fn-var 562)
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 572)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))

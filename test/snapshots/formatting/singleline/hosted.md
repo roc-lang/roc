@@ -17,53 +17,47 @@ EXPOSED BUT NOT DEFINED - hosted.md:1:13:1:15
 DECLARATION HAS NO VALUE - hosted.md:3:1:3:16
 DECLARATION HAS NO VALUE - hosted.md:5:1:5:16
 # PROBLEMS
+── ✗ exposed but not defined ───────────────────────────────────── hosted.md:1:9
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `a!` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  hosted [a!, b!]                                                           │
- │          ‾‾                                                                │
- └───────────────────────────────────────────────────────────── hosted.md:1:9 ┘
+The mod header says that a! is exposed, but it is not defined anywhere in
+this mod.
 
-    You can fix this by either defining `a!` in this mod, or by removing it
-    from the list of exposed values.
+hosted [a!, b!]
+        ^^
 
+You can fix this by either defining a! in this mod, or by removing it from
+the list of exposed values.
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `b!` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  hosted [a!, b!]                                                           │
- │              ‾‾                                                            │
- └──────────────────────────────────────────────────────────── hosted.md:1:13 ┘
+── ✗ exposed but not defined ──────────────────────────────────── hosted.md:1:13
 
-    You can fix this by either defining `b!` in this mod, or by removing it
-    from the list of exposed values.
+The mod header says that b! is exposed, but it is not defined anywhere in
+this mod.
 
+hosted [a!, b!]
+            ^^
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  a! : Str => Str                                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └───────────────────────────────────────────────────────────── hosted.md:3:1 ┘
+You can fix this by either defining b! in this mod, or by removing it from
+the list of exposed values.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+── ● declaration has no value ──────────────────────────────────── hosted.md:3:1
 
+This declaration has a type annotation but no implementation.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  b! : Str => Str                                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └───────────────────────────────────────────────────────────── hosted.md:5:1 ┘
+a! : Str => Str
+^^^^^^^^^^^^^^^
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ● declaration has no value ──────────────────────────────────── hosted.md:5:1
+
+This declaration has a type annotation but no implementation.
+
+b! : Str => Str
+^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig

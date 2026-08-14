@@ -18,24 +18,23 @@ main = {
 }
 ~~~
 # EXPECTED
-RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:9:11:9:34
+RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:8:11:8:47
 # PROBLEMS
+── ✗ recursive dispatch ──── nested_try_interpolation_recursive_dispatch.md:8:11
 
-┌────────────────────┐
-│ RECURSIVE DISPATCH ├─ This `from_interpolation` dispatch would have to ─────┐
-└┬───────────────────┘  call itself to satisfy its own type.                  │
- │                                                                            │
- │  url = "https://${domain}.com"                                             │
- │        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
- └─────────────────────── nested_try_interpolation_recursive_dispatch.md:9:11 ┘
+This from_interpolation dispatch would have to call itself to satisfy its own
+type.
 
-    The dispatcher type is:
+url : Try(Try(Url, [InvalidUrl]), [Outer])
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        Try(Url, [InvalidUrl])
+The dispatcher type is:
 
-    Hint: Use a more specific result type, or add an associated function whose
-    `from_interpolation` implementation does not require the same dispatch on
-    the same type.
+    Try(Url, [InvalidUrl])
+
+Hint: Use a more specific result type, or add an associated function whose
+from_interpolation implementation does not require the same dispatch on the
+same type.
 
 # TOKENS
 ~~~zig
@@ -165,7 +164,7 @@ main = {
 					(e-nominal (nominal "Url")
 						(e-tag (name "Url")
 							(args
-								(e-dispatch-call (method "fold") (constraint-fn-var 304)
+								(e-dispatch-call (method "fold") (constraint-fn-var 314)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "rest"))))
@@ -179,9 +178,9 @@ main = {
 													(patterns
 														(p-assign (ident "interpolated"))
 														(p-assign (ident "segment")))))
-											(e-dispatch-call (method "concat") (constraint-fn-var 302)
+											(e-dispatch-call (method "concat") (constraint-fn-var 312)
 												(receiver
-													(e-dispatch-call (method "concat") (constraint-fn-var 300)
+													(e-dispatch-call (method "concat") (constraint-fn-var 310)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "acc"))))
@@ -211,12 +210,7 @@ main = {
 					(e-literal (string "example"))))
 			(s-let
 				(p-assign (ident "url"))
-				(e-block
-					(s-let
-						(p-assign (ident "#interp_0"))
-						(e-lookup-local
-							(p-assign (ident "domain"))))
-					(e-runtime-error (tag "erroneous_value_expr"))))
+				(e-runtime-error (tag "erroneous_value_expr")))
 			(e-lookup-local
 				(p-assign (ident "url")))))
 	(s-nominal-decl

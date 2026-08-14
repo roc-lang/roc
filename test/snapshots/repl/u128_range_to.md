@@ -1,13 +1,13 @@
 # META
 ~~~ini
-description=U128.to - creates an iterator of integers from start to end (inclusive)
+description=U128 inclusive range syntax iterates from start to end
 type=repl
 ~~~
 # SOURCE
 ~~~roc
-» Iter.fold(1.U128..=5.U128, [], |acc, item| acc.append(item))
-» Iter.fold(0.U128..=0.U128, [], |acc, item| acc.append(item))
-» Iter.fold(5.U128..=3.U128, [], |acc, item| acc.append(item))
+» Iter.fold((1.U128..=5.U128).iter(), [], |acc, item| acc.append(item))
+» Iter.fold((0.U128..=0.U128).iter(), [], |acc, item| acc.append(item))
+» Iter.fold((5.U128..=3.U128).iter(), [], |acc, item| acc.append(item))
 ~~~
 # OUTPUT
 [1, 2, 3, 4, 5]

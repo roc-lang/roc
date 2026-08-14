@@ -447,6 +447,33 @@ test "Monotype draft local identity stays graph-native" {
     try expectNotContains(identity, "activeTypeFromCell");
 }
 
+test "Monotype iterator result completion stays out of relation replay and retains public request lookups" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const dispatch_result = sourceSliceBetween(
+        lower_source,
+        "fn callableDispatchResultTypeNodeInPhase(",
+        "fn materializeEvidence(",
+    );
+    try expectContains(dispatch_result, "if (phase == .expression_lowering)");
+    try expectContains(dispatch_result, "lowerAndCompleteIteratorMethodResultAtNode(");
+
+    const completion = sourceSliceBetween(
+        lower_source,
+        "fn completeDeferredIteratorResult(",
+        "fn constUseMonoType(",
+    );
+    try expectContains(completion, "try updateTemplateSpecInterfaceLookups(");
+    try expectContains(completion, "completed_source.evidence_digest.bytes");
+    try expectNotContains(completion, "unregisterTemplateSpec");
+
+    const template_spec = sourceSliceBetween(
+        lower_source,
+        "const DraftTemplateSpec = struct",
+        "const DraftConstUseProvenance",
+    );
+    try expectContains(template_spec, "lookup_request_fn_node: ?NodeId");
+}
+
 test "Monotype direct uninhabited calls lower argument through graph cell" {
     const lower_source = @embedFile("monotype/lower.zig");
     const direct_call = sourceSliceBetween(
@@ -548,6 +575,28 @@ test "Monotype gates divergent relations and crash dispatches before type instan
     );
     try expectContains(relation_gate, "if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return;");
     try expectNotContains(relation_gate, "checkedTypeContainsError");
+}
+
+test "Monotype dispatch result modes retain graph-backed result types" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const parametric_low_level = sourceSliceBetween(
+        lower_source,
+        "if (direct_parametric_low_level) |op| {",
+        "const call_data = if (direct_graph_call)",
+    );
+    try expectContains(parametric_low_level, "applyDispatchResultMode(plan.result_mode, call_expr)");
+    try expectNotContains(parametric_low_level, "activeTypeFromNode(plan_ret_node)");
+
+    const result_mode = sourceSliceBetween(
+        lower_source,
+        "fn applyDispatchResultMode(",
+        "fn typeCellHasBuiltinOwner(",
+    );
+    try expectContains(result_mode, "self.exprTypeCell(expr)");
+    try expectContains(result_mode, "self.addExprWithTypeCell(result_cell");
+    try expectNotContains(result_mode, "Type.TypeId");
+    try expectNotContains(result_mode, "activeTypeFrom");
+    try expectNotContains(result_mode, "primitiveType(.bool)");
 }
 
 test "Monotype const type lookup remains graph-native" {
@@ -691,7 +740,6 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "functionInterfaceIterator(request_fn_node)");
         try expectContains(lookup_source, "classMemberIterator(interface_node)");
         try expectContains(lookup_source, "seen_specs.getOrPut(raw_spec)");
-        try expectContains(lookup_source, "sameFunctionInterface(spec.request_fn_node, request_fn_node)");
         try expectContains(lookup_source, "draftOpenCandidateQualifies(");
         try expectContains(lookup_source, "spec.runtime_demand_guard_frames");
         try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
@@ -699,10 +747,17 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "if (selection.selected()) |raw_spec|");
         try expectContains(lookup_source, "try source_ctx.graph.unifyRecursiveFunctionInterface(");
         try expectContains(lookup_source, "spec.initial_request_arg_classes");
-        try expectContains(lookup_source, "indexed_nodes.getOrPut(interface_node)");
-        try expectContains(lookup_source, "draftOpenRequestKey(interface_node)");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
     }
+    try expectContains(template_source, "draftTemplateSpecLookupRequestNode(spec)");
+    try expectContains(nested_source, "sameFunctionInterface(spec.request_fn_node, request_fn_node)");
+    const interface_registration = sourceSliceBetween(
+        lower_source,
+        "fn updateTemplateSpecInterfaceLookups(",
+        "fn draftNestedSpecRequestNode(",
+    );
+    try expectContains(interface_registration, "indexed_nodes.getOrPut(interface_node)");
+    try expectContains(interface_registration, "draftOpenRequestKey(interface_node)");
     try expectContains(nested_source, "std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)");
 }
 
@@ -1289,7 +1344,7 @@ test "Monotype generated-private call requests retain separate request nodes" {
     const full_request = sourceSliceBetween(
         lower_source,
         "fn instantiateTargetCallNodeFromMonoArgs",
-        "fn callArgumentEvidenceNode",
+        "fn exprCallResultEvidenceNode",
     );
     const iterator = sourceSliceBetween(
         lower_source,
@@ -1394,4 +1449,28 @@ test "direct LIR verification consumes producer-owned specialization identities"
 test "post-check invariant helper is failure-only" {
     const fn_info = @typeInfo(@TypeOf(Common.invariant)).@"fn";
     try std.testing.expect(fn_info.return_type.? == noreturn);
+}
+
+test "hoist-preserving iterator producers are reachable through their method names" {
+    // The checker pre-filters hoist classification on
+    // `hoist_preserving_method_names` before resolving a receiver, so every
+    // producer that answers "preserves hoistable source input" must be
+    // reachable through one of those names; one that is not would silently
+    // stop having its receiver hoisted. This lives here because the type
+    // checker's own sources may not compare strings.
+    const registry = check.StaticDispatchRegistry;
+    for (registry.iterator_procedure_names) |entry| {
+        if (!entry[1].preservesHoistableSourceInput()) continue;
+        const qualified_name = entry[0];
+        const start = if (std.mem.findScalarLast(u8, qualified_name, '.')) |dot| dot + 1 else 0;
+        const method = qualified_name[start..];
+        var reachable = false;
+        for (registry.hoist_preserving_method_names) |candidate| {
+            if (std.mem.eql(u8, method, candidate)) reachable = true;
+        }
+        if (!reachable) {
+            std.debug.print("unreachable hoist-preserving producer: {s}\n", .{qualified_name});
+        }
+        try std.testing.expect(reachable);
+    }
 }

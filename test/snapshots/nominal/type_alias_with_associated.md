@@ -10,25 +10,22 @@ Foo : [A, B, C].{ x = 5 }
 # EXPECTED
 TYPE ALIAS WITH ASSOCIATED ITEMS - type_alias_with_associated.md:1:16:1:17
 # PROBLEMS
+── ✗ type alias with associated items ─────── type_alias_with_associated.md:1:16
 
-┌──────────────────────────────────┐
-│ TYPE ALIAS WITH ASSOCIATED ITEMS ├─ I was parsing a type alias, but only ───┐
-└┬─────────────────────────────────┘  nominal types can have associated       │
- │                                    items.                                  │
- │                                                                            │
- │  Foo : [A, B, C].{ x = 5 }                                                 │
- │                 ‾                                                          │
- └──────────────────────────────────────── type_alias_with_associated.md:1:16 ┘
+I was parsing a type alias, but only nominal types can have associated items.
 
-    Use `:=` to define a nominal type with associated items, or remove the
-    associated item block from this alias.
+Foo : [A, B, C].{ x = 5 }
+               ^
 
-    For example:
-        Id := U64 implements [
-            zero = @Id 0
-        ]
+Use := to define a nominal type with associated items, or remove the associated
+item block from this alias.
 
-    I found `.` here.
+For example:
+    Id := U64 implements [
+        zero = @Id 0
+    ]
+
+I found . here.
 
 # TOKENS
 ~~~zig

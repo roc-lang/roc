@@ -46,146 +46,128 @@ UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:12:16:12:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:13:16:13:27
 UNRECOGNIZED SYNTAX - let_polymorphism_lists.md:14:18:14:31
 # PROBLEMS
+── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:12:26
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  all_int_list = int_list ++ my_empty_list                                  │
- │                           ‾                                                │
- └─────────────────────────────────────────── let_polymorphism_lists.md:12:26 ┘
+I was parsing an expression, and this token cannot start an expression here.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+all_int_list = int_list ++ my_empty_list
+                         ^
 
-    For example:
-        add(1, 2)
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    I found `+` here.
+For example:
+    add(1, 2)
 
+I found + here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  all_int_list = int_list ++ my_empty_list                                  │
- │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
- └─────────────────────────────────────────── let_polymorphism_lists.md:12:28 ┘
+── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:12:28
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+all_int_list = int_list ++ my_empty_list
+                           ^^^^^^^^^^^^^
 
-    I found `my_empty_list` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  all_str_list = str_list ++ my_empty_list                                  │
- │                           ‾                                                │
- └─────────────────────────────────────────── let_polymorphism_lists.md:13:26 ┘
+I found my_empty_list here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:13:26
 
-    For example:
-        add(1, 2)
+I was parsing an expression, and this token cannot start an expression here.
 
-    I found `+` here.
+all_str_list = str_list ++ my_empty_list
+                         ^
 
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  all_str_list = str_list ++ my_empty_list                                  │
- │                             ‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
- └─────────────────────────────────────────── let_polymorphism_lists.md:13:28 ┘
+For example:
+    add(1, 2)
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found + here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:13:28
 
-    I found `my_empty_list` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I was parsing a statement, and this token cannot start a statement here.
 
+all_str_list = str_list ++ my_empty_list
+                           ^^^^^^^^^^^^^
 
-┌──────────────────────────────┐
-│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
-└┬─────────────────────────────┘  token cannot start an expression here.      │
- │                                                                            │
- │  all_float_list = float_list ++ my_empty_list                              │
- │                               ‾                                            │
- └─────────────────────────────────────────── let_polymorphism_lists.md:14:30 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-    blocks, conditionals, matches, or function calls.
+For example:
+    answer = 42
 
-    For example:
-        add(1, 2)
+I found my_empty_list here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    I found `+` here.
+── ✗ unexpected expression syntax ────────────── let_polymorphism_lists.md:14:30
 
+I was parsing an expression, and this token cannot start an expression here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  all_float_list = float_list ++ my_empty_list                              │
- │                                 ‾‾‾‾‾‾‾‾‾‾‾‾‾                              │
- └─────────────────────────────────────────── let_polymorphism_lists.md:14:32 ┘
+all_float_list = float_list ++ my_empty_list
+                             ^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+blocks, conditionals, matches, or function calls.
 
-    For example:
-        answer = 42
+For example:
+    add(1, 2)
 
-    I found `my_empty_list` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+I found + here.
 
+── ✗ unexpected statement ────────────────────── let_polymorphism_lists.md:14:32
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  all_int_list = int_list ++ my_empty_list                                  │
- │                 ‾‾‾‾‾‾‾‾‾‾‾                                                │
- └─────────────────────────────────────────── let_polymorphism_lists.md:12:16 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+all_float_list = float_list ++ my_empty_list
+                               ^^^^^^^^^^^^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  all_str_list = str_list ++ my_empty_list                                  │
- │                 ‾‾‾‾‾‾‾‾‾‾‾                                                │
- └─────────────────────────────────────────── let_polymorphism_lists.md:13:16 ┘
+For example:
+    answer = 42
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I found my_empty_list here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unrecognized syntax ─────────────────────── let_polymorphism_lists.md:12:16
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  all_float_list = float_list ++ my_empty_list                              │
- │                   ‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └─────────────────────────────────────────── let_polymorphism_lists.md:14:18 ┘
+I don't recognize this syntax.
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+all_int_list = int_list ++ my_empty_list
+               ^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ unrecognized syntax ─────────────────────── let_polymorphism_lists.md:13:16
+
+I don't recognize this syntax.
+
+all_str_list = str_list ++ my_empty_list
+               ^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
+
+── ✗ unrecognized syntax ─────────────────────── let_polymorphism_lists.md:14:18
+
+I don't recognize this syntax.
+
+all_float_list = float_list ++ my_empty_list
+                 ^^^^^^^^^^^^^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig
@@ -391,13 +373,13 @@ main = |_| {
 			(e-empty_list)))
 	(d-let
 		(p-assign (ident "empty_int_list"))
-		(e-call (constraint-fn-var 339)
+		(e-call (constraint-fn-var 349)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "empty_str_list"))
-		(e-call (constraint-fn-var 352)
+		(e-call (constraint-fn-var 362)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-string

@@ -10,18 +10,16 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_first_concrete.md:1:6:1:13
 # PROBLEMS
+── ✗ type mismatch ────────────────────────────── can_list_first_concrete.md:1:6
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  [42, "world", 3.14]                                                       │
- │       ‾‾‾‾‾‾‾                                                              │
- └──────────────────────────────────────────── can_list_first_concrete.md:1:6 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+[42, "world", 3.14]
+     ^^^^^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig

@@ -355,7 +355,6 @@ test "check type - record - field typo" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression is used in an unexpected way.
-        \\**test:6:13:6:31:**
         \\```roc
         \\my_record = { helo : "world" }
         \\```
@@ -388,7 +387,6 @@ test "check type - record - field missing" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression is used in an unexpected way.
-        \\**test:6:13:6:32:**
         \\```roc
         \\my_record = { hello : "world" }
         \\```
@@ -420,7 +418,6 @@ test "check type - record - ext - field missing" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression is used in an unexpected way.
-        \\**test:6:13:6:32:**
         \\```roc
         \\my_record = { hello : "world" }
         \\```
@@ -485,7 +482,6 @@ test "check type - record - opt - field supplied with wrong type" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:6:40:6:46:**
         \\```roc
         \\my_record = { hello : "world", world : "nope" }
         \\```
@@ -512,7 +508,6 @@ test "check type - record - opt - direct access rejected" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The `world` field is optional, but it is being accessed as if it is always present.
-        \\**test:4:18:4:24:**
         \\```roc
         \\get_world = |r| r.world
         \\```
@@ -572,7 +567,6 @@ test "check type - record - opt - sealed field direct access rejected" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The `world` field is optional, but it is being accessed as if it is always present.
-        \\**test:7:19:7:25:**
         \\```roc
         \\use_it = my_record.world
         \\```
@@ -849,7 +843,6 @@ test "check type - record - opt - conditional presence rejected (unannotated)" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The second branch of this `if` does not match the previous branch .
-        \\**test:6:31:6:40:**
         \\```roc
         \\y_maybe = if True with_y else without_y
         \\```
@@ -954,7 +947,6 @@ test "check type - record - list literal with annotated required field still rej
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The two elements in this list have incompatible types.
-        \\**test:4:17:4:19:**
         \\```roc
         \\xs = [{ a: 1 }, {}]
         \\```
@@ -990,7 +982,6 @@ test "check type - list literal with annotated elem type rejects wrong element" 
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:4:10:4:13:**
         \\```roc
         \\xs = [1, "x"]
         \\```
@@ -1023,7 +1014,6 @@ test "check type - record - opt - optional access on required field" {
     try checkTypesModule(source, .fail_with,
         \\**Optional Access Of Required Field**
         \\The `hello` field is always present, but it is being accessed as if it were optional.
-        \\**test:7:19:7:26:**
         \\```roc
         \\use_it = my_record.?hello ?? "default"
         \\```
@@ -1486,7 +1476,6 @@ test "check type - record - default - separately written defaults do not merge" 
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The two elements in this list have incompatible types.
-        \\**test:9:11:9:12:**
         \\```roc
         \\lst = [a, b]
         \\```
@@ -1505,14 +1494,12 @@ test "check type - record - default - separately written defaults do not merge" 
         \\To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
         \\**Hint:** The `x` field has a `??` default in both types, but they are two DIFFERENT defaults—two separately written defaults never merge, even when their values look the same. To share one default, declare the record type once (e.g. as a type alias) and annotate both values with it.
         \\One default is declared here:
-        \\**test:6:16:6:17:**
         \\```roc
         \\b : { x: U8 ?? 2 }
         \\```
         \\               ^
         \\
         \\And the other is declared here:
-        \\**test:3:16:3:17:**
         \\```roc
         \\a : { x: U8 ?? 1 }
         \\```
@@ -1564,7 +1551,6 @@ test "check type - record - opt - optional access on missing field" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This record does not have a `world` field.
-        \\**test:7:19:7:26:**
         \\```roc
         \\use_it = my_record.?world ?? 7
         \\```
@@ -1659,7 +1645,6 @@ test "check type - record - opt - sealed optional passed where required expected
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
-        \\**test:10:10:**
         \\```roc
         \\use_it = needs_world(my_record)
         \\```
@@ -1851,7 +1836,6 @@ test "check type - tag union - tag typo" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression is used in an unexpected way.
-        \\**test:6:9:6:15:**
         \\```roc
         \\color = Greeen
         \\```
@@ -1883,7 +1867,6 @@ test "check type - tag - ext - typo" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression is used in an unexpected way.
-        \\**test:6:9:6:15:**
         \\```roc
         \\color = Greeen
         \\```
@@ -2076,7 +2059,6 @@ test "check type - def - wrong arg" {
         .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:6:22:6:29:**
         \\```roc
         \\test = func("hello", "world")
         \\```
@@ -2212,7 +2194,6 @@ test "check type - def - call with wrong fn arity - too many" {
         .fail_with,
         \\**Too Many Args**
         \\The `idStr` function expects 1 argument, but it got 2 instead.
-        \\**test:4:8:4:29:**
         \\```roc
         \\test = idStr("hello", 10.U8)
         \\```
@@ -2239,7 +2220,6 @@ test "check type - def - call with wrong fn arity - too few" {
         .fail_with,
         \\**Too Few Args**
         \\The `idStr` function expects 2 arguments, but it got 1 instead.
-        \\**test:4:8:4:22:**
         \\```roc
         \\test = idStr("hello")
         \\```
@@ -2268,7 +2248,6 @@ test "check type - def - call with mismatch arg" {
         .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:4:23:4:30:**
         \\```roc
         \\test = idStr("hello", "world")
         \\```
@@ -2776,7 +2755,6 @@ test "check type - nominal - local record value - fail" {
         .fail_with,
         \\**Missing Method**
         \\This `encode_str` method is being called on a value whose type doesn't have that method.
-        \\**test:9:3:9:13:**
         \\```roc
         \\  Str.encode("hi", fmt)
         \\```
@@ -2809,7 +2787,6 @@ test "check type - nominal - local method type - fail" {
         .fail_with,
         \\**Type Mismatch**
         \\The `encode_str` method on `Utf8Format` has an incompatible type.
-        \\**test:9:20:9:23:**
         \\```roc
         \\  Str.encode("hi", fmt)
         \\```
@@ -2881,7 +2858,6 @@ test "check type - if else - invalid condition 1" {
         .fail_with,
         \\**Type Mismatch**
         \\This `if` condition must evaluate to a `Bool` – either `True` or `False`.
-        \\**test:2:8:2:13:**
         \\```roc
         \\x = if 5.I64 "true" else "false"
         \\```
@@ -2924,7 +2900,6 @@ test "check type - if else - different branch types 1" {
         .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:1:13:1:19:**
         \\```roc
         \\x = if True "true" else 10.U8
         \\```
@@ -2973,7 +2948,6 @@ test "check type - if else - dual-kind literal branches (number first) - stable 
         .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:1:20:1:23:**
         \\```roc
         \\x = if True 1 else "s"
         \\```
@@ -2997,7 +2971,6 @@ test "check type - if else - dual-kind literal branches (string first) - stable 
         .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:1:13:1:16:**
         \\```roc
         \\x = if True "s" else 1
         \\```
@@ -3095,7 +3068,6 @@ test "check type - match - diff cond types 1" {
         .fail_with,
         \\**Missing Method**
         \\This `from_quote` method is being called on a value whose type doesn't have that method.
-        \\**test:2:9:2:16:**
         \\```roc
         \\  match "hello" {
         \\```
@@ -3146,7 +3118,6 @@ test "check type - match alternative binders reject incompatible types" {
         .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:1:32:1:35:**
         \\```roc
         \\value = if True A(1.U8) else B("x")
         \\```
@@ -3283,7 +3254,6 @@ test "check type - record access - field typo" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This record does not have a `helo` field.
-        \\**test:9:6:9:11:**
         \\```roc
         \\x = r.helo
         \\```
@@ -3371,7 +3341,6 @@ test "check type - record - update - fail - empty record" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The `r` record does not have a `hello` field.
-        \\**test:5:7:5:8:**
         \\```roc
         \\  { ..r, hello: 10.U8 }
         \\```
@@ -3396,7 +3365,6 @@ test "check type - record - update - fail - missing field" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This record does not have a `hllo` field.
-        \\**test:5:7:5:8:**
         \\```roc
         \\  { ..r, hllo: "goodbye" }
         \\```
@@ -3426,7 +3394,6 @@ test "check type - record - update - fail - field mismatch" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:4:16:4:23:**
         \\```roc
         \\  r = { hello: "world" }
         \\```
@@ -3452,7 +3419,6 @@ test "check type - record - update - fail - field mismatch 2" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:4:16:4:23:**
         \\```roc
         \\  r = { hello: "world", nice: 10.U8 }
         \\```
@@ -3478,7 +3444,6 @@ test "check type - record - update - fail - field mismatch 3" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The type of the field `nice` is incompatible.
-        \\**test:5:16:5:22:**
         \\```roc
         \\  { ..r, nice: 10.Dec }
         \\```
@@ -3508,7 +3473,6 @@ test "check type - record - update - fail 2" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:3:28:3:35:**
         \\```roc
         \\updated = set_data({ data: "hello" }, 10.U8)
         \\```
@@ -3586,7 +3550,6 @@ test "check type - record - update - opt - wrong payload type on optional field 
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The type of the field `name` is incompatible.
-        \\**test:6:18:6:22:**
         \\```roc
         \\u = { ..r, name: 5.U8 }
         \\```
@@ -4110,7 +4073,6 @@ test "check type - expect not bool" {
         .fail_with,
         \\**Type Mismatch**
         \\This `expect` statement must evaluate to a `Bool` – either `True` or `False`.
-        \\**test:3:10:3:11:**
         \\```roc
         \\  expect x
         \\```
@@ -5199,7 +5161,6 @@ test "check type - recursive type - infinite" {
     try checkTypesModule(source, .fail_with,
         \\**Infinite Type**
         \\I am inferring a weird self-referential type.
-        \\**test:1:1:1:21:**
         \\```roc
         \\func = |a| func([a])
         \\```
@@ -5221,7 +5182,6 @@ test "check type - recursive type - recursive alias" {
     try checkTypesModule(source, .fail_with,
         \\**Recursive Alias**
         \\The type alias _LinkedList_ references itself, which is not allowed.
-        \\**test:1:31:1:44:**
         \\```roc
         \\LinkedList(a) : [Nil, Cons(a, LinkedList(a))]
         \\```
@@ -5244,7 +5204,6 @@ test "check type - recursive type - anonymous recursion" {
     try checkTypesModule(source, .fail_with,
         \\**Anonymous Recursion**
         \\I am inferring a recursive type that has no name somewhere in `len`.
-        \\**test:1:1:5:4:**
         \\```roc
         \\len = |linked_list|
         \\  match linked_list {
@@ -5862,7 +5821,6 @@ test "check type - record ext - arg inferred as open" {
     try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
-        \\**test:3:5:**
         \\```roc
         \\    use_record(rec)
         \\```
@@ -6556,7 +6514,6 @@ test "check type - early return - fail" {
         .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:3:12:3:19:**
         \\```roc
         \\    return "hello"
         \\```
@@ -6583,7 +6540,6 @@ test "check type - early return - ? - fail" {
         .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:2:18:2:25:**
         \\```roc
         \\  _val = Try.Err("hello")?
         \\```
@@ -6645,7 +6601,6 @@ test "check type - self recursive function - fibonacci - fail" {
         .fail_with,
         \\**Type Mismatch**
         \\This string literal is being used where a non-string type is needed.
-        \\**test:5:9:5:18:**
         \\```roc
         \\    fib("bad arg") + fib(n - 2.U8)
         \\```
@@ -7436,7 +7391,6 @@ test "check type - zulip repro" {
     try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
-        \\**test:3:5:**
         \\```roc
         \\    use_record(rec)
         \\```
@@ -8177,7 +8131,6 @@ test "check type - exhaustive match close with value reuse after match" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
-        \\**test:17:18:**
         \\```roc
         \\  broad_result = accept_broad(val)
         \\```
@@ -8221,7 +8174,6 @@ test "check type - exhaustive match close with value reuse - no static dispatch"
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
-        \\**test:15:18:**
         \\```roc
         \\  broad_result = accept_broad(val)
         \\```
@@ -8360,7 +8312,6 @@ test "check type - annotated open return type still closed by exhaustive match w
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
-        \\**test:16:18:**
         \\```roc
         \\  broad_result = accept_broad(val)
         \\```
@@ -8404,7 +8355,6 @@ test "check type - annotated open arg not closed even with exhaustive match" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\The first argument being passed to this function has the wrong type.
-        \\**test:14:3:**
         \\```roc
         \\  accept_broad(x)
         \\```
@@ -8435,7 +8385,6 @@ test "check type - tag union - ext hints 1" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression is used in an unexpected way.
-        \\**test:5:13:5:21:**
         \\```roc
         \\foo = |tag| bar(tag)
         \\```
@@ -8463,7 +8412,6 @@ test "check type - tag union - ext hints 2" {
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
         \\This expression is used in an unexpected way.
-        \\**test:2:11:2:12:**
         \\```roc
         \\foo = |a| a
         \\```
@@ -8526,7 +8474,40 @@ test "static dispatch - userland recursive-constraint method cannot self-nest (n
     // Self-nested case: element type `Vec(Leaf)` would need a `join` of shape
     // `Vec(Vec(Leaf)), Vec(Leaf) -> Vec(Leaf)`, but the only `Vec.join` has shape
     // `Vec(a), a -> a`. No overload to select, no userland reroute -> type error.
-    try testing.expect(test_env.checker.problems.problems.items.len >= 1);
+    try testing.expectEqual(@as(usize, 1), try test_env.typeProblemCount());
+}
+
+test "static dispatch - deep finite nested requirement chain stays within resource contract" {
+    const allocator = testing.allocator;
+    var nested_type = try allocator.dupe(u8, "Base");
+    defer allocator.free(nested_type);
+    for (0..80) |_| {
+        const next = try std.fmt.allocPrint(allocator, "Nest({s})", .{nested_type});
+        allocator.free(nested_type);
+        nested_type = next;
+    }
+
+    // `{{` and `}}` are Zig formatting escapes; the generated Roc declarations
+    // use ordinary `{}` empty-record backings and `{ ... }` method blocks.
+    const source = try std.fmt.allocPrint(allocator,
+        \\Base := {{}}.{{
+        \\    combine : Base, Base -> Base
+        \\    combine = |_, other| other
+        \\}}
+        \\
+        \\Nest(a) := {{}}.{{
+        \\    combine : Nest(a), Nest(a) -> Nest(a) where [a.combine : a, a -> a]
+        \\    combine = |_, other| other
+        \\}}
+        \\
+        \\drive : {s}, {s} -> {s}
+        \\drive = |left, right| left.combine(right)
+    , .{ nested_type, nested_type, nested_type });
+    defer allocator.free(source);
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
 }
 
 // DEF-ORDER INDEPENDENCE PINS for `finalizeLiteralDefaults` (src/check/Check.zig).
@@ -8720,4 +8701,1828 @@ test "check type - finalize defaulting - heterogeneous multi-driver group at top
         \\top = (5).plus((2).shl_wrap(3))
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+// OUTER-ROOTED DISPATCH CHAINS: a dispatch deferred on a flex receiver owned
+// by an outer scope is part of the inner definition's explicit type scheme.
+// Its literal-bearing callable relation is protected from boundary defaulting
+// and copied with every use, so `.get(0)` learns U64 when that use's copied
+// `List.get` requirement is discharged.
+test "check type - boundary defaulting - literal behind dispatch chain rooted at weak top-level value" {
+    const source =
+        \\top_str = "a,b,c"
+        \\get_first = |_x| top_str.split_on(",").get(0)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds, ..])");
+}
+
+// Nested-frame analogue of the test above—no top-level weak value involved.
+// The scheme requirement keeps `s` as its shared enclosing receiver while the
+// callable relation and its trapped literal are copied per use.
+test "check type - boundary defaulting - literal behind dispatch chain rooted in enclosing frame" {
+    const source =
+        \\outer = |_a| {
+        \\    s = "a,b,c"
+        \\    inner = |_b| s.split_on(",").get(0)
+        \\    inner({})
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "_arg -> Try(Str, [OutOfBounds, ..])");
+}
+
+// Guard: explicit scheme requirements must not disturb weak top-level literal
+// semantics. A weak literal stays open and a later def's use pins it to exactly
+// one type.
+test "check type - weak top-level literal pinned by cross-def use" {
+    const source =
+        \\n = 5
+        \\f : U8 -> U8
+        \\f = |x| x
+        \\use_n = f(n)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U8");
+}
+
+// Guard: weak means weak—one concrete type module-wide. The first use pins
+// the literal; a second use at another type is a mismatch (the RFC 0010
+// number-literal generalization exception was deliberately not adopted).
+test "check type - weak top-level literal rejects second use at different type" {
+    const source =
+        \\n = 5
+        \\g : U8 -> U8
+        \\g = |x| x
+        \\h : I64 -> I64
+        \\h = |x| x
+        \\a = g(n)
+        \\b = h(n)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+// PRINCIPALITY. Writing an annotation may only ever NARROW an inferred type,
+// never widen it. These two modules differ ONLY in whether the dispatch
+// chain's receiver carries an annotation, so every def must infer the same
+// type in both.
+//
+// This states the promise itself rather than the machinery that keeps it, so
+// it fails no matter HOW a change breaks it—in particular if a later change
+// ever settles an outer-scope receiver before the whole module has been read,
+// every def resting on that receiver would silently be decided against a
+// guessed type instead of the real one, and this test is what catches it.
+//
+// The two call sites at different element types are load-bearing: `f`'s
+// polymorphism is only observable through them. With one call site, or none,
+// both modules agree even when the receiver's chain has collapsed `f` to a
+// single module-wide type, and the test proves nothing.
+const principality_chain_defs = &[_]DefAndExpectation{
+    .{ .def = "f", .expected = "(Str -> b) -> List(b)" },
+    .{ .def = "lengths", .expected = "List(U64)" },
+    .{ .def = "selves", .expected = "List(Str)" },
+};
+
+test "check type - principality - annotated receiver, two call sites" {
+    const source =
+        \\top_str : Str
+        \\top_str = "a,b,c"
+        \\f = |g| top_str.split_on(",").map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_chain_defs);
+}
+
+test "check type - principality - inferred receiver, two call sites" {
+    const source =
+        \\top_str = "a,b,c"
+        \\f = |g| top_str.split_on(",").map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_chain_defs);
+}
+
+const principality_enclosing_defs = &[_]DefAndExpectation{
+    .{ .def = "outer", .expected = "_arg -> (List(U64), List(Str))" },
+    .{ .def = "result", .expected = "(List(U64), List(Str))" },
+};
+
+test "check type - principality - annotated enclosing weak receiver, two call sites" {
+    const source =
+        \\outer = |_unit| {
+        \\    weak : Str
+        \\    weak = "a,b,c"
+        \\    f = |g| weak.split_on(",").map(g)
+        \\    lengths = f(|s| s.count_utf8_bytes())
+        \\    selves = f(|s| s)
+        \\    (lengths, selves)
+        \\}
+        \\result = outer({})
+    ;
+    try checkTypesModuleDefs(source, principality_enclosing_defs);
+}
+
+test "check type - principality - inferred enclosing weak receiver, two call sites" {
+    const source =
+        \\outer = |_unit| {
+        \\    weak = "a,b,c"
+        \\    f = |g| weak.split_on(",").map(g)
+        \\    lengths = f(|s| s.count_utf8_bytes())
+        \\    selves = f(|s| s)
+        \\    (lengths, selves)
+        \\}
+        \\result = outer({})
+    ;
+    try checkTypesModuleDefs(source, principality_enclosing_defs);
+}
+
+test "check type - principality - annotated weak numeric receiver, two call sites" {
+    const source =
+        \\weak : I64
+        \\weak = 5
+        \\f = |g| weak.to_str().split_on(",").map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_chain_defs);
+}
+
+test "check type - principality - inferred weak numeric receiver, two call sites" {
+    const source =
+        \\weak = 5
+        \\f = |g| weak.to_str().split_on(",").map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_chain_defs);
+}
+
+const principality_transitive_defs = &[_]DefAndExpectation{
+    .{ .def = "base", .expected = "(Str -> b) -> List(b)" },
+    .{ .def = "f", .expected = "(Str -> b) -> List(b)" },
+    .{ .def = "lengths", .expected = "List(U64)" },
+    .{ .def = "selves", .expected = "List(Str)" },
+};
+
+test "check type - principality - annotated transitive scheme requirement" {
+    const source =
+        \\weak : Str
+        \\weak = "a,b,c"
+        \\base = |g| weak.split_on(",").map(g)
+        \\f = |g| base(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_transitive_defs);
+}
+
+test "check type - principality - inferred transitive scheme requirement" {
+    const source =
+        \\weak = "a,b,c"
+        \\base = |g| weak.split_on(",").map(g)
+        \\f = |g| base(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_transitive_defs);
+}
+
+test "check type - principality - repeated transitive helper uses remain independent" {
+    const source =
+        \\weak = "a,b,c"
+        \\base = |g| weak.split_on(",").map(g)
+        \\pair = |g| (base(g), base(g))
+        \\f = |g| pair(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "base", .expected = "(Str -> b) -> List(b)" },
+        .{ .def = "pair", .expected = "(Str -> b) -> (List(b), List(b))" },
+        .{ .def = "f", .expected = "(Str -> b) -> (List(b), List(b))" },
+        .{ .def = "lengths", .expected = "(List(U64), List(U64))" },
+        .{ .def = "selves", .expected = "(List(Str), List(Str))" },
+    });
+}
+
+test "check type - principality - recursive scheme copies pending requirement per use" {
+    const source =
+        \\weak = "a,b,c"
+        \\f = |g, n|
+        \\    if n == 0
+        \\        weak.split_on(",").map(g)
+        \\    else
+        \\        f(g, n - 1)
+        \\lengths = f(|s| s.count_utf8_bytes(), 1)
+        \\selves = f(|s| s, 1)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
+test "check type - principality - forward annotated scheme copies pending requirement" {
+    const source =
+        \\weak = "a,b,c"
+        \\forward : (Str -> b), U64 -> List(b)
+        \\forward = |g, n| f(g, n)
+        \\f : (Str -> b), U64 -> List(b)
+        \\f = |g, n|
+        \\    if n == 0
+        \\        weak.split_on(",").map(g)
+        \\    else
+        \\        forward(g, n - 1)
+        \\lengths = forward(|s| s.count_utf8_bytes(), 1)
+        \\selves = forward(|s| s, 1)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "lengths", .expected = "List(U64)" },
+        .{ .def = "selves", .expected = "List(Str)" },
+    });
+}
+
+test "check type - discharged scheme requirement is not replayed by later uses" {
+    const source =
+        \\weak = "abc"
+        \\f = |_unit| weak.to_i128()
+        \\pin : Str
+        \\pin = weak
+        \\first = f({})
+        \\second = f({})
+    ;
+    try checkTypesModule(source, .fail, "Missing Method");
+}
+
+test "check type - shared pending scheme requirement reports once across uses" {
+    const source =
+        \\weak = "abc"
+        \\f = |_unit| weak.to_i128()
+        \\first = f({})
+        \\second = f({})
+        \\third = f({})
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try testing.expectEqual(@as(usize, 1), try test_env.typeProblemCount());
+    try test_env.assertFirstTypeError("Missing Method");
+}
+
+test "check type - independent value dispatch sites each receive an ambiguity judgment" {
+    const source =
+        \\make : {} -> a
+        \\make = |_| crash "no value"
+        \\weak = make({})
+        \\first = weak.to_i128()
+        \\second = weak.to_i128()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    var creation_candidates: usize = 0;
+    for (test_env.checker.ambiguity_candidates.items) |candidate| {
+        if (candidate.source == .creation) {
+            try testing.expect(candidate.judged);
+            creation_candidates += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), creation_candidates);
+}
+
+const principality_result_flow_defs = &[_]DefAndExpectation{
+    .{ .def = "f", .expected = "(Str -> b) -> [Mapped(List(b)), ..]" },
+    .{ .def = "lengths", .expected = "[Mapped(List(U64)), ..]" },
+    .{ .def = "selves", .expected = "[Mapped(List(Str)), ..]" },
+};
+
+test "check type - principality - annotated requirement result flows into return type" {
+    const source =
+        \\weak : Str
+        \\weak = "a,b,c"
+        \\f = |g| Mapped(weak.split_on(",").map(g))
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_result_flow_defs);
+}
+
+test "check type - principality - inferred requirement result flows into return type" {
+    const source =
+        \\weak = "a,b,c"
+        \\f = |g| Mapped(weak.split_on(",").map(g))
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_result_flow_defs);
+}
+
+test "check type - principality - literal-constrained lambda parameter remains polymorphic" {
+    const source =
+        \\func = |offset| {
+        \\    condition = offset == 1
+        \\    f = if condition |x| x + offset else |x| x * 2
+        \\    f(10)
+        \\}
+        \\as_u8 = func(10.U8)
+        \\as_i64 = func(10.I64)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "as_u8", .expected = "U8" },
+        .{ .def = "as_i64", .expected = "I64" },
+    });
+}
+
+test "check type - generalized numeral-constrained lambda accepts integer and fraction uses" {
+    const source =
+        \\app [main] { pf: platform "platform.roc" }
+        \\
+        \\num = 42
+        \\frac = 4.2
+        \\int_add = num + 10
+        \\int_multiply = num * 2
+        \\float_add = num + 3.14
+        \\float_multiply = num * 2.5
+        \\double = |x| x * 2
+        \\int_doubled = double(5)
+        \\float_doubled = double(2.5)
+        \\main = |_| int_add + int_multiply
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+const GeneratedWeakLiteral = enum { quote, numeral };
+const GeneratedResultWrapper = enum { direct, record };
+const GeneratedAnnotationSite = enum { none, receiver, helper, lengths, selves };
+
+fn generatedPrincipalitySource(
+    allocator: std.mem.Allocator,
+    weak: GeneratedWeakLiteral,
+    wrapper: GeneratedResultWrapper,
+    transitive: bool,
+    annotation_site: GeneratedAnnotationSite,
+    invalid_result: bool,
+) std.mem.Allocator.Error![]u8 {
+    const receiver_annotation = if (annotation_site == .receiver)
+        switch (weak) {
+            .quote => "weak : Str\n",
+            .numeral => "weak : Dec\n",
+        }
+    else
+        "";
+    const weak_literal = switch (weak) {
+        .quote => "\"a,b,c\"",
+        .numeral => "5",
+    };
+    const normalized = switch (weak) {
+        .quote => "weak",
+        .numeral => "weak.to_str()",
+    };
+    const mapped = try std.fmt.allocPrint(allocator, "{s}.split_on(\",\").map(g)", .{normalized});
+    defer allocator.free(mapped);
+    const wrapped = switch (wrapper) {
+        .direct => try allocator.dupe(u8, mapped),
+        .record => try std.fmt.allocPrint(allocator, "{{ value: {s} }}", .{mapped}),
+    };
+    defer allocator.free(wrapped);
+
+    const base_binding = if (transitive)
+        try std.fmt.allocPrint(allocator, "base = |g| {s}\n", .{wrapped})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(base_binding);
+    const f_body = if (transitive) "base(g)" else wrapped;
+
+    const helper_type = switch (wrapper) {
+        .direct => "(Str -> b) -> List(b)",
+        .record => "(Str -> b) -> { value : List(b) }",
+    };
+    const helper_annotation = if (annotation_site == .helper)
+        try std.fmt.allocPrint(allocator, "f : {s}\n", .{helper_type})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(helper_annotation);
+
+    const lengths_type = switch (wrapper) {
+        .direct => "List(U64)",
+        .record => "{ value : List(U64) }",
+    };
+    const selves_type = switch (wrapper) {
+        .direct => "List(Str)",
+        .record => "{ value : List(Str) }",
+    };
+    const lengths_annotation = if (annotation_site == .lengths)
+        try std.fmt.allocPrint(allocator, "lengths : {s}\n", .{lengths_type})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(lengths_annotation);
+    const selves_annotation = if (annotation_site == .selves)
+        try std.fmt.allocPrint(allocator, "selves : {s}\n", .{selves_type})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(selves_annotation);
+    const invalid_binding = if (invalid_result)
+        "bad : Str\nbad = lengths\n"
+    else
+        "";
+
+    return std.fmt.allocPrint(
+        allocator,
+        "{s}weak = {s}\n{s}{s}f = |g| {s}\n{s}lengths = f(|s| s.count_utf8_bytes())\n{s}selves = f(|s| s)\n{s}",
+        .{
+            receiver_annotation,
+            weak_literal,
+            base_binding,
+            helper_annotation,
+            f_body,
+            lengths_annotation,
+            selves_annotation,
+            invalid_binding,
+        },
+    );
+}
+
+fn expectGeneratedDefTypesEqual(
+    allocator: std.mem.Allocator,
+    inferred: *TestEnv,
+    annotated: *TestEnv,
+    transitive: bool,
+) TestEnv.TestEnvError!void {
+    const names = [_][]const u8{ "weak", "f", "lengths", "selves" };
+    for (names) |name| {
+        const inferred_type = try inferred.allocDefType(allocator, name);
+        defer allocator.free(inferred_type);
+        const annotated_type = try annotated.allocDefType(allocator, name);
+        defer allocator.free(annotated_type);
+        try testing.expectEqualStrings(inferred_type, annotated_type);
+    }
+    if (transitive) {
+        const inferred_type = try inferred.allocDefType(allocator, "base");
+        defer allocator.free(inferred_type);
+        const annotated_type = try annotated.allocDefType(allocator, "base");
+        defer allocator.free(annotated_type);
+        try testing.expectEqualStrings(inferred_type, annotated_type);
+    }
+}
+
+test "check type - generated principality under optional exact annotations" {
+    const allocator = testing.allocator;
+    // Exercise the complete product of weak literal, result wrapper, and
+    // transitive helper exactly once. Each source is still assembled from the
+    // selected typed constructs; order is irrelevant because every case gets
+    // an independent TestEnv.
+    for (0..8) |raw_combination| {
+        const combination: u3 = @intCast(raw_combination);
+        const weak: GeneratedWeakLiteral = @enumFromInt(combination & 0b001);
+        const wrapper: GeneratedResultWrapper = @enumFromInt((combination >> 1) & 0b001);
+        const transitive = combination & 0b100 != 0;
+
+        const inferred_source = try generatedPrincipalitySource(
+            allocator,
+            weak,
+            wrapper,
+            transitive,
+            .none,
+            false,
+        );
+        defer allocator.free(inferred_source);
+        var inferred = try TestEnv.init("Test", inferred_source);
+        defer inferred.deinit();
+        try inferred.assertNoErrors();
+
+        const annotation_sites = [_]GeneratedAnnotationSite{ .receiver, .helper, .lengths, .selves };
+        for (annotation_sites) |annotation_site| {
+            const annotated_source = try generatedPrincipalitySource(
+                allocator,
+                weak,
+                wrapper,
+                transitive,
+                annotation_site,
+                false,
+            );
+            defer allocator.free(annotated_source);
+            var annotated = try TestEnv.init("Test", annotated_source);
+            defer annotated.deinit();
+            try annotated.assertNoErrors();
+            try expectGeneratedDefTypesEqual(allocator, &inferred, &annotated, transitive);
+        }
+
+        // An unrelated bad result stays rejected when the weak receiver gets
+        // its exact annotation: adding the annotation cannot unlock the module.
+        const rejected_source = try generatedPrincipalitySource(
+            allocator,
+            weak,
+            wrapper,
+            transitive,
+            .none,
+            true,
+        );
+        defer allocator.free(rejected_source);
+        var rejected = try TestEnv.init("Test", rejected_source);
+        defer rejected.deinit();
+        try testing.expect((try rejected.typeProblemCount()) > 0);
+
+        const rejected_annotated_source = try generatedPrincipalitySource(
+            allocator,
+            weak,
+            wrapper,
+            transitive,
+            .receiver,
+            true,
+        );
+        defer allocator.free(rejected_annotated_source);
+        var rejected_annotated = try TestEnv.init("Test", rejected_annotated_source);
+        defer rejected_annotated.deinit();
+        try testing.expect((try rejected_annotated.typeProblemCount()) > 0);
+    }
+}
+
+// PRINCIPALITY. A definition whose generalization boundary resolves a pending
+// dispatch target checks every earlier unchecked group inside that boundary,
+// sharing the module-wide rank counter with those nested checks. Schemes those
+// groups capture belong to their own module-level definitions, so the boundary
+// owner's generalization must leave them intact: `lengths`/`selves` must see
+// `f`'s pending `split_on`/`map` relation over `weak` no matter which
+// definition's boundary caused `f` to be checked. All four defs must infer
+// exactly what they infer when `f` is checked outside any other boundary
+// (the reordered control below).
+const pending_dispatch_boundary_defs = &[_]DefAndExpectation{
+    .{ .def = "user", .expected = "_arg -> Str" },
+    .{ .def = "f", .expected = "(Str -> b) -> List(b)" },
+    .{ .def = "lengths", .expected = "List(U64)" },
+    .{ .def = "selves", .expected = "List(Str)" },
+};
+
+test "check type - principality - module scheme survives unrelated pending-dispatch boundary" {
+    // `user` dispatches to `Thing.tag`, an unannotated method defined later,
+    // so `user`'s boundary checks `f`'s group before generalizing. The uses
+    // of `f` come after `Thing`, so they replay `f`'s scheme afterward.
+    const source =
+        \\weak = "a,b,c"
+        \\user = |_x| Thing.Val("z").tag()
+        \\f = |g| weak.split_on(",").map(g)
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| s
+        \\}
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, pending_dispatch_boundary_defs);
+}
+
+test "check type - principality - scheme copies made inside unrelated pending-dispatch boundary" {
+    // Same module with the uses of `f` ahead of `Thing`, so `user`'s boundary
+    // checks `f`, `lengths`, and `selves` while resolving its pending target:
+    // the per-use scheme copies themselves are made inside that boundary.
+    const source =
+        \\weak = "a,b,c"
+        \\user = |_x| Thing.Val("z").tag()
+        \\f = |g| weak.split_on(",").map(g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| s
+        \\}
+    ;
+    try checkTypesModuleDefs(source, pending_dispatch_boundary_defs);
+}
+
+test "check type - principality - helper checked ahead of unrelated pending-dispatch boundary" {
+    // Control: identical module except `f` sits ahead of `user`, so `f`'s
+    // group is already checked when `user`'s boundary resolves its pending
+    // target. The two tests above must infer exactly these same types.
+    const source =
+        \\weak = "a,b,c"
+        \\f = |g| weak.split_on(",").map(g)
+        \\user = |_x| Thing.Val("z").tag()
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| s
+        \\}
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, pending_dispatch_boundary_defs);
+}
+
+// PRINCIPALITY. `base` receives its dispatch receiver as an ARGUMENT, so
+// `f = |g| base(weak, g)` meets `base`'s where-constraints as attached
+// constraints copied during instantiation, and their fresh receiver unifies
+// outward with the module-level `weak`. The still-pending relation must enter
+// `f`'s scheme exactly as it does when `base` names `weak` directly (the
+// "transitive scheme requirement" tests above): these two modules differ only
+// in `weak`'s annotation, so every def must infer the same type in both.
+const principality_argument_routed_defs = &[_]DefAndExpectation{
+    .{ .def = "base", .expected =
+    \\c, d -> e
+    \\  where [
+    \\    c.split_on : c, h -> i,
+    \\    h.from_quote : Str -> Try(h, [BadQuotedBytes(Str)]),
+    \\    i.map : i, d -> e,
+    \\  ]
+    },
+    .{ .def = "f", .expected = "(Str -> b) -> List(b)" },
+    .{ .def = "lengths", .expected = "List(U64)" },
+    .{ .def = "selves", .expected = "List(Str)" },
+};
+
+test "check type - principality - annotated argument-routed transitive scheme requirement" {
+    const source =
+        \\weak : Str
+        \\weak = "a,b,c"
+        \\base = |r, g| r.split_on(",").map(g)
+        \\f = |g| base(weak, g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_argument_routed_defs);
+}
+
+test "check type - principality - inferred argument-routed transitive scheme requirement" {
+    const source =
+        \\weak = "a,b,c"
+        \\base = |r, g| r.split_on(",").map(g)
+        \\f = |g| base(weak, g)
+        \\lengths = f(|s| s.count_utf8_bytes())
+        \\selves = f(|s| s)
+    ;
+    try checkTypesModuleDefs(source, principality_argument_routed_defs);
+}
+
+// SCHEME OWNERSHIP IS CHECK-ORDER INDEPENDENT. A module-level value def's
+// dispatch belongs to no definition's scheme, whether the def is checked
+// directly by the module driver or from inside another definition's
+// generalization boundary (here `use_it`'s boundary checks `mid`'s group
+// while resolving its pending dispatch target into `Thing.tag`). No scheme in
+// this module carries a requirement, so no use of any def may instantiate
+// one: every ambiguity candidate must be a creation-site record. An
+// instantiation-sourced candidate would mean `use_it`'s scheme captured
+// `mid`'s relation over `n`—a receiver `use_it` does not own—and replayed it
+// at each use of `use_it`.
+fn expectNoInstantiatedSchemeRequirements(source: []const u8) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("mid", "List(Str)");
+    var instantiation_candidates: usize = 0;
+    for (test_env.checker.ambiguity_candidates.items) |candidate| {
+        if (candidate.source == .instantiation) instantiation_candidates += 1;
+    }
+    try testing.expectEqual(@as(usize, 0), instantiation_candidates);
+}
+
+test "check type - lazily checked value def dispatch stays out of enclosing boundary's scheme" {
+    try expectNoInstantiatedSchemeRequirements(
+        \\n = "a,b,c"
+        \\use_it = |_x| Thing.Val("z").tag()
+        \\mid = n.split_on(",")
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| s
+        \\}
+        \\first = use_it({})
+        \\second = use_it({})
+    );
+}
+
+test "check type - value def dispatch checked ahead of boundary stays out of every scheme" {
+    // Control: identical module except `mid` sits ahead of `use_it`, so the
+    // module driver checks it before any boundary is active.
+    try expectNoInstantiatedSchemeRequirements(
+        \\n = "a,b,c"
+        \\mid = n.split_on(",")
+        \\use_it = |_x| Thing.Val("z").tag()
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| s
+        \\}
+        \\first = use_it({})
+        \\second = use_it({})
+    );
+}
+
+// DERIVED CODEC VALIDATION MUST SHARE OUTER-RANK RECEIVERS. When derived-shape
+// validation reaches a local annotated method (here `ItemKind.encoder_for`,
+// found through the derived record encoder inside `Json.to_str`), the
+// instantiation of that method's scheme must keep body requirements rooted at
+// module-level receivers (`weak`'s pending `split_on`/`get` relation)
+// connected to those receivers, exactly as scheme replay does at ordinary use
+// sites. A disconnected copy strands the `get` index literal on fresh vars
+// where it can never meet `List.get`'s `U64` index, so it defaults and the
+// module spuriously fails to check.
+
+test "check type - derived codec - annotated encoder_for body with module-level receiver requirement" {
+    const source =
+        \\weak = "a,b,c"
+        \\ItemKind := [Basic, Fancy].{
+        \\  encoder_for : encoding -> (ItemKind, state -> Try(state, err))
+        \\  encoder_for = |_encoding| {
+        \\    parts = weak.split_on(",")
+        \\    _ = parts.get(0)
+        \\    |_kind, state| Ok(state)
+        \\  }
+        \\}
+        \\out = Json.to_str({ kind: ItemKind.Basic })
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - derived codec - annotated encoder_for body with annotated module-level receiver" {
+    // Control: identical module except `weak` is annotated, so the body's
+    // `split_on`/`get` dispatches resolve against `Str` right away and no
+    // module-level pending relation enters `encoder_for`'s scheme.
+    const source =
+        \\weak : Str
+        \\weak = "a,b,c"
+        \\ItemKind := [Basic, Fancy].{
+        \\  encoder_for : encoding -> (ItemKind, state -> Try(state, err))
+        \\  encoder_for = |_encoding| {
+        \\    parts = weak.split_on(",")
+        \\    _ = parts.get(0)
+        \\    |_kind, state| Ok(state)
+        \\  }
+        \\}
+        \\out = Json.to_str({ kind: ItemKind.Basic })
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// RECURSIVE DISPATCH MUST BE REPORTED AS SUCH. Satisfying the interpolation's
+// `from_interpolation` constraint on the annotation's inner
+// `Try(Url, [InvalidUrl])` would require dispatching `from_interpolation` on
+// that same type again, so the checker must reject the chain as recursive
+// dispatch. Builtin's `Try` really declares `from_interpolation`, so a
+// missing-method report on this program would be factually wrong.
+
+test "check type - dispatch - nested Try interpolation reports recursive dispatch" {
+    const source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
+        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\}
+        \\
+        \\main = {
+        \\    domain = "example"
+        \\    url : Try(Try(Url, [InvalidUrl]), [Outer])
+        \\    url = "https://${domain}.com"
+        \\    url
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+// STRICTLY GROWING DISPATCH CHAINS MUST BE REJECTED STRUCTURALLY. Every
+// `go` step dispatches `go` again on a receiver wrapped in two more layers of
+// `Wrap`, so the chain can never terminate and no two states on it are ever
+// equal. The checker must reject the chain as recursive dispatch quickly,
+// rather than grinding out the whole deferred-dispatch budget on receivers
+// whose printed form grows without bound.
+
+test "check type - dispatch - strictly growing dispatch chain reports recursive dispatch" {
+    const source =
+        \\Wrap(a) := [W(a)].{
+        \\    step : Wrap(a) -> Wrap(Wrap(Wrap(a)))
+        \\    step = |w| Wrap.W(Wrap.W(w))
+        \\    go = |w| w.step().go()
+        \\}
+        \\
+        \\main = Wrap.W("seed").go()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+// The variants below pin the divergence detector's coverage of receivers
+// unification can still refine, of growth spelled through aliases, and of
+// legal programs the growth rule must never reject. Each rejected variant is
+// a chain the checker would otherwise re-derive forever, so these tests
+// double as termination witnesses.
+
+fn expectRecursiveDispatchReported(test_env: *TestEnv) TestEnv.TestEnvError!void {
+    for (test_env.checker.problems.problems.items) |problem| {
+        if (problem == .static_dispatch and problem.static_dispatch == .recursive_dispatch) return;
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn expectNoRecursiveDispatchReported(test_env: *TestEnv) TestEnv.TestEnvError!void {
+    for (test_env.checker.problems.problems.items) |problem| {
+        if (problem == .static_dispatch and problem.static_dispatch == .recursive_dispatch) {
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "check type - dispatch - strictly growing chain over shared weak receiver reports recursive dispatch" {
+    // Every hop's receiver is `Wrap^(2n+1)` of the same still-flex var, so no
+    // hop is ever settled and no two states are ever digest-equal. The
+    // embedding walk must still see each receiver strictly embedding its
+    // same-binding ancestors and reject the chain.
+    const source =
+        \\Wrap(a) := [W(a)].{
+        \\    step : Wrap(a) -> Wrap(Wrap(Wrap(a)))
+        \\    step = |w| Wrap.W(Wrap.W(w))
+        \\    go = |w| w.step().go()
+        \\}
+        \\
+        \\make : {} -> a
+        \\make = |_| crash "seed"
+        \\main = Wrap.W(make({})).go()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectRecursiveDispatchReported(&test_env);
+}
+
+test "check type - dispatch - insertion growth minting a fresh flex per hop reports recursive dispatch" {
+    // `step`'s return nests the receiver's element next to a type variable
+    // that is free in the annotation, so every hop mints a fresh flex and
+    // wraps the previous receiver's interior one level deeper. No receiver is
+    // a structural subterm of any later one—the old spine is re-parenthesized
+    // around the insertion—so only embedding (couple or dive past any big-side
+    // constructor) can relate the states and stop the chain.
+    const source =
+        \\Wrap(a) := [W(a)].{
+        \\    step : Wrap(a) -> Wrap(Wrap((a, b)))
+        \\    step = |_w| crash "unreachable"
+        \\    go = |w| w.step().go()
+        \\}
+        \\
+        \\main = Wrap.W("seed").go()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectRecursiveDispatchReported(&test_env);
+}
+
+test "check type - dispatch - non-growing chain minting a fresh flex per hop reports recursive dispatch" {
+    // `step` discards the receiver and returns `Wrap^3` of a fresh flex, so
+    // every hop after the first has an alpha-equivalent state and the exact
+    // repeated-state rule must reject it without any settledness gate.
+    const source =
+        \\Wrap(a) := [W(a)].{
+        \\    step : Wrap(a) -> Wrap(Wrap(Wrap(b)))
+        \\    step = |_w| crash "unreachable"
+        \\    go = |w| w.step().go()
+        \\}
+        \\
+        \\main = Wrap.W("seed").go()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+test "check type - dispatch - growth spelled through alias arguments reports recursive dispatch" {
+    // The receiver grows only inside the arguments of the `Ph` alias whose
+    // backing (`Nom(q)`) never mentions its first parameter. The detector
+    // must see growth through alias spelling rather than looping forever on
+    // receivers whose backing looks constant.
+    const source =
+        \\Nom(a) := [N(a)].{
+        \\    grow : Ph(p, a) -> Ph(Ph(p, a), a)
+        \\    grow = |_| crash "n"
+        \\    go = |x| x.grow().go()
+        \\}
+        \\Ph(p, q) : Nom(q)
+        \\seed : Ph({}, Str)
+        \\seed = crash "seed"
+        \\main = seed.go()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+test "check type - dispatch - larger argument-supplied receiver on one lineage is not recursive dispatch" {
+    // `main`'s call makes `b := Nom(Nom(Base))`, so the `where`-obligation on
+    // `b` re-enters `Nom.pick` with a receiver that strictly embeds the first
+    // edge's `Nom(Base)`—but the larger receiver arrived from a call-site
+    // argument, not from the derivation pumping itself, and the chain
+    // terminates at `Base.pick`. A single growth step must stay legal.
+    const source =
+        \\Base := [B].{
+        \\    pick : Base, Base -> Base
+        \\    pick = |x, _| x
+        \\}
+        \\Nom(a) := [N(a)].{
+        \\    pick : Nom(a), b -> b where [b.pick : b, Base -> Base]
+        \\    pick = |_, y| y
+        \\}
+        \\seed : Nom(Base)
+        \\seed = crash "s"
+        \\other : Nom(Nom(Base))
+        \\other = crash "o"
+        \\main = seed.pick(other)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - phantom alias receiver never matches its bare backing" {
+    // Same chain as the bare control above, but the first receiver is spelled
+    // through `A(Str, Base)`, an alias whose backing discards its first
+    // argument. Discarding the alias arguments would make the receiver
+    // compare equal to bare `Nom(Base)` and reject this legal program; the
+    // embedding walk must keep the alias identity and its arguments.
+    const source =
+        \\Base := [B].{
+        \\    pick : Base, Base -> Base
+        \\    pick = |x, _| x
+        \\}
+        \\Nom(a) := [N(a)].{
+        \\    pick : Nom(a), b -> b where [b.pick : b, Base -> Base]
+        \\    pick = |_, y| y
+        \\}
+        \\A(p, q) : Nom(q)
+        \\seed : A(Str, Base)
+        \\seed = crash "s"
+        \\other : Nom(Nom(Base))
+        \\other = crash "o"
+        \\main = seed.pick(other)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - unrelated poisoned receivers never manufacture recursive dispatch" {
+    // Two dispatches fail legitimately (`not_a_method` on a `List`, `gone` on
+    // `Nom`), poisoning their receivers to erroneous content, while the
+    // `pick` lineage itself is legal. Erroneous content compares only against
+    // its own resolved var, so the poison from the unrelated failures must
+    // not make any state on the legal chain repeat or embed an ancestor.
+    const source =
+        \\Base := [B].{
+        \\    pick : Base, Base -> Base
+        \\    pick = |x, _| x
+        \\}
+        \\Nom(a) := [N(a)].{
+        \\    pick : Nom(a), b -> b where [b.pick : b, Base -> Base]
+        \\    pick = |_, y| y
+        \\}
+        \\mystery : {} -> q
+        \\mystery = |_| crash "m"
+        \\weak = mystery({})
+        \\lst = [weak]
+        \\oops = lst.not_a_method()
+        \\seed : Nom(Base)
+        \\seed = crash "s"
+        \\arg2val = Nom.N(lst)
+        \\main = seed.pick(arg2val)
+        \\oops2 = seed.gone()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectNoRecursiveDispatchReported(&test_env);
+}
+
+test "check type - dispatch - callable pumping with constant receivers reports recursive dispatch" {
+    // Each `pick` requires the other type's `pick` at a callable whose last
+    // argument is one `Wrap` deeper than its own, so the obligation chain
+    // alternates between the two constant receivers while the required
+    // callable grows without bound. No state is ever digest-equal and no
+    // receiver ever grows, so only joint state embedding (receiver and
+    // callable together) can stop the chain.
+    const source =
+        \\Wrap(a) := [W(a)]
+        \\A := [MkA].{
+        \\    pick : A, d, e -> {} where [d.pick : d, A, Wrap(e) -> {}]
+        \\    pick = |_, _, _| {}
+        \\}
+        \\B := [MkB].{
+        \\    pick : B, d, e -> {} where [d.pick : d, B, Wrap(e) -> {}]
+        \\    pick = |_, _, _| {}
+        \\}
+        \\a_val = A.MkA
+        \\main = a_val.pick(B.MkB, Wrap.W("x"))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectRecursiveDispatchReported(&test_env);
+}
+
+test "check type - dispatch - weak receiver grounded by a later requirement discharge stays legal" {
+    // `w`'s receiver is still flex when `h`'s scheme requirement is copied;
+    // only the pinned annotation at the bottom grounds it. A finite chain
+    // over a weak receiver must resolve cleanly once grounding arrives.
+    const source =
+        \\T1 := [C1].{
+        \\    step : T1 -> T2
+        \\    step = |_| T2.C2
+        \\}
+        \\T2 := [C2]
+        \\make : {} -> a
+        \\make = |_| crash "n"
+        \\w = make({})
+        \\h = |_u| w.step()
+        \\use = h({})
+        \\pin : T1
+        \\pin = w
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("use", "T2");
+}
+
+// ANNOTATED DISPATCH TARGETS ALWAYS RESOLVE THROUGH THEIR PREDECLARED SCHEMES.
+// Method-syntax dispatch to an annotated method must instantiate that method's
+// predeclared scheme at EVERY dispatch site—including a site inside the same
+// name-linked binding group whose target member has already been checked but
+// whose shared group frame has not generalized yet. Linking such a site
+// directly to the target's in-flight def var unifies the two members'
+// annotation rigids with each other, so the annotated spelling of a group
+// rejects programs its unannotated spelling accepts. The two tests below pin
+// the agreement: the annotated group must infer exactly the same types as its
+// unannotated twin (the control that follows).
+
+test "check type - mutually recursive static dispatch - annotated name-linked group members instantiate predeclared schemes" {
+    const source =
+        \\Flip(a) := [Val(a)].{
+        \\  fwd : Flip(a), U64 -> a
+        \\  fwd = |Flip.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else if n == 1.U64 {
+        \\      Flip.bwd(Flip.Val(x), 0.U64)
+        \\    } else {
+        \\      Flip.Val(x).bwd(n - 1.U64)
+        \\    }
+        \\  }
+        \\  bwd : Flip(a), U64 -> a
+        \\  bwd = |Flip.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else if n == 1.U64 {
+        \\      Flip.fwd(Flip.Val(x), 0.U64)
+        \\    } else {
+        \\      Flip.Val(x).fwd(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\use = (Flip.Val(1.U64).fwd(2.U64), Flip.Val("hi").bwd(1.U64))
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "Test.Flip.fwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "Test.Flip.bwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "use", .expected = "(U64, Str)" },
+    });
+}
+
+test "check type - mutually recursive static dispatch - unannotated name-linked group control" {
+    // Control for the test above: the identical group without annotations.
+    // The type-qualified calls put `fwd` and `bwd` in one name-linked binding
+    // group; the method-syntax dispatches link monomorphically inside it, and
+    // the shared boundary generalizes both members together.
+    const source =
+        \\Flip(a) := [Val(a)].{
+        \\  fwd = |Flip.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else if n == 1.U64 {
+        \\      Flip.bwd(Flip.Val(x), 0.U64)
+        \\    } else {
+        \\      Flip.Val(x).bwd(n - 1.U64)
+        \\    }
+        \\  }
+        \\  bwd = |Flip.Val(x), n| {
+        \\    if n == 0.U64 {
+        \\      x
+        \\    } else if n == 1.U64 {
+        \\      Flip.fwd(Flip.Val(x), 0.U64)
+        \\    } else {
+        \\      Flip.Val(x).fwd(n - 1.U64)
+        \\    }
+        \\  }
+        \\}
+        \\use = (Flip.Val(1.U64).fwd(2.U64), Flip.Val("hi").bwd(1.U64))
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "Test.Flip.fwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "Test.Flip.bwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "use", .expected = "(U64, Str)" },
+    });
+}
+
+test "check type - mutually recursive static dispatch - annotated polymorphic recursion into checked group member" {
+    // Polymorphic recursion: `deeper` dispatches `size` on `Poly((a, a))`, a
+    // DIFFERENT instantiation of the receiver than its own `Poly(a)`. The
+    // annotations license this—each method-syntax dispatch to an annotated
+    // target must instantiate the target's predeclared scheme, whether or not
+    // the target sits in the same name-linked group and has already been
+    // checked. (The `Poly.size`/`Poly.deeper` type-qualified calls create the
+    // name-graph cycle that makes the two methods one binding group.)
+    const source =
+        \\Poly(a) := [Val(a)].{
+        \\  size : Poly(a), U64 -> U64
+        \\  size = |Poly.Val(x), n| {
+        \\    if n == 0 {
+        \\      0
+        \\    } else {
+        \\      Poly.deeper(Poly.Val(x), n)
+        \\    }
+        \\  }
+        \\  deeper : Poly(a), U64 -> U64
+        \\  deeper = |Poly.Val(x), n| {
+        \\    if n == 17 {
+        \\      Poly.size(Poly.Val(x), 0)
+        \\    } else {
+        \\      Poly.Val((x, x)).size(n - 1)
+        \\    }
+        \\  }
+        \\}
+        \\use = Poly.Val(1.U64).size(3)
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "Test.Poly.size", .expected = "Poly(a), U64 -> U64" },
+        .{ .def = "Test.Poly.deeper", .expected = "Poly(a), U64 -> U64" },
+        .{ .def = "use", .expected = "U64" },
+    });
+}
+
+test "check type - mutually recursive static dispatch - annotated dispatch-only mutual methods" {
+    // Control: annotated mutual recursion through method syntax alone. With no
+    // name-graph edge between them, each method is its own binding group, so
+    // every dispatch site sees either a predeclared scheme or a generalized
+    // def and instantiates it.
+    const source =
+        \\Flip(a) := [Val(a)].{
+        \\  fwd : Flip(a), U64 -> a
+        \\  fwd = |Flip.Val(x), n| {
+        \\    if n == 0 {
+        \\      x
+        \\    } else {
+        \\      Flip.Val(x).bwd(n - 1)
+        \\    }
+        \\  }
+        \\  bwd : Flip(a), U64 -> a
+        \\  bwd = |Flip.Val(x), n| {
+        \\    if n == 0 {
+        \\      x
+        \\    } else {
+        \\      Flip.Val(x).fwd(n - 1)
+        \\    }
+        \\  }
+        \\}
+        \\use = (Flip.Val(1.U64).fwd(2.U64), Flip.Val("hi").bwd(1.U64))
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "Test.Flip.fwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "Test.Flip.bwd", .expected = "Flip(a), U64 -> a" },
+        .{ .def = "use", .expected = "(U64, Str)" },
+    });
+}
+
+// DEF ORDER MUST NOT MOVE A DISPATCH DIAGNOSTIC OFF THE DISPATCH EXPRESSION.
+// In this module, `weak`'s pending `combine` relation is genuinely unresolved,
+// so exactly three diagnostics are correct in EITHER def order: a Polymorphic
+// Value for `weak`, a Polymorphic Value for `shared`, and one Missing Method
+// reported at the dispatch expression `weak.combine(shared)` itself. The
+// end-of-check residual ambiguity judgment builds ONE shared reachability set
+// from every function def's interface (plain walks) and scheme-requirement
+// relations (walks that treat the shared receiver as an opaque boundary).
+// `weak` is reachable from `g`'s interface through `shared`'s `List` var, so
+// the judgment must acquit it regardless of whether `f`'s receiver-excluding
+// requirement walk visited that `List` var first. A conviction instead
+// replaces `weak`'s own body with a runtime error and lands the Missing
+// Method on `make({})`—a definition site that has nothing wrong with it.
+
+fn expectResidualDispatchReportShape(test_env: *TestEnv, expected_dispatch_text: []const u8) TestEnv.TestEnvError!void {
+    var polymorphic_value_count: usize = 0;
+    var unresolved_dispatcher_count: usize = 0;
+    for (test_env.checker.problems.problems.items) |problem| {
+        if (problem == .polymorphic_value) {
+            polymorphic_value_count += 1;
+        } else if (problem == .static_dispatch and problem.static_dispatch == .unresolved_dispatcher) {
+            const data = problem.static_dispatch.unresolved_dispatcher;
+            unresolved_dispatcher_count += 1;
+            const source = test_env.module_env.common.source;
+            const region_text = source[data.region.start.offset..data.region.end.offset];
+            try testing.expectEqualStrings(expected_dispatch_text, region_text);
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), polymorphic_value_count);
+    try testing.expectEqual(@as(usize, 1), unresolved_dispatcher_count);
+}
+
+test "check type - def order independence - residual dispatch report with requirement walk first" {
+    // `f` (whose scheme carries the `combine` requirement over `weak`) sits
+    // ahead of `g` (whose interface reaches `weak` through `shared`), so the
+    // residual judgment's excluded-receiver requirement walk visits `shared`'s
+    // var before `g`'s plain interface walk does.
+    const source =
+        \\make : {} -> a
+        \\make = |_| crash "no value"
+        \\weak = make({})
+        \\shared = [weak]
+        \\f = |_u| weak.combine(shared)
+        \\g = |_u| shared
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectResidualDispatchReportShape(&test_env, "weak.combine(shared)");
+}
+
+test "check type - def order independence - residual dispatch report with interface walk first" {
+    // Control: identical module with `g` ahead of `f`, so `g`'s plain
+    // interface walk reaches `weak` before any requirement walk runs.
+    const source =
+        \\make : {} -> a
+        \\make = |_| crash "no value"
+        \\weak = make({})
+        \\shared = [weak]
+        \\g = |_u| shared
+        \\f = |_u| weak.combine(shared)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try expectResidualDispatchReportShape(&test_env, "weak.combine(shared)");
+}
+
+// A REJECTED SPECULATIVE DEFAULT TARGET MUST NOT COMMIT TYPES. Validating the
+// open literal `5` against its `Dec` specialization target unifies `Dec.plus`
+// with the recorded `plus` relation; the annotation pins that relation's
+// return to `Str`, so the validation fails and the target is rejected. The
+// rejected attempt must leave `weakarg` exactly as it stands without it:
+// still `c where [c.wobble : c -> c]`, reported as a Polymorphic Value
+// alongside the one Type Mismatch. Keeping the partial unification instead
+// silently retypes `weakarg` to `Dec` and swaps its Polymorphic Value report
+// for a Missing Method claiming `wobble` is missing on a type the program
+// never chose.
+
+fn expectRejectedDefaultTargetProblemShape(test_env: *TestEnv) TestEnv.TestEnvError!void {
+    var type_mismatch_count: usize = 0;
+    var polymorphic_value_count: usize = 0;
+    for (test_env.checker.problems.problems.items) |problem| {
+        if (problem == .type_mismatch) {
+            type_mismatch_count += 1;
+        } else if (problem == .polymorphic_value) {
+            polymorphic_value_count += 1;
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), type_mismatch_count);
+    try testing.expectEqual(@as(usize, 1), polymorphic_value_count);
+}
+
+test "check type - rejected default target leaves merged weak argument polymorphic" {
+    const source =
+        \\poly : {} -> a
+        \\poly = |_| crash "n"
+        \\helper : c, d -> d where [c.wobble : c -> c]
+        \\helper = |_x, y| y
+        \\weakarg = poly({})
+        \\linked = helper(weakarg, 0)
+        \\r : Str
+        \\r = (5).plus(weakarg)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefTypeOptions("weakarg", "c where [c.wobble : c -> c]", .{ .allow_type_errors = true });
+    try expectRejectedDefaultTargetProblemShape(&test_env);
+}
+
+// The same discipline applies to quote literals: `("t")` defaults to Str
+// without candidate probing, so `Str.concat` is the first real test of the
+// recorded `concat` relation. The annotation pins that relation's return to
+// `Dec`, the validation fails, and the failed unify must not keep the partial
+// merge that retyped `weakarg` to `Str` on the way to the mismatch.
+
+test "check type - rejected quote default target leaves merged weak argument polymorphic" {
+    const source =
+        \\poly : {} -> a
+        \\poly = |_| crash "n"
+        \\helper : c, d -> d where [c.wobble : c -> c]
+        \\helper = |_x, y| y
+        \\weakarg = poly({})
+        \\linked = helper(weakarg, 0)
+        \\r : Dec
+        \\r = ("t").concat(weakarg)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefTypeOptions("weakarg", "c where [c.wobble : c -> c]", .{ .allow_type_errors = true });
+    try expectRejectedDefaultTargetProblemShape(&test_env);
+}
+
+test "check type - rejected default target leaves unreached weak argument polymorphic" {
+    // Control: the same module except the failing `plus` argument is
+    // `[weakarg]`, whose `List` shape already conflicts with `Dec`, so the
+    // rejected validation never unifies through to `weakarg`. The receiver
+    // keeps its polymorphic where-constrained type and both diagnostics land:
+    // this is the exact outcome the test above requires when the argument IS
+    // reached.
+    const source =
+        \\poly : {} -> a
+        \\poly = |_| crash "n"
+        \\helper : c, d -> d where [c.wobble : c -> c]
+        \\helper = |_x, y| y
+        \\weakarg = poly({})
+        \\linked = helper(weakarg, 0)
+        \\r : Str
+        \\r = (5).plus([weakarg])
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertDefTypeOptions("weakarg", "c where [c.wobble : c -> c]", .{ .allow_type_errors = true });
+    try expectRejectedDefaultTargetProblemShape(&test_env);
+}
+
+// CAP-FREE GENERATIONAL DISCHARGE. Each helper `h<i>` owns an explicit scheme
+// requirement over the module-level weak value `w<i>`, and each use
+// `w<i+1> = h<i>({})` mints a pending requirement copy whose receiver is
+// still flex. Grounding cascades one hop per instantiated-dispatch fixpoint
+// round: discharging hop `i` is what grounds hop `i+1`'s receiver, which then
+// takes its single deferred-queue transition through the pending index in the
+// NEXT round. With 70 hops through 70 DISTINCT nominal schemes, the fixpoint
+// must run ~70 generations to quiescence and the module must check cleanly—
+// dispatch termination is structural, with no round budget to exhaust.
+
+test "check type - dispatch - cap-free generational discharge across pending scheme requirements" {
+    const allocator = testing.allocator;
+    const hops = 70;
+
+    var source_builder: std.ArrayList(u8) = .empty;
+    defer source_builder.deinit(allocator);
+
+    for (1..hops + 2) |i| {
+        if (i < hops + 1) {
+            const piece = try std.fmt.allocPrint(allocator,
+                \\T{d} := [C{d}].{{
+                \\    step : T{d} -> T{d}
+                \\    step = |_| T{d}.C{d}
+                \\}}
+                \\
+            , .{ i, i, i, i + 1, i + 1, i + 1 });
+            defer allocator.free(piece);
+            try source_builder.appendSlice(allocator, piece);
+        } else {
+            const piece = try std.fmt.allocPrint(allocator,
+                \\T{d} := [C{d}]
+                \\
+            , .{ i, i });
+            defer allocator.free(piece);
+            try source_builder.appendSlice(allocator, piece);
+        }
+    }
+    try source_builder.appendSlice(allocator,
+        \\make : {} -> a
+        \\make = |_| crash "seed"
+        \\w1 = make({})
+        \\
+    );
+    for (1..hops + 1) |i| {
+        const piece = try std.fmt.allocPrint(allocator,
+            \\h{d} = |_u| w{d}.step()
+            \\w{d} = h{d}({{}})
+            \\
+        , .{ i, i, i + 1, i });
+        defer allocator.free(piece);
+        try source_builder.appendSlice(allocator, piece);
+    }
+    const tail = try std.fmt.allocPrint(allocator,
+        \\pin : T1
+        \\pin = w1
+        \\final : T{d}
+        \\final = w{d}
+        \\
+    , .{ hops + 1, hops + 1 });
+    defer allocator.free(tail);
+    try source_builder.appendSlice(allocator, tail);
+
+    var test_env = try TestEnv.init("Test", source_builder.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    // A hop in the middle of the chain proves the cascade really ran: `w35`
+    // starts flex and only `h34`'s discharged requirement can ground it.
+    try test_env.assertDefType("w35", "T35");
+    try test_env.assertDefType("final", "T71");
+
+    // Every hop must have traveled the pending-requirement route: one
+    // explicit scheme-requirement copy per use of an `h<i>` helper.
+    var scheme_requirement_dispatchers: usize = 0;
+    for (test_env.checker.instantiation_dispatchers.items) |dispatcher| {
+        if (dispatcher.source == .scheme_requirement) scheme_requirement_dispatchers += 1;
+    }
+    try testing.expect(scheme_requirement_dispatchers >= hops);
+}
+
+// CONFLICTED-DEFAULT RECORDING DISCIPLINE. A literal joins
+// `conflicted_default_literal_vars` only when validation REJECTED its head
+// default (every numeral candidate failed, or Str failed the quote predicate
+// probe)—the list routes the dispatch pass's failure path through
+// probed-rollback semantics, so a satisfied receiver on it would make every
+// SUCCESSFUL dispatch on that class pay the savepoint bracket and would leave
+// the resolved-root matching exposed to unrelated later merges. The list
+// itself is scoped to the defaulting-rounds invocation that recorded it, so
+// these tests observe the debug-only monotone recording counter.
+
+test "check type - satisfied quote method constraint records no conflicted default" {
+    const source =
+        \\weak = "a,b,c"
+        \\parts = weak.split_on(",")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    if (comptime std.debug.runtime_safety) {
+        try testing.expectEqual(@as(usize, 0), test_env.checker.bench_conflicted_default_records);
+    }
+}
+
+test "check type - rejected quote default is recorded once and scoped to its defaulting rounds" {
+    // Same module as "rejected quote default target leaves merged weak
+    // argument polymorphic": Str.concat's return cannot unify with the
+    // Dec-pinned relation, so validation rejects the quote default and the
+    // literal is recorded exactly once. After checking, the list is empty
+    // again—entries live only until the recording rounds' cascade has
+    // consumed them, so a var merging into the (by then concrete) class later
+    // keeps ordinary poison semantics.
+    const source =
+        \\poly : {} -> a
+        \\poly = |_| crash "n"
+        \\helper : c, d -> d where [c.wobble : c -> c]
+        \\helper = |_x, y| y
+        \\weakarg = poly({})
+        \\linked = helper(weakarg, 0)
+        \\r : Dec
+        \\r = ("t").concat(weakarg)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    if (comptime std.debug.runtime_safety) {
+        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_conflicted_default_records);
+    }
+    try testing.expectEqual(@as(usize, 0), test_env.checker.conflicted_default_literal_vars.items.len);
+}
+
+test "check type - failed group default records only the rejected driver" {
+    // The quote driver ("az", whose concat obligation Str satisfies) and the
+    // numeral driver (5, whose plus relation is return-pinned to Str so every
+    // numeric candidate fails) interfere through the concat return var, so
+    // they default as one group and the group scan fails. Only the numeral
+    // driver's head default was actually rejected: the quote driver must stay
+    // off the conflicted list and its concat dispatch discharges normally
+    // against Str.
+    const source =
+        \\poly : {} -> a
+        \\poly = |_| crash "n"
+        \\weakarg = poly({})
+        \\r : Str
+        \\r = (5).plus("az".concat(weakarg))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    if (comptime std.debug.runtime_safety) {
+        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_conflicted_default_records);
+    }
+    var mismatch_count: usize = 0;
+    for (test_env.checker.problems.problems.items) |problem| {
+        if (problem == .type_mismatch) mismatch_count += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), mismatch_count);
+}
+
+// PENDING-DISPATCH OWNERSHIP IS BY GROUP IDENTITY. A value-def group checked
+// inside another definition's generalization boundary shares that boundary's
+// rank (a value def generalizes nothing, so no fresh rank frame separates
+// them), and its end-of-def dispatch drain re-sees the enclosing frame's
+// waiting obligation. The obligation is stamped with the group that created
+// it, so the nested value-def frame leaves it waiting instead of recording
+// the target as its own pending work; the enclosing boundary then checks the
+// target's topological prefix itself. The target method here carries its own
+// module-receiver relation, so misattributed resolution would surface as an
+// instantiation-sourced candidate or a diverging type.
+
+test "check type - nested value-def boundary leaves enclosing pending-dispatch obligation with its owner" {
+    var test_env = try TestEnv.init("Test",
+        \\weak = "a,b,c"
+        \\user = |_x| Thing.Val("z").tag()
+        \\mid = "x".split_on(",")
+        \\Thing := [Val(Str)].{
+        \\  tag = |Thing.Val(s)| {
+        \\    parts = weak.split_on(",")
+        \\    _ = parts.get(0)
+        \\    s
+        \\  }
+        \\}
+        \\first = user({})
+        \\second = user({})
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("weak", "Str");
+    try test_env.assertDefType("mid", "List(Str)");
+    try test_env.assertDefType("first", "Str");
+    try test_env.assertDefType("second", "Str");
+}
+
+test "check type - cascaded value-def group checks keep pending dispatch obligations with their owners" {
+    // Two value defs sit between `user` and its dispatch target's group, each
+    // with its own dispatch work: `mid1` targets an unchecked unannotated
+    // method itself, `mid2` dispatches on a checked receiver. Every obligation
+    // must resolve at the boundary of the group that created it.
+    var test_env = try TestEnv.init("Test",
+        \\n = "a"
+        \\user = |_x| Widget.Val("z").size()
+        \\mid1 = Gadget.Val("g").poke()
+        \\mid2 = n.split_on(",")
+        \\Gadget := [Val(Str)].{
+        \\  poke = |Gadget.Val(s)| s
+        \\}
+        \\Widget := [Val(Str)].{
+        \\  size = |Widget.Val(s)| s.count_utf8_bytes()
+        \\}
+        \\out = user({})
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("user", "_arg -> U64");
+    try test_env.assertDefType("mid1", "Str");
+    try test_env.assertDefType("mid2", "List(Str)");
+    try test_env.assertDefType("out", "U64");
+}
+
+// SELF-DISPATCH AND THE DERIVATION GRAPH. A method body that dispatches its
+// own method again is type-legal when the state never grows; the derivation
+// graph must absorb the re-attached relation without recording a self-edge,
+// and the lineage detectors' exact-repeat rule—not the self-edge guard—must
+// reject the case where satisfying the dispatch re-enters itself.
+
+test "check type - self-recursive where-clause dispatch is rejected as recursive dispatch" {
+    var test_env = try TestEnv.init("Test",
+        \\apply = |x| x.step()
+        \\Counter := [Val(I64)].{
+        \\  step = |c| apply(c)
+        \\}
+        \\use1 = apply(Counter.Val(1))
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+test "check type - self-dispatch method over module receiver is rejected as recursive dispatch" {
+    // The receiver is a module-level numeral pinned to `N` by annotation, and
+    // the unannotated method re-dispatches the same method on it: satisfying
+    // the dispatch re-enters the same binding with an equal state, which the
+    // exact-repeat rule rejects. No self-edge ever enters the derivation
+    // graph on the way there.
+    var test_env = try TestEnv.init("Test",
+        \\n = 3
+        \\N := [Val(I64)].{
+        \\  from_numeral : Numeral -> Try(N, [InvalidNumeral(Str)])
+        \\  from_numeral = |_numeral| Ok(N.Val(0))
+        \\  poke = |_x| n.poke()
+        \\}
+        \\pin : N
+        \\pin = n
+        \\main = N.Val(7).poke()
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+// Instantiation depth pin for the explicit-worklist graph copier
+// (src/types/instantiate.zig). Aliases materialize their backing structure
+// inline, so chaining alias declarations grows a spine of unique type-store
+// nodes multiplicatively: each declaration wraps the previous alias in
+// `layers` more `List` levels while keeping its own source nesting (and the
+// annotation-evaluation recursion it drives) at `layers`. Evaluating `deep`'s
+// annotation then instantiates the final alias's template in ONE copy whose
+// depth is at least layers * decls = 9216 unique nodes—deeper than any native
+// stack budget for a recursive copier. The copier runs on a heap worklist, so
+// this program must check cleanly; a native-stack or depth-bounded copier
+// fails this test by crashing or by reporting a phantom infinite-recursion
+// error.
+test "instantiation - alias-chain spine deeper than any native-stack budget checks cleanly" {
+    const allocator = testing.allocator;
+    const decls = 9;
+    const layers = 1024;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "A0(a) : List(a)\n");
+    for (1..decls + 1) |k| {
+        try source.print(allocator, "A{d}(a) : ", .{k});
+        for (0..layers) |_| try source.appendSlice(allocator, "List(");
+        try source.print(allocator, "A{d}(a)", .{k - 1});
+        for (0..layers) |_| try source.appendSlice(allocator, ")");
+        try source.appendSlice(allocator, "\n");
+    }
+    try source.print(allocator,
+        \\
+        \\deep : A{d}({{}}) -> {{}}
+        \\deep = |_| {{}}
+        \\
+        \\go : {{}}
+        \\go = deep([])
+        \\
+    , .{decls});
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// Reachability pin for the canonical-key digest walk
+// (src/check/canonical_type_keys.zig). Every new dispatch edge digests its
+// receiver and its callable, so the digest sees whatever type the receiver
+// carries—here an alias-chain spine thousands of nodes deep, materialized
+// inline as the nominal receiver's argument. A digest walk that descends on
+// the native stack fails this program by crashing rather than by resolving
+// the method.
+test "check type - dispatch on a deeply nested receiver digests its state key" {
+    const allocator = testing.allocator;
+    const decls = 3;
+    const layers = 1024;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "A0(a) : List(a)\n");
+    for (1..decls + 1) |k| {
+        try source.print(allocator, "A{d}(a) : ", .{k});
+        for (0..layers) |_| try source.appendSlice(allocator, "List(");
+        try source.print(allocator, "A{d}(a)", .{k - 1});
+        for (0..layers) |_| try source.appendSlice(allocator, ")");
+        try source.appendSlice(allocator, "\n");
+    }
+    try source.print(allocator,
+        \\
+        \\Wrap(a) := [W(a)].{{
+        \\  unwrap = |w| w
+        \\}}
+        \\
+        \\deep : Wrap(A{d}({{}})) -> Wrap(A{d}({{}}))
+        \\deep = |w| w.unwrap()
+        \\
+    , .{ decls, decls });
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// Reachability pin for the cross-module graph copy
+// (src/check/copy_import.zig). Importing a value pulls its whole type into the
+// importing module's store, so the copy sees an alias-chain spine thousands of
+// nodes deep. A copy that descends on the native stack fails this program by
+// crashing rather than by checking the import.
+test "check type - importing a deeply nested value copies its type across modules" {
+    const allocator = testing.allocator;
+    const decls = 3;
+    const layers = 1024;
+
+    var source_a = std.ArrayList(u8).empty;
+    defer source_a.deinit(allocator);
+    try source_a.appendSlice(allocator, "T0(a) : List(a)\n");
+    for (1..decls + 1) |k| {
+        try source_a.print(allocator, "T{d}(a) : ", .{k});
+        for (0..layers) |_| try source_a.appendSlice(allocator, "List(");
+        try source_a.print(allocator, "T{d}(a)", .{k - 1});
+        for (0..layers) |_| try source_a.appendSlice(allocator, ")");
+        try source_a.appendSlice(allocator, "\n");
+    }
+    try source_a.print(allocator,
+        \\
+        \\A := [A].{{
+        \\  deep : T{d}({{}})
+        \\  deep = []
+        \\}}
+        \\
+    , .{decls});
+
+    var env_a = try TestEnv.init("A", source_a.items);
+    defer env_a.deinit();
+    try env_a.assertNoErrors();
+
+    var env_b = try TestEnv.initWithImport("B", "import A\n\nuse = A.deep\n", "A", &env_a);
+    defer env_b.deinit();
+    try env_b.assertNoErrors();
+}
+
+// Reachability pin for rank adjustment (src/types/generalize.zig). Rank
+// adjustment descends record fields and extensions, so a deeply nested record
+// annotation drives it as deep as the annotation nests. A walk that descends
+// on the native stack fails this program by crashing rather than by
+// generalizing the definition.
+test "check type - generalizing a deeply nested record annotation adjusts every rank" {
+    const allocator = testing.allocator;
+    const decls = 1;
+    const layers = 1200;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "R0(a) : { f : a }\n");
+    for (1..decls + 1) |k| {
+        try source.print(allocator, "R{d}(a) : ", .{k});
+        for (0..layers) |_| try source.appendSlice(allocator, "{ f : ");
+        try source.print(allocator, "R{d}(a)", .{k - 1});
+        for (0..layers) |_| try source.appendSlice(allocator, " }");
+        try source.appendSlice(allocator, "\n");
+    }
+    try source.print(allocator,
+        \\
+        \\deep : R{d}({{}}) -> {{}}
+        \\deep = |_| {{}}
+        \\
+    , .{decls});
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// Depth pin for alias row validation (`validateAliasRowsHelp` and the row
+// frames in src/check/Check.zig). Record payloads re-enter the walk per field,
+// so a record-shaped alias chain drives it as deep as instantiation goes:
+// layers * decls = 9216 nested rows, past the depth bound the checker used to
+// carry. Validation runs on a heap worklist covering both the constructor
+// spine and the rows, so this program must check cleanly; a walk that exits
+// through a natively recursive row validator fails it by crashing.
+test "check type - record alias-chain rows validate deeper than the old depth bound" {
+    const allocator = testing.allocator;
+    const decls = 9;
+    const layers = 1024;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "R0(a) : { f : a }\n");
+    for (1..decls + 1) |k| {
+        try source.print(allocator, "R{d}(a) : ", .{k});
+        for (0..layers) |_| try source.appendSlice(allocator, "{ f : ");
+        try source.print(allocator, "R{d}(a)", .{k - 1});
+        for (0..layers) |_| try source.appendSlice(allocator, " }");
+        try source.appendSlice(allocator, "\n");
+    }
+    try source.print(allocator,
+        \\
+        \\deep : R{d}({{}}) -> {{}}
+        \\deep = |_| {{}}
+        \\
+    , .{decls});
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// Scope pin for alias row duplicate-name checking. A row's duplicate set is
+// its own head fields plus its extension chain; the rows reachable through a
+// field's TYPE are separate rows and share no names with it. Here `Outer`
+// declares `value` after a field whose type reaches `Inner`, which declares
+// `value` too, and the tag union repeats the shape with `Same`—both are
+// legal. A checker that lets a nested row's names outlive it reports a
+// duplicate field, poisons the declaration, and cascades that erroneous type
+// into every annotation naming it.
+test "check type - a nested row's field names do not collide with the row containing it" {
+    const source =
+        \\Inner : { name : Str, value : U64 }
+        \\Outer : { bindings : List(Inner), value : Str }
+        \\InnerTags : [Same, Other(Str)]
+        \\OuterTags : [Wrapped(InnerTags), Same]
+        \\
+        \\use_record : Outer -> Str
+        \\use_record = |outer| outer.value
+        \\
+        \\use_tags : OuterTags -> OuterTags
+        \\use_tags = |tags| tags
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+// Reachability pin for the type renderer (src/types/TypeWriter.zig). The error
+// snapshotter renders one string per node it snapshots and `report.zig`
+// renders a type for every diagnostic it formats, so a diagnostic about a
+// deeply nested type drives the renderer as deep as the type nests. A record
+// annotation is the shape that reaches it: an alias renders as its name, so
+// only a structural type carries its whole depth into the rendered message.
+// The nesting here is what the stages ahead of checking accept—a 5,000-layer
+// annotation crashes before checking ever runs—so the renderer's own depth is
+// pinned by the unit tests beside it, and this program pins that the whole
+// report path, snapshot through render, runs on a type this deep.
+test "check type - a deeply nested record annotation reports its mismatch" {
+    const allocator = testing.allocator;
+    const layers = 1200;
+
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(allocator);
+    try source.appendSlice(allocator, "deep : ");
+    for (0..layers) |_| try source.appendSlice(allocator, "{ f : ");
+    try source.appendSlice(allocator, "{}");
+    for (0..layers) |_| try source.appendSlice(allocator, " }");
+    try source.appendSlice(allocator, "\ndeep = {}\n");
+
+    var test_env = try TestEnv.init("Test", source.items);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
 }

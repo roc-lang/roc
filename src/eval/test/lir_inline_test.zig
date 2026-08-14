@@ -3777,6 +3777,239 @@ fn expectReachableProcShapeFieldEqual(
     try std.testing.expectEqual(expected, actual);
 }
 
+// A producer-authored concrete iterator representation must survive ordinary
+// procedure returns and all supported static-dispatch invocation forms. Each
+// case below must reach `sum_it` (the debug-name sanity probe), avoid the public
+// `Iter.next` boundary, and lower without iterator-state heap or ARC operations.
+// List-backed cases retain exactly the one decref required to release their
+// concrete source list; range-backed cases have none.
+test "iterator producers and delegating wrappers fuse into a scalar loop" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, decrefs: usize, src: []const u8 }{
+        .{ .name = "direct List (baseline)", .decrefs = 1, .src =
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in xs {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "type alias of List", .decrefs = 1, .src =
+        \\Nums : List(U64)
+        \\
+        \\sum_it : Nums -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in xs {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "record wrapper with method delegate", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    var $sum = 0
+        \\    for x in rows {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "tag wrapper with qualified delegate", .decrefs = 1, .src =
+        \\Bag(a) := [Items({ entries : List(a) })].{
+        \\    iter : Bag(a) -> Iter(a)
+        \\    iter = |bag| match bag {
+        \\        Bag.Items(data) => List.iter(data.entries)
+        \\    }
+        \\}
+        \\
+        \\sum_it : Bag(U64) -> U64
+        \\sum_it = |bag| {
+        \\    var $sum = 0
+        \\    for x in bag {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Bag.Items({ entries: [1, 2, 3] }))
+        },
+        .{ .name = "generic record wrapper", .decrefs = 1, .src =
+        \\Bag(a) := { entries : List(a) }.{
+        \\    iter : Bag(a) -> Iter(a)
+        \\    iter = |bag| bag.entries.iter()
+        \\}
+        \\
+        \\sum_it : Bag(U64) -> U64
+        \\sum_it = |bag| {
+        \\    var $sum = 0
+        \\    for x in bag {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Bag.{ entries: [1, 2, 3] })
+        },
+        .{ .name = "two-parameter generic tuple wrapper", .decrefs = 1, .src =
+        \\Bag(k, v) := { entries : List((k, v)) }.{
+        \\    iter : Bag(k, v) -> Iter((k, v))
+        \\    iter = |bag| bag.entries.iter()
+        \\}
+        \\
+        \\sum_it : Bag(U64, U64) -> U64
+        \\sum_it = |bag| {
+        \\    var $sum = 0
+        \\    for pair in bag {
+        \\        $sum = $sum + pair.0 + pair.1
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Bag.{ entries: [(1, 10), (2, 20)] })
+        },
+        .{ .name = "explicit method invocation", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    iter = rows.iter()
+        \\    var $sum = 0
+        \\    for x in iter {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "fully qualified invocation", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    iter = Rows.iter(rows)
+        \\    var $sum = 0
+        \\    for x in iter {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "reverse-list delegate", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter_rev()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    var $sum = 0
+        \\    for x in rows {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "range delegate", .decrefs = 0, .src =
+        \\Span := { first : U8, last : U8 }.{
+        \\    iter : Span -> Iter(U8)
+        \\    iter = |span| span.first.until(span.last)
+        \\}
+        \\
+        \\sum_it : Span -> U64
+        \\sum_it = |span| {
+        \\    var $sum = 0
+        \\    for x in span {
+        \\        $sum = $sum + x.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Span.{ first: 1, last: 4 })
+        },
+        .{ .name = "method-syntax ascending range", .decrefs = 0, .src =
+        \\sum_it : U8 -> U64
+        \\sum_it = |n| {
+        \\    var $sum = 0
+        \\    for x in 0.U8.until(n) {
+        \\        $sum = $sum + x.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(4)
+        },
+    };
+
+    for (cases) |c| {
+        var opt = try lowerModuleWithProcDebugNames(allocator, c.src, .wrappers, true);
+        defer opt.deinit(allocator);
+        if (!try reachableProcDebugName(allocator, &opt.lowered, "sum_it")) {
+            std.debug.print("debug-name sanity probe missing for case: {s}\n", .{c.name});
+            return error.TestUnexpectedResult;
+        }
+        if (try reachableProcDebugName(allocator, &opt.lowered, "Builtin.Iter.next")) {
+            std.debug.print("iterator fusion lost for case: {s}\n", .{c.name});
+            return error.TestUnexpectedResult;
+        }
+        inline for (.{
+            "box_box_count",
+            "erased_call_count",
+            "packed_erased_fn_count",
+            "list_with_capacity_count",
+            "incref_count",
+        }) |field_name| {
+            const actual = try reachableProcShapeFieldTotal(allocator, &opt.lowered, field_name);
+            if (actual != 0) {
+                std.debug.print("unexpected {s}={d} for case: {s}\n", .{ field_name, actual, c.name });
+                return error.TestUnexpectedResult;
+            }
+        }
+        const actual_decrefs = try reachableProcShapeFieldTotal(allocator, &opt.lowered, "decref_count");
+        if (actual_decrefs != c.decrefs) {
+            std.debug.print("unexpected decref_count={d} for case: {s}\n", .{ actual_decrefs, c.name });
+            return error.TestUnexpectedResult;
+        }
+        try expectLoweredIterChainAllocatesNothing(allocator, &opt.lowered);
+    }
+}
+
 fn expectStaticListIterAppendLoopAvoidsListAppendAllocation(
     iter_source: []const u8,
     list_source: []const u8,
@@ -3826,10 +4059,11 @@ fn expectLoweredIterStateHasNoBoxesOrErasedCallables(
     try expectReachableProcShapeFieldEqual(allocator, lowered, "packed_erased_fn_count", 0);
 }
 
-// Repro for https://github.com/roc-lang/roc/issues/10429: numeric `until` and
-// `range_exclusive` iterators consumed directly by `for` have scalar state,
-// with no heap or ARC operations.
-test "issue 10429 numeric until and range_exclusive loops have no heap or RC operations" {
+// Repro for https://github.com/roc-lang/roc/issues/10429: numeric ranges
+// consumed directly by `for` have scalar state, with no heap or ARC
+// operations. All four spellings live in one body so their distinct producer
+// representations cannot be accidentally deduplicated.
+test "issue 10429 numeric range spellings in one body have no heap or RC operations" {
     const allocator = std.testing.allocator;
     const numeric_types = [_][]const u8{
         "U8",  "I8",  "U16",  "I16",  "U32", "I32",
@@ -3838,42 +4072,331 @@ test "issue 10429 numeric until and range_exclusive loops have no heap or RC ope
 
     for (numeric_types) |numeric_type| {
         const source = try std.fmt.allocPrint(allocator,
-            \\until_last : {s} -> {s}
-            \\until_last = |n| {{
+            \\all_last : {s} -> ({s}, {s}, {s}, {s})
+            \\all_last = |n| {{
             \\    var $last = 0.{s}
             \\    for i in {s}.until(0, n) {{
             \\        $last = i
             \\    }}
-            \\    $last
-            \\}}
-            \\
-            \\range_last : {s} -> {s}
-            \\range_last = |n| {{
-            \\    var $last = 0.{s}
-            \\    for i in {s}.range_exclusive(0, n) {{
+            \\    until_last = $last
+            \\    $last = 0.{s}
+            \\    for i in {s}.range_exclusive_to(0, n) {{
             \\        $last = i
             \\    }}
-            \\    $last
+            \\    exclusive_last = $last
+            \\    $last = 0.{s}
+            \\    for i in {s}.to(0, n) {{
+            \\        $last = i
+            \\    }}
+            \\    to_last = $last
+            \\    $last = 0.{s}
+            \\    for i in {s}.range_inclusive_to(0, n) {{
+            \\        $last = i
+            \\    }}
+            \\    (until_last, exclusive_last, to_last, $last)
             \\}}
             \\
-            \\main : {s} -> ({s}, {s})
-            \\main = |n| (until_last(n), range_last(n))
+            \\main : {s} -> ({s}, {s}, {s}, {s})
+            \\main = |n| all_last(n)
         , .{
             numeric_type, numeric_type, numeric_type, numeric_type,
             numeric_type, numeric_type, numeric_type, numeric_type,
-            numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type,
         });
         defer allocator.free(source);
 
-        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .proc_debug_names = true,
+            .tag_reachability = true,
+        });
         defer optimized.deinit(allocator);
 
+        if (try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next")) {
+            std.debug.print("numeric range fusion lost for {s}\n", .{numeric_type});
+            return error.TestUnexpectedResult;
+        }
         try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "incref_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_if_initialized_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "free_count", 0);
     }
+}
+
+test "F32 and F64 range syntax fuses without Iter.next" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "F32", "F64" }) |numeric_type| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\all_last : {s} -> ({s}, {s})
+            \\all_last = |n| {{
+            \\    var $exclusive = 0.0.{s}
+            \\    for i in 0.0.{s}..<n {{
+            \\        $exclusive = i
+            \\    }}
+            \\    var $inclusive = 0.0.{s}
+            \\    for i in 0.0.{s}..=n {{
+            \\        $inclusive = i
+            \\    }}
+            \\    ($exclusive, $inclusive)
+            \\}}
+            \\
+            \\main : {s} -> ({s}, {s})
+            \\main = |n| all_last(n)
+        , .{
+            numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type,
+            numeric_type,
+        });
+        defer allocator.free(source);
+
+        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .proc_debug_names = true,
+            .tag_reachability = true,
+        });
+        defer optimized.deinit(allocator);
+
+        if (try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next")) {
+            std.debug.print("floating-point range fusion lost for {s}\n", .{numeric_type});
+            return error.TestUnexpectedResult;
+        }
+        try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+    }
+}
+
+test "nested iterator results retain the callee-authored representation" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8 }{
+        .{ .name = "record", .source =
+        \\wrap : List(U64) -> { it : Iter(U64) }
+        \\wrap = |items| { it: items.iter() }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "tuple", .source =
+        \\wrap : List(U64) -> (Iter(U64), U64)
+        \\wrap = |items| (items.iter(), 1)
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.0 {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "list", .source =
+        \\wrap : List(U64) -> List(Iter(U64))
+        \\wrap = |items| [items.iter()]
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    var $sum = 0
+        \\    for iter in wrap(items) {
+        \\        for x in iter {
+        \\            $sum = $sum + x
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "nominal record", .source =
+        \\Wrapped := { it : Iter(U64) }
+        \\
+        \\wrap : List(U64) -> Wrapped
+        \\wrap = |items| Wrapped.{ it: items.iter() }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "Try", .source =
+        \\wrap : List(U64) -> Try(Iter(U64), [Unavailable])
+        \\wrap = |items| Ok(items.iter())
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| match wrap(items) {
+        \\    Ok(iter) => {
+        \\        var $sum = 0
+        \\        for x in iter {
+        \\            $sum = $sum + x
+        \\        }
+        \\        $sum
+        \\    }
+        \\    Err(_) => 0
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "match field access", .source =
+        \\wrap : List(U64) -> { it : Try(Iter(U64), [Unavailable]) }
+        \\wrap = |items| { it: Ok(items.iter()) }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    match wrapped.it {
+        \\        Ok(iter) => {
+        \\            var $sum = 0
+        \\            for x in iter {
+        \\                $sum = $sum + x
+        \\            }
+        \\            $sum
+        \\        }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "closed direct Try method", .source =
+        \\Rows := { items : List(U64) }.{
+        \\    wrapped : Rows -> Try(Iter(U64), [Unavailable])
+        \\    wrapped = |rows| Ok(rows.items.iter())
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    wrapped = rows.wrapped()
+        \\    match wrapped {
+        \\        Ok(iter) => {
+        \\            var $sum = 0
+        \\            for x in iter {
+        \\                $sum = $sum + x
+        \\            }
+        \\            $sum
+        \\        }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+    };
+
+    for (cases) |case| {
+        var optimized = try lowerModuleWithProcDebugNames(allocator, case.source, .wrappers, true);
+        defer optimized.deinit(allocator);
+
+        if (try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next")) {
+            std.debug.print("nested iterator result lost representation for {s} wrapper\n", .{case.name});
+            return error.TestUnexpectedResult;
+        }
+        try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+    }
+}
+
+test "completed iterator method specs refresh their public lookup keys" {
+    const allocator = std.testing.allocator;
+    const single_source =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_once : Rows -> U64
+        \\sum_once = |rows| {
+        \\    first = rows.iter()
+        \\    var $sum = 0
+        \\    for x in first {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_once(Rows.{ items: [1, 2, 3] })
+    ;
+    const source =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_twice : Rows -> U64
+        \\sum_twice = |rows| {
+        \\    first = rows.iter()
+        \\    var $sum = 0
+        \\    for x in first {
+        \\        $sum = $sum + x
+        \\    }
+        \\    second = rows.iter()
+        \\    for x in second {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_twice(Rows.{ items: [1, 2, 3] })
+    ;
+
+    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers, true);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+
+    const single_counters = try monotypeCountersForModule(allocator, single_source);
+    const repeated_counters = try monotypeCountersForModule(allocator, source);
+    try std.testing.expectEqual(single_counters.template_misses, repeated_counters.template_misses);
+    try std.testing.expect(repeated_counters.template_hits > single_counters.template_hits);
+}
+
+test "match locals and field accesses retain their registered scrutinee nodes" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : Try(U64, [Unavailable]), { value : Try(U64, [Unavailable]) } -> U64
+        \\main = |input, record| {
+        \\    local = input
+        \\    from_local = match local {
+        \\        Ok(value) => value
+        \\        Err(_) => 0
+        \\    }
+        \\    from_field = match record.value {
+        \\        Ok(value) => value
+        \\        Err(_) => 0
+        \\    }
+        \\    from_local + from_field
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+    try expectReachableProcShapeFieldEqual(allocator, &lowered.lowered, "switch_count", 2);
 }
 
 // Zero-allocation gate for iterator chains that escape their construction site
@@ -3922,7 +4445,7 @@ test "iter alloc static: iterator returned from a function is zero-alloc" {
         \\}
         \\
         \\make : U64 -> Iter(U64)
-        \\make = |n| Iter.map(0.U64..<n, |x| x + 1)
+        \\make = |n| Iter.map((0.U64..<n).iter(), |x| x + 1)
         \\
         \\main : U64
         \\main = consume(make(5))
@@ -3941,7 +4464,7 @@ test "iter alloc static: iterator passed to a non-inlined function is zero-alloc
         \\}
         \\
         \\main : U64
-        \\main = consume(Iter.map(0.U64..<5, |x| x + 1))
+        \\main = consume(Iter.map((0.U64..<5).iter(), |x| x + 1))
     );
 }
 
@@ -3959,9 +4482,9 @@ test "iter alloc static: branch-chosen iterator is zero-alloc" {
         \\choose : Bool -> Iter(U64)
         \\choose = |flag|
         \\    if flag {
-        \\        Iter.map(0.U64..<5, |x| x + 1)
+        \\        Iter.map((0.U64..<5).iter(), |x| x + 1)
         \\    } else {
-        \\        Iter.keep_if(0.U64..<5, |x| x > 2)
+        \\        Iter.keep_if((0.U64..<5).iter(), |x| x > 2)
         \\    }
         \\
         \\main : U64
@@ -3988,9 +4511,9 @@ test "iter alloc static: same adapter with different capture layouts is zero-all
         \\    config : Config
         \\    config = { big: 10, small: 3 }
         \\    if flag {
-        \\        Iter.map(0.U64..<5, |x| x + offset)
+        \\        Iter.map((0.U64..<5).iter(), |x| x + offset)
         \\    } else {
-        \\        Iter.map(0.U64..<5, |x| x + config.big + config.small)
+        \\        Iter.map((0.U64..<5).iter(), |x| x + config.big + config.small)
         \\    }
         \\}
         \\
@@ -4024,7 +4547,7 @@ test "iter alloc static: runtime-count map wrapping terminates at dynamic bounda
         \\}
         \\
         \\main : U64 -> U64
-        \\main = |count| consume(wrap(count, 0.U64..<5))
+        \\main = |count| consume(wrap(count, (0.U64..<5).iter()))
     ;
 
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
@@ -4062,7 +4585,7 @@ test "iter alloc static: recursive map wrapping terminates at dynamic boundary" 
         \\    }
         \\
         \\main : U64 -> U64
-        \\main = |count| consume(wrap(count, 0.U64..<5))
+        \\main = |count| consume(wrap(count, (0.U64..<5).iter()))
     ;
 
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
@@ -4092,7 +4615,7 @@ fn deepStaticChainSource(comptime map_count: usize) []const u8 {
         var source: []const u8 =
             \\main : U64 -> U64
             \\main = |n| {
-            \\    i0 = 0.U64..<n
+            \\    i0 = (0.U64..<n).iter()
             \\
         ;
         for (0..map_count) |index| {
@@ -4475,6 +4998,7 @@ test "plant iter pipeline collect uses direct range map list loop" {
         \\starting_plants : () -> List(Plant)
         \\starting_plants = || {
         \\    (0.I64..=15)
+        \\        .iter()
         \\        .map(|i| random_plant(i * 12))
         \\        .collect()
         \\}
@@ -4494,7 +5018,7 @@ test "direct range map collect uses direct list loop" {
         \\main : () -> List(Plant)
         \\main = ||
         \\    Iter.collect(
-        \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
+        \\        Iter.map((0.I64..=15).iter(), |i| random_plant(i * 12)),
         \\    )
     , 2);
 }
@@ -4685,6 +5209,154 @@ test "imported iterator producer keeps finite step callables" {
     defer optimized.deinit(allocator);
 
     try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+}
+
+test "static list iter_rev loop eliminates the public iterator boundary" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\sum_backwards : U64 -> I64
+        \\sum_backwards = |extra| {
+        \\    base = [11, 13, 3, 11]
+        \\
+        \\    points =
+        \\        if extra == 2 {
+        \\            base.append(2).append(7)
+        \\        } else {
+        \\            base
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for x in points.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_backwards(2)
+    ;
+
+    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers, true);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.List.iter_rev"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "iter_from_step"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
+}
+
+test "Dict and Set iteration inherit the minted list representation" {
+    const allocator = std.testing.allocator;
+    const dict_source =
+        \\sum_dict : U64 -> U64
+        \\sum_dict = |extra| {
+        \\    d = Dict.single(1.U64, 10.U64).insert(extra, 20)
+        \\
+        \\    var $sum = 0
+        \\    for (k, v) in d.iter() {
+        \\        $sum = $sum + k + v
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_dict(2)
+    ;
+    const set_source =
+        \\sum_set : U64 -> U64
+        \\sum_set = |extra| {
+        \\    s = Set.from_list([1.U64, 2, extra])
+        \\
+        \\    var $sum = 0
+        \\    for x in s.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_set(3)
+    ;
+
+    var dict_optimized = try lowerModuleWithProcDebugNames(allocator, dict_source, .wrappers, true);
+    defer dict_optimized.deinit(allocator);
+    var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers, true);
+    defer set_optimized.deinit(allocator);
+
+    // The `Dict.iter` / `Set.iter_rev` procedures themselves may survive as a
+    // call: their bodies unwrap the nominal and hand back the backing list,
+    // which happens once when the iterator is built rather than once per step.
+    // What must not survive is the stepping machinery—a reachable `Iter.next`
+    // would mean the loop is running against the public iterator boundary
+    // instead of the minted representation.
+    for ([_][]const u8{ "Builtin.List.iter", "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &dict_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE dict: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
+    for ([_][]const u8{ "Builtin.List.iter_rev", "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &set_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE set: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
+}
+
+test "closed Dict and Set receivers keep minted iteration" {
+    const allocator = std.testing.allocator;
+    // The receivers are fully closed, so the checker's static-data hoisting
+    // applies. The delegating `.iter()`/`.iter_rev()` dispatch must leave the
+    // collection as the hoist root instead of becoming one itself; a hoisted
+    // dispatch result would step through the public iterator boundary.
+    const dict_source =
+        \\sum_dict : U64 -> U64
+        \\sum_dict = |seed| {
+        \\    d = Dict.single(1.U64, 10.U64).insert(2, 20)
+        \\
+        \\    var $sum = seed
+        \\    for (k, v) in d.iter() {
+        \\        $sum = $sum + k + v
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_dict(7)
+    ;
+    const set_source =
+        \\sum_set : U64 -> U64
+        \\sum_set = |seed| {
+        \\    s = Set.from_list([1.U64, 2, 3])
+        \\
+        \\    var $sum = seed
+        \\    for x in s.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_set(7)
+    ;
+
+    var dict_optimized = try lowerModuleWithProcDebugNames(allocator, dict_source, .wrappers, true);
+    defer dict_optimized.deinit(allocator);
+    var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers, true);
+    defer set_optimized.deinit(allocator);
+
+    // Sanity probes: reachability data must be populated, or every absence
+    // assertion below holds vacuously.
+    try std.testing.expect(try reachableProcDebugName(allocator, &dict_optimized.lowered, "sum_dict"));
+    try std.testing.expect(try reachableProcDebugName(allocator, &set_optimized.lowered, "sum_set"));
+
+    for ([_][]const u8{ "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &dict_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE closed dict: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
+    for ([_][]const u8{ "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &set_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE closed set: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
 }
 
 test "static list iter append loop eliminates public iter adapters" {
@@ -5649,7 +6321,7 @@ test "iterdiff: recursively-constructed iterator chain agrees across inline mode
         \\build : U64 -> U64
         \\build = |depth| {
         \\    var $sum = 0.U64
-        \\    for x in wrap(depth, 0.U64..<5) {
+        \\    for x in wrap(depth, (0.U64..<5).iter()) {
         \\        $sum = $sum + x
         \\    }
         \\    dbg $sum

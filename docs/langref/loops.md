@@ -14,7 +14,7 @@ for n in 1..<5 {
 }
 ```
 
-> `1..<5` is a [range](numbers#ranges): an `Iter` of the numbers from 1 up to (but not including) 5. Writing `1..=5` instead would include the 5. A range is an `Iter` of its bounds' type—for example, if the bounds are `I64` values, the range is an `Iter(I64)`, and so `n` in this example would be an `I64`.
+> `1..<5` is a [range](numbers#ranges): a reusable `Range` describing the numbers from 1 up to (but not including) 5. Writing `1..=5` instead would include the 5. If the bounds are `I64` values, the range is a `Range(I64)`, and its iterator yields `I64` values.
 
 A loop body only includes statements; it does not have a final expression. The loop itself evaluates to `{}`.
 
@@ -34,7 +34,28 @@ for n in [1, 2, 3, 4] {
 }
 ```
 
-This `[1, 2, 3, 4]` code snippet works the same way as the earlier `1..<5` one. In one case, `1..<5` evaluates to an `Iter` of the numbers 1 through 4, and in the other, `[1, 2, 3, 4].iter()` evaluates to an `Iter` of those same numbers. Either way, the loop proceeds by repeatedly calling `next` on that `Iter`.
+This `[1, 2, 3, 4]` code snippet works the same way as the earlier `1..<5` one. The range stores its bounds and produces an iterator when the loop calls its `iter` method; the list's `iter` method also produces an iterator over the same values. The loop then repeatedly calls `next` on that `Iter`.
+
+### Looping backwards
+
+To visit a list's items from last to first, use `List.iter_rev` instead of
+`iter`:
+
+```roc
+var $visited = []
+
+for n in [1, 2, 3, 4].iter_rev() {
+    $visited = $visited.append(n)
+}
+
+# $visited is now [4, 3, 2, 1]
+```
+
+This reads the list backwards in place. Unlike `List.rev`, it does not build a
+reversed copy of the list first. Dictionaries and sets also provide `iter_rev`
+to traverse their current iteration order backwards. To reverse values from
+another iterator source, first collect them with `List.from_iter`, then call
+`iter_rev` on that list.
 
 ### Pattern matching in `for`
 

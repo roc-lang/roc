@@ -69,6 +69,7 @@ pub const Problem = union(enum) {
     effectful_default_value: EffectfulDefaultValue,
     non_concrete_default_value: NonConcreteDefaultValue,
     recursive_default_value: RecursiveDefaultValue,
+    circular_value_definition: CircularValueDefinition,
     literal_defaulted: LiteralDefaulted,
     non_exhaustive_match: NonExhaustiveMatch,
     non_exhaustive_destructure: NonExhaustiveDestructure,
@@ -307,6 +308,13 @@ pub const RecursiveDefaultValue = struct {
     field_name: Ident.Idx,
 };
 
+/// A top-level non-function value in a strict dependency cycle discovered
+/// after type-directed dispatch targets have resolved.
+pub const CircularValueDefinition = struct {
+    ident: Ident.Idx,
+    region: base.Region,
+};
+
 /// Tuple access on a value whose resolved type proves the access is invalid.
 pub const InvalidTupleAccess = struct {
     region: base.Region,
@@ -523,11 +531,15 @@ pub const TypeDoesNotSupportMap = struct {
 };
 
 /// Error when satisfying a static-dispatch constraint immediately requires the
-/// same static-dispatch constraint again on the same dispatcher type.
+/// same static-dispatch constraint again on the same dispatcher type, or on a
+/// dispatcher that strictly structurally contains an earlier dispatcher on the
+/// same derivation chain. `grown_from_snapshot` is that earlier, strictly
+/// smaller dispatcher in the growing-receiver case.
 pub const RecursiveDispatch = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
     method_name: Ident.Idx,
+    grown_from_snapshot: ?SnapshotContentIdx = null,
 };
 
 // nominal type errors //

@@ -12,20 +12,17 @@ result = poly() == poly()
 # EXPECTED
 MISSING METHOD - static_dispatch_unresolved_equality.md:3:10:3:16
 # PROBLEMS
+── ✗ missing method ──────────────── static_dispatch_unresolved_equality.md:3:10
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to compare values with `==`, but their ────┐
-└┬───────────────┘  type is an unresolved type variable, which has no         │
- │                  methods.                                                  │
- │                                                                            │
- │  result = poly() == poly()                                                 │
- │           ‾‾‾‾‾‾                                                           │
- └─────────────────────────────── static_dispatch_unresolved_equality.md:3:10 ┘
+This is trying to compare values with ==, but their type is an unresolved type
+variable, which has no methods.
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+result = poly() == poly()
+         ^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -81,7 +78,7 @@ result = poly() == poly()
 			(lhs
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(rhs
-				(e-call (constraint-fn-var 218)
+				(e-call (constraint-fn-var 228)
 					(e-lookup-local
 						(p-assign (ident "poly"))))))))
 ~~~

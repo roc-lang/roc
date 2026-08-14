@@ -2002,8 +2002,8 @@ const Lowerer = struct {
             .type_name = try self.result.const_type_names.internTypeName(self.solved.lifted.names.typeNameText(def.type_name)),
             .source_decl = def.source_decl,
             .generated = def.generated,
-            .iterator_representation = @enumFromInt(@intFromEnum(def.iterator_representation)),
-            .iterator_kind = @enumFromInt(@intFromEnum(def.iterator_kind)),
+            .iterator_representation = def.iterator_representation,
+            .iterator_kind = def.iterator_kind,
             .iterator_depth = def.iterator_depth,
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try self.constRecordFieldName(topology.len_field),
@@ -9698,18 +9698,26 @@ fn reinternNames(
 
 fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Store) std.mem.Allocator.Error!MonoType.Store {
     const view = source.view();
-    return .{
-        .allocator = allocator,
-        .types = @TypeOf(source.types).fromArrayList(try cloneSlice(MonoType.Content, allocator, view.types)),
-        .type_digests = @TypeOf(source.type_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, view.type_digests)),
-        .specialization_digests = @TypeOf(source.specialization_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.specializationDigestsView())),
-        .constructing = @TypeOf(source.constructing).fromArrayList(try cloneSlice(bool, allocator, source.constructing.unsafeRawItemsForView())),
-        .spans = @TypeOf(source.spans).fromArrayList(try cloneSlice(MonoType.TypeId, allocator, view.spans)),
-        .fields = @TypeOf(source.fields).fromArrayList(try cloneSlice(MonoType.Field, allocator, view.fields)),
-        .tags = @TypeOf(source.tags).fromArrayList(try cloneSlice(MonoType.Tag, allocator, view.tags)),
-        .declared_fields = @TypeOf(source.declared_fields).fromArrayList(try cloneSlice(MonoType.DeclaredField, allocator, view.declared_fields)),
-        .frozen = source.isFrozen(),
-    };
+    var cloned = MonoType.Store.init(allocator);
+    errdefer cloned.deinit();
+
+    cloned.types = @TypeOf(source.types).fromArrayList(try cloneSlice(MonoType.Content, allocator, view.types));
+    cloned.type_digests = @TypeOf(source.type_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, view.type_digests));
+    cloned.specialization_digests = @TypeOf(source.specialization_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.specializationDigestsView()));
+    cloned.constructing = @TypeOf(source.constructing).fromArrayList(try cloneSlice(bool, allocator, source.constructing.unsafeRawItemsForView()));
+    cloned.iterator_interface_cache = @TypeOf(source.iterator_interface_cache).fromArrayList(try cloneSlice(?bool, allocator, source.iterator_interface_cache.unsafeRawItemsForView()));
+    var iterator_interface_visit_epochs: std.ArrayList(u32) = .empty;
+    errdefer iterator_interface_visit_epochs.deinit(allocator);
+    try iterator_interface_visit_epochs.resize(allocator, view.types.len);
+    @memset(iterator_interface_visit_epochs.items, 0);
+    cloned.iterator_interface_visit_epochs = @TypeOf(source.iterator_interface_visit_epochs).fromArrayList(iterator_interface_visit_epochs);
+    iterator_interface_visit_epochs = .empty;
+    cloned.spans = @TypeOf(source.spans).fromArrayList(try cloneSlice(MonoType.TypeId, allocator, view.spans));
+    cloned.fields = @TypeOf(source.fields).fromArrayList(try cloneSlice(MonoType.Field, allocator, view.fields));
+    cloned.tags = @TypeOf(source.tags).fromArrayList(try cloneSlice(MonoType.Tag, allocator, view.tags));
+    cloned.declared_fields = @TypeOf(source.declared_fields).fromArrayList(try cloneSlice(MonoType.DeclaredField, allocator, view.declared_fields));
+    cloned.frozen = source.isFrozen();
+    return cloned;
 }
 
 fn cloneSolvedTypeStore(allocator: std.mem.Allocator, source: *const SolvedType.Store) std.mem.Allocator.Error!SolvedType.Store {

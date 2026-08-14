@@ -4955,6 +4955,409 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "10" },
     },
+    // A procedure that returns `Iter` hands its caller a callee-authored
+    // representation. Consuming that call directly as a `for` source must
+    // still dispatch against the caller's own iterator request.
+    .{
+        .name = "for loop over a procedure returning a list-backed iterator",
+        .source_kind = .module,
+        .source =
+        \\mk : List(U64) -> Iter(U64)
+        \\mk = |xs| xs.iter()
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in mk(xs) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_it([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "for loop over a procedure returning a stored Range",
+        .source_kind = .module,
+        .source =
+        \\mk : U64 -> Range(U64)
+        \\mk = |n| 0..<n
+        \\
+        \\sum_it : U64 -> U64
+        \\sum_it = |n| {
+        \\    var $sum = 0
+        \\    for x in mk(n) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_it(4)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "for loop over a procedure returning an adapted iterator",
+        .source_kind = .module,
+        .source =
+        \\mk : List(U64) -> Iter(U64)
+        \\mk = |xs| xs.iter().map(|x| x * 2)
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in mk(xs) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_it([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure joining two producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| if flag { xs.iter() } else { (0..<n).iter() }
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "inspect: wrapper iterator with distinct branch producers stays correct",
+        .source_kind = .module,
+        .source =
+        \\Mixed := { xs : List(U64), n : U64 }.{
+        \\    iter : Mixed -> Iter(U64)
+        \\    iter = |mixed| if mixed.n == 0 {
+        \\        mixed.xs.iter()
+        \\    } else {
+        \\        mixed.xs.iter_rev()
+        \\    }
+        \\}
+        \\
+        \\digits : Mixed -> U64
+        \\digits = |mixed| {
+        \\    var $out = 0
+        \\    for x in mixed {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = (
+        \\    digits(Mixed.{ xs: [1, 2, 3], n: 0 }),
+        \\    digits(Mixed.{ xs: [1, 2, 3], n: 1 }),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(123, 321)" },
+    },
+    // A list literal builds one element representation for every item, so a
+    // producer-authored iterator reaching a list element must keep the
+    // representation the constructor selected for that element. These cases
+    // put the iterator behind a second container (a nested list, a tuple slot,
+    // a record field) so the element representation is a container rather than
+    // the iterator itself, and build the container in its own procedure so the
+    // whole result cannot be folded before it is lowered.
+    .{
+        .name = "for loop over a procedure returning a list of lists of iterators",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List(List(Iter(U64)))
+        \\wrap = |xs| [[xs.iter()]]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for row in wrap(xs) {
+        \\        for it in row {
+        \\            for x in it {
+        \\                $out = $out * 10 + x
+        \\            }
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of records holding an iterator",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List({ it : Iter(U64) })
+        \\wrap = |xs| [{ it: xs.iter() }]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for row in wrap(xs) {
+        \\        for x in row.it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of tuples holding an iterator",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List((Iter(U64), U64))
+        \\wrap = |xs| [(xs.iter(), 1)]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for row in wrap(xs) {
+        \\        for x in row.0 {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning nested stored ranges",
+        .source_kind = .module,
+        .source =
+        \\wrap : U64 -> List(List(Range(U64)))
+        \\wrap = |n| [[0..<n]]
+        \\
+        \\digits : U64 -> U64
+        \\digits = |n| {
+        \\    var $out = 0
+        \\    for row in wrap(n) {
+        \\        for it in row {
+        \\            for x in it {
+        \\                $out = $out * 10 + x
+        \\            }
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits(3)
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of lists of string iterators",
+        .source_kind = .module,
+        .source =
+        \\wrap : Str -> List(List(Iter(U8)))
+        \\wrap = |text| [[Str.iter_utf8(text)]]
+        \\
+        \\total : Str -> U64
+        \\total = |text| {
+        \\    var $sum = 0
+        \\    for row in wrap(text) {
+        \\        for it in row {
+        \\            for byte in it {
+        \\                $sum = $sum + byte.to_u64()
+        \\            }
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = total("ab")
+        ,
+        .expected = .{ .inspect_str = "195" },
+    },
+    .{
+        .name = "for loop over a procedure returning a list of tag payloads holding an iterator",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List([Ready(Iter(U64)), Empty])
+        \\wrap = |xs| [Ready(xs.iter()), Empty]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for slot in wrap(xs) {
+        \\        match slot {
+        \\            Ready(it) => {
+        \\                for x in it {
+        \\                    $out = $out * 10 + x
+        \\                }
+        \\            }
+        \\            Empty => {}
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    // Every element of a list literal contributes its own producer
+    // representation. A literal that mixes producers must read each element
+    // back at the representation that element was built with.
+    .{
+        .name = "for loop over a procedure returning mixed forward and reverse list iterators",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64) -> List(Iter(U64))
+        \\wrap = |xs| [xs.iter(), xs.iter_rev()]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for it in wrap(xs) {
+        \\        for x in it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "123321" },
+    },
+    .{
+        .name = "for loop over a procedure returning mixed list and range producers",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64), U64 -> List(Iter(U64))
+        \\wrap = |xs, n| [xs.iter(), (1..<n).iter(), xs.iter_rev()]
+        \\
+        \\digits : List(U64), U64 -> U64
+        \\digits = |xs, n| {
+        \\    var $out = 0
+        \\    for it in wrap(xs, n) {
+        \\        for x in it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([7, 8, 9], 4)
+        ,
+        .expected = .{ .inspect_str = "789123987" },
+    },
+    // A direct procedure call relates its produced iterator to the element
+    // slot without merging classes, unlike a dispatch child, so this literal
+    // exercises the constructor's element-witness selection across both
+    // producer paths in the order that leaves the selection to the direct
+    // call.
+    .{
+        .name = "for loop over a list literal mixing direct-call and dispatch iterator producers",
+        .source_kind = .module,
+        .source =
+        \\mk : List(U64) -> Iter(U64)
+        \\mk = |xs| xs.iter()
+        \\
+        \\wrap : List(U64) -> List(Iter(U64))
+        \\wrap = |xs| [mk(xs), xs.iter_rev()]
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    var $out = 0
+        \\    for it in wrap(xs) {
+        \\        for x in it {
+        \\            $out = $out * 10 + x
+        \\        }
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "1221" },
+    },
+    // A record update stores its updated field values while typed at the
+    // update's record node, so a producer-authored iterator field must carry
+    // its exact representation through the update.
+    .{
+        .name = "record update storing a dispatch-produced iterator field",
+        .source_kind = .module,
+        .source =
+        \\rewrap : { it : Iter(U64), n : U64 }, List(U64) -> { it : Iter(U64), n : U64 }
+        \\rewrap = |w, items| { ..w, it: items.iter_rev() }
+        \\
+        \\digits : List(U64) -> U64
+        \\digits = |xs| {
+        \\    base = { it: xs.iter(), n: 7 }
+        \\    updated = rewrap(base, xs)
+        \\    var $out = updated.n
+        \\    for x in updated.it {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = digits([1, 2])
+        ,
+        .expected = .{ .inspect_str = "721" },
+    },
+    // A fully closed receiver is a static-data hoist candidate; its `.iter()`
+    // dispatch must leave the collection as the hoist root instead of
+    // becoming one itself.
+    .{
+        .name = "for loop over a closed Dict receiver's iterator",
+        .source_kind = .module,
+        .source =
+        \\sum_dict : U64 -> U64
+        \\sum_dict = |seed| {
+        \\    d = Dict.single(1.U64, 10.U64).insert(2, 20)
+        \\    var $sum = seed
+        \\    for (k, v) in d.iter() {
+        \\        $sum = $sum + k + v
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_dict(7)
+        ,
+        .expected = .{ .inspect_str = "40" },
+    },
+    .{
+        .name = "for loop over a closed Set receiver's reverse iterator",
+        .source_kind = .module,
+        .source =
+        \\sum_set : U64 -> U64
+        \\sum_set = |seed| {
+        \\    s = Set.from_list([1.U64, 2, 3])
+        \\    var $sum = seed
+        \\    for x in s.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = sum_set(7)
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
     .{
         .name = "inspect: Iter.keep_if emits skip with rest iterator",
         .source =
@@ -5086,10 +5489,10 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1]" },
     },
     .{
-        .name = "inspect: Iter.step_by on a range",
+        .name = "inspect: Range.step_by sets an absolute step",
         .source =
         \\{
-        \\    iter = (1.U64..=10).step_by(3)
+        \\    iter = (1.U64..=10).step_by(2).step_by(3).iter()
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
@@ -5111,8 +5514,8 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Known(3)" },
     },
     .{
-        .name = "inspect: Iter.step_by known length on a range",
-        .source = "Iter.size_hint((1.U64..=10).step_by(3))",
+        .name = "inspect: Range.step_by recomputes its exact size hint",
+        .source = "Range.size_hint((1.U64..=10).step_by(3))",
         .expected = .{ .inspect_str = "Known(4)" },
     },
     .{
@@ -5126,74 +5529,129 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Unknown" },
     },
     .{
-        .name = "inspect: Iter.rev reverses items",
+        .name = "inspect: List.iter_rev yields items back to front",
         .source =
         \\{
-        \\    iter = [1.I64, 2, 3].iter().rev()
+        \\    iter = [1.I64, 2, 3].iter_rev()
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[3, 2, 1]" },
     },
     .{
-        .name = "inspect: Iter.rev on empty source is empty",
+        .name = "inspect: List.iter_rev on empty list is empty",
         .source =
         \\{
-        \\    iter = [].iter().rev()
+        \\    iter = [].iter_rev()
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[]" },
     },
     .{
-        .name = "inspect: Iter.rev on a singleton",
+        .name = "inspect: List.iter_rev on a singleton",
         .source =
         \\{
-        \\    iter = [1.I64].iter().rev()
+        \\    iter = [1.I64].iter_rev()
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
         .expected = .{ .inspect_str = "[1]" },
     },
     .{
-        .name = "inspect: Iter.rev on a range",
+        .name = "inspect: List.iter_rev composed with keep_if",
         .source =
         \\{
-        \\    iter = (1.U64..=5).rev()
+        \\    odds = [1.I64, 2, 3, 4, 5].iter_rev().keep_if(|x| I64.rem_by(x, 2) == 1)
+        \\    Iter.fold(odds, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 3, 1]" },
+    },
+    .{
+        .name = "inspect: List.iter_rev composed with step_by",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter_rev().step_by(2)
         \\    Iter.fold(iter, [], |acc, item| acc.append(item))
         \\}
         ,
+        .expected = .{ .inspect_str = "[5, 3, 1]" },
+    },
+    .{
+        .name = "inspect: List.iter_rev composed with take_first",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3, 4, 5].iter_rev().take_first(2)
+        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[5, 4]" },
+    },
+    .{
+        .name = "inspect: List.iter_rev reports known length",
+        .source = "Iter.size_hint([1.I64, 2, 3].iter_rev())",
+        .expected = .{ .inspect_str = "Known(3)" },
+    },
+    .{
+        .name = "inspect: List.iter_rev on empty list reports zero length",
+        .source = "Iter.size_hint([].iter_rev())",
+        .expected = .{ .inspect_str = "Known(0)" },
+    },
+    .{
+        .name = "inspect: non-list iterator can be collected before reversing",
+        .source = "Iter.fold(List.from_iter((1.U64..=5).iter()).iter_rev(), [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[5, 4, 3, 2, 1]" },
     },
     .{
-        .name = "inspect: Iter.rev of unknown-length source upgrades to known",
+        .name = "inspect: Dict.iter yields pairs in insertion order",
         .source =
         \\{
-        \\    odds = [1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1)
-        \\    Iter.fold(odds.rev(), [], |acc, item| acc.append(item))
+        \\    d = Dict.single(1.U64, "one").insert(2, "two").insert(3, "three")
+        \\    Iter.fold(d.iter(), [], |acc, pair| acc.append(pair))
         \\}
         ,
-        .expected = .{ .inspect_str = "[5, 3, 1]" },
+        .expected = .{ .inspect_str = "[(1, \"one\"), (2, \"two\"), (3, \"three\")]" },
     },
     .{
-        .name = "inspect: Iter.rev composed with step_by",
+        .name = "inspect: Dict.iter_rev yields pairs in reverse insertion order",
         .source =
         \\{
-        \\    iter = [1.I64, 2, 3, 4, 5].iter().step_by(2).rev()
-        \\    Iter.fold(iter, [], |acc, item| acc.append(item))
+        \\    d = Dict.single(1.U64, "one").insert(2, "two").insert(3, "three")
+        \\    Iter.fold(d.iter_rev(), [], |acc, pair| acc.append(pair))
         \\}
         ,
-        .expected = .{ .inspect_str = "[5, 3, 1]" },
+        .expected = .{ .inspect_str = "[(3, \"three\"), (2, \"two\"), (1, \"one\")]" },
     },
     .{
-        .name = "inspect: Iter.rev reports known length",
-        .source = "Iter.size_hint([1.I64, 2, 3].iter().rev())",
-        .expected = .{ .inspect_str = "Known(3)" },
+        .name = "inspect: Dict.remove may reorder remaining iteration entries",
+        .source =
+        \\{
+        \\    d = Dict.single(1.U64, "one").insert(2, "two").insert(3, "three").remove(1)
+        \\    Iter.fold(d.iter(), [], |acc, pair| acc.append(pair))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[(3, \"three\"), (2, \"two\")]" },
     },
     .{
-        .name = "inspect: Iter.rev upgrades unknown length to known",
-        .source = "Iter.size_hint([1.I64, 2, 3, 4, 5].iter().keep_if(|x| I64.rem_by(x, 2) == 1).rev())",
-        .expected = .{ .inspect_str = "Known(3)" },
+        .name = "inspect: Set.fold sums the values",
+        .source = "Set.fold(Set.from_list([1, 2, 3.U64]), 0, |sum, item| sum + item)",
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        .name = "inspect: Set.fold on an empty set returns the initial state",
+        .source = "Set.fold(Set.empty(), 0.U64, |sum, item| sum + item)",
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "inspect: Set.iter yields values in insertion order",
+        .source = "Iter.fold(Set.from_list([1, 2, 3.U64]).iter(), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: Set.iter_rev yields values in reverse insertion order",
+        .source = "Iter.fold(Set.from_list([1, 2, 3.U64]).iter_rev(), [], |acc, item| acc.append(item))",
+        .expected = .{ .inspect_str = "[3, 2, 1]" },
     },
     .{ .name = "inspect: List.any true on integers", .source = "List.any([1, 0, 1, 0, -1], |x| x > 0)", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: List.any false on positive integers with negative predicate", .source = "List.any([9, 8, 7, 6, 5], |x| x < 0)", .expected = .{ .inspect_str = "False" } },
@@ -5296,55 +5754,131 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" },
     },
     .{
-        .name = "inspect: U32.to builds inclusive range iterator",
-        .source = "Iter.fold(1.U32..=5.U32, [], |acc, item| acc.append(item))",
+        .name = "inspect: inclusive U32 Range iterates through its upper bound",
+        .source = "Iter.fold((1.U32..=5.U32).iter(), [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[1, 2, 3, 4, 5]" },
     },
     .{
-        .name = "inspect: U32.until builds exclusive range iterator",
-        .source = "Iter.fold(0.U32..<3.U32, [], |acc, item| acc.append(item))",
+        .name = "inspect: exclusive U32 Range stops before its upper bound",
+        .source = "Iter.fold((0.U32..<3.U32).iter(), [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[0, 1, 2]" },
     },
     .{
-        .name = "inspect: I64.until builds exclusive range iterator",
-        .source = "Iter.fold((-2.I64)..<2.I64, [], |acc, item| acc.append(item))",
+        .name = "inspect: exclusive I64 Range iterates negative and positive values",
+        .source = "Iter.fold(((-2.I64)..<2.I64).iter(), [], |acc, item| acc.append(item))",
         .expected = .{ .inspect_str = "[-2, -1, 0, 1]" },
     },
     .{
-        .name = "inspect: numeric to methods all return iterators",
+        .name = "inspect: Range.iter_rev preserves exclusive and inclusive bounds",
         .source =
         \\{
-        \\    u8 = Iter.fold(1.U8..=3.U8, 0.U8, |acc, item| acc + item)
-        \\    i8 = Iter.fold((-1.I8)..=1.I8, 0.I8, |acc, item| acc + item)
-        \\    u16 = Iter.fold(1.U16..=3.U16, 0.U16, |acc, item| acc + item)
-        \\    i16 = Iter.fold((-1.I16)..=1.I16, 0.I16, |acc, item| acc + item)
-        \\    u32 = Iter.fold(1.U32..=3.U32, 0.U32, |acc, item| acc + item)
-        \\    i32 = Iter.fold((-1.I32)..=1.I32, 0.I32, |acc, item| acc + item)
-        \\    u64 = Iter.fold(1.U64..=3.U64, 0.U64, |acc, item| acc + item)
-        \\    i64 = Iter.fold((-1.I64)..=1.I64, 0.I64, |acc, item| acc + item)
-        \\    u128 = Iter.fold(1.U128..=3.U128, 0.U128, |acc, item| acc + item)
-        \\    i128 = Iter.fold((-1.I128)..=1.I128, 0.I128, |acc, item| acc + item)
-        \\    dec = Iter.fold(1.0..=3.0, 0.0.Dec, |acc, item| acc + item)
+        \\    exclusive = Iter.fold((1.I64..<5).iter_rev(), [], |acc, item| acc.append(item))
+        \\    inclusive = Iter.fold((1.I64..=5).iter_rev(), [], |acc, item| acc.append(item))
+        \\    (exclusive, inclusive)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([4, 3, 2, 1], [5, 4, 3, 2, 1])" },
+    },
+    .{
+        .name = "inspect: reverse iteration is anchored at the range's lower bound",
+        .source =
+        \\{
+        \\    range = (5.I64..=12).step_by(2)
+        \\    Iter.fold(range.iter_rev(), [], |acc, item| acc.append(item))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[11, 9, 7, 5]" },
+    },
+    .{
+        .name = "inspect: numeric from constructors create ranges in reverse direction",
+        .source =
+        \\{
+        \\    exclusive = Iter.fold(5.I64.range_exclusive_from(1).iter(), [], |acc, item| acc.append(item))
+        \\    inclusive = Iter.fold(5.Dec.range_inclusive_from(1).step_by(1.5).iter(), [], |acc, item| acc.append(item))
+        \\    (exclusive, inclusive)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([4, 3, 2, 1], [4.0, 2.5, 1.0])" },
+    },
+    .{
+        .name = "inspect: Range.custom iterates a third-party numeric type",
+        .source_kind = .module,
+        .source =
+        \\Distance := [Meters(U64)].{
+        \\    range_iter : Distance, Distance, Distance, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(Distance)
+        \\    range_iter = |Meters(lower), Meters(upper), Meters(step), upper_bound, direction, len_if_known| {
+        \\        initial = match direction {
+        \\            To => At(lower)
+        \\            From => Finished
+        \\        }
+        \\        Iter.custom(initial, len_if_known, |state| match state {
+        \\            Finished => Err(NoMore)
+        \\            At(current) => {
+        \\                within_upper = match upper_bound {
+        \\                    Exclusive => current < upper
+        \\                    Inclusive => current <= upper
+        \\                }
+        \\                if step > 0 and within_upper {
+        \\                    next = current + step
+        \\                    Ok((Meters(current), if next > current { At(next) } else { Finished }))
+        \\                } else {
+        \\                    Err(NoMore)
+        \\                }
+        \\            }
+        \\        })
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    range : Range(Distance)
+        \\    range = Range.custom({
+        \\        lower: Meters(2),
+        \\        upper: Meters(9),
+        \\        step: Meters(3),
+        \\        upper_bound: Exclusive,
+        \\        direction: To,
+        \\        len_if_known: Known(3),
+        \\    })
+        \\    Iter.fold(range.iter(), [], |items, Meters(value)| items.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[2, 5, 8]" },
+    },
+    .{
+        .name = "inspect: inclusive numeric ranges all iterate",
+        .source =
+        \\{
+        \\    u8 = Iter.fold((1.U8..=3.U8).iter(), 0.U8, |acc, item| acc + item)
+        \\    i8 = Iter.fold(((-1.I8)..=1.I8).iter(), 0.I8, |acc, item| acc + item)
+        \\    u16 = Iter.fold((1.U16..=3.U16).iter(), 0.U16, |acc, item| acc + item)
+        \\    i16 = Iter.fold(((-1.I16)..=1.I16).iter(), 0.I16, |acc, item| acc + item)
+        \\    u32 = Iter.fold((1.U32..=3.U32).iter(), 0.U32, |acc, item| acc + item)
+        \\    i32 = Iter.fold(((-1.I32)..=1.I32).iter(), 0.I32, |acc, item| acc + item)
+        \\    u64 = Iter.fold((1.U64..=3.U64).iter(), 0.U64, |acc, item| acc + item)
+        \\    i64 = Iter.fold(((-1.I64)..=1.I64).iter(), 0.I64, |acc, item| acc + item)
+        \\    u128 = Iter.fold((1.U128..=3.U128).iter(), 0.U128, |acc, item| acc + item)
+        \\    i128 = Iter.fold(((-1.I128)..=1.I128).iter(), 0.I128, |acc, item| acc + item)
+        \\    dec = Iter.fold((1.0..=3.0).iter(), 0.0.Dec, |acc, item| acc + item)
         \\    (u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, dec)
         \\}
         ,
         .expected = .{ .inspect_str = "(6, 0, 6, 0, 6, 0, 6, 0, 6, 0, 6.0)" },
     },
     .{
-        .name = "inspect: numeric until methods all return iterators",
+        .name = "inspect: exclusive numeric ranges all iterate",
         .source =
         \\{
-        \\    u8 = Iter.fold(1.U8..<3.U8, 0.U64, |acc, _| acc + 1)
-        \\    i8 = Iter.fold((-1.I8)..<1.I8, 0.U64, |acc, _| acc + 1)
-        \\    u16 = Iter.fold(1.U16..<3.U16, 0.U64, |acc, _| acc + 1)
-        \\    i16 = Iter.fold((-1.I16)..<1.I16, 0.U64, |acc, _| acc + 1)
-        \\    u32 = Iter.fold(1.U32..<3.U32, 0.U64, |acc, _| acc + 1)
-        \\    i32 = Iter.fold((-1.I32)..<1.I32, 0.U64, |acc, _| acc + 1)
-        \\    u64 = Iter.fold(1.U64..<3.U64, 0.U64, |acc, _| acc + 1)
-        \\    i64 = Iter.fold((-1.I64)..<1.I64, 0.U64, |acc, _| acc + 1)
-        \\    u128 = Iter.fold(1.U128..<3.U128, 0.U64, |acc, _| acc + 1)
-        \\    i128 = Iter.fold((-1.I128)..<1.I128, 0.U64, |acc, _| acc + 1)
-        \\    dec = Iter.fold(1.0..<3.0, 0.U64, |acc, _| acc + 1)
+        \\    u8 = Iter.fold((1.U8..<3.U8).iter(), 0.U64, |acc, _| acc + 1)
+        \\    i8 = Iter.fold(((-1.I8)..<1.I8).iter(), 0.U64, |acc, _| acc + 1)
+        \\    u16 = Iter.fold((1.U16..<3.U16).iter(), 0.U64, |acc, _| acc + 1)
+        \\    i16 = Iter.fold(((-1.I16)..<1.I16).iter(), 0.U64, |acc, _| acc + 1)
+        \\    u32 = Iter.fold((1.U32..<3.U32).iter(), 0.U64, |acc, _| acc + 1)
+        \\    i32 = Iter.fold(((-1.I32)..<1.I32).iter(), 0.U64, |acc, _| acc + 1)
+        \\    u64 = Iter.fold((1.U64..<3.U64).iter(), 0.U64, |acc, _| acc + 1)
+        \\    i64 = Iter.fold(((-1.I64)..<1.I64).iter(), 0.U64, |acc, _| acc + 1)
+        \\    u128 = Iter.fold((1.U128..<3.U128).iter(), 0.U64, |acc, _| acc + 1)
+        \\    i128 = Iter.fold(((-1.I128)..<1.I128).iter(), 0.U64, |acc, _| acc + 1)
+        \\    dec = Iter.fold((1.0..<3.0).iter(), 0.U64, |acc, _| acc + 1)
         \\    (u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, dec)
         \\}
         ,
@@ -5748,7 +6282,7 @@ const core_tests = [_]TestCase{
         .name = "inspect: numeric inclusive ranges stop at highest",
         .source =
         \\{
-        \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
+        \\    count = |range| Iter.fold(range.iter(), 0.U64, |acc, _| acc + 1)
         \\    (
         \\        count(U8.highest..=U8.highest),
         \\        count(I8.highest..=I8.highest),
@@ -5772,7 +6306,7 @@ const core_tests = [_]TestCase{
         .name = "inspect: numeric exclusive ranges stop at highest",
         .source =
         \\{
-        \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
+        \\    count = |range| Iter.fold(range.iter(), 0.U64, |acc, _| acc + 1)
         \\    (
         \\        count(U8.highest..<U8.highest),
         \\        count(I8.highest..<I8.highest),
@@ -5796,7 +6330,7 @@ const core_tests = [_]TestCase{
         .name = "inspect: numeric exclusive ranges include predecessor of highest",
         .source =
         \\{
-        \\    count = |iter| Iter.fold(iter, 0.U64, |acc, _| acc + 1)
+        \\    count = |range| Iter.fold(range.iter(), 0.U64, |acc, _| acc + 1)
         \\    (
         \\        count((U8.highest - 1)..<U8.highest),
         \\        count((I8.highest - 1)..<I8.highest),
@@ -5814,43 +6348,35 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
     },
     .{
-        // Directly exercises the range length computation via size_hint:
-        // ascending -> Known(count); descending and empty -> Known(0) (the
-        // lower guard branch the range boundary tests never hit); inclusive
-        // singleton -> Known(1); the U128/I128 over-U64-width, the inclusive
-        // full-width count that exceeds U64, and Dec -> Unknown (which feeds
-        // the from_iter grow path).
+        // Directly exercises the stored range length computation: ascending ->
+        // Known(count); descending and empty -> Known(0); inclusive singleton
+        // -> Known(1); and counts wider than U64 -> Unknown.
         .name = "inspect: range size_hint reports Known counts, Known(0) descending, Unknown on overflow",
         .source =
         \\{
         \\    (
-        \\        Iter.size_hint(U8.range_exclusive(5, 10)),
-        \\        Iter.size_hint(U8.range_exclusive(10, 5)),
-        \\        Iter.size_hint(U8.range_exclusive(5, 5)),
-        \\        Iter.size_hint(U8.range_inclusive(5, 5)),
-        \\        Iter.size_hint(I8.range_exclusive(-3, 2)),
-        \\        Iter.size_hint(I8.range_exclusive(2, -3)),
-        \\        Iter.size_hint(U128.range_exclusive(0, 100)),
-        \\        Iter.size_hint(U128.range_exclusive(0, U128.highest)),
-        \\        Iter.size_hint(I128.range_exclusive(0, I128.highest)),
-        \\        Iter.size_hint(U64.range_inclusive(0, U64.highest)),
-        \\        Iter.size_hint(Dec.range_exclusive(1.0, 5.0)),
+        \\        Range.size_hint(U8.range_exclusive_to(5, 10)),
+        \\        Range.size_hint(U8.range_exclusive_to(10, 5)),
+        \\        Range.size_hint(U8.range_exclusive_to(5, 5)),
+        \\        Range.size_hint(U8.range_inclusive_to(5, 5)),
+        \\        Range.size_hint(I8.range_exclusive_to(-3, 2)),
+        \\        Range.size_hint(I8.range_exclusive_to(2, -3)),
+        \\        Range.size_hint(U128.range_exclusive_to(0, 100)),
+        \\        Range.size_hint(U128.range_exclusive_to(0, U128.highest)),
+        \\        Range.size_hint(I128.range_exclusive_to(0, I128.highest)),
+        \\        Range.size_hint(U64.range_inclusive_to(0, U64.highest)),
+        \\        Range.size_hint(Dec.range_exclusive_to(1.0, 5.0)),
         \\    )
         \\}
         ,
-        .expected = .{ .inspect_str = "(Known(5), Known(0), Known(0), Known(1), Known(5), Known(0), Known(100), Unknown, Unknown, Unknown, Unknown)" },
+        .expected = .{ .inspect_str = "(Known(5), Known(0), Known(0), Known(1), Known(5), Known(0), Known(100), Unknown, Unknown, Unknown, Known(4))" },
     },
     .{
-        // Collecting a range whose length is Unknown (Dec ranges always report
-        // Unknown) must route through from_iter's grow path rather than exact
-        // preallocation. It also exercises the generic from_numeral fold: the
-        // range constructor's literal `1` is monomorphized to Dec here, so this
-        // must compile (not just interpret) on every backend.
-        .name = "inspect: collect over Unknown-length (Dec) range grows correctly",
+        .name = "inspect: collect over a Dec range uses its exact hint",
         .source_kind = .module,
         .source =
         \\main : List(Dec)
-        \\main = Iter.collect(1.0..<4.0)
+        \\main = Iter.collect((1.0..<4.0).iter())
         ,
         .expected = .{ .inspect_str = "[1.0, 2.0, 3.0]" },
     },

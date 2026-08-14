@@ -327,9 +327,9 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array
         }
         log("reported NIL problems", .{});
     } else {
-        // Render all reports in order, as plain-text boxes.
+        // Render all reports in order using the plain terminal layout.
         for (reports.items) |*report| {
-            reporting.renderReportToBoxPlain(report, &output.md_writer.writer, reporting.ReportingConfig.initMarkdown()) catch |err| {
+            reporting.renderReportToPlain(report, &output.md_writer.writer, reporting.ReportingConfig.initMarkdown()) catch |err| {
                 std.debug.panic("Failed to render report: {s}", .{@errorName(err)});
             };
 
@@ -416,7 +416,7 @@ fn lastTitleSegment(title: []const u8) []const u8 {
     return std.mem.trim(u8, title, " \t\r\n");
 }
 
-/// Dupe `s` shouted to ALL CAPS via the box renderer's own `writeShouted`, so
+/// Dupe `s` shouted to ALL CAPS via the reporting formatter's `writeShouted`, so
 /// the EXPECTED section's titles can never drift from the rendered PROBLEMS.
 fn shoutedDupe(allocator: std.mem.Allocator, s: []const u8) Allocator.Error![]u8 {
     var shouted = std.Io.Writer.Allocating.init(allocator);
@@ -462,6 +462,7 @@ fn reportRegionLoc(report: *const reporting.Report) RegionLoc {
             .vertical_stack,
             .horizontal_concat,
             .source_code_multi_region,
+            .source_location,
             => {},
         }
     }
@@ -3476,12 +3477,42 @@ fn processDocsSnapshot(
         module_docs_list.deinit(allocator);
     }
 
+    var public_type_projections = std.ArrayList(docs_mod.extract.PublicTypeProjection).empty;
+    defer public_type_projections.deinit(allocator);
+    {
+        const routing_modules = try build_env.getCompiledPublicModules(allocator);
+        defer allocator.free(routing_modules);
+        for (routing_modules) |mod| {
+            const source_decl = mod.public_type_decl orelse continue;
+            const artifact = mod.semantic.checked_artifact orelse unreachable;
+            try public_type_projections.append(allocator, .{
+                .public_name = mod.name,
+                .package_name = build_env.displayNameForPackage(mod.package_name),
+                .source_env = mod.semantic.env,
+                .source_identity = &artifact.key.module_identity_hash,
+                .source_decl = source_decl,
+                .public_order = mod.public_order,
+            });
+        }
+    }
+    docs_mod.extract.sortPublicTypeProjections(public_type_projections.items);
+
     for (modules) |mod| {
         // Docs show display names (root alias, or "app"/"module" for the
         // root itself), never internal identity keys (URLs, absolute paths).
         const display_pkg_name = build_env.displayNameForPackage(mod.package_name);
         var mod_docs = docs_mod.extract.extractModuleDocsWithOptions(allocator, mod.semantic.env, display_pkg_name, mod.path, .{
             .exposed_names = mod.docs_exposed_names,
+            .public_type = if (mod.public_type_decl) |source_decl| .{
+                .public_name = mod.name,
+                .package_name = display_pkg_name,
+                .source_env = mod.semantic.env,
+                .source_identity = &(mod.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_decl = source_decl,
+                .public_order = mod.public_order,
+            } else null,
+            .public_types = public_type_projections.items,
+            .checked_artifact = mod.semantic.checked_artifact,
         }) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
@@ -5344,8 +5375,8 @@ fn snapshotReplExpressionStep(
 
                 if (use_expr_fallback) {
                     // These titles are matched against markdown output, which
-                    // preserves the authored title case (the box/snapshot output
-                    // shouts them to ALL CAPS, but this is the markdown render).
+                    // preserves the authored title case (EXPECTED metadata uses
+                    // uppercase, but this is the markdown render).
                     const is_top_level_wrapper_problem =
                         std.mem.find(u8, module_problems, "Effectful Top Level Value") != null or
                         std.mem.find(u8, module_problems, "Polymorphic Value") != null;

@@ -4475,7 +4475,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_to_i16_try_unsafe,
                 .dec_to_i32_try_unsafe,
                 .dec_to_i64_try_unsafe,
-                .dec_to_i128_try_unsafe,
                 .dec_to_u8_try_unsafe,
                 .dec_to_u16_try_unsafe,
                 .dec_to_u32_try_unsafe,
@@ -6818,7 +6817,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_to_f32_wrap,
                 .dec_to_f64,
                 .dec_to_i128_trunc,
-                .dec_to_i128_try_unsafe,
                 .dec_to_i16_trunc,
                 .dec_to_i16_try_unsafe,
                 .dec_to_i32_trunc,
@@ -11493,7 +11491,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 dec_to_i16_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i16_try_unsafe),
                 dec_to_i32_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i32_try_unsafe),
                 dec_to_i64_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i64_try_unsafe),
-                dec_to_i128_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_i128_try_unsafe),
                 dec_to_u8_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u8_try_unsafe),
                 dec_to_u16_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u16_try_unsafe),
                 dec_to_u32_try_unsafe = @intFromEnum(lir.LowLevel.dec_to_u32_try_unsafe),
@@ -11529,7 +11526,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_to_i16_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = true },
                 .dec_to_i32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = true },
                 .dec_to_i64_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 64, .tgt_signed = true },
-                .dec_to_i128_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 128, .tgt_signed = true },
                 .dec_to_u8_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 8, .tgt_signed = false },
                 .dec_to_u16_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 16, .tgt_signed = false },
                 .dec_to_u32_try_unsafe => .{ .src_kind = .dec, .tgt_kind = .int, .tgt_bits = 32, .tgt_signed = false },
@@ -16830,14 +16826,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .stack => |stack_offset| builder.addStackLeaArgAt(stack_offset, frame_ptr, slot_off),
                     },
                     .stack_value => |stack_value| {
-                        builder.addStackMemArgAt(stack_value.offset, frame_ptr, slot_off, stack_value.size);
+                        builder.addStackMemArgAt(
+                            stack_value.offset,
+                            frame_ptr,
+                            slot_off,
+                            stack_value.size,
+                            CallingConventionMod.Promotion.fromStackValue(stack_value),
+                        );
                     },
                     .registers => |pieces| {
                         for (pieces) |assigned| {
                             const piece = assigned.piece;
                             const piece_off = slot_off + @as(i32, @intCast(piece.offset));
                             switch (piece.class) {
-                                .integer => builder.addMemArgAt(assigned.register_index, frame_ptr, piece_off),
+                                .integer => builder.addMemArgAt(
+                                    assigned.register_index,
+                                    frame_ptr,
+                                    piece_off,
+                                    CallingConventionMod.Promotion.fromRegPiece(piece),
+                                ),
                                 .float, .vector => try builder.addFloatMemArgAt(assigned.register_index, frame_ptr, piece_off, piece.size),
                             }
                         }
@@ -26392,4 +26399,213 @@ test "aarch64 hosted HFA and HVA returns expose V0 through V3" {
     try std.testing.expectEqual(aarch64.FloatReg.V1, ArmCodeGen.hostedFloatResultReg(1));
     try std.testing.expectEqual(aarch64.FloatReg.V2, ArmCodeGen.hostedFloatResultReg(2));
     try std.testing.expectEqual(aarch64.FloatReg.V3, ArmCodeGen.hostedFloatResultReg(3));
+}
+
+/// Complete argument registers a hosted callee saw for its narrow parameters.
+const NarrowHostedArgRegisters = struct {
+    u8_register: u64 = 0,
+    i8_register: u64 = 0,
+    u16_register: u64 = 0,
+    i16_register: u64 = 0,
+};
+
+var narrow_hosted_arg_registers: NarrowHostedArgRegisters = .{};
+
+/// Hosted callee declared over the full argument registers, so it observes every
+/// bit the caller placed there rather than only the bits the Roc types describe.
+fn observeNarrowHostedArgs(
+    u8_register: u64,
+    i8_register: u64,
+    u16_register: u64,
+    i16_register: u64,
+) callconv(.c) i64 {
+    narrow_hosted_arg_registers = .{
+        .u8_register = u8_register,
+        .i8_register = i8_register,
+        .u16_register = u16_register,
+        .i16_register = i16_register,
+    };
+    return 0;
+}
+
+/// Values a hosted callee saw for narrow parameters that the ABI placed in the
+/// outgoing stack argument area rather than in registers.
+const OverflowHostedArgs = struct {
+    last_register: u64 = 0,
+    u8_value: u8 = 0,
+    i16_value: i16 = 0,
+};
+
+var overflow_hosted_args: OverflowHostedArgs = .{};
+
+fn observeOverflowHostedArgs(
+    _: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+    _: u64,
+    last_register: u64,
+    u8_value: u8,
+    i16_value: i16,
+) callconv(.c) i64 {
+    overflow_hosted_args = .{
+        .last_register = last_register,
+        .u8_value = u8_value,
+        .i16_value = i16_value,
+    };
+    return 0;
+}
+
+/// Write a nonzero pattern over the stack the generated code is about to use, so
+/// bytes the caller leaves unwritten are observable instead of incidentally zero.
+noinline fn dirtyNativeStack() void {
+    var scratch: [16 * 1024]u8 = undefined;
+    @memset(&scratch, 0xA5);
+    std.mem.doNotOptimizeAway(&scratch);
+}
+
+/// Compile `root`, point the hosted table at `hosted`, and run it over a stack
+/// whose unwritten bytes are observable.
+fn runHostedRootOverDirtyStack(
+    store: *LirStore,
+    layout_store: *layout.Store,
+    root: lir.LIR.LirProcSpecId,
+    hosted: builtins.host_abi.HostedFn,
+) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, MprotectFailed, VirtualProtectFailed, UnsupportedPlatform, UnwindRegistrationFailed })!void {
+    const allocator = std.testing.allocator;
+    const compiled = try compileRoot(store, layout_store, root, .i64);
+    defer allocator.free(compiled.code);
+    defer allocator.free(compiled.unwind_functions);
+
+    var executable = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
+        compiled.code,
+        compiled.entry_offset,
+        compiled.unwind_functions,
+    );
+    defer executable.deinit();
+
+    var hosted_table = [_]builtins.host_abi.HostedFn{hosted};
+    var test_ops = TestRocOps.init(allocator);
+    const ops = test_ops.getOps();
+    ops.hosted_fns = .{ .count = hosted_table.len, .fns = &hosted_table };
+
+    var out: i64 = undefined;
+    const func: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
+    dirtyNativeStack();
+    func(@ptrCast(&out), @ptrCast(ops));
+}
+
+/// Build a hosted proc over `arg_layouts` and a root that calls it with each of
+/// `values` assigned to a matching local.
+fn addHostedCallRoot(
+    store: *LirStore,
+    symbol_name: []const u8,
+    arg_layouts: []const layout.Idx,
+    values: []const i64,
+) Allocator.Error!lir.LIR.LirProcSpecId {
+    std.debug.assert(arg_layouts.len == values.len);
+    const allocator = std.testing.allocator;
+
+    const params = try allocator.alloc(LocalId, arg_layouts.len);
+    defer allocator.free(params);
+    for (arg_layouts, params) |arg_layout, *param| param.* = try addLocal(store, arg_layout);
+
+    const hosted_proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(params),
+        .ret_layout = .i64,
+        .hosted = .{ .symbol = try store.insertString(symbol_name), .dispatch_index = 0 },
+    });
+
+    const args = try allocator.alloc(LocalId, arg_layouts.len);
+    defer allocator.free(args);
+    for (arg_layouts, args) |arg_layout, *arg| arg.* = try addLocal(store, arg_layout);
+
+    const observed = try addLocal(store, .i64);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = observed } });
+    var body = try store.addCFStmt(.{ .assign_call = .{
+        .target = observed,
+        .proc = hosted_proc,
+        .args = try store.addLocalSpan(args),
+        .next = ret,
+    } });
+
+    var i = arg_layouts.len;
+    while (i > 0) {
+        i -= 1;
+        body = try store.addCFStmt(.{ .assign_literal = .{
+            .target = args[i],
+            .value = .{ .i64_literal = .{ .value = values[i], .layout_idx = arg_layouts[i] } },
+            .next = body,
+        } });
+    }
+
+    return try addNoArgProc(store, body, .i64);
+}
+
+test "issue 10748: hosted call promotes narrow integer arguments in registers" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const root = try addHostedCallRoot(
+        &store,
+        "roc_test_observe_narrow_hosted_args",
+        &.{ .u8, .i8, .u16, .i16 },
+        &.{ 3, -3, 0x0102, -2 },
+    );
+
+    narrow_hosted_arg_registers = .{};
+    try runHostedRootOverDirtyStack(
+        &store,
+        &test_state.layout_store,
+        root,
+        builtins.host_abi.hostedFn(&observeNarrowHostedArgs),
+    );
+
+    // C promotes each of these to `int`, so the callee is entitled to read the
+    // complete low 32 bits of the register.
+    try std.testing.expectEqual(@as(u64, 3), narrow_hosted_arg_registers.u8_register);
+    try std.testing.expectEqual(@as(u64, 0xFFFF_FFFD), narrow_hosted_arg_registers.i8_register);
+    try std.testing.expectEqual(@as(u64, 0x0102), narrow_hosted_arg_registers.u16_register);
+    try std.testing.expectEqual(@as(u64, 0xFFFF_FFFE), narrow_hosted_arg_registers.i16_register);
+}
+
+test "issue 10748: hosted call promotes narrow integer arguments that overflow to the stack" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const root = try addHostedCallRoot(
+        &store,
+        "roc_test_observe_overflow_hosted_args",
+        &.{ .i64, .i64, .i64, .i64, .i64, .i64, .i64, .i64, .u8, .i16 },
+        &.{ 1, 2, 3, 4, 5, 6, 7, 8, 200, -300 },
+    );
+
+    overflow_hosted_args = .{};
+    try runHostedRootOverDirtyStack(
+        &store,
+        &test_state.layout_store,
+        root,
+        builtins.host_abi.hostedFn(&observeOverflowHostedArgs),
+    );
+
+    try std.testing.expectEqual(@as(u64, 8), overflow_hosted_args.last_register);
+    try std.testing.expectEqual(@as(u8, 200), overflow_hosted_args.u8_value);
+    try std.testing.expectEqual(@as(i16, -300), overflow_hosted_args.i16_value);
 }
