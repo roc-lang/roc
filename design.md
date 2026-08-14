@@ -1416,6 +1416,15 @@ producer keeps the type it was solved to, so a rejected relation neither
 cascades into unrelated uses of that producer nor leaves an `.err` on a binding
 whose value post-check lowering must still instantiate.
 
+Static-dispatch target compatibility is the same kind of owned relation. The
+dispatch expression may reject the selected method's instantiated callable,
+but that failure marks the selected dispatch expression `checked_error`; it
+never poisons the reusable method scheme in the registry. Other dispatch sites
+may have already selected that scheme successfully, and `CheckedModule`
+construction must be able to instantiate those explicit successful targets
+without deriving validity from the order in which the checker visited their
+siblings.
+
 Because `.err` no longer merges, it also no longer relates the operands unified
 against it. A checker site that relies on one variable to carry a relation
 between several others has to supply that relation itself once the carrier is

@@ -26074,7 +26074,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     };
                     const fn_result = fn_result: {
                         if (self.probe_depth != 0 or !self.varIsConflictedDefaultLiteral(deferred_constraint.var_)) {
-                            break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
+                            break :fn_result try self.unifyOwnedRelation(method_var, constraint.fn_var, env, fn_ctx, .exact);
                         }
                         // This receiver's type is the documented head default,
                         // committed while its method constraints were still
