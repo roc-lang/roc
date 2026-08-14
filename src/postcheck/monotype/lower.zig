@@ -535,7 +535,7 @@ const MethodLookup = struct {
 /// vector is self-contained (dictionary passing evaluated at compile time).
 const SpecEvidence = union(enum) {
     target: *const SpecEvidenceTarget,
-    structural: static_dispatch.StructuralDerivation,
+    structural: SpecStructuralEvidence,
     /// The edge left the requirement's dispatcher unsolved: no value of that
     /// type can ever reach the dispatch. Monotype represents that non-returning
     /// path with an ordinary Roc runtime crash instead of a dispatch call.
@@ -544,6 +544,17 @@ const SpecEvidence = union(enum) {
     /// if `roc run` continues and reaches the dispatch, Monotype emits an
     /// ordinary Roc runtime crash instead of returning a value.
     checked_error,
+};
+
+/// The checker's structural decision, retaining the exact checked evidence
+/// record when one exists. Generated codecs use that record's stable contract
+/// reference instead of reconstructing their internal method instantiations.
+const SpecStructuralEvidence = struct {
+    derivation: static_dispatch.StructuralDerivation,
+    checked: ?struct {
+        view: ModuleView,
+        evidence: static_dispatch.StructuralEvidence,
+    } = null,
 };
 
 const SpecEvidenceTarget = struct {
@@ -1399,8 +1410,12 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
             },
             .structural, .unreachable_value, .checked_error => false,
         },
-        .structural => |a_kind| switch (b) {
-            .structural => |b_kind| std.meta.eql(a_kind, b_kind),
+        .structural => |a_structural| switch (b) {
+            // The checked contract is provenance for materializing the
+            // derivation's internal calls, not a distinct dispatch choice.
+            // Once the monomorphic callable agrees, structural specialization
+            // identity is exactly the derivation selected by checking.
+            .structural => |b_structural| std.meta.eql(a_structural.derivation, b_structural.derivation),
             .target, .unreachable_value, .checked_error => false,
         },
         .unreachable_value => b == .unreachable_value,
@@ -3237,7 +3252,7 @@ const Builder = struct {
                     .nested = nested,
                 } };
             },
-            .structural => |kind| try nodes.append(self.allocator, .{ .structural = kind }),
+            .structural => |structural| try nodes.append(self.allocator, .{ .structural = structural.derivation }),
             .unreachable_value => try nodes.append(self.allocator, .unreachable_value),
             .checked_error => try nodes.append(self.allocator, .checked_error),
         };
@@ -6435,6 +6450,11 @@ const Builder = struct {
         defer ctx.deinit();
         ctx.evidence = boundary.evidence;
         ctx.current_fn_key = boundary.current_fn_key;
+        ctx.active_codec_contract = .{
+            .structural = boundary.structural,
+            .callable_node = boundary.callable_node,
+            .shape_node = boundary.shape_node,
+        };
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
         const kind: CodecKind = switch (boundary.plan.result_mode) {
@@ -10550,6 +10570,7 @@ const DraftDeferredStructuralSerialization = struct {
     plan: static_dispatch.StaticDispatchCallPlan,
     callable_node: NodeId,
     shape_node: NodeId,
+    structural: SpecStructuralEvidence,
     encoding: DraftExprId,
     evidence: EvidenceChain,
     current_fn_key: names.TypeDigest,
@@ -13055,6 +13076,13 @@ const BodyContext = struct {
     /// Phase-B structural serialization may consume these sealed requests but
     /// may not instantiate or lower another checked callable.
     frozen_codec_calls: ?*const FrozenPreparedCodecCalls = null,
+    /// Exact checker-authored contract for the structural codec currently
+    /// being prepared, plus the live constructor and shape cells it denotes.
+    active_codec_contract: ?struct {
+        structural: SpecStructuralEvidence,
+        callable_node: NodeId,
+        shape_node: NodeId,
+    } = null,
     /// Final structural serialization emission consumes only durable types and
     /// exact prepared call identities instead of reconstructing checked requests.
     frozen_sealed_emission: bool = false,
@@ -33982,11 +34010,12 @@ const BodyContext = struct {
         const resolved = switch (self.evidenceResolution(plan) orelse
             Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
             .target => |lookup| lookup,
-            .structural => |derivation| return switch (derivation) {
+            .structural => |structural| return switch (structural.derivation) {
                 .equality => try self.lowerStructuralEqualityAtNode(plan, callable_node, self, pre_lowered.items),
                 .hash => try self.lowerStructuralHashAtNode(plan, callable_node, self, pre_lowered.items),
                 .parser, .encoder => try self.deferStructuralSerializationAtNode(
                     plan,
+                    structural,
                     callable_node,
                     try call_ctx.instNode(plan.dispatcher_ty),
                     pre_lowered.items,
@@ -35291,7 +35320,10 @@ const BodyContext = struct {
                     Common.invariant("checked evidence reference was absent from its lexical chain");
                 return entry;
             },
-            .structural => |evidence| return .{ .structural = evidence.derivation },
+            .structural => |evidence| return .{ .structural = .{
+                .derivation = evidence.derivation,
+                .checked = .{ .view = self.view, .evidence = evidence },
+            } },
             .from_callable => Common.invariant("callable-derived checked evidence escaped a nested procedure construction recipe"),
             .checked_error => return .checked_error,
             .unreachable_value => return .unreachable_value,
@@ -35456,7 +35488,7 @@ const BodyContext = struct {
                     };
                     break :blk .{ .target = materialized };
                 },
-                .structural => |kind| .{ .structural = kind },
+                .structural => |kind| .{ .structural = .{ .derivation = kind } },
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
             };
@@ -35539,7 +35571,7 @@ const BodyContext = struct {
     /// structural decision.
     const EvidenceResolved = union(enum) {
         target: MethodLookup,
-        structural: static_dispatch.StructuralDerivation,
+        structural: SpecStructuralEvidence,
     };
 
     /// The plan's checked or edge-supplied resolution. Null is reserved for
@@ -35571,7 +35603,7 @@ const BodyContext = struct {
                     .unreachable_value, .checked_error => null,
                 };
             },
-            .structural => |derivation| return .{ .structural = derivation },
+            .structural => |derivation| return .{ .structural = .{ .derivation = derivation } },
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
             .checked_error, .@"unreachable" => return null,
         }
@@ -36045,7 +36077,7 @@ const BodyContext = struct {
         if (self.methodOwnerFromNode(component_node)) |owner| {
             if (try self.builder.lookupMethodTarget(self.method_scope, owner, view, method)) |found| {
                 if (found.target.kind == .structural) {
-                    return .{ .structural = structuralDerivationWithoutMap(found.target.kind.structural) };
+                    return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(found.target.kind.structural) } };
                 }
                 const arena = self.builder.evidence_arena.allocator();
                 const target = try arena.create(SpecEvidenceTarget);
@@ -36059,10 +36091,10 @@ const BodyContext = struct {
                 };
                 return .{ .target = target };
             }
-            if (structural) |kind| return .{ .structural = structuralDerivationWithoutMap(kind) };
+            if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
             Common.invariant("compiler-generated graph component owner had no exact checked method target");
         }
-        if (structural) |kind| return .{ .structural = structuralDerivationWithoutMap(kind) };
+        if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
         if (try self.nodeIsProvenUninhabited(component_node)) return .unreachable_value;
         Common.invariant("compiler-generated ownerless graph component had no checked structural or uninhabited evidence");
     }
@@ -36118,7 +36150,7 @@ const BodyContext = struct {
         if (methodOwnerFromType(&self.builder.program.types, component_ty)) |owner| {
             if (try self.builder.lookupMethodTarget(self.method_scope, owner, view, method)) |found| {
                 if (found.target.kind == .structural) {
-                    return .{ .structural = structuralDerivationWithoutMap(found.target.kind.structural) };
+                    return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(found.target.kind.structural) } };
                 }
                 const arena = self.builder.evidence_arena.allocator();
                 const target = try arena.create(SpecEvidenceTarget);
@@ -36132,10 +36164,10 @@ const BodyContext = struct {
                 };
                 return .{ .target = target };
             }
-            if (structural) |kind| return .{ .structural = structuralDerivationWithoutMap(kind) };
+            if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
             Common.invariant("compiler-generated component owner had no exact checked method target");
         }
-        if (structural) |kind| return .{ .structural = structuralDerivationWithoutMap(kind) };
+        if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
         if (self.typeIsClosedEmptyTagUnion(component_ty)) return .unreachable_value;
         Common.invariant("compiler-generated ownerless component had no checked structural or uninhabited evidence");
     }
@@ -36896,6 +36928,7 @@ const BodyContext = struct {
     fn deferStructuralSerializationAtNode(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
+        structural: SpecStructuralEvidence,
         callable_node: NodeId,
         shape_node: NodeId,
         pre_lowered: []const PreLoweredOperand,
@@ -36923,6 +36956,7 @@ const BodyContext = struct {
             .plan = plan,
             .callable_node = callable_node,
             .shape_node = shape_node,
+            .structural = structural,
             .encoding = encoding,
             .evidence = self.evidence,
             .current_fn_key = self.current_fn_key,
@@ -36933,6 +36967,13 @@ const BodyContext = struct {
             .parser_for => .parser,
             .encoder_for => .encoder,
             .value, .equality, .hash, .map, .map_effectful => Common.invariant("non-codec result mode reached structural serialization deferral"),
+        };
+        const previous_contract = self.active_codec_contract;
+        defer self.active_codec_contract = previous_contract;
+        self.active_codec_contract = .{
+            .structural = structural,
+            .callable_node = callable_node,
+            .shape_node = shape_node,
         };
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
@@ -39791,6 +39832,101 @@ const BodyContext = struct {
         return try FrozenPreparedCodecCalls.init(self.allocator, try out.toOwnedSlice(self.allocator));
     }
 
+    const CheckedGeneratedCodecCallee = struct {
+        lookup: MethodLookup,
+        callable_node: NodeId,
+        evidence: []const SpecEvidence,
+    };
+
+    /// Resolve one generated-codec method call from the exact contract emitted
+    /// by checking. The contract's snapshot types all instantiate in one graph
+    /// context, so its subject identity selects the precise call even when the
+    /// same method occurs at several nested shapes.
+    fn checkedGeneratedCodecCallee(
+        self: *BodyContext,
+        method_name: []const u8,
+        subject_node: NodeId,
+        expected_lookup: MethodLookup,
+    ) Allocator.Error!?CheckedGeneratedCodecCallee {
+        const active = self.active_codec_contract orelse return null;
+        const checked_structural = active.structural.checked orelse return null;
+        const derivation_id = checked_structural.evidence.generated_codec_derivation orelse
+            Common.invariant("checked structural codec evidence had no generated derivation contract");
+        if (@intFromEnum(derivation_id) >= checked_structural.view.static_dispatch_plans.generated_codec_derivations.len) {
+            Common.invariant("checked structural codec evidence referenced a missing generated derivation");
+        }
+        const derivation = checked_structural.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+        const expected_kind: static_dispatch.GeneratedCodecDerivationKind = switch (active.structural.derivation.kind()) {
+            .parser => .parser,
+            .encoder => .encoder,
+            .equality, .hash, .map, .map_effectful => Common.invariant("non-codec structural evidence carried a generated codec contract"),
+        };
+        if (derivation.kind != expected_kind) {
+            Common.invariant("checked structural codec evidence referenced a derivation of the wrong kind");
+        }
+
+        var contract_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self.builder,
+            checked_structural.view,
+            self.method_scope,
+            self.owner_template,
+            self.graph,
+            self.draft,
+        );
+        defer contract_ctx.deinit();
+        contract_ctx.evidence = self.evidence;
+        try relateFunctionRequestInterface(
+            self.graph,
+            try contract_ctx.instNode(derivation.constructor_ty),
+            active.callable_node,
+        );
+        try relateRequestComponent(
+            self.graph,
+            try contract_ctx.instNode(derivation.shape_ty),
+            active.shape_node,
+        );
+
+        var selected: ?static_dispatch.GeneratedCodecCall = null;
+        for (derivation.callsSlice(checked_structural.view.static_dispatch_plans)) |candidate| {
+            if (!std.mem.eql(u8, checked_structural.view.names.methodNameText(candidate.method), method_name)) continue;
+            const subject_ty = candidate.subject_ty orelse continue;
+            if (!self.graph.sameClass(try contract_ctx.instNode(subject_ty), subject_node)) continue;
+            if (selected != null) {
+                Common.invariant("checked generated codec contract had ambiguous subject method calls");
+            }
+            selected = candidate;
+        }
+        const call = selected orelse
+            Common.invariant("checked generated codec contract was missing its subject method call");
+        const dispatcher_node = try contract_ctx.instNode(call.dispatcher_ty);
+        const owner = self.methodOwnerFromNode(dispatcher_node) orelse
+            Common.invariant("checked generated codec call dispatcher had no method owner");
+        const exact_lookup = (try self.builder.lookupMethodTarget(
+            self.method_scope,
+            owner,
+            checked_structural.view,
+            call.method,
+        )) orelse Common.invariant("checked generated codec call target was absent from the method registry");
+        if (!moduleBytesEqual(exact_lookup.view.key.bytes, expected_lookup.view.key.bytes) or
+            !std.meta.eql(exact_lookup.target, expected_lookup.target))
+        {
+            Common.invariant("checked generated codec call target disagreed with graph method lookup");
+        }
+        var lookup = expected_lookup;
+        lookup.instantiation = .{
+            .view = checked_structural.view,
+            .callable_ty = call.callable_ty,
+        };
+        return .{
+            .lookup = lookup,
+            .callable_node = try contract_ctx.instNode(call.callable_ty),
+            .evidence = try contract_ctx.materializeEvidence(
+                checked_structural.view.static_dispatch_plans.generatedCodecCallEvidence(call),
+            ),
+        };
+    }
+
     fn prepareCustomCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
@@ -39840,14 +39976,28 @@ const BodyContext = struct {
                 try relateRequestComponent(self.graph, target_runtime.ret, runtime.ret);
             },
         }
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const checked_call = try self.checkedGeneratedCodecCallee(
+            switch (kind) {
+                .parser => "parser_for",
+                .encoder => "encoder_for",
+            },
+            shape_node,
+            lookup,
+        );
+        const callee = if (checked_call) |exact| blk: {
+            break :blk try self.methodTargetCalleeAtNode(
+                exact.lookup,
+                exact.callable_node,
+                .{ .resolved = exact.evidence },
+            );
+        } else try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
             .purpose = .custom,
             .shape_node = shape_node,
             .lookup = lookup,
-            .callable_node = target_node,
+            .callable_node = if (checked_call) |exact| exact.callable_node else target_node,
             .callee = callee,
         });
         return true;
@@ -49201,7 +49351,7 @@ test "specialization evidence equality includes exact target instantiation" {
         .target = method,
         .instantiation = .{ .view = instantiation_view, .callable_ty = @enumFromInt(8) },
         .local_proc_context = null,
-        .nested = .{ .resolved = &.{.{ .structural = .equality }} },
+        .nested = .{ .resolved = &.{.{ .structural = .{ .derivation = .equality } }} },
     };
     try std.testing.expect(specEvidenceEql(.{ .target = &exact }, .{ .target = &exact }));
 

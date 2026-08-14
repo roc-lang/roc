@@ -5065,11 +5065,11 @@ fn instantiateBindingVar(
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
-    if (self.types.resolveVar(binding_var).desc.rank == .generalized) {
-        return self.instantiateVar(binding_var, env, region_behavior);
-    }
     if (self.isBindingSchemeVar(binding_var)) {
         return self.instantiateTypeScheme(binding_var, env, region_behavior);
+    }
+    if (self.types.resolveVar(binding_var).desc.rank == .generalized) {
+        return self.instantiateVar(binding_var, env, region_behavior);
     }
     self.var_map.clearRetainingCapacity();
     return binding_var;
@@ -17885,38 +17885,6 @@ fn methodTypeVarFromOriginalEnv(
     };
 }
 
-fn derivedMethodValidationVar(
-    self: *Self,
-    original_env: *const ModuleEnv,
-    is_this_module: bool,
-    binding: ModuleEnv.MethodBinding,
-    dispatcher_name: Ident.Idx,
-    env: *Env,
-    region: Region,
-) Allocator.Error!Var {
-    if (!is_this_module) {
-        return (try self.methodVarFromOriginalEnv(
-            original_env,
-            false,
-            binding.type_node_idx,
-            dispatcher_name,
-            env,
-            region,
-        )).var_;
-    }
-
-    // Derived-shape validation can discover an annotated local method before
-    // its body has been checked. Its declared scheme is the explicit type
-    // available at that edge; the in-flight definition var is not.
-    const def_var: Var = ModuleEnv.varFrom(binding.type_node_idx);
-    const scheme_var = self.predeclaredSchemeVar(binding.def_idx) orelse def_var;
-    if (self.types.resolveVar(scheme_var).desc.rank == .generalized or self.isBindingSchemeVar(scheme_var)) {
-        self.pending_shape_validation_instantiation = true;
-        return try self.instantiateBindingVar(scheme_var, env, .use_last_var);
-    }
-    return scheme_var;
-}
-
 fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ident.Idx {
     const def = module_env.store.getDef(def_idx);
     const pattern = module_env.store.getPattern(def.pattern);
@@ -30312,9 +30280,9 @@ fn instantiateGeneratedCodecMethodTarget(
 ) Allocator.Error!Var {
     const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
     const scheme_var = if (method_lookup.is_this_module)
-        method_type_var
+        self.predeclaredSchemeVar(method_lookup.binding.def_idx) orelse method_type_var
     else
-        try self.copyVar(method_type_var, method_lookup.env, region);
+        try self.importedMethodScheme(method_lookup);
 
     const records_before = self.cir.scheme_uses.items.items.len;
     const previous_evidence_target_site = self.evidence_target_site;
@@ -30326,10 +30294,15 @@ fn instantiateGeneratedCodecMethodTarget(
     };
     defer self.evidence_target_site = previous_evidence_target_site;
 
-    const method_var = if (method_lookup.is_this_module)
-        try self.instantiateBindingVar(scheme_var, env, .use_last_var)
-    else
-        try self.instantiateVar(scheme_var, env, .{ .explicit = region });
+    const method_var = if (method_lookup.is_this_module) blk: {
+        // Shape validation can select an annotated method before its body has
+        // been checked. Instantiate the declared binding scheme while keeping
+        // monomorphic receiver obligations attached to their owning scheme.
+        if (self.types.resolveVar(scheme_var).desc.rank == .generalized or self.isBindingSchemeVar(scheme_var)) {
+            self.pending_shape_validation_instantiation = true;
+        }
+        break :blk try self.instantiateBindingVar(scheme_var, env, .use_last_var);
+    } else try self.instantiateVar(scheme_var, env, .{ .explicit = region });
 
     if (self.cir.scheme_uses.items.items.len == records_before and
         try self.schemeHasEvidenceParams(scheme_var))
@@ -31539,19 +31512,11 @@ fn validateDerivedParseNominal(
         return try self.reportDerivedParseMissingMethodAt(nominal_var, self.cir.idents.parser_for, constraint, env, failure_expr);
     };
 
-    const method_var = try self.derivedMethodValidationVar(
-        method_lookup.env,
-        method_lookup.is_this_module,
-        method_lookup.binding,
-        nominal.ident.ident_idx,
-        env,
-        region,
-    );
-
     const child_err_var = try self.fresh(env, region);
     const expected_ret = try self.freshParseResultTryVar(nominal_var, state_var, child_err_var, env, region);
     const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
+    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
             .constraint_var = nominal_var,
@@ -31599,7 +31564,7 @@ fn validateDerivedParseNominal(
         self.cir.idents.parser_for,
         nominal_var,
         expected_fn,
-        method_var,
+        expected_fn,
         nominal_var,
     )) {
         .ok => {},
@@ -32198,18 +32163,10 @@ fn validateDerivedEncodeNominal(
         return try self.reportDerivedParseMissingMethod(nominal_var, self.cir.idents.encoder_for, constraint, env);
     };
 
-    const method_var = try self.derivedMethodValidationVar(
-        method_lookup.env,
-        method_lookup.is_this_module,
-        method_lookup.binding,
-        nominal.ident.ident_idx,
-        env,
-        region,
-    );
-
     const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
     const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ nominal_var, state_var }, expected_ret), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
+    const method_var = try self.instantiateGeneratedCodecMethodTarget(method_lookup, expected_fn, env, region);
     const result = try self.unifyInContext(method_var, expected_fn, env, .{
         .method_type = .{
             .constraint_var = nominal_var,
@@ -32255,7 +32212,7 @@ fn validateDerivedEncodeNominal(
         self.cir.idents.encoder_for,
         nominal_var,
         expected_fn,
-        method_var,
+        expected_fn,
         nominal_var,
     );
 }
