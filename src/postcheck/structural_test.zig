@@ -471,6 +471,20 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(lower_source, "selectRequestRepresentation");
     try expectNotContains(lower_source, "sameFieldHandleType");
 
+    const iterator_step = sourceSliceBetween(
+        lower_source,
+        "fn generatedIteratorStepFunctionNode(",
+        "fn generatedIteratorStepResultNode(",
+    );
+    try expectContains(iterator_step, "self.graph.newProducedFunction(");
+
+    const required_field_parser = sourceSliceBetween(
+        lower_source,
+        "fn graphParserCallableWithMissingRequiredFieldError(",
+        "fn graphRowHasTag(",
+    );
+    try expectContains(required_field_parser, "self.graph.newProducedFunction(runtime.args, produced_result)");
+
     try expectNotContains(lower_source, "selectExprRepresentationAtNode");
     try expectContains(lower_source, ".checked_base, .request_occurrence => false");
     try expectContains(lower_source, ".concrete_checked, .produced_occurrence => true");
@@ -653,14 +667,16 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     const dispatch_instantiation = sourceSliceBetween(
         lower_source,
-        "fn storedDispatchRequestFromCheckedPlan(",
-        "fn lookupExprTypeNode(",
+        "fn storedDispatchCallableFromCheckedPlan(",
+        "fn instantiateTargetCallNodeFromMonoArgs(",
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
+    try expectContains(dispatch_instantiation, "exact_dispatcher: NodeId");
     try expectContains(dispatch_instantiation, "directSelectionsForCall(");
     try expectContains(dispatch_instantiation, ".scheduled_operands");
     try expectContains(dispatch_instantiation, "materializeCallSelectionSpan(");
     try expectContains(dispatch_instantiation, "@memset(available, false)");
+    try expectNotContains(dispatch_instantiation, "materializeCallSelectionEdgeSubtree(");
     try expectNotContains(dispatch_instantiation, "lowerExprTypeNode");
     try expectNotContains(dispatch_instantiation, "applyCheckedTypeMapping");
     try expectContains(lower_source, "specializationValueFlowForExpr(checked_expr)");
@@ -1533,6 +1549,35 @@ test "Monotype call requests retain defaults in explicit forward cells" {
 
 test "Monotype callable requests keep explicit independent body result authority" {
     const lower_source = @embedFile("monotype/lower.zig");
+    const solve_source = @embedFile("monotype/solve.zig");
+
+    const complete_registration = sourceSliceBetween(
+        solve_source,
+        "pub fn registerSpecializationRequest(",
+        "pub fn requestCheckedSource(",
+    );
+    try expectContains(complete_registration, "registerRequestCheckedSource(request_fn, checked_source)");
+    try expectContains(complete_registration, "registerFunctionArgumentAuthorities(request_fn, argument_authorities)");
+    try expectContains(complete_registration, "registerFunctionResultRelation(request_fn, result_relation)");
+    try expectContains(complete_registration, "recordDirectRequestSelections(request_fn, selections)");
+    try expectNotContains(lower_source, ".registerRequestCheckedSource(");
+
+    const contextual_request = sourceSliceBetween(
+        lower_source,
+        "fn authorFunctionArgumentAuthorities(",
+        "fn hashFnTypeCell(",
+    );
+    try expectContains(contextual_request, "if (result_relation == .exact_destination)");
+    try expectContains(contextual_request, "try self.graphFunctionNode(function.args, function.ret)");
+    try expectContains(contextual_request, "registerUniformFunctionArgumentAuthority(");
+
+    const completion = sourceSliceBetween(
+        solve_source,
+        "pub fn completeFunctionResult(",
+        "pub fn completeProducedSelection(",
+    );
+    try expectContains(completion, "setContent(result_cell, .{ .redirect = exact_produced })");
+    try expectNotContains(completion, "internCompletedFunction");
 
     const source_request = sourceSliceBetween(
         lower_source,
@@ -1549,7 +1594,8 @@ test "Monotype callable requests keep explicit independent body result authority
         "fn ensureCallableRequestResultRelation(",
         "fn enclosingFunctionTypeSource(",
     );
-    try expectContains(callable_relation, "functionResultRelation(request_node) != null");
+    try expectContains(callable_relation, "functionResultRelation(request_node) == null");
+    try expectContains(callable_relation, "return request_node");
     try expectContains(callable_relation, ".exact_request => .exact_destination");
     try expectContains(callable_relation, ".checked_mapping, .public_request, .exact_producer => .produced");
     try expectContains(callable_relation, "callable value request had no explicit result authority");
@@ -1560,6 +1606,72 @@ test "Monotype callable requests keep explicit independent body result authority
         "fn restoreConstParserRuntimeFnAtNode(",
     );
     try expectContains(restore, "registerFunctionResultRelation(request_root, .exact_destination)");
+}
+
+test "Monotype deferred serialization retains bindings separately from body references" {
+    const lower_source = @embedFile("monotype/lower.zig");
+
+    const stored_dispatch = sourceSliceBetween(
+        lower_source,
+        "fn storedDispatchCallableFromCheckedPlan(",
+        "fn instantiateTargetCallNodeFromMonoArgs(",
+    );
+    try expectContains(stored_dispatch, "exact_dispatcher: NodeId");
+    try expectContains(stored_dispatch, ".node = self.graph.rootNode(exact_dispatcher)");
+    try expectContains(stored_dispatch, ".authority = .request");
+    try expectNotContains(stored_dispatch, "materializeCallSelectionEdgeSubtree(");
+    try expectNotContains(stored_dispatch, "CallableDispatchRequest");
+
+    const parser_restore = sourceSliceBetween(
+        lower_source,
+        "fn restoreConstParserRuntimeFnAtNode(",
+        "fn restoreConstEncoderForRuntimeFnAtNode(",
+    );
+    try expectContains(parser_restore, "graphParserResultNodes(requested_runtime.ret)).value");
+    try expectContains(parser_restore, "storedDispatchCallableFromCheckedPlan(");
+    try expectContains(parser_restore, "shape_node,");
+    try expectNotContains(parser_restore, "dispatch_request.dispatcher");
+
+    const encoder_restore = sourceSliceBetween(
+        lower_source,
+        "fn restoreConstEncoderForRuntimeFnAtNode(",
+        "fn lowerExprSpan(",
+    );
+    try expectContains(encoder_restore, "const shape_node = requested_runtime.args[0]");
+    try expectContains(encoder_restore, "storedDispatchCallableFromCheckedPlan(");
+    try expectContains(encoder_restore, "shape_node,");
+    try expectNotContains(encoder_restore, "dispatch_request.dispatcher");
+
+    const deferred_runtime = sourceSliceBetween(
+        lower_source,
+        "const DraftDeferredRestoredCodecRuntime = struct",
+        "const DraftDeferredCallsiteIntrinsic = struct",
+    );
+    try expectContains(deferred_runtime, "encoding: DraftExprId");
+    try expectContains(deferred_runtime, "encoding_binding: ?DraftExprBinding");
+    try expectNotContains(deferred_runtime, "encoding_local");
+
+    const emission = sourceSliceBetween(
+        lower_source,
+        "fn emitDraftDeferredRestoredCodecRuntimes(",
+        "fn emitDraftDeferredCallsiteIntrinsics(",
+    );
+    const encoding_wrap = sourceSliceBetween(
+        emission,
+        "if (boundary.encoding_binding) |binding|",
+        "runtime_expr = try self.wrapConstSourceCaptureLetsAtTypeCell(",
+    );
+    try expectContains(encoding_wrap, "binding.local");
+    try expectContains(encoding_wrap, "binding.value");
+    try expectNotContains(encoding_wrap, "boundary.encoding,");
+
+    const helper_plan = sourceSliceBetween(
+        lower_source,
+        "fn cloneSerializationHelperPlan(",
+        "fn typedBinder(",
+    );
+    try expectContains(helper_plan, "helper.args[index] = .{ .local = helper_local, .ty = str_ty }");
+    try expectNotContains(helper_plan, "helper.plan.bindings.append");
 }
 
 test "control-flow alternatives produce the selected request without root normalization" {
@@ -1637,7 +1749,7 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(cell_boundary, "self.builder.program.current_loc = try self.sourceLocFor(region)");
     try expectContains(cell_boundary, "self.builder.program.current_region = region");
     try expectContains(cell_boundary, "const expected_node = try cell.toGraphNode(self.graph)");
-    try expectContains(cell_boundary, "const graph_cell = DraftTypeCell.fromGraphNode(expected_node)");
+    try expectContains(cell_boundary, "const graph_cell = DraftTypeCell.fromGraphNode(effective_node)");
     try expectContains(cell_boundary, "self.requireLoweredExprAtCell(checked_expr, expr, graph_cell, demand, lowered)");
     try expectNotContains(cell_boundary, "return switch (cell)");
     try expectNotContains(cell_boundary, ".sealed => |ty|");
@@ -2212,14 +2324,17 @@ test "Monotype encoding intrinsics consume producer-owned identity and result to
     );
     try expectContains(intrinsic_call, "intrinsic.requestResultSource()");
     try expectContains(intrinsic_call, "const request_ret = callable.args[index]");
-    try expectContains(intrinsic_call, "functionRequestNode(self.graph, callable_node, callable.args, request_ret)");
+    try expectContains(intrinsic_call, "rebaseAuthoredFunctionRequest(self.graph, callable_node, callable.args, request_ret)");
+    try expectContains(intrinsic_call, "const produced_ret = try self.generatedIteratorNode(callable.ret, item_node)");
     try expectContains(intrinsic_call, "self.finalTypeForNode(callable.ret)");
     try expectNotContains(intrinsic_call, "generatedFieldNamesBackingValueFieldNames");
 
     switch (check.CheckedArtifact.IntrinsicId.field_names_rename_fields.requestResultSource()) {
         .argument => |index| try std.testing.expectEqual(@as(u8, 0), index),
-        .declared_return => return error.TestUnexpectedResult,
+        .declared_return, .generated_iterator => return error.TestUnexpectedResult,
     }
+    try std.testing.expect(check.CheckedArtifact.IntrinsicId.field_names_iter.requestResultSource() == .generated_iterator);
+    try std.testing.expect(check.CheckedArtifact.IntrinsicId.field_names_for_size.requestResultSource() == .generated_iterator);
     try std.testing.expect(check.CheckedArtifact.IntrinsicId.parse_tag_union.requestResultSource() == .declared_return);
 }
 

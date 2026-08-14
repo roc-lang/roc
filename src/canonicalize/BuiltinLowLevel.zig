@@ -43,6 +43,7 @@ pub const IntrinsicId = enum(u8) {
     pub const RequestResultSource = union(enum(u8)) {
         declared_return,
         argument: u8,
+        generated_iterator,
     };
 
     /// Arity for intrinsics whose implementation is emitted at each checked
@@ -64,7 +65,17 @@ pub const IntrinsicId = enum(u8) {
 
     /// Explicit request-topology contract for compiler-owned intrinsic calls.
     pub fn requestResultSource(self: IntrinsicId) RequestResultSource {
-        return if (self == .field_names_rename_fields) .{ .argument = 0 } else .declared_return;
+        return switch (self) {
+            .field_names_rename_fields => .{ .argument = 0 },
+            .field_names_iter, .field_names_for_size => .generated_iterator,
+            .str_inspect,
+            .structural_eq,
+            .parse_tag_union,
+            .field_names_shortest_name,
+            .field_names_longest_name,
+            .field_name,
+            => .declared_return,
+        };
     }
 };
 
@@ -1665,4 +1676,8 @@ test "intrinsic call-site protocol classifies every intrinsic" {
     try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_iter.callsiteArity());
     try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.field_names_for_size.callsiteArity());
     try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_name.callsiteArity());
+    try std.testing.expect(IntrinsicId.field_names_rename_fields.requestResultSource() == .argument);
+    try std.testing.expect(IntrinsicId.field_names_iter.requestResultSource() == .generated_iterator);
+    try std.testing.expect(IntrinsicId.field_names_for_size.requestResultSource() == .generated_iterator);
+    try std.testing.expect(IntrinsicId.parse_tag_union.requestResultSource() == .declared_return);
 }

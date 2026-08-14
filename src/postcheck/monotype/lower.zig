@@ -841,35 +841,47 @@ fn hostedExternAbiViolationMessage(
     ) catch "a hosted extern was specialized at a type other than the one its host ABI declares";
 }
 
-fn functionRequestNode(
+/// Replace one part of an already-authored function request while preserving
+/// every explicit edge that gives the request its meaning. This operation is
+/// only for compiler-owned callable boundaries whose result topology differs
+/// from the checked callable; it never reconstructs request metadata from the
+/// function graph.
+fn rebaseAuthoredFunctionRequest(
     graph: *InstGraph,
-    source_fn: NodeId,
+    source_request: NodeId,
     request_args: []const NodeId,
     request_ret: NodeId,
 ) Allocator.Error!NodeId {
-    const source = try graph.functionNodes(source_fn);
+    const source = try graph.functionNodes(source_request);
     if (source.args.len != request_args.len) {
-        Common.invariant("exact function request had different arity from its checked source");
+        Common.invariant("function request rebase changed arity");
     }
+    const checked_source = graph.requestCheckedSource(source_request) orelse
+        Common.invariant("function request rebase had no checked source");
+    const argument_authorities = graph.functionArgumentAuthorities(source_request) orelse
+        Common.invariant("function request rebase had no argument-authority vector");
+    if (argument_authorities.len != source.args.len) {
+        Common.invariant("function request rebase had an invalid argument-authority vector");
+    }
+    const result_relation = graph.functionResultRelation(source_request) orelse
+        Common.invariant("function request rebase had no result authority");
     var changed = !graph.sameClass(source.ret, request_ret);
     for (source.args, request_args) |source_arg, request_arg| {
         if (!graph.sameClass(source_arg, request_arg)) changed = true;
     }
-    if (!changed) {
-        // The checked source itself is also the request node when no argument
-        // or result cell changed. Record that relation so lowering the callable
-        // still uses checked-interface mapping at this boundary.
-        if (graph.requestCheckedSource(source_fn) == null) {
-            try graph.registerRequestCheckedSource(source_fn, source_fn);
-        }
-        return source_fn;
-    }
+    if (!changed) return source_request;
 
     const request_fn = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, request_args),
         .ret = request_ret,
     } });
-    try graph.registerRequestCheckedSource(request_fn, source_fn);
+    try graph.registerSpecializationRequest(
+        request_fn,
+        checked_source,
+        argument_authorities,
+        result_relation,
+        graph.directRequestSelections(source_request),
+    );
     return request_fn;
 }
 
@@ -2348,7 +2360,7 @@ const Builder = struct {
         // A root procedure is an independent runtime producer. The checked
         // root supplies its callable shell, while the procedure body owns the
         // exact result it returns.
-        try ctx.ensureCallableRequestResultRelation(
+        root_node = try ctx.ensureCallableRequestResultRelation(
             request.checked_type,
             root_node,
             .exact_producer,
@@ -6081,8 +6093,8 @@ const Builder = struct {
                     );
                     var capture_tys = std.ArrayList(Type.TypeId).empty;
                     defer capture_tys.deinit(self.allocator);
-                    if (boundary.encoding_local != null) try capture_tys.append(self.allocator, encoding_ty);
-                    for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
+                    if (boundary.encoding_binding != null) try capture_tys.append(self.allocator, encoding_ty);
+                    for (precomputed_plan.bindings.items) |_| try capture_tys.append(self.allocator, str_ty);
                     const demand_scope = try ctx.enterCallableBodyDemandScope(&.{state_ty}, capture_tys.items);
                     defer demand_scope.leave();
                     const parsed = try ctx.lowerParseResultFromState(
@@ -6128,8 +6140,8 @@ const Builder = struct {
 
                     var capture_tys = std.ArrayList(Type.TypeId).empty;
                     defer capture_tys.deinit(self.allocator);
-                    if (boundary.encoding_local != null) try capture_tys.append(self.allocator, encoding_ty);
-                    for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
+                    if (boundary.encoding_binding != null) try capture_tys.append(self.allocator, encoding_ty);
+                    for (precomputed_plan.bindings.items) |_| try capture_tys.append(self.allocator, str_ty);
                     const demand_scope = try ctx.enterCallableBodyDemandScope(&.{ value_ty, state_ty }, capture_tys.items);
                     defer demand_scope.leave();
                     const encoded = try ctx.lowerEncodeShapeToState(
@@ -6201,23 +6213,23 @@ const Builder = struct {
                 .args = lambda_args,
                 .body = body,
             } });
-            var capture_index = precomputed_plan.captures.items.len;
-            while (capture_index > 0) {
-                capture_index -= 1;
-                const capture = precomputed_plan.captures.items[capture_index];
+            var binding_index = precomputed_plan.bindings.items.len;
+            while (binding_index > 0) {
+                binding_index -= 1;
+                const binding = precomputed_plan.bindings.items[binding_index];
                 runtime_expr = try ctx.wrapLetAtTypeCell(
-                    capture.local,
+                    binding.local,
                     DraftTypeCell.fromSealed(str_ty),
-                    capture.value,
+                    binding.value,
                     runtime_expr,
                     request_cell,
                 );
             }
-            if (boundary.encoding_local) |local| {
+            if (boundary.encoding_binding) |binding| {
                 runtime_expr = try ctx.wrapLetAtTypeCell(
-                    local,
+                    binding.local,
                     DraftTypeCell.fromGraphNode(boundary.encoding_node),
-                    boundary.encoding,
+                    binding.value,
                     runtime_expr,
                     request_cell,
                 );
@@ -10090,6 +10102,12 @@ const DraftDeferredStructuralMap = struct {
     operands: DraftSpan(DraftExprId),
 };
 
+/// One explicit outer binding retained across deferred body emission.
+const DraftExprBinding = struct {
+    local: DraftLocalId,
+    value: DraftExprId,
+};
+
 /// A restored parser/encoder runtime whose exact operands and callable
 /// relations were produced while the specialization graph was live. The
 /// runtime lambda itself is emitted only after graph freeze, when every node
@@ -10106,7 +10124,7 @@ const DraftDeferredRestoredCodecRuntime = struct {
     shape_node: NodeId,
     encoding_node: NodeId,
     encoding: DraftExprId,
-    encoding_local: ?DraftLocalId,
+    encoding_binding: ?DraftExprBinding,
     state_local: DraftLocalId,
     state: DraftExprId,
     value_local: ?DraftLocalId,
@@ -13051,22 +13069,17 @@ const BodyContext = struct {
         renamed_field_texts: ?[][]const u8,
     };
 
-    const ParserPrecomputedCapture = struct {
-        local: DraftLocalId,
-        value: DraftExprId,
-    };
-
     const ParserPrecomputedPlan = struct {
         allocator: Allocator,
         records: std.AutoHashMap(names.TypeDigest, ParserPrecomputedRecord),
-        captures: std.ArrayList(ParserPrecomputedCapture),
+        bindings: std.ArrayList(DraftExprBinding),
         next_capture_id: usize,
 
         fn init(allocator: Allocator) ParserPrecomputedPlan {
             return .{
                 .allocator = allocator,
                 .records = std.AutoHashMap(names.TypeDigest, ParserPrecomputedRecord).init(allocator),
-                .captures = .empty,
+                .bindings = .empty,
                 .next_capture_id = 1,
             };
         }
@@ -13080,7 +13093,7 @@ const BodyContext = struct {
                 if (record.renamed_field_texts) |texts| self.allocator.free(texts);
             }
             self.records.deinit();
-            self.captures.deinit(self.allocator);
+            self.bindings.deinit(self.allocator);
         }
     };
 
@@ -13277,10 +13290,9 @@ const BodyContext = struct {
             try local_map.put(source_local, helper_local);
             try expr_map.put(source_local, helper_expr);
             helper.args[index] = .{ .local = helper_local, .ty = str_ty };
-            try helper.plan.captures.append(self.allocator, .{
-                .local = helper_local,
-                .value = helper_expr,
-            });
+            // These locals are bound by `helper.args`. They are parameters of
+            // the generated helper, not values which its caller must bind
+            // around the helper body.
         }
 
         var key_iter = inputs.record_keys.keyIterator();
@@ -16139,24 +16151,27 @@ const BodyContext = struct {
         return request;
     }
 
-    /// Author positional request authority at the callable-value boundary where a
-    /// callable value consumes a contextual signature. Equal checked argument
-    /// types remain separate positions; this metadata is never reconstructed
-    /// from their graph nodes later.
-    fn registerContextualFunctionArgumentRequests(
+    /// Author positional argument authority at the callable-value boundary.
+    /// An exact destination is already an occurrence-owned node inside its
+    /// parent's type, so keep that root intact. An independently produced
+    /// callable gets a fresh root around the same immediate children so its
+    /// request protocol cannot attach to a shared checked construction node.
+    fn authorFunctionArgumentAuthorities(
         self: *BodyContext,
-        raw_request: NodeId,
+        raw_function: NodeId,
+        result_relation: solve.FunctionResultRelation,
     ) Allocator.Error!NodeId {
-        const request = try self.graph.functionRequestRoot(raw_request);
+        const source = try self.graph.functionRequestRoot(raw_function);
         // A call schedule may already have authored exact positional producer
         // edges on this request. The surrounding callable-value context adds
         // only the missing metadata; it must not replace those producer facts
         // with a uniform request vector.
-        if (self.graph.functionArgumentAuthorities(request) != null) return request;
-        const function = try self.graph.functionNodes(request);
-        // Reading a named callable can materialize its structural backing,
-        // whose construction already records the positional vector.
-        if (self.graph.functionArgumentAuthorities(request) != null) return request;
+        if (self.graph.functionArgumentAuthorities(source) != null) return source;
+        const function = try self.graph.functionNodes(source);
+        const request = if (result_relation == .exact_destination)
+            source
+        else
+            try self.graphFunctionNode(function.args, function.ret);
         try self.graph.registerUniformFunctionArgumentAuthority(
             request,
             function.args.len,
@@ -17562,12 +17577,17 @@ const BodyContext = struct {
             body_request_fn_node;
         const result_relation = self.graph.functionResultRelation(body_request_fn_node) orelse
             Common.invariant("function result reservation had no explicit authority");
+        const argument_authorities = self.graph.functionArgumentAuthorities(body_request_fn_node) orelse
+            Common.invariant("function result reservation had no argument-authority vector");
         const produced_ret = try self.graph.newNode(.{ .unresolved = InstVariable.producerPlaceholder() });
         const result_fn = try self.graphFunctionNode(body_request.args, produced_ret);
-        try self.graph.registerRequestCheckedSource(result_fn, checked_source);
-        try self.graph.inheritFunctionArgumentAuthorities(body_request_fn_node, result_fn);
-        self.graph.registerFunctionResultRelation(result_fn, result_relation);
-        self.graph.inheritDirectRequestSelections(body_request_fn_node, result_fn);
+        try self.graph.registerSpecializationRequest(
+            result_fn,
+            checked_source,
+            argument_authorities,
+            result_relation,
+            self.graph.directRequestSelections(body_request_fn_node),
+        );
         return result_fn;
     }
 
@@ -18433,13 +18453,19 @@ const BodyContext = struct {
                 .exact_producer,
             ),
             .lambda => {
-                const request = try self.lowerExprTypeNode(expr_id);
-                try self.ensureCallableRequestResultRelation(expr.ty, request, .exact_producer);
+                const request = try self.ensureCallableRequestResultRelation(
+                    expr.ty,
+                    try self.lowerExprTypeNode(expr_id),
+                    .exact_producer,
+                );
                 return try self.lowerLambdaExprAtNode(expr_id, request);
             },
             .closure => |closure| {
-                const request = try self.lowerExprTypeNode(expr_id);
-                try self.ensureCallableRequestResultRelation(expr.ty, request, .exact_producer);
+                const request = try self.ensureCallableRequestResultRelation(
+                    expr.ty,
+                    try self.lowerExprTypeNode(expr_id),
+                    .exact_producer,
+                );
                 return try self.lowerClosureAtNode(expr_id, closure, request);
             },
             .pending, .match_, .if_, .call, .block, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
@@ -19208,7 +19234,18 @@ const BodyContext = struct {
             .argument => |index| {
                 if (index >= callable.args.len) Common.invariant("checked intrinsic result argument was outside its callable request");
                 const request_ret = callable.args[index];
-                callable_node = try functionRequestNode(self.graph, callable_node, callable.args, request_ret);
+                callable_node = try rebaseAuthoredFunctionRequest(self.graph, callable_node, callable.args, request_ret);
+                callable = try self.graph.functionNodes(callable_node);
+            },
+            .generated_iterator => {
+                const item_node = try self.generatedIteratorItemNode(callable.ret);
+                const produced_ret = try self.generatedIteratorNode(callable.ret, item_node);
+                callable_node = try rebaseAuthoredFunctionRequest(
+                    self.graph,
+                    callable_node,
+                    callable.args,
+                    produced_ret,
+                );
                 callable = try self.graph.functionNodes(callable_node);
             },
         }
@@ -19337,8 +19374,10 @@ const BodyContext = struct {
             const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
             switch (record.ref) {
                 .local_proc => |local| {
-                    const request_fn_node = try self.activeNodeFromType(ty);
-                    _ = try self.registerContextualFunctionArgumentRequests(request_fn_node);
+                    const request_fn_node = try self.authorFunctionArgumentAuthorities(
+                        try self.activeNodeFromType(ty),
+                        .exact_destination,
+                    );
                     self.graph.registerFunctionResultRelation(request_fn_node, .exact_destination);
                     const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                     const fn_id = try self.lowerDraftLocalProcAtNode(
@@ -19510,6 +19549,7 @@ const BodyContext = struct {
         // This checked wrapper has no runtime arguments and returns the one
         // callable-evaluation destination supplied by its consumer. It does
         // not own a second result cell: its body is explicitly request-directed.
+        try body_ctx.graph.registerUniformFunctionArgumentAuthority(wrapper_request, 0, .request);
         body_ctx.graph.registerFunctionResultRelation(wrapper_request, .exact_destination);
         const wrapper_fn_node = try body_ctx.exactFunctionRequestFromCheckedSource(
             wrapper.checked_fn_root,
@@ -20839,7 +20879,7 @@ const BodyContext = struct {
         item_node: NodeId,
     ) Allocator.Error!NodeId {
         const step = try self.graph.functionNodes(public_step);
-        return try self.graphFunctionNode(
+        return try self.graph.newProducedFunction(
             step.args,
             try self.generatedIteratorStepResultNode(step.ret, self_node, item_node),
         );
@@ -20918,12 +20958,6 @@ const BodyContext = struct {
         const checked_node = try self.persistentCheckedBaseNode(checked_fn_ty);
         const recipe_node = try self.graph.importMono(mono_fn_ty);
         const recipe_fn = try self.graph.functionNodes(recipe_node);
-        try self.graph.registerUniformFunctionArgumentAuthority(
-            recipe_node,
-            recipe_fn.args.len,
-            .produced,
-        );
-        self.graph.registerFunctionResultRelation(recipe_node, .produced);
         const available = try self.graph.arena().alloc(bool, recipe_fn.args.len);
         @memset(available, true);
         const plan = self.view.templates.specializationCallPlanForCallable(checked_fn_ty);
@@ -21607,7 +21641,7 @@ const BodyContext = struct {
         return @intCast(capture_id);
     }
 
-    fn appendParserPrecomputedCaptures(
+    fn appendParserPrecomputedBindings(
         self: *BodyContext,
         plan: *ParserPrecomputedPlan,
         fields: []const Type.Field,
@@ -21622,7 +21656,7 @@ const BodyContext = struct {
         while (rank < fields.len) : (rank += 1) {
             for (fields, 0..) |_, index| {
                 if (self.parserRecordFieldRank(fields, index) != rank) continue;
-                try plan.captures.append(self.allocator, .{
+                try plan.bindings.append(self.allocator, .{
                     .local = renamed_field_locals[index],
                     .value = renamed_field_values[index],
                 });
@@ -21846,7 +21880,7 @@ const BodyContext = struct {
         });
         inserted = true;
 
-        try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
+        try self.appendParserPrecomputedBindings(plan, fields, locals, values);
     }
 
     fn buildEncodeRestoredRecordPrecomputedPlan(
@@ -21854,7 +21888,7 @@ const BodyContext = struct {
         plan: *ParserPrecomputedPlan,
         fn_value: check.ConstStore.ConstFn,
         store_view: ModuleView,
-        fn_view: ModuleView,
+        _: ModuleView,
         shape_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
@@ -21880,7 +21914,7 @@ const BodyContext = struct {
                 Common.invariant("stored encoder_for runtime function was missing a renamed field capture");
             locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
             self.setLocalCaptureId(locals[index], capture_id);
-            values[index] = try self.restoreConstNodeAtType(store_view, fn_view, node, str_ty);
+            values[index] = try self.stringExpr(constStrNodeBytes(store_view, node), str_ty);
         }
 
         try self.parserPlanPut(plan, shape_ty, .{
@@ -21891,7 +21925,7 @@ const BodyContext = struct {
         });
         inserted = true;
 
-        try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
+        try self.appendParserPrecomputedBindings(plan, fields, locals, values);
     }
 
     fn buildParserConstructionRecordPrecomputedPlan(
@@ -21935,7 +21969,7 @@ const BodyContext = struct {
         });
         inserted = true;
 
-        try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
+        try self.appendParserPrecomputedBindings(plan, fields, locals, values);
 
         for (fields) |field| {
             try self.buildParserConstructionPrecomputedPlan(plan, field.ty, encoding_expr, encoding_ty, str_ty);
@@ -22196,7 +22230,7 @@ const BodyContext = struct {
             });
             inserted = true;
 
-            try self.appendParserPrecomputedCaptures(plan, record_fields, locals, values);
+            try self.appendParserPrecomputedBindings(plan, record_fields, locals, values);
         }
     }
 
@@ -22235,7 +22269,7 @@ const BodyContext = struct {
                 Common.invariant("stored parser runtime function was missing a renamed field capture");
             locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
             self.setLocalCaptureId(locals[index], capture_id);
-            values[index] = try self.restoreConstNodeAtType(store_view, fn_view, node, str_ty);
+            values[index] = try self.stringExpr(constStrNodeBytes(store_view, node), str_ty);
             lengths[index] = constStrNodeByteLen(store_view, node);
             texts[index] = constStrNodeBytes(store_view, node);
         }
@@ -22248,7 +22282,7 @@ const BodyContext = struct {
         });
         inserted = true;
 
-        try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
+        try self.appendParserPrecomputedBindings(plan, fields, locals, values);
 
         for (fields) |field| {
             try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, field.ty, str_ty);
@@ -25489,11 +25523,11 @@ const BodyContext = struct {
         body = try self.wrapLet(key_local, key_ty, key_value, body, ret_ty);
         body = try self.wrapLet(options_local, options_ty, options_value, body, ret_ty);
         if (maybe_spec_backing_ty) |spec_backing_ty| {
-            var capture_index = precomputed_plan.captures.items.len;
-            while (capture_index > 0) {
-                capture_index -= 1;
-                const capture = precomputed_plan.captures.items[capture_index];
-                body = try self.wrapLet(capture.local, try self.builder.primitiveType(.str), capture.value, body, ret_ty);
+            var binding_index = precomputed_plan.bindings.items.len;
+            while (binding_index > 0) {
+                binding_index -= 1;
+                const binding = precomputed_plan.bindings.items[binding_index];
+                body = try self.wrapLet(binding.local, try self.builder.primitiveType(.str), binding.value, body, ret_ty);
             }
             const backing_local = spec_backing_local orelse Common.invariant("generated tag-union spec backing local was missing");
             const spec_pat = try self.addPat(.{
@@ -27682,6 +27716,7 @@ const BodyContext = struct {
             selections,
         );
         defer self.active_checked_selections = inherited;
+        var effective_request = request;
         if (resolvedPayload(self.view, self.view.bodies.expr(expr).ty).payload == .function) {
             // A checker-designated callable consumer receives its complete
             // runtime interface from this call edge. That includes the result
@@ -27690,14 +27725,14 @@ const BodyContext = struct {
             // Nested procedure lowering runs in its own BodyContext after this
             // operand scope has unwound, so carry both that authority and the
             // already-mapped identities on the immutable request itself.
-            try self.ensureCallableRequestResultRelation(
+            effective_request = try self.ensureCallableRequestResultRelation(
                 self.view.bodies.expr(expr).ty,
                 request,
                 .exact_request,
             );
-            try self.recordActiveCheckedSelectionsOnFunction(request);
+            try self.recordActiveCheckedSelectionsOnFunction(effective_request);
         }
-        return try self.lowerExprAtProducedValueRequest(expr, request);
+        return try self.lowerExprAtProducedValueRequest(expr, effective_request);
     }
 
     fn lowerExprAtCallConsumerRequestInView(
@@ -27718,15 +27753,16 @@ const BodyContext = struct {
             );
         }
         defer self.active_checked_selections = inherited;
+        var effective_request = request;
         if (resolvedPayload(self.view, self.view.bodies.expr(expr).ty).payload == .function) {
-            try self.ensureCallableRequestResultRelation(
+            effective_request = try self.ensureCallableRequestResultRelation(
                 self.view.bodies.expr(expr).ty,
                 request,
                 .exact_request,
             );
-            try self.recordActiveCheckedSelectionsOnFunction(request);
+            try self.recordActiveCheckedSelectionsOnFunction(effective_request);
         }
-        return try self.lowerExprAtProducedValueRequest(expr, request);
+        return try self.lowerExprAtProducedValueRequest(expr, effective_request);
     }
 
     /// Lower a value that consumes an exact outer request while retaining
@@ -27739,12 +27775,12 @@ const BodyContext = struct {
         expr: checked.CheckedExprId,
         request: NodeId,
     ) Allocator.Error!DraftExprId {
-        try self.ensureCallableRequestResultRelation(
+        const effective_request = try self.ensureCallableRequestResultRelation(
             self.view.bodies.expr(expr).ty,
             request,
             .exact_producer,
         );
-        return try self.lowerExprAtExactRequest(expr, DraftTypeCell.fromGraphNode(request));
+        return try self.lowerExprAtExactRequest(expr, DraftTypeCell.fromGraphNode(effective_request));
     }
 
     fn persistentCheckedBaseNode(
@@ -28009,6 +28045,8 @@ const BodyContext = struct {
         const source = try self.graph.functionNodes(source_request);
         const source_argument_authorities = self.graph.functionArgumentAuthorities(source_request) orelse
             Common.invariant("source call request had no argument-authority vector");
+        const source_result_relation = self.graph.functionResultRelation(source_request) orelse
+            Common.invariant("source call request had no result authority");
         if (source.args.len != checked_fn.args.len) {
             Common.invariant("source call request had a different arity from its checked callable");
         }
@@ -28042,12 +28080,13 @@ const BodyContext = struct {
             );
         };
         const request = try self.graphFunctionNode(args, ret);
-        try self.graph.registerRequestCheckedSource(request, checked_fn_node);
-        try self.graph.registerFunctionArgumentAuthorities(request, argument_authorities);
-        if (self.graph.functionResultRelation(source_request)) |relation| {
-            self.graph.registerFunctionResultRelation(request, relation);
-        }
-        try self.graph.recordDirectRequestSelections(request, selections);
+        try self.graph.registerSpecializationRequest(
+            request,
+            checked_fn_node,
+            argument_authorities,
+            source_result_relation,
+            selections,
+        );
         return request;
     }
 
@@ -28118,10 +28157,13 @@ const BodyContext = struct {
                 .request,
             );
         const request = try self.graphFunctionNode(args, ret);
-        try self.graph.registerRequestCheckedSource(request, checked_fn_node);
-        try self.graph.registerFunctionArgumentAuthorities(request, argument_authorities);
-        self.graph.registerFunctionResultRelation(request, result_relation);
-        try self.graph.recordDirectRequestSelections(request, completed_selections);
+        try self.graph.registerSpecializationRequest(
+            request,
+            checked_fn_node,
+            argument_authorities,
+            result_relation,
+            completed_selections,
+        );
         return request;
     }
 
@@ -28321,14 +28363,12 @@ const BodyContext = struct {
             var fn_node = planned.request;
             const hosted_capability = try self.hostedTryCapabilityForResolvedTarget(target);
             if (hosted_capability) |capability| {
-                const completed = try self.graph.functionNodes(fn_node);
                 if (try self.hostedTryWidenedRequestNode(
                     capability,
                     checked_fn_node,
-                    completed.args,
+                    fn_node,
                     request_ret,
                 )) |widened| {
-                    self.graph.inheritDirectRequestSelections(fn_node, widened);
                     fn_node = widened;
                 }
             }
@@ -28697,36 +28737,39 @@ const BodyContext = struct {
     fn hostedTryWidenedRequestNode(
         self: *BodyContext,
         capability: HostedTryAdapterCapability,
-        source_fn: NodeId,
-        request_args: []const NodeId,
+        public_fn: NodeId,
+        source_request: NodeId,
         request_ret: NodeId,
     ) Allocator.Error!?NodeId {
-        if (!try hostedTryWideningRequestHasAdditionalErrors(self.graph, capability, source_fn, request_ret)) {
+        if (!try hostedTryWideningRequestHasAdditionalErrors(self.graph, capability, public_fn, request_ret)) {
             return null;
         }
-        const request_fn = try self.graph.newNode(.{ .func = .{
-            .args = try self.graph.arena().dupe(NodeId, request_args),
-            .ret = request_ret,
-        } });
-        if (!try validateHostedTryWidening(self.graph, capability, source_fn, request_fn)) {
+        const source = try self.graph.functionNodes(source_request);
+        const request_fn = try rebaseAuthoredFunctionRequest(
+            self.graph,
+            source_request,
+            source.args,
+            request_ret,
+        );
+        if (!try validateHostedTryWidening(self.graph, capability, public_fn, request_fn)) {
             Common.invariant("hosted Try widening request lost its additional error labels");
         }
-        try self.graph.registerRequestCheckedSource(request_fn, source_fn);
         return request_fn;
     }
 
-    /// Build the contextual shell used while restoring a stored generated
-    /// parser/encoder. No operand has run yet, so only checker-proven concrete
-    /// roots, active exact selections, and the explicit result destination
-    /// participate. The restored body later lowers each operand and receives
-    /// its exact produced node directly.
-    fn storedDispatchRequestFromCheckedPlan(
+    /// Build the callable shell used while restoring a stored generated
+    /// parser/encoder. The exact shape is already an explicit child of the
+    /// restored runtime signature, so the dispatch plan consumes that node as
+    /// its dispatcher request. No operand has run yet, and this operation does
+    /// not construct a second shape from the checked selection graph.
+    fn storedDispatchCallableFromCheckedPlan(
         self: *BodyContext,
         callable_plan: CallableDispatchPlan,
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         expected_ret_node: ?NodeId,
-    ) Allocator.Error!CallableDispatchRequest {
+        exact_dispatcher: NodeId,
+    ) Allocator.Error!NodeId {
         const plan = callable_plan.plan;
         const operands = callable_plan.operands;
         const source_fn_ty = plan.callable_ty;
@@ -28762,12 +28805,15 @@ const BodyContext = struct {
             &.{},
             request_args,
             available,
-            null,
+            .{
+                .node = self.graph.rootNode(exact_dispatcher),
+                .authority = .request,
+            },
             request_ret,
             .request,
             .scheduled_operands,
         );
-        const materialized = try self.materializeCallSelectionSpan(
+        return try self.materializeCallSelectionSpan(
             call_plan,
             source_fn_ty,
             fn_node,
@@ -28777,17 +28823,6 @@ const BodyContext = struct {
             request_ret,
             if (expected_ret_node != null) .exact_destination else .produced,
         );
-        const completed_selections = self.graph.directRequestSelections(materialized);
-        const dispatcher_root = self.callDispatcherRootEdge(call_plan, plan.dispatcher_ty);
-        return .{
-            .callable = materialized,
-            .dispatcher = try self.materializeCallSelectionEdgeSubtree(
-                call_plan,
-                dispatcher_root,
-                completed_selections,
-                .{ .checked = null },
-            ),
-        };
     }
 
     fn instantiateTargetCallNodeFromMonoArgs(
@@ -29619,7 +29654,7 @@ const BodyContext = struct {
                 );
             },
             .local_proc => |local| {
-                const request_fn_node = try self.registerContextualFunctionArgumentRequests(expected_node);
+                const request_fn_node = try self.authorFunctionArgumentAuthorities(expected_node, result_relation);
                 self.graph.registerFunctionResultRelation(request_fn_node, result_relation);
                 const checked_ty = self.view.bodies.expr(checked_expr).ty;
                 const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
@@ -29629,11 +29664,11 @@ const BodyContext = struct {
                     context_id,
                     checked_ty,
                     self.view.types.rootKey(checked_ty),
-                    expected_node,
+                    request_fn_node,
                     try self.evidenceForUseSite(record.expr),
                     self.localProcedureUseSignatureRelation(local),
                 );
-                const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, expected_node);
+                const fn_node = try self.draftFnSlotTypeNode(.{ .local = fn_id }, request_fn_node);
                 return try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(fn_node),
                     .{ .fn_def = .{
@@ -29784,7 +29819,7 @@ const BodyContext = struct {
         }
         const source_fn_ty = proc.source_fn_ty_payload orelse
             Common.invariant("checked procedure value reached Monotype without a requested function type");
-        const request_fn_node = try self.registerContextualFunctionArgumentRequests(raw_request_fn_node);
+        const request_fn_node = try self.authorFunctionArgumentAuthorities(raw_request_fn_node, result_relation);
         self.graph.registerFunctionResultRelation(request_fn_node, result_relation);
         const slot = try self.draftFnSlotForProcedureUseAtNode(
             proc,
@@ -29984,10 +30019,13 @@ const BodyContext = struct {
                 .request,
             );
         const request = try self.graphFunctionNode(args, ret);
-        try self.graph.registerRequestCheckedSource(request, checked_source);
-        try self.graph.registerFunctionArgumentAuthorities(request, argument_authorities);
-        self.graph.registerFunctionResultRelation(request, result_relation);
-        try self.graph.recordDirectRequestSelections(request, selections);
+        try self.graph.registerSpecializationRequest(
+            request,
+            checked_source,
+            argument_authorities,
+            result_relation,
+            selections,
+        );
         return request;
     }
 
@@ -30066,10 +30104,13 @@ const BodyContext = struct {
             }
         }
         const request = try self.graphFunctionNode(args, exact.ret);
-        try self.graph.registerRequestCheckedSource(request, checked_source);
-        try self.graph.registerFunctionArgumentAuthorities(request, argument_authorities);
-        self.graph.registerFunctionResultRelation(request, result_relation);
-        try self.graph.recordDirectRequestSelections(request, selections);
+        try self.graph.registerSpecializationRequest(
+            request,
+            checked_source,
+            argument_authorities,
+            result_relation,
+            selections,
+        );
         return request;
     }
 
@@ -31251,13 +31292,13 @@ const BodyContext = struct {
         const raw = @intFromEnum(fn_id);
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
         const fn_value = store_view.const_store.getFn(@enumFromInt(raw));
-        const request_root = try self.graph.functionRequestRoot(request_fn_node);
+        var request_root = try self.graph.functionRequestRoot(request_fn_node);
         if (self.graph.functionResultRelation(request_root) == null) {
             // ConstStore records the complete producer-owned representation
             // of every stored function value. Its enclosing stored value
             // therefore supplies an exact result cell as well as the callable
             // arguments; rebasing the checked body must preserve both.
-            _ = try self.registerContextualFunctionArgumentRequests(request_root);
+            request_root = try self.authorFunctionArgumentAuthorities(request_root, .exact_destination);
             self.graph.registerFunctionResultRelation(request_root, .exact_destination);
         }
         switch (fn_value.fn_def) {
@@ -31265,14 +31306,14 @@ const BodyContext = struct {
                 store_view,
                 fn_id,
                 fn_value,
-                request_fn_node,
+                request_root,
                 static_data_const_locator,
             ),
             .encoder_for_runtime => return try self.restoreConstEncoderForRuntimeFnAtNode(
                 store_view,
                 fn_id,
                 fn_value,
-                request_fn_node,
+                request_root,
                 static_data_const_locator,
             ),
             .local_template, .imported_template, .nested, .local_hosted, .imported_hosted, .checked_generated => {},
@@ -31290,7 +31331,7 @@ const BodyContext = struct {
                 store_view,
                 fn_value,
                 fn_def,
-                request_fn_node,
+                request_root,
                 retained_evidence,
                 static_data_const_locator,
             );
@@ -31299,9 +31340,9 @@ const BodyContext = struct {
             fn_value,
             fn_def,
             retained_evidence,
-            request_fn_node,
+            request_root,
         );
-        return try self.addRestoredFnDefAtNode(restored_fn, .empty(), request_fn_node);
+        return try self.addRestoredFnDefAtNode(restored_fn, .empty(), request_root);
     }
 
     fn restoreConstFnTemplateAtNode(
@@ -31834,16 +31875,21 @@ const BodyContext = struct {
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
-        const dispatch_request = try fn_ctx.storedDispatchRequestFromCheckedPlan(
+        const requested_runtime = try self.graph.functionNodes(request_fn_node);
+        if (requested_runtime.args.len != 1) {
+            Common.invariant("stored parser runtime request had an unexpected arity");
+        }
+        const shape_node = (try fn_ctx.graphParserResultNodes(requested_runtime.ret)).value;
+        var callable_node = try fn_ctx.storedDispatchCallableFromCheckedPlan(
             callable_plan,
             &fn_ctx,
             expr.ty,
             request_fn_node,
+            shape_node,
         );
-        var callable_node = dispatch_request.callable;
         var required_error_seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer required_error_seen.deinit();
-        if (try fn_ctx.graphParserShapeNeedsRequiredFieldError(dispatch_request.dispatcher, &required_error_seen)) {
+        if (try fn_ctx.graphParserShapeNeedsRequiredFieldError(shape_node, &required_error_seen)) {
             callable_node = try fn_ctx.graphParserCallableWithMissingRequiredFieldError(callable_node);
         }
         const callable = try self.graph.functionNodes(callable_node);
@@ -31856,7 +31902,6 @@ const BodyContext = struct {
         if (runtime_fn.args.len != 1) Common.invariant("stored parser runtime function had an unexpected arity");
         const state_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[0]);
 
-        const shape_node = dispatch_request.dispatcher;
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(produced_runtime_node),
             .pending_deferred,
@@ -31870,14 +31915,11 @@ const BodyContext = struct {
         const state_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
         const state_expr = try fn_ctx.addExprWithTypeCell(state_cell, .{ .local = state_local });
 
-        var encoding_let: ?struct {
-            local: DraftLocalId,
-            value: DraftExprId,
-        } = null;
+        var encoding_binding: ?DraftExprBinding = null;
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, parserEncodingCaptureId())) |node| blk: {
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
             fn_ctx.setLocalCaptureId(local, parserEncodingCaptureId());
-            encoding_let = .{
+            encoding_binding = .{
                 .local = local,
                 .value = if (static_data_const_locator) |const_locator|
                     try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
@@ -31915,7 +31957,7 @@ const BodyContext = struct {
             .shape_node = shape_node,
             .encoding_node = encoding_node,
             .encoding = encoding_expr,
-            .encoding_local = if (encoding_let) |let_| let_.local else null,
+            .encoding_binding = encoding_binding,
             .state_local = state_local,
             .state = state_expr,
             .value_local = null,
@@ -31966,13 +32008,18 @@ const BodyContext = struct {
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
-        const dispatch_request = try fn_ctx.storedDispatchRequestFromCheckedPlan(
+        const requested_runtime = try self.graph.functionNodes(request_fn_node);
+        if (requested_runtime.args.len != 2) {
+            Common.invariant("stored encoder_for runtime request had an unexpected arity");
+        }
+        const shape_node = requested_runtime.args[0];
+        const callable_node = try fn_ctx.storedDispatchCallableFromCheckedPlan(
             callable_plan,
             &fn_ctx,
             expr.ty,
             request_fn_node,
+            shape_node,
         );
-        const callable_node = dispatch_request.callable;
         const callable = try self.graph.functionNodes(callable_node);
         if (callable.args.len != 1) Common.invariant("stored encoder_for constructor had an unexpected arity");
         if (!self.graph.sameClass(callable.ret, request_fn_node)) {
@@ -31986,7 +32033,6 @@ const BodyContext = struct {
         const value_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[0]);
         const state_cell = DraftTypeCell.fromGraphNode(runtime_fn.args[1]);
 
-        const shape_node = dispatch_request.dispatcher;
         const runtime_boundary = try fn_ctx.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(request_fn_node),
             .pending_deferred,
@@ -32002,14 +32048,11 @@ const BodyContext = struct {
         const state_local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, null);
         const state_expr = try fn_ctx.addExprWithTypeCell(state_cell, .{ .local = state_local });
 
-        var encoding_let: ?struct {
-            local: DraftLocalId,
-            value: DraftExprId,
-        } = null;
+        var encoding_binding: ?DraftExprBinding = null;
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoderForEncodingCaptureId())) |node| blk: {
             const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), encoding_cell, null);
             fn_ctx.setLocalCaptureId(local, encoderForEncodingCaptureId());
-            encoding_let = .{
+            encoding_binding = .{
                 .local = local,
                 .value = if (static_data_const_locator) |const_locator|
                     try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
@@ -32047,7 +32090,7 @@ const BodyContext = struct {
             .shape_node = shape_node,
             .encoding_node = encoding_node,
             .encoding = encoding_expr,
-            .encoding_local = if (encoding_let) |let_| let_.local else null,
+            .encoding_binding = encoding_binding,
             .state_local = state_local,
             .state = state_expr,
             .value_local = value_local,
@@ -33306,19 +33349,19 @@ const BodyContext = struct {
         self.builder.program.current_loc = try self.sourceLocFor(region);
         self.builder.program.current_region = region;
         const expected_node = try cell.toGraphNode(self.graph);
-        try self.ensureCallableRequestResultRelation(
+        const effective_node = try self.ensureCallableRequestResultRelation(
             expr.ty,
             expected_node,
             destination_relation,
         );
-        const graph_cell = DraftTypeCell.fromGraphNode(expected_node);
+        const graph_cell = DraftTypeCell.fromGraphNode(effective_node);
         const lowered = if (expr_diverges)
             try self.lowerDivergentExprAtTypeCell(checked_expr, graph_cell)
         else
             try self.lowerExprAtTypeCellInner(
                 checked_expr,
                 graph_cell,
-                expected_node,
+                effective_node,
                 destination_relation,
             );
         return try self.requireLoweredExprAtCell(checked_expr, expr, graph_cell, demand, lowered);
@@ -33334,14 +33377,17 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         raw_request_node: NodeId,
         destination_relation: ControlFlowDestinationRelation,
-    ) Allocator.Error!void {
-        if (resolvedPayload(self.view, checked_ty).payload != .function) return;
-        const request_node = try self.registerContextualFunctionArgumentRequests(raw_request_node);
-        if (self.graph.functionResultRelation(request_node) != null) return;
-        self.graph.registerFunctionResultRelation(request_node, switch (destination_relation) {
+    ) Allocator.Error!NodeId {
+        if (resolvedPayload(self.view, checked_ty).payload != .function) return raw_request_node;
+        const result_relation: solve.FunctionResultRelation = switch (destination_relation) {
             .exact_request => .exact_destination,
             .checked_mapping, .public_request, .exact_producer => .produced,
-        });
+        };
+        const request_node = try self.authorFunctionArgumentAuthorities(raw_request_node, result_relation);
+        if (self.graph.functionResultRelation(request_node) == null) {
+            self.graph.registerFunctionResultRelation(request_node, result_relation);
+        }
+        return request_node;
     }
 
     fn callableRequestResultRelation(
@@ -39492,7 +39538,7 @@ const BodyContext = struct {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
             try capture_tys.append(self.allocator, arg_tys[0]);
-            for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
+            for (precomputed_plan.bindings.items) |_| try capture_tys.append(self.allocator, str_ty);
             const demand_scope = try self.enterCallableBodyDemandScope(&.{runtime_arg_tys[0]}, capture_tys.items);
             defer demand_scope.leave();
             break :blk try self.lowerParseShapeHelperCall(
@@ -39522,11 +39568,11 @@ const BodyContext = struct {
             }),
             .body = parsed,
         } } });
-        var capture_index = precomputed_plan.captures.items.len;
-        while (capture_index > 0) {
-            capture_index -= 1;
-            const capture = precomputed_plan.captures.items[capture_index];
-            parser_expr = try self.wrapLet(capture.local, str_ty, capture.value, parser_expr, ret_ty);
+        var binding_index = precomputed_plan.bindings.items.len;
+        while (binding_index > 0) {
+            binding_index -= 1;
+            const binding = precomputed_plan.bindings.items[binding_index];
+            parser_expr = try self.wrapLet(binding.local, str_ty, binding.value, parser_expr, ret_ty);
         }
         return try self.wrapLet(encoding_local, arg_tys[0], encoding_value, parser_expr, ret_ty);
     }
@@ -39602,7 +39648,7 @@ const BodyContext = struct {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
             try capture_tys.append(self.allocator, arg_tys[0]);
-            for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
+            for (precomputed_plan.bindings.items) |_| try capture_tys.append(self.allocator, str_ty);
             const demand_scope = try self.enterCallableBodyDemandScope(runtime_arg_tys, capture_tys.items);
             defer demand_scope.leave();
             break :blk try self.lowerEncodeShapeToState(
@@ -39634,11 +39680,11 @@ const BodyContext = struct {
             }),
             .body = encoded,
         } } });
-        var capture_index = precomputed_plan.captures.items.len;
-        while (capture_index > 0) {
-            capture_index -= 1;
-            const capture = precomputed_plan.captures.items[capture_index];
-            encoder_expr = try self.wrapLet(capture.local, str_ty, capture.value, encoder_expr, ret_ty);
+        var binding_index = precomputed_plan.bindings.items.len;
+        while (binding_index > 0) {
+            binding_index -= 1;
+            const binding = precomputed_plan.bindings.items[binding_index];
+            encoder_expr = try self.wrapLet(binding.local, str_ty, binding.value, encoder_expr, ret_ty);
         }
         return try self.wrapLet(encoding_local, arg_tys[0], encoding_value, encoder_expr, ret_ty);
     }
@@ -43767,8 +43813,13 @@ const BodyContext = struct {
             outer_result.rest,
             produced_err,
         );
-        const produced_runtime = try self.graphFunctionNode(runtime.args, produced_result);
-        return try self.graphFunctionNode(callable.args, produced_runtime);
+        const produced_runtime = try self.graph.newProducedFunction(runtime.args, produced_result);
+        return try rebaseAuthoredFunctionRequest(
+            self.graph,
+            boundary_callable_node,
+            callable.args,
+            produced_runtime,
+        );
     }
 
     fn graphRowHasTag(self: *BodyContext, row_node: NodeId, text: []const u8) Allocator.Error!bool {

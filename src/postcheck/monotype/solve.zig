@@ -783,7 +783,7 @@ pub const InstGraph = struct {
         _ = self.unifyFieldKinds(left.kind, left.default, right.kind, right.default);
     }
 
-    pub fn registerRequestCheckedSource(
+    fn registerRequestCheckedSource(
         self: *InstGraph,
         request_fn: NodeId,
         source_fn: NodeId,
@@ -797,6 +797,29 @@ pub const InstGraph = struct {
         } else {
             entry.* = source_fn;
         }
+    }
+
+    /// Register the complete specialization meaning of one function request
+    /// at the construction site that owns it. A checked source, positional
+    /// authorities, result authority, and flat selection edges are one
+    /// indivisible protocol; later code must never recover an omitted member
+    /// from the function graph.
+    pub fn registerSpecializationRequest(
+        self: *InstGraph,
+        request_fn: NodeId,
+        checked_source: NodeId,
+        argument_authorities: []const DirectRequestSelectionAuthority,
+        result_relation: FunctionResultRelation,
+        selections: []const DirectRequestSelection,
+    ) Allocator.Error!void {
+        const function = try self.functionNodes(request_fn);
+        if (argument_authorities.len != function.args.len) {
+            Common.invariant("specialization request argument-authority vector had the wrong arity");
+        }
+        try self.registerRequestCheckedSource(request_fn, checked_source);
+        try self.registerFunctionArgumentAuthorities(request_fn, argument_authorities);
+        self.registerFunctionResultRelation(request_fn, result_relation);
+        try self.recordDirectRequestSelections(request_fn, selections);
     }
 
     pub fn requestCheckedSource(self: *InstGraph, request_fn: NodeId) ?NodeId {
@@ -822,11 +845,6 @@ pub const InstGraph = struct {
 
     pub fn functionResultRelation(self: *const InstGraph, request_fn: NodeId) ?FunctionResultRelation {
         return self.function_result_relations.items[@intFromEnum(request_fn)];
-    }
-
-    pub fn inheritFunctionResultRelation(self: *InstGraph, source_fn: NodeId, destination_fn: NodeId) void {
-        const relation = self.functionResultRelation(source_fn) orelse return;
-        self.registerFunctionResultRelation(destination_fn, relation);
     }
 
     pub fn functionArgumentAuthorities(
@@ -869,16 +887,6 @@ pub const InstGraph = struct {
         return self.registerFunctionArgumentAuthorities(request_fn, authorities);
     }
 
-    pub fn inheritFunctionArgumentAuthorities(
-        self: *InstGraph,
-        source_fn: NodeId,
-        destination_fn: NodeId,
-    ) Allocator.Error!void {
-        const authorities = self.functionArgumentAuthorities(source_fn) orelse
-            Common.invariant("function request rebasing had no argument-authority vector");
-        return self.registerFunctionArgumentAuthorities(destination_fn, authorities);
-    }
-
     pub fn directRequestSelections(self: *const InstGraph, request_fn: NodeId) []const DirectRequestSelection {
         const span = self.direct_request_selection_spans.items[@intFromEnum(request_fn)];
         if (!span.isInitialized()) return &.{};
@@ -914,17 +922,6 @@ pub const InstGraph = struct {
             .start = start,
             .len = @intCast(selections.len),
         };
-    }
-
-    pub fn inheritDirectRequestSelections(self: *InstGraph, source_fn: NodeId, destination_fn: NodeId) void {
-        if (source_fn == destination_fn) return;
-        const source = self.direct_request_selection_spans.items[@intFromEnum(source_fn)];
-        if (!source.isInitialized()) return;
-        const destination = &self.direct_request_selection_spans.items[@intFromEnum(destination_fn)];
-        if (destination.isInitialized() and !std.meta.eql(destination.*, source)) {
-            Common.invariant("function request inherited two different direct-selection spans");
-        }
-        destination.* = source;
     }
 
     /// Whether two requests carry the same node and authority for every
@@ -969,7 +966,10 @@ pub const InstGraph = struct {
     /// Resolve the stable result cell held by callers and recursive references
     /// to the exact node returned by the completed function body. The result
     /// cell is a producer-owned forward edge, not a checked type and not a
-    /// second graph to compare or merge.
+    /// second graph to compare or merge. The request root remains distinct
+    /// after completion because its checked source and directional edges are
+    /// occurrence-owned protocol, even when another function has the same
+    /// exact type shape.
     pub fn completeFunctionResult(
         self: *InstGraph,
         raw_fn_node: NodeId,
@@ -988,7 +988,6 @@ pub const InstGraph = struct {
             }
             try self.setContent(result_cell, .{ .redirect = exact_produced });
         }
-        _ = try self.internCompletedFunction(fn_node);
     }
 
     /// Resolve one explicit control-flow result cell to the exact node chosen
@@ -5356,7 +5355,7 @@ test "function request identity distinguishes request seeds from produced edges"
     try std.testing.expect(!try graph.sameFunctionRequestInputs(left, right));
 }
 
-test "completed functions with the same exact children share one runtime node" {
+test "completed specialization requests retain distinct occurrence roots" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -5378,9 +5377,35 @@ test "completed functions with the same exact children share one runtime node" {
         .args = try graph.arena().dupe(NodeId, &.{arg}),
         .ret = right_ret,
     } });
+    const checked_source = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = produced_ret,
+    } });
+    try graph.registerSpecializationRequest(left, checked_source, &.{.produced}, .produced, &.{});
+    try graph.registerSpecializationRequest(right, checked_source, &.{.produced}, .produced, &.{});
 
     try graph.completeFunctionResult(left, produced_ret);
     try graph.completeFunctionResult(right, produced_ret);
+
+    try std.testing.expect(!graph.sameClass(left, right));
+    try std.testing.expect(graph.sameClass((try graph.functionNodes(left)).ret, produced_ret));
+    try std.testing.expect(graph.sameClass((try graph.functionNodes(right)).ret, produced_ret));
+}
+
+test "produced functions with the same exact children share one runtime node" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const arg = try graph.newNode(.{ .primitive = .u64 });
+    const ret = try graph.newNode(.{ .primitive = .bool });
+    const left = try graph.newProducedFunction(&.{arg}, ret);
+    const right = try graph.newProducedFunction(&.{arg}, ret);
 
     try std.testing.expect(graph.sameClass(left, right));
 }

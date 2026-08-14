@@ -2669,6 +2669,13 @@ iterator.
 Ordinary calls and method dispatches to the same intrinsic consume this exact
 identity through one Monotype lowering path. A call-site intrinsic never becomes
 an ordinary procedure specialization merely because static dispatch selected it.
+The intrinsic descriptor records how its result root is obtained. Field-name
+iterator intrinsics explicitly select generated-iterator production: after all
+call arguments have supplied their exact selection edges, the intrinsic
+producer constructs the content-addressed iterator from the exact item node and
+places that generated node directly in its callable result position. The
+checked-public `Iter(item)` result is only the construction input. It is never
+emitted as the intrinsic result and is never replaced by a later scan.
 
 Each checked procedure template stores separate spans of direct calls and
 dispatch relations. Evidence instantiation iterates only the relation span; it
@@ -4025,8 +4032,13 @@ a call result, descend through a field or tuple receiver, or query a local as
 return. A producer enters a call's exact substitution span only after its one
 real lowering pass has returned the produced node. A stored generated body that
 has not yet restored its operands carries checked formal shells with every
-operand marked unavailable; only its explicit result destination may affect
-that preliminary request.
+operand marked unavailable. Its restored runtime signature is explicit input,
+so a parser takes its value shape directly from the `Try` result in that
+signature and an encoder takes its value shape directly from the signature's
+first argument. That exact child is passed to the dispatch plan as the
+dispatcher request. The plan does not construct, return, or later replace a
+second shape node; apart from that child, only the explicit result destination
+may affect the preliminary request.
 
 A requested lambda keeps that destination as immutable input while lowering
 its body, but the function value owns a distinct forward result cell. The body
@@ -4481,6 +4493,21 @@ source on the request's structural function root.
 Named callable wrappers are normalized to that root before provenance is
 recorded, so body lowering consumes the explicit source mapping instead of
 deriving it from the request shape.
+
+A specialization request root is occurrence-owned protocol, not an interned
+function type. Its checked source, positional argument-authority vector, result
+authority, and flat selection span are registered together at the operation
+that creates it. Omitting any member is an invariant violation; rebasing a
+request copies that complete explicit record in one operation. Completing the
+body redirects only the request's forward result cell and keeps the request
+root distinct, even when another request has identical immediate type
+children. Exact produced function types are interned as soon as their immediate
+children are known. A contextual function value that independently produces
+its body first creates a fresh request root around those exact child nodes, so
+two use sites can never attach different directional facts to a shared type
+node. An exact destination is already the occurrence-owned root supplied by
+its parent and remains that root; creating another wrapper would duplicate the
+request rather than isolate it.
 
 The outer callable value request and the callable body's result direction are
 two independent pieces of data. The function node records the exact argument
@@ -6895,7 +6922,9 @@ body and fill that reservation. Frozen emission may not revisit a checked
 callable, add a graph relation, or create a new checked runtime-value demand.
 In particular, restoring a stored parser or encoder does not obtain a temporary
 `TypeId` for its encoding, state, value, result, or shape while their graph is
-live; those exact nodes cross the phase boundary directly.
+live; those exact nodes cross the phase boundary directly. The shape retained
+for deferred emission is the same node read from the restored runtime
+signature, not a separately materialized copy from the checked dispatch plan.
 
 Anything that needs specialization identity before freezing consumes a
 graph-native identity view. That view reads the authoritative nodes through the
