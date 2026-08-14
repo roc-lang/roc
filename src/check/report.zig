@@ -782,28 +782,12 @@ pub const ReportBuilder = struct {
                         },
                     }
                 },
-                .field_default_mismatch => |fdm| {
-                    try D.renderSlice(&.{
-                        D.bytes("Hint:").withAnnotation(.emphasized),
-                        D.bytes("The"),
-                        D.ident(fdm.field).withAnnotation(.inline_code),
-                        D.bytes("field has a"),
-                        D.bytes("??").withAnnotation(.inline_code),
-                        D.bytes("default in both types, but they are two DIFFERENT defaults—two separately written defaults never merge, even when their values look the same. To share one default, declare the record type once (e.g. as a type alias) and annotate both values with it."),
-                    }, self, report);
-                    if (self.defaultDeclRegion(fdm.expected_default)) |region| {
-                        try report.document.addLineBreak();
-                        try D.renderSlice(&.{D.bytes("One default is declared here:")}, self, report);
-                        try report.document.addLineBreak();
-                        try self.addSourceHighlightRegion(report, region);
-                    }
-                    if (self.defaultDeclRegion(fdm.actual_default)) |region| {
-                        try report.document.addLineBreak();
-                        try D.renderSlice(&.{D.bytes("And the other is declared here:")}, self, report);
-                        try report.document.addLineBreak();
-                        try self.addSourceHighlightRegion(report, region);
-                    }
-                },
+                // Unreachable by construction: every type-mismatch report
+                // probes for this hint first (`findFieldDefaultMismatch` in
+                // `build`) and diverts to the dedicated Incompatible
+                // Defaults report; `compareTypes` is deterministic, so the
+                // re-run here can never surface a hint the probe did not.
+                .field_default_mismatch => unreachable,
                 .ext_mismatch => |em| {
                     switch (em.type) {
                         .tag_union => {
@@ -877,6 +861,15 @@ pub const ReportBuilder = struct {
 
         switch (problem) {
             .type_mismatch => |mismatch| {
+                // A defaulted-field identity conflict gets its own dedicated
+                // report before any per-context mismatch builder runs: the
+                // generic shape renders two often identical-looking types,
+                // hiding that the real difference is two distinct `??`
+                // default identities (design.md "Defaulted Fields"—two
+                // separately written defaults never merge).
+                if (try self.findFieldDefaultMismatch(mismatch.types)) |fdm| {
+                    return self.buildIncompatibleDefaultsReport(mismatch.types, fdm);
+                }
                 // All error contexts are now handled via mismatch.context
                 return switch (mismatch.context) {
                     .if_condition => self.buildIfConditionReport(mismatch.types),
@@ -3059,6 +3052,102 @@ pub const ReportBuilder = struct {
     /// run effects at unpredictable times (design.md "Defaulted Fields").
     /// A default is evaluated once at compile time, so its type must be
     /// concrete (design.md "Defaulted Fields").
+    /// Probe a mismatch's two snapshots for a defaulted-field identity
+    /// conflict (design.md "Defaulted Fields": `defaulted(d1) ~
+    /// defaulted(d2)` unifies only when d1 = d2). The conflict is fully
+    /// visible in the snapshots, so no unify-side detail channel is needed.
+    fn findFieldDefaultMismatch(self: *Self, types: TypePair) Allocator.Error!?diff.FieldDefaultMismatch {
+        const hints = try diff.compareTypes(
+            self.snapshots,
+            self.module_env.getIdentStoreConst(),
+            types.expected_snapshot,
+            types.actual_snapshot,
+            self.gpa,
+            &self.diff_fields,
+            &self.diff_tags,
+        );
+        for (hints.slice()) |hint| {
+            switch (hint) {
+                .field_default_mismatch => |fdm| return fdm,
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    /// Build the dedicated report for a defaulted-field identity conflict:
+    /// both types default the named field with two DIFFERENT identities, so
+    /// unification rejected the pair—merging would leave no coherent
+    /// default for construction sites (design.md "Defaulted Fields").
+    fn buildIncompatibleDefaultsReport(
+        self: *Self,
+        types: TypePair,
+        fdm: diff.FieldDefaultMismatch,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Incompatible Defaults", "", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSliceInto(&.{
+            D.bytes("The"),
+            D.ident(fdm.field).withAnnotation(.inline_code),
+            D.bytes("field has a"),
+            D.bytes("??").withAnnotation(.inline_code),
+            D.bytes("default in both of these types, but they are two different defaults\u{2014}two separately written defaults never merge, even when their values look the same."),
+        }, self, &report, &report.headline);
+
+        try self.addSourceHighlight(&report, regionIdxFrom(types.actual_var));
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{D.bytes("One type is:")}, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const actual_type_str = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        try report.document.addCodeBlock(actual_type_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{D.bytes("The other is:")}, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        try report.document.addCodeBlock(expected_type_str);
+        try report.document.addLineBreak();
+
+        // A foreign default's declaration is not reachable from this
+        // module's report (`defaultDeclRegion` is null), so render only
+        // the locally declared side(s), with labels that read correctly
+        // for two, one, or zero available declarations.
+        var decl_regions: [2]Region = undefined;
+        var decl_count: usize = 0;
+        if (self.defaultDeclRegion(fdm.actual_default)) |region| {
+            decl_regions[decl_count] = region;
+            decl_count += 1;
+        }
+        if (self.defaultDeclRegion(fdm.expected_default)) |region| {
+            decl_regions[decl_count] = region;
+            decl_count += 1;
+        }
+        if (decl_count == 2) {
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("One default is declared here:")}, self, &report);
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(&report, decl_regions[0]);
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("And the other is declared here:")}, self, &report);
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(&report, decl_regions[1]);
+        } else if (decl_count == 1) {
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{D.bytes("One of the defaults is declared here; the other comes from another module:")}, self, &report);
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(&report, decl_regions[0]);
+        }
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("To share one default, declare it once on a nominal type and use that type in both places.");
+
+        return report;
+    }
+
     fn buildNonConcreteDefaultValueReport(
         self: *Self,
         data: NonConcreteDefaultValue,
