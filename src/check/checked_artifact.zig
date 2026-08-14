@@ -22456,7 +22456,8 @@ fn publishSpecializationCallPlans(
         );
     }
     for (static_dispatch_plans.plans) |plan| {
-        if (checked_bodies.exprContainsDiagnosticError(plan.expr)) continue;
+        if (checked_bodies.exprContainsDiagnosticError(plan.expr) or
+            dispatchResolutionCrashes(plan.resolution)) continue;
         const raw_plan_expr = @intFromEnum(plan.expr);
         const flow_span = try appendSpecializationOperandFlowsForDispatchCall(
             allocator,
@@ -23406,6 +23407,11 @@ const CheckedTemplateRefCollector = struct {
     ) Allocator.Error!void {
         if (self.checked_bodies.exprContainsDiagnosticError(expr_id)) return;
         const plan = self.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        // A rejected or unreachable dispatch has no runtime result and its
+        // checked callable may deliberately be the error type. The plan's
+        // explicit resolution is the authority; there is no callable
+        // specialization relation to publish for the crash expression.
+        if (dispatchResolutionCrashes(plan.resolution)) return;
         const operands = plan.argsSlice(self.static_dispatch_plans);
         const function = checkedFunctionPayload(
             &self.checked_types.store,
