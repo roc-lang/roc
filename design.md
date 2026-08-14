@@ -9016,6 +9016,47 @@ parameter-benefit mask consumed by variant admission; the caller does not
 rediscover the benefit from field reads or uniqueness checks. The base emission
 keeps the borrowed schedule untouched.
 
+Ownership-complete aggregate reads extend that schedule across wrappers without
+scalarizing them. An aggregate read is ownership-complete when, for the
+runtime shape established by the read, it contains every refcounted field the
+source owns: a struct field is its struct's sole refcounted field, a whole tag
+payload contains all refcounted data of the active variant, or an individual
+tag-payload field is that payload struct's sole refcounted field. The tag read's
+variant and discriminant metadata is the explicit proof of the active shape;
+no layout shape is treated as evidence that a variant is active.
+
+Ownership-complete aggregate reads and borrowed pure aliases form explicit
+ownership places. The place graph is solved to a fixpoint, so a nested read
+chain such as tag payload to struct field keeps the root aggregate's unit key.
+If the final read result binds owned, that read moves the unit only when the
+root unit is present and the root's liveness group has no later use on that
+path; otherwise it retains exactly as an ordinary read would. A borrowed result
+keeps the root unit key until a later consuming operation makes the same
+path-sensitive decision. This applies to ordinary owned locals and to owned
+join parameters; join parameters are not themselves assigned one global place
+origin because each incoming edge defines the join cell independently.
+
+On another control-flow path where the aggregate read did not run, the root
+still holds the unit and receives its ordinary whole release. Consequently no
+runtime discriminant, drop flag, expanded join parameter, scalarized wrapper,
+or residual storage is introduced.
+
+When such an ownership place is passed to a callee parameter with an
+owned-only take benefit, the source procedure parameter has that same benefit.
+Benefits are solved to a fixpoint over direct call edges and pure
+whole-parameter forwarding, so an arbitrary chain of ownership-neutral wrappers
+does not stop the move. In the owned emission, moving the aggregate-read value
+clears the source parameter's unit. The borrowed base emission is unchanged
+because it never holds that unit.
+
+An exact field-take benefit may materialize an owned mode variant even when
+general optimization-level specialization is disabled. This exception is
+demand-driven: only a dying argument whose callee benefit removes real RC work
+requests the variant, and variants are interned by their ownership vector.
+Without that variant the caller must manufacture a second unit, which changes
+the runtime ownership schedule rather than merely foregoing optional inlining
+or uniqueness seeding.
+
 Which consuming reads become takes is decided per field by a forward
 dataflow from the container's definition over the control-flow graph,
 tracking for each refcounted field whether it may and whether it must have
@@ -9055,25 +9096,34 @@ nothing beyond its visit in one linear statement scan, preserving the rule
 that ARC memory scales with ownership work actually demanded.
 
 The certifier verifies takes from the emitted LIR alone, with no side tables,
-by deferred claims. A field read still binds its result at balance zero, but
-the result value remembers which container value and field it came from. When
-such a value is consumed or released without a unit—where the certifier
-previously failed outright—the consumption instead claims that field's
-stored unit from the container, provided the container still holds its own
-unit unconditionally and the field is unclaimed; a second claim of the same
-field fails as before. Aggregate moves keep their transient-negative
-discipline: negative balances attempt their claims when the path's outcome is
-fixed, at a terminal's leak check or a jump's quotient. The container's
-balance stays at one throughout—borrowed reads of its unclaimed bytes
-remain legitimate after any claim—and a claim set covering every refcounted
-field marks the unit spent: a terminal treats it as balanced and a jump's
-carry check exempts it, while anything less fails as an unspent stored unit.
-A claimed container can be neither consumed, moved into an aggregate, nor
-released whole.
-Claims and claim targets cross join quotients on the summary: owned entries
-carry their container's claim set, and borrowed field-read entries carry
-their container's representative and field so a claim deferred past a join
-still lands.
+by deferred claims. A field or payload read still binds its result at balance
+zero, but the result value remembers its container and encoded read operation.
+When such a value is consumed or released without a unit—where the certifier
+previously failed outright—the consumption instead claims the read's stored
+unit from the container, provided the container still holds its own unit
+unconditionally or can claim itself through an ownership-complete aggregate
+read from its parent. The latter recursively certifies nested places without
+changing their runtime representation: the parent claim and the child's
+conceptual balance are two views of the same unit. Struct fields claim
+independently; a tag payload claims the tag's unit only when the layouts prove
+the aggregate read ownership-complete for the read's explicit variant. A
+partial tag payload can never claim, and a second claim of the same unit fails
+as before. Aggregate moves keep their transient-negative discipline: negative
+balances attempt their claims when the path's outcome is fixed, at a terminal's
+leak check or a jump's quotient. A claimed container keeps its conceptual
+balance at one—borrowed reads of its unclaimed bytes remain legitimate—and a
+complete claim set marks that unit spent: a terminal treats it as balanced and
+a jump's carry check exempts it, while anything less fails as an unspent stored
+unit. A claimed container can be neither consumed, moved into an aggregate, nor
+released whole. Claims and complete read chains cross join quotients on the
+summary: owned entries carry their container's claim set, and borrowed field or
+payload entries carry their immediate container's representative and encoded
+read operation. When such a read value is relevant after the join but its
+nearest unit-holding container is not independently relevant, quotienting
+claims the stored unit and makes the join value its carrier; when that
+container is independently relevant, the read stays borrowed. Restoration of
+the remaining read chains happens only after all representatives exist, so
+correctness is independent of local numbering.
 
 Partial dismantling across diverging paths -- a field consumed in one switch
 arm and not another -- is future work: it needs per-path residual masks, and

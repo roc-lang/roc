@@ -1988,6 +1988,14 @@ const Inserter = struct {
                     var transfer = AliasBindTransfer{ .retain_target = true, .release_old_target = false };
                     if (self.isBindingBorrowed(assign.target)) {
                         transfer.retain_target = false;
+                    } else if (self.dismantles.completeTakeRoot(segment.cursor)) |root| {
+                        transfer = try self.transferForCompleteProjectionBind(
+                            &segment.owned,
+                            assign.target,
+                            root,
+                            assign.next,
+                            segment.ctx.loop_keep,
+                        );
                     } else {
                         switch (assign.op) {
                             .local => |source| {
@@ -2006,9 +2014,10 @@ const Inserter = struct {
                             => transfer.release_old_target = self.transferForFreshBind(&segment.owned, assign.target),
                         }
                     }
-                    // A take read consumes the container's stored unit for
-                    // this field: the target still binds owned, but no
-                    // retain is paid.
+                    // A partial field take consumes the container's stored
+                    // field unit: the target still binds owned, but no
+                    // retain is paid. Complete projections made their
+                    // path-sensitive move decision above.
                     if (self.takeApplies(segment.cursor)) transfer.retain_target = false;
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.retain_assign_ref_target = transfer.retain_target;
@@ -3473,6 +3482,7 @@ const Inserter = struct {
 
     /// The single alias-to-unit resolution used by every transfer site.
     fn unitOf(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
+        if (self.dismantles.projectionUnitOf(local)) |root| return root;
         return self.solution.unitLocalOf(local);
     }
 
@@ -3576,6 +3586,28 @@ const Inserter = struct {
         const release_old_target = self.takeRebindTarget(owned, target);
         self.placeUnit(owned, target);
         return release_old_target;
+    }
+
+    /// An owned read of a complete aggregate projection. If the root's unit
+    /// is present and its liveness group has no later use on this path, move
+    /// that unit into the target. Otherwise preserve the root and retain the
+    /// projected value exactly like an ordinary fresh bind.
+    fn transferForCompleteProjectionBind(
+        self: *Inserter,
+        owned: *OwnedSet,
+        target: LIR.LocalId,
+        root: LIR.LocalId,
+        next: LIR.CFStmtId,
+        loop_keep: ?LoopKeep,
+    ) ResourceError!AliasBindTransfer {
+        const release_old_target = self.takeRebindTarget(owned, target);
+        const move_root = owned.contains(root) and !try self.groupUsedInPath(next, root, loop_keep);
+        if (move_root) owned.unset(root);
+        self.placeUnit(owned, target);
+        return .{
+            .retain_target = !move_root,
+            .release_old_target = release_old_target,
+        };
     }
 
     /// `init_uninitialized`: the target's previous binding dies and nothing
@@ -4188,20 +4220,27 @@ const Inserter = struct {
                 // runtime work inside the callee. Merely moving the caller's
                 // post-call release into a clone preserves the same RC work
                 // while growing live code.
-                if (!self.variants.enabled) continue;
                 const bit = arc_sig.paramBit(position) orelse continue;
+                const enables_field_take = if (callee) |direct|
+                    (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
+                else
+                    false;
+                // Field-take variants are a correctness-preserving ownership
+                // schedule, not optional optimization work: without
+                // them a complete payload move is forced to manufacture a
+                // second unit and defeats runtime uniqueness. General return
+                // and born-unique variants remain opt-in.
+                if (!self.variants.enabled and !enables_field_take) continue;
                 const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
-                const owner = self.solution.unitLocalOf(local);
-                const can_transfer = owned.contains(owner) and !used_after_call;
+                const owner = self.unitOf(local);
+                const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
+                    self.groupSharesOtherOperand(locals, position, local);
+                const can_transfer = owned.contains(owner) and !used_after_call and !projected_alias_conflict;
                 if (!can_transfer) continue;
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
                 const seeds_unique_param = unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local);
-                const enables_field_take = if (callee) |direct|
-                    (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
-                else
-                    false;
                 if (!return_borrows_param and !seeds_unique_param and !enables_field_take) continue;
                 demanded.borrowed_params &= ~bit;
                 if (return_borrows_param) {
@@ -4216,8 +4255,10 @@ const Inserter = struct {
             }
 
             const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
-            const owner = self.solution.unitLocalOf(local);
-            const can_transfer = owned.contains(owner) and !used_after_call;
+            const owner = self.unitOf(local);
+            const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
+                self.groupSharesOtherOperand(locals, position, local);
+            const can_transfer = owned.contains(owner) and !used_after_call and !projected_alias_conflict;
 
             if (can_transfer) {
                 // A dying argument moving into an owned position that is
@@ -7961,7 +8002,7 @@ test "RC tag-pattern match tail-cleans outer scrutinee binding with refcounted p
     try f.expectRc(tag_value, 0, 1, 0);
 }
 
-test "RC discriminant_switch: scrutinee is released on both payload and no-payload paths" {
+test "RC discriminant_switch: complete payload moves scrutinee unit on payload path" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
     const payload = try f.local(.str);
@@ -7984,18 +8025,15 @@ test "RC discriminant_switch: scrutinee is released on both payload and no-paylo
     _ = try f.addProc(&.{}, body, .i64);
     try f.run();
 
-    // The payload's unit moves into the tag. Each switch path owns one
-    // release of the scrutinee: the payload branch after extraction, the
-    // no-payload path immediately.
+    // The payload's unit moves into the tag. The proven payload path moves
+    // that same unit through the complete payload projection and into the
+    // call; only the no-payload path releases the scrutinee whole.
     try f.expectRc(payload, 0, 0, 0);
     try testing.expectEqual(@as(usize, 0), f.countRc(tag_value, .incref));
-    try testing.expectEqual(@as(usize, 2), f.countRc(tag_value, .decref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(tag_value, .decref));
     const switch_after = f.walkToSwitch(f.procBody());
-    const branch_after = GuardedList.at(f.store.getCFSwitchBranches(switch_after.branches), 0).body;
-    try f.expectReachableRcBefore(branch_after, .decref, tag_value, .ret);
     try f.expectReachableRcBefore(switch_after.default_branch, .decref, tag_value, .ret);
-    // Extraction retains the payload view it hands out.
-    try testing.expect(f.countRc(extracted, .incref) >= 1);
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted, .incref));
 }
 
 test "RC discriminant_switch: body-bound symbols don't get per-branch RC ops" {
@@ -8016,7 +8054,7 @@ test "RC discriminant_switch: body-bound symbols don't get per-branch RC ops" {
     try f.expectRc(default_value, 0, 1, 0);
 }
 
-test "RC tag_payload_access: retained parent temp is released after extraction" {
+test "RC tag_payload_access: complete payload moves parent unit into return" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
     const payload = try f.local(.str);
@@ -8028,6 +8066,29 @@ test "RC tag_payload_access: retained parent temp is released after extraction" 
     const body = try f.assignStr(payload, "extract", tag_assign);
     _ = try f.addProc(&.{}, body, .str);
     try f.run();
+    try f.expectRc(tag_value, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 0), f.countRc(extracted, .incref));
+}
+
+test "RC tag_payload_access: complete payload retains when parent remains live" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const payload = try f.local(.str);
+    const tag_value = try f.local(f.tag_str);
+    const extracted = try f.local(.str);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_parent = try f.expectStmt(tag_value, result_assign);
+    const consume_payload = try f.assignCall(call_result, &.{extracted}, use_parent);
+    const extract = try f.assignTagPayload(extracted, tag_value, consume_payload);
+    const tag_assign = try f.assignTag(tag_value, 1, payload, extract);
+    const body = try f.assignStr(payload, "still-live", tag_assign);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
     try f.expectRc(tag_value, 0, 1, 0);
     try testing.expect(f.countRc(extracted, .incref) >= 1);
 }
@@ -9896,6 +9957,96 @@ test "RC specialization: owned-only field take demands an owned variant" {
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try f.expectRc(pair, 0, 0, 0);
     try testing.expectEqual(@as(usize, 1), f.countRc(field, .incref));
+}
+
+test "RC field-take demand crosses complete tag payload and wrapper calls" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_list,
+    });
+
+    // The leaf can dismantle an owned pair: field 0 moves through the checked
+    // op while field 1 is released residually. Its base parameter stays
+    // borrowed, so only the owned field-take variant omits the field retain.
+    const leaf_param = try f.local(f.pair_list);
+    const leaf_field = try f.local(f.list_i64);
+    const reversed = try f.local(f.list_i64);
+    const leaf_result = try f.local(.i64);
+    const leaf_ret = try f.ret(leaf_result);
+    const leaf_result_assign = try f.assignI64(leaf_result, 1, leaf_ret);
+    const reverse = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = reversed,
+        .op = .list_reverse,
+        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .args = try f.span(&.{leaf_field}),
+        .next = leaf_result_assign,
+    } });
+    const leaf_read = try f.assignRefField(leaf_field, leaf_param, 0, reverse);
+    const leaf = try f.addProc(&.{leaf_param}, leaf_read, .i64);
+
+    // The wrapper only borrows its tag in the base signature. On the payload
+    // path, however, the payload is the active variant's complete RC
+    // ownership, so an owned wrapper can move that unit into the leaf's
+    // field-take variant without scalarizing the tag or retaining the pair.
+    const wrapper_param = try f.local(tag_pair);
+    const disc = try f.local(.u8);
+    const payload = try f.local(f.pair_list);
+    const payload_alias = try f.local(f.pair_list);
+    const branch_result = try f.local(.i64);
+    const default_result = try f.local(.i64);
+    const branch_ret = try f.ret(branch_result);
+    const branch_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = branch_result,
+        .proc = leaf,
+        .args = try f.span(&.{payload_alias}),
+        .next = branch_ret,
+    } });
+    const alias = try f.assignRefLocal(payload_alias, payload, branch_call);
+    const payload_read = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = payload,
+        .op = .{ .tag_payload_struct = .{
+            .source = wrapper_param,
+            .variant_index = 1,
+            .tag_discriminant = 1,
+        } },
+        .next = alias,
+    } });
+    const default_ret = try f.ret(default_result);
+    const default_body = try f.assignI64(default_result, 0, default_ret);
+    const switch_stmt = try f.switchStmt(disc, payload_read, default_body, null);
+    const wrapper_body = try f.assignDiscriminant(disc, wrapper_param, switch_stmt);
+    const wrapper = try f.addProc(&.{wrapper_param}, wrapper_body, .i64);
+
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const tag = try f.local(tag_pair);
+    const caller_result = try f.local(.i64);
+    const caller_ret = try f.ret(caller_result);
+    const wrapper_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = caller_result,
+        .proc = wrapper,
+        .args = try f.span(&.{tag}),
+        .next = caller_ret,
+    } });
+    const tag_assign = try f.assignTag(tag, 1, pair, wrapper_call);
+    const pair_assign = try f.assignStruct(pair, &.{ first, second }, tag_assign);
+    const second_assign = try f.assignList(second, &.{}, pair_assign);
+    const caller_body = try f.assignList(first, &.{}, second_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    // General mode specialization is disabled, as it is in dev builds.
+    // Exact field-take schedules still materialize because otherwise the
+    // generated program must manufacture a second ownership unit.
+    try f.run();
+
+    try testing.expectEqual(base_proc_count + 2, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 1), f.countRc(leaf_field, .incref));
+    try f.expectRc(tag, 0, 0, 0);
 }
 
 test "RC specialization: caller body survives variant proc append" {
