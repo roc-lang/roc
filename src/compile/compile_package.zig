@@ -358,19 +358,54 @@ fn importedTypeModule(sibling_env: *const ModuleEnv) ?ImportedTypeModule {
     };
 }
 
-fn importedSelectedType(
-    gpa: Allocator,
-    sibling_env: *const ModuleEnv,
-    nested_type: []const u8,
-) Allocator.Error!?ImportedTypeModule {
-    const qualified_name = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ sibling_env.module_name, nested_type });
-    defer gpa.free(qualified_name);
+/// Return the main declaration of a type module, if this is one.
+pub fn resolveMainType(sibling_env: *const ModuleEnv) ?can.CIR.Statement.Idx {
+    return if (importedTypeModule(sibling_env)) |selected| selected.statement_idx else null;
+}
 
+/// Resolve a nested public selection to its exact declaration in this CIR.
+pub fn resolveSelectedType(
+    sibling_env: *const ModuleEnv,
+    qualified_name: []const u8,
+) ?can.CIR.Statement.Idx {
     const source_ident = sibling_env.common.findIdent(qualified_name) orelse return null;
     const type_node_idx = sibling_env.getExposedTypeNodeIndexById(source_ident) orelse return null;
+    return @enumFromInt(type_node_idx);
+}
+
+fn importedSelectedType(
+    sibling_env: *const ModuleEnv,
+    statement_idx: can.CIR.Statement.Idx,
+) ImportedTypeModule {
+    const statement = sibling_env.store.getStatement(statement_idx);
+    const header_idx = switch (statement) {
+        .s_alias_decl => |decl| decl.header,
+        .s_nominal_decl => |decl| decl.header,
+        .s_where_alias_decl => |decl| decl.header,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => unreachable,
+    };
+    const header = sibling_env.store.getTypeHeader(header_idx);
     return .{
-        .source_ident = source_ident,
-        .statement_idx = @enumFromInt(type_node_idx),
+        .source_ident = header.name,
+        .statement_idx = statement_idx,
     };
 }
 
@@ -399,7 +434,7 @@ pub fn canonicalizeModuleWithSiblings(
     // though both end in `Random`.
     const ResolvedImport = struct {
         env: *const ModuleEnv,
-        nested_type: ?[]const u8,
+        selected_type_decl: ?can.CIR.Statement.Idx,
     };
     var resolved_import_envs = std.StringHashMap(ResolvedImport).init(gpa);
     defer resolved_import_envs.deinit();
@@ -407,11 +442,7 @@ pub fn canonicalizeModuleWithSiblings(
         const result = try resolved_import_envs.getOrPut(pre.import_name);
         if (result.found_existing) {
             const existing = result.value_ptr.*;
-            const same_nested_type = if (existing.nested_type) |existing_nested|
-                if (pre.nested_type) |nested| std.mem.eql(u8, existing_nested, nested) else false
-            else
-                pre.nested_type == null;
-            if (existing.env != pre.module_env or !same_nested_type) {
+            if (existing.env != pre.module_env or existing.selected_type_decl != pre.selected_type_decl) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "canonicalization received conflicting environments for exact import '{s}'",
@@ -421,7 +452,7 @@ pub fn canonicalizeModuleWithSiblings(
                 unreachable;
             }
         } else {
-            result.value_ptr.* = .{ .env = pre.module_env, .nested_type = pre.nested_type };
+            result.value_ptr.* = .{ .env = pre.module_env, .selected_type_decl = pre.selected_type_decl };
         }
     }
 
@@ -479,8 +510,8 @@ pub fn canonicalizeModuleWithSiblings(
 
         // Public entries may project a nested type from one source module.
         // Resolve that selection once and carry the exact declaration index.
-        const type_module = if (resolved.nested_type) |nested_type|
-            try importedSelectedType(gpa, actual_env, nested_type)
+        const type_module = if (resolved.selected_type_decl) |statement_idx|
+            importedSelectedType(actual_env, statement_idx)
         else
             importedTypeModule(actual_env);
         const qualified_type_ident = if (type_module) |info|

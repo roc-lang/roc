@@ -880,7 +880,7 @@ pub const BuildEnv = struct {
                     public_module.nested_type,
                 );
             }
-            coord_pkg.finishPublicModules();
+            try coord_pkg.finishPublicModules(self.gpa);
 
             // The coordinator gates the hosted transform (and app-root artifact
             // lookups) on knowing which package is the app; app modules must
@@ -2416,8 +2416,22 @@ pub const BuildEnv = struct {
         depth: u32,
         /// Platform provides entries (only populated for platform main modules)
         provides_entries: []const ProvidesEntry = &.{},
+    };
+
+    /// Compact borrowed view used only by public docs and API extraction.
+    /// General compiled-module consumers do not pay for this routing metadata.
+    pub const PublicModuleInfo = struct {
+        name: []const u8,
+        path: []const u8,
+        semantic: SemanticModuleData,
+        package_name: []const u8,
         /// Root-owned names to retain when extracting documentation.
         docs_exposed_names: ?[]const []const u8 = null,
+        /// Exact type declaration represented by this public module view.
+        /// This is transient post-build routing data, not retained per CIR node.
+        public_type_decl: ?CIR.Statement.Idx = null,
+        /// Declaration order within the owning package's public surface.
+        public_order: u32 = 0,
     };
 
     /// Get all compiled modules from the Coordinator (after build completes).
@@ -2530,7 +2544,7 @@ pub const BuildEnv = struct {
 
     /// Resolve the root package or platform's explicit public module list to
     /// completed compiler outputs. Dependency modules are deliberately absent.
-    pub fn getPublicRootModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {
+    pub fn getPublicRootModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
             std.debug.panic("build env invariant violated: public modules requested before dependency discovery", .{});
         };
@@ -2547,11 +2561,17 @@ pub const BuildEnv = struct {
             std.debug.panic("build env invariant violated: public-module root coordinator package is unavailable", .{});
         };
 
-        var public_modules = std.ArrayList(CompiledModuleInfo).empty;
+        var public_modules = std.ArrayList(PublicModuleInfo).empty;
         errdefer public_modules.deinit(allocator);
 
-        for (root_pkg.public_surface.modules.items) |public_module| {
+        for (root_pkg.public_surface.modules.items, 0..) |public_module, public_index| {
             const module_name = public_module.name;
+            const public_target = root_coord_pkg.getPublicModuleTarget(module_name) orelse {
+                std.debug.panic(
+                    "build env invariant violated: public module '{s}' has no source target",
+                    .{module_name},
+                );
+            };
             const module_id = root_coord_pkg.getPublicModuleId(module_name) orelse {
                 std.debug.panic(
                     "build env invariant violated: public module '{s}' was not compiled",
@@ -2566,16 +2586,64 @@ pub const BuildEnv = struct {
                 );
             };
             try public_modules.append(allocator, .{
-                .name = module_state.name,
+                .name = module_name,
                 .path = module_state.path,
                 .semantic = module_data,
-                .source = module_data.env.common.source,
                 .package_name = root_name,
-                .is_platform_main = false,
-                .is_app = false,
-                .is_platform_sibling = root_pkg.kind == .platform,
-                .depth = module_state.depth,
+                .public_order = @intCast(public_index),
+                .public_type_decl = switch (public_target.selection) {
+                    .type_decl => |statement| statement,
+                    .whole_module => null,
+                    .unresolved_nested_type => std.debug.panic(
+                        "build env invariant violated: public module '{s}' has an unresolved nested type",
+                        .{module_name},
+                    ),
+                },
             });
+        }
+
+        return public_modules.toOwnedSlice(allocator);
+    }
+
+    /// Return every compiled public module view in the resolved package graph.
+    /// Consumers use the public spelling here instead of exposing private
+    /// source-module names; type views additionally carry their exact root.
+    pub fn getCompiledPublicModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
+        const coord = self.coordinator orelse {
+            std.debug.panic("build env invariant violated: public modules requested before coordinator initialization", .{});
+        };
+
+        var public_modules = std.ArrayList(PublicModuleInfo).empty;
+        errdefer public_modules.deinit(allocator);
+
+        var packages = self.packages.iterator();
+        while (packages.next()) |package_entry| {
+            const package_name = package_entry.key_ptr.*;
+            const package = package_entry.value_ptr;
+            const coord_package = coord.packages.get(package_name) orelse continue;
+
+            for (package.public_surface.modules.items, 0..) |public_module, public_index| {
+                const module_id = coord_package.getPublicModuleId(public_module.name) orelse continue;
+                const module_state = coord_package.getModule(module_id) orelse continue;
+                const semantic = module_state.semanticData() orelse continue;
+                const public_target = coord_package.getPublicModuleTarget(public_module.name) orelse unreachable;
+                const source_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
+                    .type_decl => |statement| statement,
+                    .whole_module => null,
+                    .unresolved_nested_type => std.debug.panic(
+                        "build env invariant violated: compiled public module '{s}' has an unresolved nested type",
+                        .{public_module.name},
+                    ),
+                };
+                try public_modules.append(allocator, .{
+                    .name = public_module.name,
+                    .path = module_state.path,
+                    .semantic = semantic,
+                    .package_name = package_name,
+                    .public_type_decl = source_decl,
+                    .public_order = @intCast(public_index),
+                });
+            }
         }
 
         return public_modules.toOwnedSlice(allocator);
@@ -2584,7 +2652,7 @@ pub const BuildEnv = struct {
     /// Return the compiled modules that belong in generated documentation.
     /// Package roots use their public modules. Platform roots additionally use
     /// their root module when the header exposes root-owned names.
-    pub fn getDocumentationModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {
+    pub fn getDocumentationModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
             std.debug.panic("build env invariant violated: documentation requested before dependency discovery", .{});
         };
@@ -2600,7 +2668,7 @@ pub const BuildEnv = struct {
             const public_modules = try self.getPublicRootModules(allocator);
             defer allocator.free(public_modules);
 
-            var docs_modules = try std.ArrayList(CompiledModuleInfo).initCapacity(
+            var docs_modules = try std.ArrayList(PublicModuleInfo).initCapacity(
                 allocator,
                 public_modules.len + @intFromBool(root_pkg.public_surface.root_names.items.len > 0),
             );
@@ -2618,13 +2686,7 @@ pub const BuildEnv = struct {
                     .name = root_module.name,
                     .path = root_module.path,
                     .semantic = root_data,
-                    .source = root_data.env.common.source,
                     .package_name = root_name,
-                    .is_platform_main = true,
-                    .is_app = false,
-                    .is_platform_sibling = false,
-                    .depth = root_module.depth,
-                    .provides_entries = root_pkg.provides_entries.items,
                     .docs_exposed_names = root_pkg.public_surface.root_names.items,
                 });
             }
@@ -2633,20 +2695,35 @@ pub const BuildEnv = struct {
         }
 
         const all_modules = try self.getCompiledModules(allocator);
-        errdefer allocator.free(all_modules);
+        defer allocator.free(all_modules);
+        const public_modules = try self.getCompiledPublicModules(allocator);
+        defer allocator.free(public_modules);
 
-        var docs_modules = std.ArrayList(CompiledModuleInfo).empty;
+        var docs_modules = std.ArrayList(PublicModuleInfo).empty;
         errdefer docs_modules.deinit(allocator);
 
+        // The root's own compiled modules are its documentation surface.
         for (all_modules) |mod| {
+            if (!std.mem.eql(u8, mod.package_name, root_name)) continue;
             switch (mod.semantic.env.module_kind) {
                 .package, .platform => continue,
                 .type_module, .default_app, .app, .hosted, .module, .malformed => {},
             }
+            try docs_modules.append(allocator, .{
+                .name = mod.name,
+                .path = mod.path,
+                .semantic = mod.semantic,
+                .package_name = mod.package_name,
+            });
+        }
+
+        // Dependencies contribute only explicit public views. Their private
+        // source module names and transitive implementation helpers stay out.
+        for (public_modules) |mod| {
+            if (std.mem.eql(u8, mod.package_name, root_name)) continue;
             try docs_modules.append(allocator, mod);
         }
 
-        allocator.free(all_modules);
         return docs_modules.toOwnedSlice(allocator);
     }
 

@@ -259,6 +259,14 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
     }
 
+    /// Get the prepared Wasm host cache directory.
+    pub fn getWasmHostCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "wasm-host" });
+    }
+
     /// Get the cache entries directory (alias for module cache dir).
     pub fn getCacheEntriesDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         return self.getModuleCacheDir(allocator);
