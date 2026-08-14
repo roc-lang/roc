@@ -782,6 +782,13 @@ scheme_relation_reachable_vars: std.AutoHashMap(Var, void),
 /// closure of the def root(s) being generalized (constraint-signature edges
 /// included).
 boundary_reachable_vars: std.AutoHashMap(Var, void),
+/// Scratch for `defaultLiteralsAtGeneralizationBoundary`: structural closure
+/// of every ENCLOSING-scope (lower-rank) pool var. A boundary literal in this
+/// set is anchored to an outer scope still being inferred, so this inner
+/// boundary must not force-default it — it escapes to the enclosing boundary
+/// (or module finalize) for adjudication, exactly like a signature-reachable
+/// literal stays open.
+boundary_lower_rank_reachable: std.AutoHashMap(Var, void),
 /// Scratch for `boundaryDefaultLeaksIntoSignature`: closure of one boundary
 /// literal's constraint signatures, intersected with
 /// `boundary_reachable_vars` to detect interface leaks.
@@ -2430,6 +2437,7 @@ fn initAssumePrepared(
         .scheme_relation_reachability = std.AutoHashMap(SchemeReachabilityVisit, void).init(gpa),
         .scheme_relation_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
+        .boundary_lower_rank_reachable = std.AutoHashMap(Var, void).init(gpa),
         .boundary_leak_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_eql_edges = .empty,
         .literal_defaulting_open_roots = .empty,
@@ -2611,6 +2619,7 @@ pub fn deinit(self: *Self) void {
     self.scheme_relation_reachability.deinit();
     self.scheme_relation_reachable_vars.deinit();
     self.boundary_reachable_vars.deinit();
+    self.boundary_lower_rank_reachable.deinit();
     self.boundary_leak_vars.deinit();
     self.boundary_eql_edges.deinit(self.gpa);
     self.literal_defaulting_open_roots.deinit(self.gpa);
@@ -23368,6 +23377,18 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                     // thunk simply generalizes as a polymorphic function (see
                     // `reportPolymorphicTopLevelValues`).
                     if (self.boundary_reachable_vars.contains(resolved.var_)) continue;
+                    // A literal anchored to an enclosing (lower-rank) scope is
+                    // NOT this boundary's to default: committing it here would
+                    // pin an outer scope's still-open type (e.g. an outer
+                    // lambda parameter's element type) before that scope's own
+                    // annotation lands. It escapes to the enclosing boundary /
+                    // module finalize, exactly like a signature-reachable
+                    // literal stays open. (Such a var sits at this boundary's
+                    // rank only because it was minted inside this frame yet
+                    // unified into an outer container; rank adjustment does not
+                    // lower it, since it walks this rank's roots, not the outer
+                    // container that structurally holds it.)
+                    if (self.boundary_lower_rank_reachable.contains(resolved.var_)) continue;
                     const gop = try self.literal_defaulting_seen_roots.getOrPut(resolved.var_);
                     if (gop.found_existing) continue;
                     try self.literal_defaulting_open_roots.append(self.gpa, resolved.var_);
@@ -24291,6 +24312,20 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
         try self.boundary_reachable_vars.put(var_.*, {});
     }
 
+    // The structural closure of every enclosing-scope (lower-rank) pool var.
+    // A literal here escapes this boundary rather than defaulting (see the
+    // gather in `runLiteralDefaultingRounds`). Ranks below `.outermost` are
+    // `.generalized`, which holds no live scope var, so the scan starts at
+    // `.outermost`.
+    self.boundary_lower_rank_reachable.clearRetainingCapacity();
+    {
+        var lower_rank_int: u8 = @intFromEnum(Rank.outermost);
+        while (lower_rank_int < @intFromEnum(rank)) : (lower_rank_int += 1) {
+            for (env.var_pool.getVarsForRank(@enumFromInt(lower_rank_int))) |lower_var| {
+                try self.collectReachableVars(lower_var, &self.boundary_lower_rank_reachable);
+            }
+        }
+    }
     // Default every unreachable candidate through the shared component machinery—
     // identical to `finalizeLiteralDefaults` except for the candidate universe
     // and the per-commit leak warnings—and cascade the dispatches whose

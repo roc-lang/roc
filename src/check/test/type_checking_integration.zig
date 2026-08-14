@@ -5873,6 +5873,40 @@ test "check type - implicitly opened local value annotation generalizes like top
     try checkTypesModule(source, .{ .pass = .{ .def = "go" } }, "U64 -> U64");
 }
 
+test "check type - inner generalization boundary does not default an enclosing-scope literal" {
+    // `classified`'s annotation gains a variable from polarity opening, so it
+    // generalizes — pushing a boundary around its RHS inside the `|input|`
+    // lambda. The numeral pattern `1` there constrains the element type of
+    // `input`, which `build`'s signature pins to `U8` only once the call to
+    // `build` unifies (at `thing`'s outer boundary). That element var sits at
+    // the inner boundary's rank (minted in the frame, unified into `input`),
+    // but it is not the inner boundary's to default: force-defaulting it to
+    // `Dec` here made `input : List(Dec)`, conflicting with `List(U8)`. It
+    // must escape to the enclosing boundary, where `U8` is fixed.
+    //
+    // Minimized from the roc-parser Letters example (issue 9890). The bug
+    // pre-existed for an explicit `[Bad, ..]` on `classified`; polarity's
+    // implicit opening surfaced it on the bare `[Bad]` spelling.
+    const source =
+        \\build : (List(U8) -> a) -> a
+        \\build = |f| f([1, 2, 3])
+        \\
+        \\thing : Try(U8, [Bad])
+        \\thing = build(
+        \\    |input| {
+        \\        classified : Try(U8, [Bad])
+        \\        classified =
+        \\            match input {
+        \\                [1, ..] => Ok(1)
+        \\                _ => Err(Bad)
+        \\            }
+        \\        classified
+        \\    },
+        \\)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "thing" } }, "Try(U8, [Bad])");
+}
+
 // record extension in type annotations //
 
 test "check type - record extension - basic open record annotation" {
