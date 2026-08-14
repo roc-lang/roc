@@ -1055,7 +1055,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             const wait_result = waitpid(s.pid, 0);
             const term_signal: u8 = @truncate(wait_result.status & 0x7f);
 
-            if (s.timed_out or term_signal == 9) {
+            if (s.timed_out) {
                 results[s.test_index] = cfg.timeout_result;
             } else if (term_signal != 0) {
                 results[s.test_index] = cfg.default_result;
