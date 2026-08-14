@@ -41,11 +41,11 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "plus") (constraint-fn-var 218)
+(e-dispatch-call (method "plus") (constraint-fn-var 228)
 	(receiver
 		(e-num (value "1")))
 	(args
-		(e-dispatch-call (method "times") (constraint-fn-var 216)
+		(e-dispatch-call (method "times") (constraint-fn-var 226)
 			(receiver
 				(e-num (value "2")))
 			(args

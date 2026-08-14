@@ -406,7 +406,7 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_str") (constraint-fn-var 454)
+				(e-dispatch-call (method "update_str") (constraint-fn-var 464)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
@@ -450,9 +450,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_u64") (constraint-fn-var 554)
+				(e-dispatch-call (method "update_u64") (constraint-fn-var 564)
 					(receiver
-						(e-dispatch-call (method "update_str") (constraint-fn-var 545)
+						(e-dispatch-call (method "update_str") (constraint-fn-var 555)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -463,12 +463,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dispatch-call (method "to_str") (constraint-fn-var 560)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 570)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dispatch-call (method "to_u64") (constraint-fn-var 562)
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 572)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))

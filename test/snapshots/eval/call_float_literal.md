@@ -47,7 +47,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 203)
+		(e-call (constraint-fn-var 213)
 			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
