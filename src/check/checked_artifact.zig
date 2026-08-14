@@ -16952,6 +16952,7 @@ const TemplateIteratorRefs = struct {
 fn sealCheckedProcedureTemplateRefs(
     allocator: Allocator,
     module: TypedCIR.Module,
+    names: *const canonical.CanonicalNameStore,
     checked_types: *const CheckedTypePublication,
     checked_bodies: *const CheckedBodyStore,
     entry_wrappers: *const EntryWrapperTable,
@@ -16998,6 +16999,7 @@ fn sealCheckedProcedureTemplateRefs(
     var collector = CheckedTemplateRefCollector.init(
         allocator,
         module,
+        names,
         checked_types,
         checked_bodies,
         static_dispatch_plans,
@@ -23137,6 +23139,7 @@ fn collectSpecializationCallOccurrences(
 const CheckedTemplateRefCollector = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
+    names: *const canonical.CanonicalNameStore,
     checked_types: *const CheckedTypePublication,
     checked_bodies: *const CheckedBodyStore,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
@@ -23172,6 +23175,7 @@ const CheckedTemplateRefCollector = struct {
     fn init(
         allocator: Allocator,
         module: TypedCIR.Module,
+        names: *const canonical.CanonicalNameStore,
         checked_types: *const CheckedTypePublication,
         checked_bodies: *const CheckedBodyStore,
         static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
@@ -23181,6 +23185,7 @@ const CheckedTemplateRefCollector = struct {
         return .{
             .allocator = allocator,
             .module = module,
+            .names = names,
             .checked_types = checked_types,
             .checked_bodies = checked_bodies,
             .static_dispatch_plans = static_dispatch_plans,
@@ -23400,6 +23405,45 @@ const CheckedTemplateRefCollector = struct {
         });
     }
 
+    /// Record the solved constructor boundary directly: the result record owns
+    /// each field's checked type, and the field expression produces that exact
+    /// type. For updates, the base record is the other producer of every
+    /// unchanged field. Monotype consumes the resulting flat identity edges;
+    /// it never searches the surrounding record for an identity while lowering
+    /// a nested procedure.
+    fn appendRecordConstructionRelations(
+        self: *CheckedTemplateRefCollector,
+        expr_id: CheckedExprId,
+        result_ty: CheckedTypeId,
+        record: anytype,
+    ) Allocator.Error!void {
+        if (self.checked_bodies.exprContainsDiagnosticError(expr_id)) return;
+        const structural_root = (try checkedRecordLiteralStructuralRoot(
+            self.allocator,
+            self.checked_types,
+            result_ty,
+        )) orelse return;
+        if (record.ext) |ext| {
+            try self.appendBidirectionalSpecializationIdentityRelations(
+                structural_root,
+                self.checked_bodies.expr(ext).ty,
+            );
+        }
+        for (record.fields) |field| {
+            const field_ty = try checkedRecordLiteralFieldType(
+                self.allocator,
+                self.names,
+                self.checked_types,
+                structural_root,
+                field.label,
+            );
+            try self.appendBidirectionalSpecializationIdentityRelations(
+                field_ty,
+                self.checked_bodies.expr(field.value).ty,
+            );
+        }
+    }
+
     fn appendDispatchCallRelation(
         self: *CheckedTemplateRefCollector,
         expr_id: CheckedExprId,
@@ -23588,6 +23632,7 @@ const CheckedTemplateRefCollector = struct {
                 try self.appendCallRelation(expr_id, expr, call);
             },
             .record => |record| {
+                try self.appendRecordConstructionRelations(expr_id, expr.ty, record);
                 if (record.ext) |ext| try self.collectExpr(ext);
                 for (record.fields) |field| try self.collectExpr(field.value);
             },
@@ -38168,6 +38213,7 @@ pub fn publishFromTypedModule(
     try sealCheckedProcedureTemplateRefs(
         allocator,
         module,
+        &canonical_names,
         &checked_type_publication,
         checked_bodies,
         &entry_wrappers,
@@ -38892,6 +38938,7 @@ fn expectProvidedExportKind(
     try sealCheckedProcedureTemplateRefs(
         allocator,
         module,
+        &canonical_names,
         &checked_type_publication,
         checked_bodies,
         &entry_wrappers,

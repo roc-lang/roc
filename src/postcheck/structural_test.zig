@@ -120,7 +120,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lower_source = @embedFile("monotype/lower.zig");
     const lower_call = sourceSliceBetween(lower_source, "fn lowerCall(self:", "fn directCallInstantiationSourceFnType");
     const lower_expr_type_node = sourceSliceBetween(lower_source, "fn lowerExprTypeNode", "fn sourceLocFor(");
-    const lower_expr_at_cell = sourceSliceBetween(lower_source, "fn lowerExprAtTypeCell", "fn lowerPrimitiveNumeralAtNode");
+    const lower_expr_at_cell = sourceSliceBetween(lower_source, "fn lowerExprAtTypeCell", "fn lowerCallExprAtNode");
     const lower_lookup_at_node = sourceSliceBetween(lower_source, "fn lowerLookupExprAtNode", "fn lowerProcedureUseValueAtNode");
     const lookup_type_node = sourceSliceBetween(lower_source, "fn lookupExprTypeNode", "fn fnTemplateForDirectCallAtNode");
     const lower_expr_inner = sourceSliceBetween(lower_source, "fn lowerExprInner", "fn lowerReturn");
@@ -670,7 +670,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectContains(target_request, "const include_result = result_relation == .exact_destination;");
     try expectContains(target_request, "const checked_target = try self.persistentCheckedBaseNode(lookup.target.callable_ty);");
     try expectContains(target_request, "const plan = lookup.view.templates.specializationCallPlanForCallable(lookup.target.callable_ty)");
-    try expectContains(target_request, "null,\n            callsite.ret,");
+    try expectContains(target_request, ".{\n                .node = dispatcher_edge.produced,\n                .authority = dispatcher_edge.authority,\n            },\n            callsite.ret,");
     try expectNotContains(target_request, "active_checked_selections");
     try expectNotContains(target_request, "methodTargetSignatureNode(lookup)");
     try expectNotContains(target_request, "const checked_target = try self.instNode(");
@@ -754,7 +754,7 @@ test "unsubstituted checked bases are persistent and checked-node reservations a
     );
     try expectContains(inst_node, ".building => |maybe_reserved| if (maybe_reserved) |reserved|");
     try expectContains(inst_node, "recursive_checked_node_reservations");
-    try expectNotContains(inst_node, "newNode(.{ .unresolved = InstVariable.placeholder() });\n        try self.putScopedNodeState");
+    try expectNotContains(inst_node, "newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });\n        try self.putScopedNodeState");
 }
 
 test "record literals request and retain only immediate exact field nodes" {
@@ -1443,8 +1443,8 @@ test "Monotype call requests retain defaults in explicit forward cells" {
         "fn generatedNominalFromSelectedArguments(",
     );
     try expectContains(representation_selection, "completePendingProducedNode(self, selection.node)");
-    try expectContains(representation_selection, ".checked_variable, .row_extension =>");
-    try expectContains(representation_selection, ".placeholder => try self.callArgumentSelection(");
+    try expectContains(representation_selection, ".checked_variable, .row_extension, .construction_placeholder =>");
+    try expectContains(representation_selection, ".producer_placeholder => try self.callArgumentSelection(");
 
     const selection = sourceSliceBetween(
         lower_source,
@@ -1490,7 +1490,7 @@ test "Monotype callable requests keep explicit independent body result authority
         "fn restoreConstFnAtNodeWithStaticRoot(",
         "fn restoreConstParserRuntimeFnAtNode(",
     );
-    try expectContains(restore, "registerFunctionResultRelation(request_root, .produced)");
+    try expectContains(restore, "registerFunctionResultRelation(request_root, .exact_destination)");
 }
 
 test "control-flow alternatives produce the selected request without root normalization" {
@@ -1693,7 +1693,7 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
     try expectContains(inst_node, "if (self.scopedNodeState(scoped_ty)) |state|");
     try expectContains(inst_node, "try self.putScopedNodeState(scoped_ty, .{ .building = null })");
     try expectContains(inst_node, ".content => |content| try self.graph.newNode(content)");
-    try expectContains(inst_node, ".content => |content| try self.graph.completeReservedProducedNode(reserved, content)");
+    try expectContains(inst_node, ".content => |content| try self.graph.completeReservedConstructionNode(reserved, content)");
     try expectNotContains(inst_node, "self.graph.unify(");
 
     const child_context = sourceSliceBetween(
@@ -1727,7 +1727,7 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
     try std.testing.expect(reserve_identity < complete_declared_order);
     try std.testing.expect(complete_declared_order < fill_backing);
     try expectContains(nominal_backing, "try self.putScopedNode(backing, placeholder)");
-    try expectContains(nominal_backing, ".content => |content| try self.graph.completeReservedProducedNode(placeholder, content)");
+    try expectContains(nominal_backing, ".content => |content| try self.graph.completeReservedConstructionNode(placeholder, content)");
     try expectNotContains(nominal_backing, "self.graph.unify(");
     try expectNotContains(nominal_backing, "attachCheckedBaseAlias");
 
@@ -1739,7 +1739,7 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
         "pub fn reserveOrdinaryNamedBacking(",
         "fn registerRowParent(",
     );
-    const reserve_backing = std.mem.find(u8, ordinary_reservation, "self.appendDistinctNode(.{ .unresolved = InstVariable.placeholder() })") orelse
+    const reserve_backing = std.mem.find(u8, ordinary_reservation, "self.appendDistinctNode(.{ .unresolved = InstVariable.constructionPlaceholder() })") orelse
         return error.TestExpectedEqual;
     const exact_lookup = std.mem.find(u8, ordinary_reservation, "self.existingNamedIdentity(raw_named)") orelse
         return error.TestExpectedEqual;
@@ -1755,7 +1755,7 @@ test "Monotype closed direct dispatch preserves produced operand graphs" {
 
     const complete_reserved = sourceSliceBetween(
         solve_source,
-        "pub fn completeReservedProducedNode(",
+        "pub fn completeReservedConstructionNode(",
         "pub fn addRecursiveNode(",
     );
     try expectContains(complete_reserved, "try self.redirectRoot(node, root)");

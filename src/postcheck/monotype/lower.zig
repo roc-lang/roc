@@ -5497,8 +5497,8 @@ const Builder = struct {
         const completed = try self.completePendingProducedNode(body_ctx, raw_node);
         if (body_ctx.graph.content(completed) != .unresolved) return completed;
         return switch (body_ctx.graph.content(completed).unresolved.origin) {
-            .checked_variable, .row_extension => completed,
-            .placeholder => try self.pendingProducedRepresentationRequest(body_ctx, raw_node) orelse
+            .checked_variable, .row_extension, .construction_placeholder => completed,
+            .producer_placeholder => try self.pendingProducedRepresentationRequest(body_ctx, raw_node) orelse
                 Common.invariant("representation consumer reached an unresolved producer without an explicit request recipe"),
         };
     }
@@ -15011,7 +15011,7 @@ const BodyContext = struct {
                     .building => |maybe_reserved| if (maybe_reserved) |reserved|
                         reserved
                     else reserved: {
-                        const node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                        const node = try self.graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
                         entry.value_ptr.* = .{ .building = node };
                         break :reserved node;
                     },
@@ -16192,7 +16192,7 @@ const BodyContext = struct {
                 .building => |maybe_reserved| if (maybe_reserved) |reserved|
                     reserved
                 else blk: {
-                    const reserved = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                    const reserved = try self.graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
                     state.* = .{ .building = reserved };
                     self.builder.countBodyDiagnostic("recursive_checked_node_reservations");
                     break :blk reserved;
@@ -16223,7 +16223,7 @@ const BodyContext = struct {
         };
         const completed = if (maybe_reserved) |reserved| completed: {
             switch (build) {
-                .content => |content| try self.graph.completeReservedProducedNode(reserved, content),
+                .content => |content| try self.graph.completeReservedConstructionNode(reserved, content),
                 .existing => |existing| try self.graph.completeProducedSelection(reserved, existing),
             }
             break :completed self.graph.rootNode(reserved);
@@ -16606,7 +16606,7 @@ const BodyContext = struct {
                     }
                     const checked_kind = self.scopedCheckedType(field.kind.undeterminedVariable() orelse
                         Common.invariant("undetermined checked field kind carried no presence variable"));
-                    const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                    const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
                     const instantiated = self.scopedFieldKind(checked_kind) orelse instantiated: {
                         const fresh = InstantiatedFieldKind{
                             .id = try self.graph.newUndeterminedFieldKind(),
@@ -16944,7 +16944,7 @@ const BodyContext = struct {
         args: []NodeId,
         authority: InstantiationAuthority,
     ) Allocator.Error!NodeId {
-        const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+        const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
         try self.fillNominalDeclarationBackingNode(source, args, placeholder, authority);
         return placeholder;
     }
@@ -17038,7 +17038,7 @@ const BodyContext = struct {
         }
         try self.putScopedNode(backing, placeholder);
         switch (try self.instNodeBuild(backing)) {
-            .content => |content| try self.graph.completeReservedProducedNode(placeholder, content),
+            .content => |content| try self.graph.completeReservedConstructionNode(placeholder, content),
             .existing => |existing| try self.graph.completeProducedSelection(placeholder, existing),
         }
     }
@@ -17446,7 +17446,7 @@ const BodyContext = struct {
             body_request_fn_node;
         const result_relation = self.graph.functionResultRelation(body_request_fn_node) orelse
             Common.invariant("function result reservation had no explicit authority");
-        const produced_ret = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+        const produced_ret = try self.graph.newNode(.{ .unresolved = InstVariable.producerPlaceholder() });
         const result_fn = try self.graphFunctionNode(body_request.args, produced_ret);
         try self.graph.registerRequestCheckedSource(result_fn, checked_source);
         self.graph.registerFunctionResultRelation(result_fn, result_relation);
@@ -18433,7 +18433,7 @@ const BodyContext = struct {
         return switch (destination_relation) {
             .exact_request => try self.restoredHoistedConstAtNode(entry, request_node),
             .checked_mapping, .exact_producer => blk: {
-                const result_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+                const result_node = try self.graph.newNode(.{ .unresolved = InstVariable.producerPlaceholder() });
                 break :blk try self.restoredHoistedConstAtNodes(
                     entry,
                     request_node,
@@ -25931,7 +25931,7 @@ const BodyContext = struct {
         const local_node = try cell.toGraphNode(self.graph);
         if (!self.graph.sameClass(local_node, value_node)) {
             const local_content = self.graph.content(local_node);
-            if (local_content == .unresolved and local_content.unresolved.origin == .placeholder) {
+            if (local_content == .unresolved and local_content.unresolved.origin == .construction_placeholder) {
                 try self.graph.completeProducedSelection(local_node, value_node);
             } else if (local_content == .func and
                 self.graph.content(value_node) == .func and
@@ -26141,7 +26141,12 @@ const BodyContext = struct {
         };
     }
 
-    /// Add one complete exact producer edge to a request's flat identity.
+    const ExactRequestEdge = struct {
+        produced: NodeId,
+        authority: solve.DirectRequestSelectionAuthority,
+    };
+
+    /// Add one complete exact edge to a request's flat identity.
     /// This is used by compiler-authored structural derivations whose selected
     /// method body depends on the operand's complete runtime type even though
     /// the target's checked signature has no polymorphic leaf for that shape.
@@ -26150,7 +26155,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         source_view: ModuleView,
         checked_root: checked.CheckedTypeId,
-        produced_root: NodeId,
+        edge: ExactRequestEdge,
     ) Allocator.Error!void {
         const selection_base = solve.CheckedBaseKey{
             .module_bytes = source_view.key.bytes,
@@ -26161,19 +26166,17 @@ const BodyContext = struct {
         try selections.appendSlice(self.allocator, self.graph.directRequestSelections(request_fn_node));
         try self.recordCallSelection(&selections, .{
             .base = selection_base,
-            .produced = produced_root,
-            .authority = .produced,
+            .produced = edge.produced,
+            .authority = edge.authority,
         });
         try self.graph.recordDirectRequestSelections(request_fn_node, selections.items);
     }
 
-    const ExactRequestEdge = struct {
-        produced: NodeId,
-    };
-
-    fn exactRequestEdgeAtNode(_: *BodyContext, produced: NodeId) Allocator.Error!ExactRequestEdge {
+    fn exactRequestEdgeAtNode(self: *BodyContext, produced: NodeId) Allocator.Error!ExactRequestEdge {
+        const selection = try self.callArgumentSelection(produced);
         return .{
-            .produced = produced,
+            .produced = selection.node,
+            .authority = selection.authority,
         };
     }
 
@@ -26189,6 +26192,7 @@ const BodyContext = struct {
         ) orelse Common.invariant("selected method call had no checker-recorded exact dispatcher edge");
         return .{
             .produced = selection.produced,
+            .authority = selection.authority,
         };
     }
 
@@ -26231,7 +26235,8 @@ const BodyContext = struct {
                     Common.invariant("checked call argument edge exceeded function arity");
                 }
                 if (!newly_available[root.index]) break :blk null;
-                break :blk (try self.callArgumentSelection(produced_args[root.index])).node;
+                const selection = try self.callArgumentSelection(produced_args[root.index]);
+                break :blk selection.node;
             },
             .result => if (include_result)
                 request_ret orelse Common.invariant("result edge had no exact result node")
@@ -26287,11 +26292,11 @@ const BodyContext = struct {
             };
         }
         return switch (self.graph.content(produced).unresolved.origin) {
-            .checked_variable, .row_extension => .{
+            .checked_variable, .row_extension, .construction_placeholder => .{
                 .node = produced,
                 .authority = .request,
             },
-            .placeholder => .{
+            .producer_placeholder => .{
                 .node = try self.builder.pendingProducedRepresentationRequest(
                     self,
                     produced,
@@ -27287,11 +27292,11 @@ const BodyContext = struct {
         // needs the separate immutable representation request registered by
         // its still-running producer.
         return switch (unresolved.origin) {
-            .checked_variable, .row_extension => .{
+            .checked_variable, .row_extension, .construction_placeholder => .{
                 .node = produced,
                 .authority = .request,
             },
-            .placeholder => try self.callArgumentSelection(produced),
+            .producer_placeholder => try self.callArgumentSelection(produced),
         };
     }
 
@@ -29592,13 +29597,13 @@ const BodyContext = struct {
                 const request = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
                 break :blk .{
                     .request = request,
-                    .witness = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() }),
+                    .witness = try self.graph.newNode(.{ .unresolved = InstVariable.producerPlaceholder() }),
                     .destination_relation = .exact_producer,
                 };
             },
             .eval_template => .{
                 .request = try self.producedOccurrenceNode(requested_ty),
-                .witness = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() }),
+                .witness = try self.graph.newNode(.{ .unresolved = InstVariable.producerPlaceholder() }),
                 .destination_relation = .exact_producer,
             },
             .reserved => Common.invariant("reserved checked const template reached deferred Monotype lowering"),
@@ -31023,10 +31028,11 @@ const BodyContext = struct {
         const fn_value = store_view.const_store.getFn(@enumFromInt(raw));
         const request_root = try self.graph.functionRequestRoot(request_fn_node);
         if (self.graph.functionResultRelation(request_root) == null) {
-            // A stored function is a runtime value producer. Its outer
-            // container supplies only the callable shell; absent an explicit
-            // call-site destination, the restored body owns its exact result.
-            self.graph.registerFunctionResultRelation(request_root, .produced);
+            // ConstStore records the complete producer-owned representation
+            // of every stored function value. Its enclosing stored value
+            // therefore supplies an exact result cell as well as the callable
+            // arguments; rebasing the checked body must preserve both.
+            self.graph.registerFunctionResultRelation(request_root, .exact_destination);
         }
         switch (fn_value.fn_def) {
             .parser_runtime => return try self.restoreConstParserRuntimeFnAtNode(
@@ -33244,8 +33250,18 @@ const BodyContext = struct {
                     )) |lowered| break :blk lowered;
                 }
                 switch (expr.data) {
-                    .numeral => |numeral| break :blk try self.lowerPrimitiveNumeralAtNode(numeral, expected_node),
-                    .str_from_quote => |quote| break :blk try self.lowerPrimitiveQuoteAtNode(quote, expected_node),
+                    .numeral => |numeral| break :blk try self.lowerNumeralExprAtNode(
+                        checked_expr,
+                        expr.ty,
+                        numeral,
+                        expected_node,
+                    ),
+                    .str_from_quote => |quote| break :blk try self.lowerQuoteExprAtNode(
+                        checked_expr,
+                        expr.ty,
+                        quote,
+                        expected_node,
+                    ),
                     .str_segment => |str| break :blk try self.addExprWithTypeCell(
                         cell,
                         .{ .str_lit = try self.lowerStringLiteral(str) },
@@ -33364,43 +33380,6 @@ const BodyContext = struct {
                 break :blk try self.lowerExprInner(checked_expr);
             },
         };
-    }
-
-    fn lowerPrimitiveNumeralAtNode(
-        self: *BodyContext,
-        numeral: checked.CheckedNumeralData,
-        target_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        // The literal is the producer for this exact identity leaf. Consume
-        // its checker-recorded language default here, at that leaf, rather
-        // than defaulting sibling edges when their enclosing compound is
-        // constructed.
-        const produced_node = (try self.graph.checkedDefaultNode(target_node)) orelse target_node;
-        const primitive = (try self.graph.primitiveAtNode(produced_node)) orelse
-            Common.invariant("graph-native custom numeral lowering requires its recorded dispatch request");
-        const data = (try self.numeralBits(numeral.literal, primitive)) orelse
-            BodyExprData{ .crash = try self.addStringLiteral("invalid numeric literal") };
-        return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), data);
-    }
-
-    fn lowerPrimitiveQuoteAtNode(
-        self: *BodyContext,
-        quote: checked.CheckedQuoteData,
-        target_node: NodeId,
-    ) Allocator.Error!DraftExprId {
-        const produced_node = (try self.graph.checkedDefaultNode(target_node)) orelse target_node;
-        const primitive = (try self.graph.primitiveAtNode(produced_node)) orelse
-            Common.invariant("graph-native custom quote lowering requires its recorded dispatch request");
-        if (primitive != .str) {
-            return try self.addExprWithTypeCell(
-                DraftTypeCell.fromGraphNode(produced_node),
-                .{ .crash = try self.addStringLiteral("invalid string literal") },
-            );
-        }
-        return try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(produced_node),
-            .{ .str_lit = try self.lowerStringLiteral(quote.literal) },
-        );
     }
 
     fn lowerCallExprAtNode(
@@ -36087,29 +36066,57 @@ const BodyContext = struct {
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
-
-        const callable_node = try self.persistentCheckedBaseNode(plan.callable_ty);
-        if ((try self.graph.functionNodes(callable_node)).args.len != plan_args.len) {
+        const resolution = self.evidenceResolution(plan) orelse
+            Common.invariant("checked from_numeral dispatch had no callable resolution");
+        const resolved = switch (resolution) {
+            .target => |lookup| lookup,
+            .structural => Common.invariant("checked from_numeral dispatch unexpectedly resolved structurally"),
+        };
+        const expression_call_plan = self.view.templates.specializationCallPlanForExpr(plan.expr);
+        const operation = self.selectedDispatchOperationPlan(expression_call_plan, resolution);
+        const source_callable = operation.call.source_callable;
+        const checked_callable_node = try self.persistentCheckedBaseNodeInView(
+            operation.view,
+            source_callable,
+        );
+        if ((try self.graph.functionNodes(checked_callable_node)).args.len != plan_args.len) {
             Common.invariant("checked from_numeral plan graph arity differed from its operand span");
         }
-        const resolved = self.dispatchTarget(plan) orelse
-            Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
-        const callable = try self.graph.functionNodes(callable_node);
-        var pre_lowered = std.ArrayList(PreLoweredOperand).empty;
+        const planned = try self.lowerDispatchOperandsByPlan(
+            operation.view,
+            operation.call,
+            operation.positional_operand_requests,
+            source_callable,
+            checked_callable_node,
+            plan_args,
+            target_node,
+            null,
+            .{ .node = target_node, .authority = .request },
+            .produced,
+            self.iteratorProcedureForMethodTarget(resolved.target),
+        );
+        var pre_lowered = planned.lowered;
         defer pre_lowered.deinit(self.allocator);
-        try self.preLowerDispatchOperands(plan_args, callable.args, &pre_lowered);
         const lowered = try self.lowerResolvedDispatchAtNode(
             plan,
             resolved,
-            callable_node,
+            planned.request,
             target_node,
             self,
             pre_lowered.items,
         );
         const call_expr = try self.addExprWithTypeCell(lowered.ret_ty, lowered.data);
+        const produced_try_node = try lowered.ret_ty.toGraphNode(self.graph);
         return .{
             .call = call_expr,
-            .try_node = try lowered.ret_ty.toGraphNode(self.graph),
+            // Unwrapping inspects the call result's immediate Try row. An
+            // active method specialization still owns its forward output
+            // cell, so inspect its explicit body request while retaining the
+            // producer-owned cell on `call_expr` itself.
+            .try_node = try self.builder.completePendingProducedRepresentationNode(
+                self,
+                produced_try_node,
+            ),
         };
     }
 
@@ -38311,7 +38318,7 @@ const BodyContext = struct {
                     .redirect, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
                 },
                 .record_field => switch (content) {
-                    .record => node = try self.graph.recordFieldNode(node, try self.builder.recordFieldName(view, @enumFromInt(step.data))),
+                    .record => node = try self.graph.evidenceRecordFieldValueNode(node, try self.builder.recordFieldName(view, @enumFromInt(step.data))),
                     .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
                 },
                 .tag_payload_tag => switch (content) {
@@ -38668,7 +38675,10 @@ const BodyContext = struct {
             &.{},
             callsite.args,
             available,
-            null,
+            .{
+                .node = dispatcher_edge.produced,
+                .authority = dispatcher_edge.authority,
+            },
             callsite.ret,
             if (include_result) .request else null,
         );
@@ -38690,7 +38700,7 @@ const BodyContext = struct {
             exact_request,
             lookup.view,
             lookup.target.callable_ty,
-            dispatcher_edge.produced,
+            dispatcher_edge,
         );
         return exact_request;
     }
@@ -38901,7 +38911,7 @@ const BodyContext = struct {
         }
         const encoding = self.preLoweredOperandAt(pre_lowered, 0) orelse
             Common.invariant("structural serialization encoding operand was not lowered before deferral");
-        const result_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+        const result_node = try self.graph.newNode(.{ .unresolved = InstVariable.producerPlaceholder() });
         const expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(result_node), .pending_deferred);
         self.draft.expr_impossibility_proofs.items[@intFromEnum(expr)] = self.exprImpossibilityProof(encoding);
         const lexical = try self.captureCodecLexicalContext();
@@ -44391,7 +44401,7 @@ const BodyContext = struct {
             callable_node,
             lookup.view,
             lookup.target.callable_ty,
-            node,
+            try self.exactRequestEdgeAtNode(node),
         );
         const callee = try self.methodTargetCalleeAtNode(lookup, callable_node, .synthesize);
         try self.draft.structural_eq_method_calls.append(self.allocator, .{
@@ -44846,8 +44856,8 @@ const BodyContext = struct {
         // parent compound or relating two completed type graphs.
         if (self.graph.content(produced_node) == .unresolved) {
             switch (self.graph.content(produced_node).unresolved.origin) {
-                .placeholder => return produced_expr,
-                .checked_variable, .row_extension => {
+                .producer_placeholder => return produced_expr,
+                .checked_variable, .row_extension, .construction_placeholder => {
                     self.draft.exprs.items[@intFromEnum(produced_expr)].ty =
                         DraftTypeCell.fromGraphNode(destination);
                     return produced_expr;
@@ -46907,7 +46917,7 @@ const BodyContext = struct {
         return .{
             .declared = declared,
             .selected = DraftTypeCell.fromGraphNode(try self.graph.newNode(.{
-                .unresolved = InstVariable.placeholder(),
+                .unresolved = InstVariable.producerPlaceholder(),
             })),
             .destination_relation = destination_relation,
             .has_exact_producer = false,

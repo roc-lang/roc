@@ -110,7 +110,13 @@ pub const InstField = struct {
 pub const InstVariableOrigin = enum(u8) {
     checked_variable,
     row_extension,
-    placeholder,
+    /// Recursive forward cell owned and filled by one type-construction
+    /// traversal. Consumers may retain it as explicit request authority.
+    construction_placeholder,
+    /// Exact output cell owned by a value producer. Consumers must use that
+    /// producer's separately registered representation request until it
+    /// completes the output.
+    producer_placeholder,
 };
 
 /// Defaulting evidence carried by an unresolved instantiation-graph node until
@@ -158,8 +164,12 @@ pub const InstVariable = struct {
         };
     }
 
-    pub fn placeholder() InstVariable {
-        return .{ .origin = .placeholder };
+    pub fn constructionPlaceholder() InstVariable {
+        return .{ .origin = .construction_placeholder };
+    }
+
+    pub fn producerPlaceholder() InstVariable {
+        return .{ .origin = .producer_placeholder };
     }
 };
 
@@ -979,7 +989,7 @@ pub const InstGraph = struct {
         comptime fill: fn (@TypeOf(context), NodeId) Allocator.Error!InstNode,
     ) Allocator.Error!NodeId {
         self.requireRelationProduction();
-        const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+        const reserved = try self.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
         const entry = try self.generated_nominal_intern.getOrPut(digest);
         if (entry.found_existing) {
             Common.invariant("generated iterator was reserved after its identity had already been interned");
@@ -1246,7 +1256,8 @@ pub const InstGraph = struct {
                     return switch (variable.origin) {
                         .checked_variable => Common.invariant("checked variable reached final demand validation without an explicit default"),
                         .row_extension => Common.invariant("row extension reached final demand validation without row default"),
-                        .placeholder => Common.invariant("instantiation placeholder reached final demand validation"),
+                        .construction_placeholder => Common.invariant("instantiation construction placeholder reached final demand validation"),
+                        .producer_placeholder => Common.invariant("instantiation producer placeholder reached final demand validation"),
                     };
                 },
                 .named => |named| {
@@ -1378,7 +1389,8 @@ pub const InstGraph = struct {
                 break :blk switch (variable.origin) {
                     .checked_variable => Common.invariant("checked variable reached final inhabitance validation without an explicit default"),
                     .row_extension => Common.invariant("row extension reached final inhabitance validation without row default"),
-                    .placeholder => Common.invariant("instantiation placeholder reached final inhabitance validation"),
+                    .construction_placeholder => Common.invariant("instantiation construction placeholder reached final inhabitance validation"),
+                    .producer_placeholder => Common.invariant("instantiation producer placeholder reached final inhabitance validation"),
                 };
             },
             .named => |named| if (named.backing) |backing|
@@ -2171,14 +2183,14 @@ pub const InstGraph = struct {
     /// Complete a placeholder reserved by one explicit producer traversal.
     /// This exists for recursive structural producers whose self-edge is
     /// encountered before the enclosing node has been built.
-    pub fn completeReservedProducedNode(
+    pub fn completeReservedConstructionNode(
         self: *InstGraph,
         reserved: NodeId,
         raw_content: InstNode,
     ) Allocator.Error!void {
         const root = self.find(reserved);
         const existing = self.nodes.items[@intFromEnum(root)];
-        if (existing != .unresolved or existing.unresolved.origin != .placeholder) {
+        if (existing != .unresolved or existing.unresolved.origin != .construction_placeholder) {
             Common.invariant("produced node reservation was completed more than once");
         }
         const completed_content = if (raw_content == .named and self.checked_base_construction_depth == 0)
@@ -2229,7 +2241,7 @@ pub const InstGraph = struct {
         context: anytype,
         comptime fill: fn (@TypeOf(context), NodeId) Allocator.Error!InstNode,
     ) Allocator.Error!NodeId {
-        const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+        const reserved = try self.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
         try self.setContent(reserved, try fill(context, reserved));
         return reserved;
     }
@@ -2268,7 +2280,7 @@ pub const InstGraph = struct {
             break :blk normalized;
         } else raw_named;
 
-        const backing = try self.appendDistinctNode(.{ .unresolved = InstVariable.placeholder() });
+        const backing = try self.appendDistinctNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
         var completed = interned;
         completed.backing = .{
             .node = backing,
@@ -2782,6 +2794,13 @@ pub const InstGraph = struct {
         return self.recordFieldNodeWithAccess(raw_record, name, .inspectable, "record field access");
     }
 
+    /// Return the exact field value cell named by a checker-authored evidence
+    /// path. Generalized and optional fields keep this separate from the
+    /// runtime presence slot returned by `recordFieldNode`.
+    pub fn evidenceRecordFieldValueNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
+        return self.recordFieldValueNodeWithAccess(raw_record, name, .inspectable, "evidence record field value");
+    }
+
     /// Apply one checked required-access judgment to the field-kind cell and
     /// return the inline value slot selected by that judgment.
     pub fn requiredRecordFieldNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
@@ -2890,18 +2909,7 @@ pub const InstGraph = struct {
         raw_record: NodeId,
         name: names.RecordFieldNameId,
     ) Allocator.Error!NodeId {
-        const structural = try self.shapeRoot(raw_record, "record constructor", .runtime_layout);
-        if (self.content(structural) != .record) {
-            Common.invariant("instantiation record constructor had a non-record receiver type");
-        }
-        const row = try self.flattenRecordRow(structural);
-        const wanted = self.fieldLabelText(name);
-        for (row.fields) |field| {
-            if (Ident.textEql(wanted, self.fieldLabelText(field.name))) {
-                return self.find(field.value_ty orelse field.ty);
-            }
-        }
-        Common.invariant("instantiation record constructor requested an absent field value");
+        return self.recordFieldValueNodeWithAccess(raw_record, name, .runtime_layout, "record constructor");
     }
 
     /// Return the exact field representation already carried by the requested
@@ -2985,6 +2993,17 @@ pub const InstGraph = struct {
         comptime noun: []const u8,
     ) Allocator.Error!NodeId {
         return self.find((try self.recordFieldWithAccess(raw_record, name, access, noun)).ty);
+    }
+
+    fn recordFieldValueNodeWithAccess(
+        self: *InstGraph,
+        raw_record: NodeId,
+        name: names.RecordFieldNameId,
+        access: BackingAccess,
+        comptime noun: []const u8,
+    ) Allocator.Error!NodeId {
+        const field = try self.recordFieldWithAccess(raw_record, name, access, noun);
+        return self.find(field.value_ty orelse field.ty);
     }
 
     fn recordFieldWithAccess(
@@ -3413,9 +3432,10 @@ pub const InstGraph = struct {
     }
 
     fn mergeVariableOrigin(a: InstVariableOrigin, b: InstVariableOrigin) InstVariableOrigin {
+        if (a == b) return a;
         if (a == .checked_variable or b == .checked_variable) return .checked_variable;
         if (a == .row_extension or b == .row_extension) return .row_extension;
-        return .placeholder;
+        Common.invariant("exact lowering attempted to merge construction and producer placeholders");
     }
 
     fn unifyConcrete(
@@ -4230,7 +4250,7 @@ pub const InstGraph = struct {
             }
         }
         self.countDiagnostic("mono_import_misses");
-        const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+        const node = try self.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
         // One-way memo: every import is a finished Monotype from outside this
         // graph. This specialization copies its exact structure into graph
         // nodes and never exposes those mutable nodes as a TypeId view.
@@ -4619,7 +4639,8 @@ const GeneratedIdentityWriter = struct {
             } else switch (content.unresolved.origin) {
                 .checked_variable => Common.invariant("generated identity input contained a checked variable without an explicit default"),
                 .row_extension => Common.invariant("generated identity input contained a row extension without its checked default"),
-                .placeholder => Common.invariant("generated identity input contained an incomplete producer placeholder"),
+                .construction_placeholder => Common.invariant("generated identity input contained an incomplete construction placeholder"),
+                .producer_placeholder => Common.invariant("generated identity input contained an incomplete producer placeholder"),
             };
             try self.graph.setContent(node, completed);
             return self.writeNode(node);
@@ -4806,7 +4827,8 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
     return switch (variable.origin) {
         .checked_variable => Common.invariant("checked variable reached Monotype materialization without an explicit default"),
         .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),
-        .placeholder => Common.invariant("instantiation placeholder reached Monotype materialization"),
+        .construction_placeholder => Common.invariant("instantiation construction placeholder reached Monotype materialization"),
+        .producer_placeholder => Common.invariant("instantiation producer placeholder reached Monotype materialization"),
     };
 }
 
@@ -5080,8 +5102,8 @@ test "completed functions with the same exact children share one runtime node" {
 
     const arg = try graph.newNode(.{ .primitive = .u64 });
     const produced_ret = try graph.newNode(.{ .primitive = .bool });
-    const left_ret = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    const right_ret = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const left_ret = try graph.newNode(.{ .unresolved = InstVariable.producerPlaceholder() });
+    const right_ret = try graph.newNode(.{ .unresolved = InstVariable.producerPlaceholder() });
     const left = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, &.{arg}),
         .ret = left_ret,
@@ -5107,7 +5129,7 @@ test "cyclic row extension is not a resolved graph type" {
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const row = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const row = try graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
     try graph.setContent(row, .{ .tag_union = .{ .tags = &.{}, .ext = row } });
     try std.testing.expect(!try graph.typeIsResolved(row));
 }
@@ -5150,7 +5172,7 @@ test "undetermined record field freezes to its required inline representation" {
 
     const field_name = try name_store.internRecordFieldLabel("value");
     const value_ty = try graph.newNode(.{ .primitive = .u64 });
-    const slot = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const slot = try graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
     const kind = try graph.newUndeterminedFieldKind();
     try graph.registerUndeterminedFieldKindCells(kind, slot, value_ty);
     const fields = try graph.arena().alloc(InstField, 1);
@@ -6195,7 +6217,7 @@ test "issue 9647: recursive nominal backing cycle is not chased as structural ba
     const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(2) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
 
-    const nominal = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const nominal = try graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
     try graph.setContent(nominal, .{ .named = .{
         .named_type = named_type,
         .def = def,
@@ -6237,7 +6259,7 @@ test "recursive nominal backing can meet an alias to that nominal" {
     const nominal_def: Type.TypeDef = .{ .module = module_identity, .type_name = nominal_name };
     const alias_def: Type.TypeDef = .{ .module = module_identity, .type_name = alias_name };
 
-    const nominal = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const nominal = try graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
     try graph.setContent(nominal, .{ .named = .{
         .named_type = nominal_type,
         .def = nominal_def,
