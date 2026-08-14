@@ -14121,6 +14121,67 @@ const BodyContext = struct {
         return current;
     }
 
+    /// Materialize a local at its requested graph node. The request relation
+    /// either joins the local and request representations, relates a
+    /// generated-private local to a distinct public interface, or leaves an
+    /// exact chain of producer-authored nominal backing edges between them.
+    /// Preserve the producer-owned local at an opaque interface boundary;
+    /// otherwise record every requested nominal layer explicitly in Monotype
+    /// IR.
+    fn lowerLocalAtRequestedNode(
+        self: *BodyContext,
+        local: DraftLocalId,
+        source_cell: DraftTypeCell,
+        expected_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const source_node = try source_cell.toGraphNode(self.graph);
+        const source_root_private = self.isGeneratedPrivateRootNode(source_node);
+        const expected_root_private = self.isGeneratedPrivateRootNode(expected_node);
+        const preserves_distinct_interface = if (source_root_private or expected_root_private)
+            source_root_private != expected_root_private
+        else
+            try self.graph.containsGeneratedPrivate(source_node) !=
+                try self.graph.containsGeneratedPrivate(expected_node);
+        try relateRequestComponent(self.graph, source_node, expected_node);
+        if (preserves_distinct_interface) {
+            return try self.addExprWithTypeCell(source_cell, .{ .local = local });
+        }
+        const source_representation_node = self.constructorRepresentationNode(source_node);
+
+        var layers = std.ArrayList(NodeId).empty;
+        defer layers.deinit(self.allocator);
+
+        var current = expected_node;
+        while (true) {
+            current = self.constructorRepresentationNode(current);
+            if (self.graph.sameClass(source_representation_node, current)) break;
+            if (self.graph.content(current) != .named) {
+                Common.invariant("related local and request had no exact nominal backing path");
+            }
+            for (layers.items) |layer| {
+                if (self.graph.sameClass(layer, current)) {
+                    Common.invariant("nominal local request backing path contained a cycle");
+                }
+            }
+            try layers.append(self.allocator, current);
+            const named = self.graph.namedNodes(current);
+            if (named.kind == .alias) Common.invariant("constructor representation retained a transparent alias node");
+            current = (named.backing orelse
+                Common.invariant("named expression graph node had no explicit backing")).node;
+        }
+
+        var expr = try self.addExprWithTypeCell(source_cell, .{ .local = local });
+        var index = layers.items.len;
+        while (index > 0) {
+            index -= 1;
+            expr = try self.addExprWithTypeCell(
+                DraftTypeCell.fromGraphNode(layers.items[index]),
+                .{ .nominal = expr },
+            );
+        }
+        return expr;
+    }
+
     /// Wrap an exact structural value witness in its nominal constructor
     /// layers. Transparent aliases stay out of the runtime IR but remain part
     /// of the witness type, matching `addConstructorExprAtNode`, whose
@@ -27997,11 +28058,9 @@ const BodyContext = struct {
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const local_cell = self.localTypeCell(binding.local);
-        const local_node = try local_cell.toGraphNode(self.graph);
         try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
         try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
-        try relateRequestComponent(self.graph, local_node, expected_node);
-        return try self.addExprWithTypeCell(local_cell, .{ .local = binding.local });
+        return try self.lowerLocalAtRequestedNode(binding.local, local_cell, expected_node);
     }
 
     fn lowerLookupExprAtType(
@@ -28081,10 +28140,8 @@ const BodyContext = struct {
         }
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
             const local_cell = self.localTypeCell(local_id);
-            const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
-            try relateRequestComponent(self.graph, local_node, try self.activeNodeFromType(ty));
-            return try self.addExprWithTypeCell(local_cell, .{ .local = local_id });
+            return try self.lowerLocalAtRequestedNode(local_id, local_cell, try self.activeNodeFromType(ty));
         }
 
         switch (record.ref) {
@@ -28197,13 +28254,8 @@ const BodyContext = struct {
         if (try self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
             const checked_ty = self.view.bodies.expr(checked_expr).ty;
             const local_cell = self.localTypeCell(local_id);
-            const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
-            try relateRequestComponent(self.graph, local_node, expected_node);
-            return try self.addExprWithTypeCell(
-                local_cell,
-                .{ .local = local_id },
-            );
+            return try self.lowerLocalAtRequestedNode(local_id, local_cell, expected_node);
         }
         switch (record.ref) {
             .selected_hoisted_const => |selected| {
