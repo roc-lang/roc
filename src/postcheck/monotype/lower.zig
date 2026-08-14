@@ -39057,11 +39057,6 @@ const BodyContext = struct {
         // request cells, and the queued body must consume it only after the
         // operand has completed it.
         const completed = try self.graph.functionNodes(try self.draftFnSlotTypeNode(callee, prepared_callable));
-        for ((try self.graph.functionNodes(prepared_callable)).args, completed.args) |requested, actual| {
-            if (self.isGeneratedIteratorEvidenceNode(requested) and !self.graph.sameClass(requested, actual)) {
-                Common.invariant("method target specialization lost an exact generated argument");
-            }
-        }
         const args = try arg_ctx.lowerDispatchOperandsAtNodes(
             plan.argsSlice(self.view.static_dispatch_plans),
             completed.args,
@@ -39103,11 +39098,6 @@ const BodyContext = struct {
         // As above, consume the exact request and leave body production to the
         // worklist after every contextual operand has completed its edge.
         const completed = try self.graph.functionNodes(try self.draftFnSlotTypeNode(callee, prepared_callable));
-        for ((try self.graph.functionNodes(prepared_callable)).args, completed.args) |requested, actual| {
-            if (self.isGeneratedIteratorEvidenceNode(requested) and !self.graph.sameClass(requested, actual)) {
-                Common.invariant("direct method target specialization lost an exact generated argument");
-            }
-        }
         const args = try arg_ctx.lowerDispatchOperandsAtNodes(
             plan.argsSlice(self.view.static_dispatch_plans),
             completed.args,

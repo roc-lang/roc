@@ -470,6 +470,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(lower_source, "OpenFunctionInterfaceShape");
     try expectNotContains(lower_source, "selectRequestRepresentation");
     try expectNotContains(lower_source, "sameFieldHandleType");
+    try expectNotContains(lower_source, "method target specialization lost an exact generated argument");
 
     const iterator_step = sourceSliceBetween(
         lower_source,
