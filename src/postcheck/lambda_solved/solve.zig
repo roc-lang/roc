@@ -157,6 +157,7 @@ const Solver = struct {
         list_replace_unsafe,
         list_swap,
         list_prepend,
+        list_map_prepare_reuse,
         dict_pseudo_seed,
         hasher_finish,
         crypto_sha256_hash_bytes,
@@ -1594,6 +1595,10 @@ const Solver = struct {
                 expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[0]);
                 try self.unify(args[1], try self.listElem(expected));
+            },
+            .list_map_prepare_reuse => {
+                expectLowLevelArity(op, args, 1);
+                try self.unify(expected, args[0]);
             },
             .dict_pseudo_seed => expectLowLevelArity(op, args, 0),
             .hasher_finish => expectLowLevelArity(op, args, 1),
