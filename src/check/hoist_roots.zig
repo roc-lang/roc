@@ -30,8 +30,8 @@ pub const Body = union(enum) {
 /// The runtime value shape produced by a selected root.
 ///
 /// This is decided by the checker after solving and consumed directly by
-/// checked artifact publication. Later stages must not recover it from the
-/// source expression or checked type.
+/// checked artifact publication. Source expressions and checked types are
+/// validation inputs, not alternate sources for this fact.
 pub const ValueKind = enum(u8) {
     data_constant,
     callable_binding,
