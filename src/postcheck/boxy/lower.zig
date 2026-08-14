@@ -21345,10 +21345,11 @@ const ProcBodyBuilder = struct {
         record_expr: checked.CheckedExprId,
         record_ty: checked.CheckedTypeId,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const rep_id = self.repForType(record_ty);
-        return try self.lowerRecordRepInto(target, record_expr, rep_id, expr_fields, null, next);
+        return try self.lowerRecordRepInto(target, record_expr, rep_id, expr_fields, unset_fields, null, next);
     }
 
     fn lowerEmptyRecordInto(
@@ -21362,7 +21363,7 @@ const ProcBodyBuilder = struct {
         if (self.parent.plan.representations.items[@intFromEnum(rep_id)].kind == .empty_record) {
             return try self.assignZst(target, next);
         }
-        return try self.lowerRecordRepInto(target, record_expr, rep_id, &.{}, null, next);
+        return try self.lowerRecordRepInto(target, record_expr, rep_id, &.{}, &.{}, null, next);
     }
 
     const RecordExtension = struct {
@@ -21376,6 +21377,7 @@ const ProcBodyBuilder = struct {
         record_expr: checked.CheckedExprId,
         rep_id: Plan.TypeRepId,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         extension: ?RecordExtension,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -21383,9 +21385,9 @@ const ProcBodyBuilder = struct {
         switch (rep.kind) {
             .record,
             .record_unbound,
-            => return try self.lowerRecordPayloadInto(target, record_expr, rep_id, rep, expr_fields, extension, next),
-            .dynamic => return try self.lowerDynamicRecordInto(target, record_expr, rep_id, rep, expr_fields, extension, next),
-            .alias => return try self.lowerRecordRepInto(target, record_expr, self.requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, extension, next),
+            => return try self.lowerRecordPayloadInto(target, record_expr, rep_id, rep, expr_fields, unset_fields, extension, next),
+            .dynamic => return try self.lowerDynamicRecordInto(target, record_expr, rep_id, rep, expr_fields, unset_fields, extension, next),
+            .alias => return try self.lowerRecordRepInto(target, record_expr, self.requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, unset_fields, extension, next),
             .nominal => |kind| switch (kind) {
                 .transparent,
                 .opaque_nominal,
@@ -21394,7 +21396,7 @@ const ProcBodyBuilder = struct {
                     const backing = self.requiredSingleChild(rep_id, .nominal_backing);
                     const backing_local = try self.addFrameLocalForRep(backing.rep);
                     const assign = try self.assignRepresentationBoundary(target, backing_local, rep_id, backing.rep, next);
-                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, extension, assign);
+                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, unset_fields, extension, assign);
                 },
             },
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
@@ -21408,6 +21410,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         rep: Plan.TypeRepresentation,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         extension: ?RecordExtension,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -21438,6 +21441,9 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(source_field_kinds);
         const field_sources = try self.parent.allocator.alloc(RecordPayloadFieldSource, field_count);
         defer self.parent.allocator.free(field_sources);
+        const unset_matched = try self.parent.allocator.alloc(bool, unset_fields.len);
+        defer self.parent.allocator.free(unset_matched);
+        @memset(unset_matched, false);
 
         var layout_index: usize = 0;
         const rep_field_view = procedureModuleById(self.parent.modules, rep.source_type.module);
@@ -21467,6 +21473,23 @@ const ProcBodyBuilder = struct {
                         source_field_target_reps[source_index] = child.rep;
                         source_field_kinds[source_index] = child.record_field_kind.tag;
                         field_sources[layout_index] = .expr;
+                    } else if (self.recordUnsetFieldIndex(unset_fields, rep_field_view, label)) |unset_index| {
+                        // An UNSET field (`label: _`) constructs the slot's
+                        // Missing tag even under an update—never copied from
+                        // the extension (design.md "In Progress: Unsetting an
+                        // Optional Field").
+                        if (child.record_field_kind.tag != .optional) {
+                            boxyLowerInvariant("record expression unset field was not optional after checking");
+                        }
+                        const local = try self.addFrameLocal(field_layout);
+                        field_locals[layout_index] = local;
+                        descriptor_fields[layout_index] = .{
+                            .local = local,
+                            .target_rep = child.rep,
+                            .source_rep = child.rep,
+                        };
+                        field_sources[layout_index] = .{ .missing_optional = child.rep };
+                        unset_matched[unset_index] = true;
                     } else if (extension) |ext| {
                         const local = try self.addFrameLocal(field_layout);
                         field_locals[layout_index] = local;
@@ -21523,6 +21546,11 @@ const ProcBodyBuilder = struct {
         for (source_field_locals) |maybe_local| {
             if (maybe_local == null) {
                 boxyLowerInvariant("record expression had a field outside its checked type representation");
+            }
+        }
+        for (unset_matched) |matched| {
+            if (!matched) {
+                boxyLowerInvariant("record expression had an unset field outside its checked type representation");
             }
         }
 
@@ -21715,6 +21743,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         rep: Plan.TypeRepresentation,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         extension: ?RecordExtension,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -21738,6 +21767,7 @@ const ProcBodyBuilder = struct {
             rep_id,
             rep,
             expr_fields,
+            unset_fields,
             extension,
             try self.prependOptionalDescriptorMaterialization(payload_desc_info.materialize, assign_box),
         );
@@ -21755,13 +21785,13 @@ const ProcBodyBuilder = struct {
             const ext_expr = self.module.checked_bodies.expr(ext);
             const ext_rep = self.repForType(ext_expr.ty);
             const ext_local = try self.addFrameLocalForRep(ext_rep);
-            const continuation = try self.lowerRecordRepInto(target, record_expr, self.repForType(record_ty), record.fields, .{
+            const continuation = try self.lowerRecordRepInto(target, record_expr, self.repForType(record_ty), record.fields, record.unsets, .{
                 .local = ext_local,
                 .rep = ext_rep,
             }, next);
             return try self.lowerExprInto(ext_local, ext, continuation);
         }
-        return try self.lowerRecordInto(target, record_expr, record_ty, record.fields, next);
+        return try self.lowerRecordInto(target, record_expr, record_ty, record.fields, record.unsets, next);
     }
 
     fn reserveBlockBindings(self: *ProcBodyBuilder, statements: []const checked.CheckedStatementId) Allocator.Error!void {
@@ -36350,6 +36380,23 @@ const ProcBodyBuilder = struct {
         return found;
     }
 
+    fn recordUnsetFieldIndex(
+        self: *const ProcBodyBuilder,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
+        label_view: ProcedureModuleView,
+        label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
+    ) ?usize {
+        var found: ?usize = null;
+        for (unset_fields, 0..) |unset_label, index| {
+            if (!self.recordFieldNameMatches(self.module, unset_label, label_view, label)) continue;
+            if (found != null) {
+                boxyLowerInvariant("record expression contained the same unset field label more than once");
+            }
+            found = index;
+        }
+        return found;
+    }
+
     fn recordEqualityFieldCount(children: []const Plan.RepChild) u16 {
         var count: usize = 0;
         for (children) |child| {
@@ -43324,6 +43371,7 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -43855,6 +43903,7 @@ test "boxy lowerer emits record construction in layout order after source-order 
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -43973,6 +44022,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 1 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = @enumFromInt(2),
         } },
     });
@@ -44120,6 +44170,7 @@ test "boxy lowerer emits record field access using layout field index" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -44487,6 +44538,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -44675,6 +44727,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -44875,6 +44928,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });

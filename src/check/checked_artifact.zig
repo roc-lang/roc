@@ -9859,6 +9859,11 @@ pub const CheckedExprData = union(enum) {
     },
     record: struct {
         fields: []const CheckedRecordExprField,
+        /// Fields unset (`name: _`) at this construction/update site, by
+        /// label; name-only, no value expression (design.md "In Progress:
+        /// Unsetting an Optional Field"). Lowering routes each to the
+        /// optional slot's Missing construction.
+        unsets: []const canonical.RecordFieldLabelId,
         ext: ?CheckedExprId,
     },
     empty_record,
@@ -10020,6 +10025,7 @@ pub const StoredCheckedExprData = union(enum) {
     },
     record: struct {
         fields: CheckedBodyRange,
+        unsets: CheckedBodyRange,
         ext: ?CheckedExprId,
     },
     empty_record,
@@ -10269,6 +10275,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
         } },
         .record => |r| .{ .record = .{
             .fields = pool_owner.recordExprFieldPool()[r.fields.start .. r.fields.start + r.fields.len],
+            .unsets = pool_owner.recordUnsetLabelPool()[r.unsets.start .. r.unsets.start + r.unsets.len],
             .ext = r.ext,
         } },
         .block => |b| .{ .block = .{
@@ -10487,6 +10494,7 @@ pub const CheckedBodyStoreView = struct {
     statement_id_pool: []const CheckedStatementId = &.{},
     pattern_binder_id_pool: []const PatternBinderId = &.{},
     record_expr_field_pool: []const CheckedRecordExprField = &.{},
+    record_unset_label_pool: []const canonical.RecordFieldLabelId = &.{},
     field_access_segment_pool: []const CheckedFieldAccessSegment = &.{},
     if_branch_pool: []const CheckedIfBranch = &.{},
     match_branch_pool: []const CheckedMatchBranch = &.{},
@@ -10526,6 +10534,10 @@ pub const CheckedBodyStoreView = struct {
     }
     pub fn recordExprFieldPool(self: CheckedBodyStoreView) []const CheckedRecordExprField {
         return self.record_expr_field_pool;
+    }
+
+    pub fn recordUnsetLabelPool(self: CheckedBodyStoreView) []const canonical.RecordFieldLabelId {
+        return self.record_unset_label_pool;
     }
     pub fn fieldAccessSegmentPool(self: CheckedBodyStoreView) []const CheckedFieldAccessSegment {
         return self.field_access_segment_pool;
@@ -11184,6 +11196,7 @@ pub const CheckedBodyStore = struct {
     pattern_binder_id_pool: std.ArrayList(PatternBinderId) = .empty,
     /// Flat pool of record expression fields backing record payloads.
     record_expr_field_pool: std.ArrayList(CheckedRecordExprField) = .empty,
+    record_unset_label_pool: std.ArrayList(canonical.RecordFieldLabelId) = .empty,
     /// Flat pool of checked field-access segments backing field-access paths.
     field_access_segment_pool: std.ArrayList(CheckedFieldAccessSegment) = .empty,
     /// Flat pool of if-branches backing if_ payloads.
@@ -11569,6 +11582,7 @@ pub const CheckedBodyStore = struct {
             .statement_id_pool = self.statement_id_pool.items,
             .pattern_binder_id_pool = self.pattern_binder_id_pool.items,
             .record_expr_field_pool = self.record_expr_field_pool.items,
+            .record_unset_label_pool = self.record_unset_label_pool.items,
             .field_access_segment_pool = self.field_access_segment_pool.items,
             .if_branch_pool = self.if_branch_pool.items,
             .match_branch_pool = self.match_branch_pool.items,
@@ -11625,6 +11639,10 @@ pub const CheckedBodyStore = struct {
     pub fn recordExprFieldPool(self: *const CheckedBodyStore) []const CheckedRecordExprField {
         return self.record_expr_field_pool.items;
     }
+
+    pub fn recordUnsetLabelPool(self: *const CheckedBodyStore) []const canonical.RecordFieldLabelId {
+        return self.record_unset_label_pool.items;
+    }
     pub fn fieldAccessSegmentPool(self: *const CheckedBodyStore) []const CheckedFieldAccessSegment {
         return self.field_access_segment_pool.items;
     }
@@ -11671,6 +11689,10 @@ pub const CheckedBodyStore = struct {
 
     fn appendRecordExprFields(self: *CheckedBodyStore, allocator: Allocator, fields: []const CheckedRecordExprField) Allocator.Error!CheckedBodyRange {
         return artifact_serialize.appendSpan(CheckedBodyRange, CheckedRecordExprField, &self.record_expr_field_pool, allocator, fields);
+    }
+
+    fn appendRecordUnsetLabels(self: *CheckedBodyStore, allocator: Allocator, labels: []const canonical.RecordFieldLabelId) Allocator.Error!CheckedBodyRange {
+        return artifact_serialize.appendSpan(CheckedBodyRange, canonical.RecordFieldLabelId, &self.record_unset_label_pool, allocator, labels);
     }
 
     fn appendFieldAccessSegments(self: *CheckedBodyStore, allocator: Allocator, segments: []const CheckedFieldAccessSegment) Allocator.Error!CheckedBodyRange {
@@ -11745,6 +11767,7 @@ pub const CheckedBodyStore = struct {
             } },
             .record => |r| .{ .record = .{
                 .fields = try self.appendRecordExprFields(allocator, r.fields),
+                .unsets = try self.appendRecordUnsetLabels(allocator, r.unsets),
                 .ext = r.ext,
             } },
             .block => |b| .{ .block = .{
@@ -12274,6 +12297,7 @@ pub const CheckedBodyStore = struct {
             self.statement_id_pool.deinit(allocator);
             self.pattern_binder_id_pool.deinit(allocator);
             self.record_expr_field_pool.deinit(allocator);
+            self.record_unset_label_pool.deinit(allocator);
             self.field_access_segment_pool.deinit(allocator);
             self.default_exprs.deinit(allocator);
             self.record_omitted_defaults.deinit(allocator);
@@ -12309,6 +12333,7 @@ pub const CheckedBodyStore = struct {
         statement_id_pool: SerializedSlice(CheckedStatementId) = .{},
         pattern_binder_id_pool: SerializedSlice(PatternBinderId) = .{},
         record_expr_field_pool: SerializedSlice(CheckedRecordExprField) = .{},
+        record_unset_label_pool: SerializedSlice(canonical.RecordFieldLabelId) = .{},
         field_access_segment_pool: SerializedSlice(CheckedFieldAccessSegment) = .{},
         if_branch_pool: SerializedSlice(CheckedIfBranch) = .{},
         match_branch_pool: SerializedSlice(CheckedMatchBranch) = .{},
@@ -12324,9 +12349,9 @@ pub const CheckedBodyStore = struct {
         record_omitted_defaults: SerializedSlice(CheckedRecordOmittedDefault) = .{},
 
         comptime {
-            // 24 SerializedSlice fields → 24 base-pointer fixups, independent of
+            // 25 SerializedSlice fields → 25 base-pointer fixups, independent of
             // stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 24);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 25);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedBodyStore, @This());
@@ -13483,6 +13508,7 @@ const CheckedBodyPayloadCopier = struct {
             } },
             .e_record => |record| .{ .record = .{
                 .fields = try self.copyRecordFields(record.fields),
+                .unsets = try self.copyUnsetFieldLabels(record.unsets),
                 .ext = if (record.ext) |ext| self.checkedExpr(ext) else null,
             } },
             .e_empty_record => .empty_record,
@@ -13941,6 +13967,17 @@ const CheckedBodyPayloadCopier = struct {
                 .label = try self.names.internRecordFieldIdent(self.module.identStoreConst(), field.name),
                 .value = self.checkedExpr(field.value),
             };
+        }
+        return out;
+    }
+
+    fn copyUnsetFieldLabels(self: *@This(), span: CIR.UnsetField.Span) Allocator.Error![]const canonical.RecordFieldLabelId {
+        const source = self.module.sliceUnsetFields(span);
+        if (source.len == 0) return &.{};
+        const out = try self.allocator.alloc(canonical.RecordFieldLabelId, source.len);
+        for (source, 0..) |field_idx, i| {
+            const field = self.module.getUnsetField(field_idx);
+            out[i] = try self.names.internRecordFieldIdent(self.module.identStoreConst(), field.name);
         }
         return out;
     }
@@ -29022,8 +29059,9 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size. The optional-field body tables
-            // add three pointers beyond the current-main count.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 212);
+            // add three pointers beyond the current-main count, and the
+            // record-unset label pool one more.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 213);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -29209,7 +29247,10 @@ pub const CheckedModuleArtifact = struct {
     // Version 69 records in the checking-context identity how a module's
     // compile-time roots were established, so an app root checked without its
     // entrypoint contract cannot share a cache entry with one checked under it.
-    const serialized_layout_version: u32 = 69;
+    // Version 70 carries unset (`name: _`) field labels on checked record
+    // expressions (`record_unset_label_pool`, design.md "In Progress:
+    // Unsetting an Optional Field").
+    const serialized_layout_version: u32 = 70;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35323,7 +35364,7 @@ test "checked inspect evaluation elision is producer-recorded for exact callable
     const call_args = [_]CheckedExprId{};
     const exprs = [_]CheckedExpr{
         .{ .id = testIndexId(CheckedExprId, 0), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .lambda = .{ .args = &.{}, .body = testIndexId(CheckedExprId, 0) } } },
-        .{ .id = @enumFromInt(1), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .record = .{ .fields = &record_fields, .ext = null } } },
+        .{ .id = @enumFromInt(1), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .record = .{ .fields = &record_fields, .unsets = &.{}, .ext = null } } },
         .{ .id = @enumFromInt(2), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .field_access = .{ .receiver = @enumFromInt(1), .segments = &access_segments } } },
         .{ .id = @enumFromInt(3), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .block = .{ .statements = &block_statements, .final_expr = testIndexId(CheckedExprId, 0) } } },
         .{ .id = @enumFromInt(4), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .call = .{ .func = testIndexId(CheckedExprId, 0), .args = &call_args, .called_via = .apply, .source_fn_ty_payload = testIndexId(CheckedTypeId, 0) } } },
@@ -35365,8 +35406,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xF7, 0x81, 0xEC, 0xFE, 0xB4, 0x4E, 0xEE, 0xD7, 0x62, 0xAE, 0xC1, 0x92, 0xBB, 0x16, 0xAF, 0xAB,
-        0x31, 0xB7, 0x4F, 0xF9, 0xB6, 0x87, 0x92, 0x31, 0xC2, 0x1D, 0xCF, 0x7E, 0xF5, 0x43, 0x05, 0x89,
+        0x4B, 0x99, 0x42, 0x52, 0x7C, 0x7C, 0xF3, 0x83, 0x5D, 0x77, 0x2C, 0x2C, 0xE1, 0x22, 0x29, 0xEB,
+        0x13, 0xE0, 0x21, 0xA0, 0x14, 0xAA, 0x6A, 0xE0, 0x10, 0x67, 0xF1, 0x07, 0x7D, 0xED, 0xB2, 0x4C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
