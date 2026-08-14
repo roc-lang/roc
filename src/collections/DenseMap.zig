@@ -47,6 +47,11 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         allocator: Allocator,
         sparse_chunks: std.ArrayList(?*SparseChunk) = .empty,
+        /// Chunk index of `sparse_chunks.items[0]`. The chunk-pointer array
+        /// spans only the touched chunk range, so a map holding a few entries
+        /// with large IDs costs a few slots rather than a slot for every
+        /// chunk between ID zero and the highest touched ID.
+        chunk_base: usize = 0,
         active_indices: std.ArrayList(usize) = .empty,
         values: std.ArrayList(V) = .empty,
 
@@ -169,6 +174,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         pub fn clearAndFree(self: *Self) void {
             self.freeChunks();
+            self.chunk_base = 0;
             self.sparse_chunks.clearAndFree(self.allocator);
             self.active_indices.clearAndFree(self.allocator);
             self.values.clearAndFree(self.allocator);
@@ -224,32 +230,54 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         fn ensureSparseSlot(self: *Self, index: usize) Allocator.Error!*u32 {
             const chunk_index = index >> chunk_shift;
-            if (chunk_index >= self.sparse_chunks.items.len) {
+            if (self.sparse_chunks.items.len == 0) {
+                try self.sparse_chunks.append(self.allocator, null);
+                self.chunk_base = chunk_index;
+            } else if (chunk_index < self.chunk_base) {
+                // Grow toward low IDs by at least the current span so
+                // alternating low/high inserts stay amortized O(1) per slot.
+                const needed = self.chunk_base - chunk_index;
+                const grow = @min(self.chunk_base, @max(needed, self.sparse_chunks.items.len));
                 const old_len = self.sparse_chunks.items.len;
-                try self.sparse_chunks.resize(self.allocator, chunk_index + 1);
+                try self.sparse_chunks.resize(self.allocator, old_len + grow);
+                std.mem.copyBackwards(
+                    ?*SparseChunk,
+                    self.sparse_chunks.items[grow..],
+                    self.sparse_chunks.items[0..old_len],
+                );
+                @memset(self.sparse_chunks.items[0..grow], null);
+                self.chunk_base -= grow;
+            } else if (chunk_index - self.chunk_base >= self.sparse_chunks.items.len) {
+                const old_len = self.sparse_chunks.items.len;
+                try self.sparse_chunks.resize(self.allocator, chunk_index - self.chunk_base + 1);
                 @memset(self.sparse_chunks.items[old_len..], null);
             }
 
-            if (self.sparse_chunks.items[chunk_index] == null) {
+            const slot_index = chunk_index - self.chunk_base;
+            if (self.sparse_chunks.items[slot_index] == null) {
                 const chunk = try self.allocator.create(SparseChunk);
                 @memset(chunk, empty_position);
-                self.sparse_chunks.items[chunk_index] = chunk;
+                self.sparse_chunks.items[slot_index] = chunk;
             }
 
-            return &self.sparse_chunks.items[chunk_index].?[index & chunk_mask];
+            return &self.sparse_chunks.items[slot_index].?[index & chunk_mask];
         }
 
         fn sparseSlotPtr(self: *Self, index: usize) ?*u32 {
             const chunk_index = index >> chunk_shift;
-            if (chunk_index >= self.sparse_chunks.items.len) return null;
-            const chunk = self.sparse_chunks.items[chunk_index] orelse return null;
+            if (chunk_index < self.chunk_base) return null;
+            const slot_index = chunk_index - self.chunk_base;
+            if (slot_index >= self.sparse_chunks.items.len) return null;
+            const chunk = self.sparse_chunks.items[slot_index] orelse return null;
             return &chunk[index & chunk_mask];
         }
 
         fn sparseSlotPtrConst(self: *const Self, index: usize) ?*const u32 {
             const chunk_index = index >> chunk_shift;
-            if (chunk_index >= self.sparse_chunks.items.len) return null;
-            const chunk = self.sparse_chunks.items[chunk_index] orelse return null;
+            if (chunk_index < self.chunk_base) return null;
+            const slot_index = chunk_index - self.chunk_base;
+            if (slot_index >= self.sparse_chunks.items.len) return null;
+            const chunk = self.sparse_chunks.items[slot_index] orelse return null;
             return &chunk[index & chunk_mask];
         }
 
@@ -279,6 +307,58 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             for (self.sparse_chunks.items) |maybe_chunk| {
                 if (maybe_chunk) |chunk| self.allocator.destroy(chunk);
             }
+        }
+    };
+}
+
+/// A pool of reusable `DenseMap`s for passes that repeatedly need short-lived
+/// maps over the same large ID domain. A fresh map must allocate and zero its
+/// sparse chunks on every first touch, which dominates passes that create one
+/// map per work item; pooled maps keep their chunks and dense capacity across
+/// uses, so only the live entries of each use are ever cleared. The pool hands
+/// out maps by value, so nested scopes may acquire further maps while an outer
+/// one is still in use.
+pub fn DenseMapPool(comptime K: type, comptime V: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Map = DenseMap(K, V);
+
+        /// Maps kept beyond this many are freed on release instead of pooled.
+        const max_pooled = 8;
+
+        allocator: Allocator,
+        maps: [max_pooled]Map = undefined,
+        len: usize = 0,
+
+        pub fn init(allocator: Allocator) Self {
+            return .{ .allocator = allocator };
+        }
+
+        pub fn deinit(self: *Self) void {
+            for (self.maps[0..self.len]) |*map| map.deinit();
+            self.* = undefined;
+        }
+
+        /// An empty map, reusing a pooled map's storage when one is available.
+        pub fn acquire(self: *Self) Map {
+            if (self.len > 0) {
+                self.len -= 1;
+                return self.maps[self.len];
+            }
+            return Map.init(self.allocator);
+        }
+
+        /// Return an acquired map to the pool. The caller's map is consumed.
+        pub fn release(self: *Self, map: *Map) void {
+            if (self.len == max_pooled) {
+                map.deinit();
+                return;
+            }
+            map.clearRetainingCapacity();
+            self.maps[self.len] = map.*;
+            self.len += 1;
+            map.* = undefined;
         }
     };
 }
@@ -343,8 +423,45 @@ test "DenseMap directly indexes integer and enum IDs" {
     defer sparse_map.deinit();
     try sparse_map.put(1_000_000, 9);
     try std.testing.expectEqual(@as(?u8, 9), sparse_map.get(1_000_000));
-    try std.testing.expect(sparse_map.sparse_chunks.items.len < 4_000);
+    // The chunk-pointer array is base-offset: one entry at a large ID costs
+    // one slot, not a slot per chunk below it.
+    try std.testing.expectEqual(@as(usize, 1), sparse_map.sparse_chunks.items.len);
     try std.testing.expectEqual(@as(usize, 1), sparse_map.values.items.len);
+}
+
+test "DenseMap chunk window grows toward low and high IDs" {
+    var map = DenseMap(u32, u32).init(std.testing.allocator);
+    defer map.deinit();
+
+    try map.put(1_000_000, 1);
+    try map.put(999_000, 2);
+    try map.put(5, 3);
+    try map.put(2_000_000, 4);
+    try std.testing.expectEqual(@as(?u32, 1), map.get(1_000_000));
+    try std.testing.expectEqual(@as(?u32, 2), map.get(999_000));
+    try std.testing.expectEqual(@as(?u32, 3), map.get(5));
+    try std.testing.expectEqual(@as(?u32, 4), map.get(2_000_000));
+    try std.testing.expectEqual(@as(?u32, null), map.get(999_999));
+    try std.testing.expectEqual(@as(?u32, null), map.get(0));
+    try std.testing.expectEqual(@as(usize, 4), map.count());
+
+    try std.testing.expect(map.remove(5));
+    try std.testing.expectEqual(@as(?u32, null), map.get(5));
+    map.clearRetainingCapacity();
+    try std.testing.expectEqual(@as(?u32, null), map.get(1_000_000));
+    try map.put(1_000_000, 7);
+    try std.testing.expectEqual(@as(?u32, 7), map.get(1_000_000));
+
+    // Regression: growing toward low IDs when the window is already wider
+    // than the room below it must clamp instead of underflowing chunk_base.
+    var low_map = DenseMap(u32, u32).init(std.testing.allocator);
+    defer low_map.deinit();
+    try low_map.put(300, 1);
+    try low_map.put(5_000, 2);
+    try low_map.put(10, 3);
+    try std.testing.expectEqual(@as(?u32, 1), low_map.get(300));
+    try std.testing.expectEqual(@as(?u32, 2), low_map.get(5_000));
+    try std.testing.expectEqual(@as(?u32, 3), low_map.get(10));
 }
 
 test "DenseMap swap-removes and clears compact values" {
@@ -373,4 +490,28 @@ test "DenseMap swap-removes and clears compact values" {
     try set.put(@enumFromInt(900), {});
     try std.testing.expect(set.contains(@enumFromInt(900)));
     try std.testing.expect(set.remove(@enumFromInt(900)));
+}
+
+test "DenseMapPool reuses released map storage and supports nested acquires" {
+    const TestId = enum(u32) { _ };
+    var pool = DenseMapPool(TestId, u32).init(std.testing.allocator);
+    defer pool.deinit();
+
+    var outer = pool.acquire();
+    try outer.put(@enumFromInt(5_000), 1);
+    const outer_chunks = outer.sparse_chunks.items.len;
+
+    var inner = pool.acquire();
+    try inner.put(@enumFromInt(5_000), 2);
+    try std.testing.expectEqual(@as(?u32, 1), outer.get(@enumFromInt(5_000)));
+    pool.release(&inner);
+    pool.release(&outer);
+
+    var reused = pool.acquire();
+    defer pool.release(&reused);
+    try std.testing.expectEqual(@as(usize, 0), reused.count());
+    try std.testing.expectEqual(@as(?u32, null), reused.get(@enumFromInt(5_000)));
+    try std.testing.expectEqual(outer_chunks, reused.sparse_chunks.items.len);
+    try reused.put(@enumFromInt(5_000), 3);
+    try std.testing.expectEqual(@as(?u32, 3), reused.get(@enumFromInt(5_000)));
 }

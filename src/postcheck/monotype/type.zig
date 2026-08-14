@@ -1176,6 +1176,7 @@ pub const Store = struct {
         open: []const TypeId,
         named_mode: NamedDigestMode,
     ) ?usize {
+        if (open.len == 0) return null;
         if (node != .named) return null;
         const named = node.named;
         if (named.kind == .alias) return null;

@@ -1,11 +1,11 @@
 # META
 ~~~ini
-description=Annotation on a range pins the bound type through Iter(num)
+description=Annotation on a range pins the bound type through Range(num)
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
-r : Iter(U8)
+r : Range(U8)
 r = 0..<10
 ~~~
 # EXPECTED
@@ -25,7 +25,7 @@ EndOfFile,
 	(statements
 		(s-type-anno (name "r")
 			(ty-apply
-				(ty (name "Iter"))
+				(ty (name "Range"))
 				(ty (name "U8"))))
 		(s-decl
 			(p-ident (raw "r"))
@@ -42,20 +42,20 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "range_exclusive") (constraint-fn-var 226)
+		(e-dispatch-call (method "range_exclusive_to") (constraint-fn-var 236)
 			(receiver
 				(e-num (value "0")))
 			(args
 				(e-num (value "10"))))
 		(annotation
-			(ty-apply (name "Iter") (builtin)
+			(ty-apply (name "Range") (builtin)
 				(ty-lookup (name "U8") (builtin))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Iter(U8)")))
+		(patt (type "Range(U8)")))
 	(expressions
-		(expr (type "Iter(U8)"))))
+		(expr (type "Range(U8)"))))
 ~~~

@@ -942,6 +942,23 @@ branch, central dispatch, or recursive parser call. Each path uses one compact,
 source-ordered segment span in dedicated side storage; it does not widen the
 parser's node column.
 
+Uppercase-led expression qualification across trivia was audited separately on
+2026-08-13:
+
+```text
+change: issue 10708 qualified-lookup trivia parsing
+baseline: 7f9b644e33
+target: native x86_64-linux-musl, baseline CPU
+build: zig build run-test-zig-module-parse -Doptimize=ReleaseFast
+baseline kernel sizes: 0x1234e, 0x1172b, 0x11ef0
+target kernel sizes:   0x1234e, 0x1172b, 0x11ef0
+baseline indirect jumps per kernel: 13, 13, 13
+target indirect jumps per kernel:   13, 13, 13
+```
+
+The new qualification-mode branch therefore adds neither an indirect jump nor
+code-size growth to any ReleaseFast expression/statement kernel instantiation.
+
 Nested Roc syntax uses explicit open-syntax state, like simdjson's open
 container depth. This state records concrete syntax currently being parsed:
 open lists, records, strings, blocks, matches, type applications, and similar
@@ -2359,10 +2376,31 @@ REQUIRED/OPTIONAL UNIFICATION, AND THE SINGLE SHARED `Try(_, [FieldMissing])`
 WRAP. CANONICALIZATION MUST NOT RECONSTRUCT A PATH FROM NESTED EXPRESSIONS AND
 MUST NOT DESUGAR IT TO TAG CONSTRUCTORS OR CONTROL FLOW.
 
-THE DOT-CALL SPELLING HAS NO WHITESPACE BETWEEN THE RECEIVER AND DOT, BETWEEN
-THE DOT AND NAME, OR BETWEEN A METHOD NAME AND ITS OPENING PARENTHESIS. TRIVIA
-RECOVERY AND FORMAT NORMALIZATION MUST NEVER BE USED AS A SIGNAL FOR CHOOSING
-FIELD ACCESS VERSUS METHOD DISPATCH.
+THE DOT AND LOWERCASE NAME OF A FIELD ACCESS OR METHOD CALL FORM ONE LEXICAL
+TOKEN. TRIVIA MAY PRECEDE THAT TOKEN; IN PARTICULAR, FORMAT-NORMAL MULTILINE
+CHAINS PUT EACH DOTTED OPERATION ON ITS OWN LINE. A METHOD NAME AND ITS OPENING
+PARENTHESIS HAVE NO INTERVENING TRIVIA. WHETHER TRIVIA PRECEDES THE DOTTED TOKEN
+MUST NEVER BE USED AS A SIGNAL FOR CHOOSING FIELD ACCESS VERSUS METHOD DISPATCH.
+TRIVIA RECOVERY AND FORMAT NORMALIZATION MUST NOT CHANGE THAT CHOICE.
+
+AN ORDINARY EXPRESSION PRIMARY THAT STARTS WITH AN UNPARENTHESIZED UPPERCASE
+IDENTIFIER CONSUMES ITS DOTTED UPPERCASE QUALIFICATION SEGMENTS AND THEN ITS
+FIRST DOTTED LOWERCASE SEGMENT AS ONE QUALIFIED VALUE LOOKUP. THIS IS
+INDEPENDENT OF WHETHER EACH DOTTED SEGMENT'S TOKEN IS THE TRIVIA-SEPARATED OR
+ADJACENT VARIANT. AFTER THE FIRST LOWERCASE SEGMENT, FURTHER DOTTED SEGMENTS ARE
+ORDINARY POSTFIX OPERATIONS ON THE LOOKUP RESULT. PARENTHESES END THE
+QUALIFICATION PRIMARY: `Blub .go()` AND `Blub\n    .go()` LOOK UP `Blub.go`,
+WHILE `(Blub).go()` CALLS `go` AS A METHOD ON THE `Blub` TAG VALUE. THE PARSER
+MAKES THIS DECISION FROM TOKENS ALONE; SCOPE CONTENTS AND TYPES NEVER
+PARTICIPATE.
+
+A PIPE TARGET IS THE EXPLICIT GRAMMAR EXCEPTION TO THAT OWNERSHIP RULE. AN
+ADJACENT DOTTED SEGMENT CONTINUES THE TARGET, WHILE A TRIVIA-SEPARATED DOTTED
+SEGMENT IS A POSTFIX OPERATION ON THE COMPLETED PIPE RESULT. THUS `x |> X.a`
+PIPES INTO THE QUALIFIED TARGET `X.a`, WHILE `x |> X .a` IS `(x |> X).a`. THIS
+LAYOUT DISTINCTION SELECTS WHICH EXPRESSION OWNS THE POSTFIX; THE FOLLOWING
+`NoSpaceOpenRound` STILL SELECTS FIELD ACCESS VERSUS METHOD DISPATCH EXACTLY AS
+IT DOES OUTSIDE A PIPE.
 
 THE PARSER, NOT THE TYPE CHECKER, MAKES THE COMPLETE AND FINAL CHOICE:
 
@@ -3334,6 +3372,15 @@ Stream(item) :: {
     len_if_known : [Known(U64), Unknown],
     step! : () => [One({ item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
 }
+
+Range(num) :: {
+    lower : num,
+    upper : num,
+    step : num,
+    upper_bound : [Exclusive, Inclusive],
+    direction : [To, From],
+    len_if_known : [Known(U64), Unknown],
+}
 ```
 
 Adapters, custom sources, and consumers remain ordinary Roc functions. There is
@@ -3342,6 +3389,24 @@ compiler representation. Internal representation data is attached only after
 checking, when Monotype creates concrete iterator call results.
 
 #### Exact Produced Monotypes
+
+Range syntax produces a reusable `Range(num)`, not an `Iter(num)`. The
+exclusive and inclusive operators dispatch to `num.range_exclusive_to` and
+`num.range_inclusive_to`, respectively. `Range.step_by` replaces the stored
+absolute step with another value of `num`; it does not compose or multiply
+steps. `Range.size_hint` returns the stored exact count when that count fits in
+`U64`, otherwise `Unknown`. `Range.iter` delegates to `num.range_iter` and
+propagates that hint into the resulting iterator.
+
+Reverse iteration is an explicit numeric capability. `Range.iter_rev`
+reconstructs the opposite direction through `num.range_exclusive_from` or
+`num.range_inclusive_from`, reapplies the stored step, and iterates that range.
+Integers and `Dec` provide both `_to` and `_from` constructors. `F32` and `F64`
+provide only `_to`, so their ranges deliberately have no `iter_rev` dispatch.
+`Range.custom` permits third-party number types to construct the same stored
+representation and participate by implementing the explicit range methods;
+range behavior comes only from those explicit methods, and arithmetic method
+names are not consulted.
 
 Checking is the final authority for Roc type correctness. A checked expression
 type, checked procedure interface, dispatch plan, and producer identity are
@@ -5245,6 +5310,17 @@ The kind rules:
   boundary's); lower-ranked entries stay pending for the scope that owns
   them, so nested boundaries fired mid-statement never pin an enclosing
   destructure prematurely.
+  Binding a destructure can also ground a deferred static-dispatch receiver
+  without adding an ordinary equality constraint. Every literal-defaulting
+  boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
+  constraints and every now-runnable dispatch relation alternate to a
+  fixpoint before the boundary gathers any default candidates. Defaulting may
+  only classify a literal after the method signatures selected by all
+  pre-boundary type evidence have propagated through the graph. Each defaulting
+  round runs the same joint quiescence after its commits, with default-origin
+  diagnostics enabled for relations grounded by those commits. Still-flex
+  receivers remain parked, so quiescence does not speculatively select or
+  reject a method.
   Nested sub-patterns (`{ x: Ok(y) }`) check against the binder, so on an
   optional field they see the Try. Exhaustiveness analysis consumes that
   exact checker-judged sub-pattern type for every record column, rather
@@ -8872,13 +8948,31 @@ reaching `assign_boxy_adapt` is never treated as unsupported.
 
 Machine-code backends lower the complete Boxy statement surface to the shared
 `roc_boxy_*` C ABI. Native LLVM links the target's standalone Boxy runtime
-object and an object containing the serialized sidecar. Wasm merges the
-relocatable Boxy runtime object and a static-data module containing that same
-sidecar into either the final surgical-link module or the emitted relocatable
-object. Entrypoint wrappers initialize the embedded runtime before calling Roc
-code. Dictionary worker thunks and erased-callable registrations expose only
-the proc ids, layouts, descriptor sources, and ownership metadata already
-present in LIR; backend code does not derive any of them from procedure bodies.
+object and an object containing the serialized sidecar. Optimized Wasm links
+the relocatable Boxy runtime object and a static-data module containing that
+same sidecar into the emitted app object, then resolves the complete app and
+host link with Wasm LLD. When standalone Wasm dev LIR explicitly requires
+Boxy, the build prepares each distinct host through a content-addressed
+relocatable LLD link with the builtins object and relocatable Boxy runtime
+object. Later builds load that cached prepared-host variant and surgically
+merge only the generated app code and its exact sidecar. Non-Boxy dev builds
+directly use the fast surgical merge because no runtime object needs LLD
+symbol resolution. The cache identity includes every ordered input's bytes;
+changing any input produces a different prepared host. The cached object
+preserves only the platform's original function exports, leaving builtins and
+Boxy runtime functions internal and eligible for dead-code elimination during
+the surgical link. Preparation is serialized per content identity across
+compiler processes and remains available when the checked module cache and
+generated app-object cache are disabled: it is the exact prepared platform
+link output, not a cached app result. The
+standalone Wasm runtime uses direct
+data-symbol relocations rather than PIC GOT
+globals, so the partial link preserves its unresolved sidecar references for
+the later surgical merge. Entrypoint wrappers initialize the embedded runtime
+before calling Roc code. Dictionary worker thunks and erased-callable
+registrations expose only the proc ids, layouts, descriptor sources, and
+ownership metadata already present in LIR; backend code does not derive any of
+them from procedure bodies.
 
 In-process test invocation context is also an explicit execution ABI input. It
 is threaded through ordinary procedures, Boxy dictionary calls and their
@@ -8905,8 +8999,10 @@ Every linked Wasm image has exactly one provider for compiler runtime libcalls.
 Standalone Wasm obtains them from the builtins object and the standalone Boxy
 runtime suppresses its copies. Evaluator Wasm has no companion builtins object,
 so its vtable-mode Boxy runtime exports the small required libcall set itself.
-Runtime-object construction must preserve this ownership split; duplicate weak
-or strong exports are not resolved by link order.
+Runtime-object construction must preserve this ownership split. LLD resolves
+the strong/weak and COMDAT rules while preparing a surgical-link host or
+producing an optimized final image; the surgical linker never guesses among
+duplicate weak or strong definitions and link order never chooses the owner.
 
 Dynamic RC in boxy LIR is explicit. A local whose boxy runtime layout is a
 dynamic value has a pointer-sized committed storage layout, but its nested
@@ -12049,14 +12145,15 @@ and verifies direct and nested vector values in both call directions.
 standalone dev and LLVM programs, optimized compile-time tests, every evaluator
 backend, and the Lambda Mono comparison in sequence. The corpus contains 294
 operation/type cases, fixed boundary values, algebraic properties, and at least
-64 deterministic generated inputs per applicable case. Every shift operation is
-checked directly against the scalar oracle for every count from zero through one
-less than the lane width,
-then all 256 possible `U8` counts are proven equal to their oracle-checked
-modulo-lane-width count. This targeted loop does not repeat count-independent
-cases. Checked memory access pins the final valid 16-byte window, the first
-invalid offset, and `U64.highest`; every public
-lane accessor pins its exact first-invalid index. The corpus is opt-in to
+64 deterministic generated inputs per applicable case. Every generated input
+checks each shift operation directly against the scalar oracle at its generated
+count. A separate pinned vector with populated high and low bits in every lane
+checks each in-range count directly against the oracle, then proves all 256
+possible `U8` counts equal to their oracle-checked modulo-lane-width count. This
+keeps the exhaustive count proof out of the generated-input Cartesian product
+and does not repeat count-independent cases. Checked memory access pins the
+final valid 16-byte window, the first invalid offset, and `U64.highest`; every
+public lane accessor pins its exact first-invalid index. The corpus is opt-in to
 ordinary test enumeration so the normal eval and Lambda Mono steps do not run
 it twice, but MiniCI runs the dedicated no-skip gate explicitly.
 The full Lambda Mono body-lowering differential sweep over the ordinary eval

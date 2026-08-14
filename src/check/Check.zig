@@ -88,6 +88,14 @@ const FunctionEffectResolution = enum {
     }
 };
 
+/// How a type variable occurrence will be represented in the checked type
+/// artifact consumed by later compiler stages.
+const InspectTypePosition = enum(u2) {
+    value,
+    record_row,
+    tag_row,
+};
+
 /// Transient checker input carrying the platform root's requirement surface:
 /// the platform's checked env (read-only; instantiated into the app's store,
 /// never referenced by checker output) and its path for diagnostics.
@@ -163,6 +171,11 @@ return_constraint_frames: std.ArrayListUnmanaged(ReturnConstraintFrame),
 var_map: std.AutoHashMap(Var, Var),
 /// A map from one var to another. Used in instantiation and var copying
 var_set: std.AutoHashMap(Var, void),
+/// Reusable visited set for validating the concrete content of values passed
+/// to `Str.inspect`. Each value is a bitset of occurrence positions because
+/// the same type variable can appear both as a row tail and as an ordinary
+/// value.
+inspect_type_visits: std.AutoHashMap(Var, u8),
 /// Explicit visit stack for `varContainsError`'s heap-worklist type-graph
 /// walk. Entries are base-relative: each entry point operates only on the
 /// slots it pushed and drains back to its entry length, so the walk may nest
@@ -2215,6 +2228,7 @@ fn initAssumePrepared(
         .return_constraints = .empty,
         .return_constraint_frames = .empty,
         .var_set = std.AutoHashMap(Var, void).init(gpa),
+        .inspect_type_visits = std.AutoHashMap(Var, u8).init(gpa),
         .type_visit_stack = .empty,
         .alias_row_frames = .empty,
         .alias_row_names = .empty,
@@ -2393,6 +2407,7 @@ pub fn deinit(self: *Self) void {
     self.return_constraints.deinit(self.gpa);
     self.return_constraint_frames.deinit(self.gpa);
     self.var_set.deinit();
+    self.inspect_type_visits.deinit();
     self.type_visit_stack.deinit(self.gpa);
     self.alias_row_frames.deinit(self.gpa);
     self.alias_row_names.deinit(self.gpa);
@@ -5609,6 +5624,49 @@ fn mkIterVar(self: *Self, item_var: Var, env: *Env, region: Region) Allocator.Er
 
     _ = try self.unify(args[0], item_var, env);
     return iter_var;
+}
+
+/// Instantiate the builtin Num.Range type declaration and bind its numeric parameter.
+fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const range_decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
+        const indices = self.builtin_ctx.builtin_indices orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+            }
+            unreachable;
+        };
+        break :blk try self.copyVar(ModuleEnv.varFrom(indices.range_type), builtin_env, region);
+    } else blk: {
+        const range_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_range) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: Builtin.Num.Range declaration not found while checking Builtin", .{});
+            }
+            unreachable;
+        };
+        break :blk ModuleEnv.varFrom(range_stmt_idx);
+    };
+
+    const range_var = try self.instantiateVar(range_decl_var, env, .{ .explicit = region });
+    const range_content = self.types.resolveVar(range_var).desc.content;
+    const nominal = range_content.unwrapNominalType() orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: Builtin.Num.Range did not instantiate to a nominal type", .{});
+        }
+        unreachable;
+    };
+    const args = self.types.sliceNominalArgs(nominal);
+    if (args.len != 1) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: Builtin.Num.Range expected one type argument, found {d}", .{args.len});
+        }
+        unreachable;
+    }
+
+    _ = try self.unify(args[0], num_var, env);
+    return range_var;
 }
 
 const IteratorStepBuild = struct {
@@ -9556,48 +9614,62 @@ fn checkEffectfulFunctionName(self: *Self, pattern_idx: CIR.Pattern.Idx, expr_id
     } });
 }
 
-fn varHasUnresolvedContent(
+fn varHasUnresolvedInspectContent(
     self: *Self,
     var_: Var,
-    visited: *std.AutoHashMap(Var, void),
+    position: InspectTypePosition,
+    visited: *std.AutoHashMap(Var, u8),
 ) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return false;
-    try visited.put(resolved.var_, {});
+    const position_bit = @as(u8, 1) << @intFromEnum(position);
+    const visit = try visited.getOrPut(resolved.var_);
+    if (!visit.found_existing) visit.value_ptr.* = 0;
+    if (visit.value_ptr.* & position_bit != 0) return false;
+    visit.value_ptr.* |= position_bit;
 
+    // Checked-type publication attaches an explicit close-to-empty default to
+    // each unconstrained row-tail occurrence. Ordinary value occurrences have
+    // no such default, and constrained variables cannot receive a row default.
     return switch (resolved.desc.content) {
-        .flex, .rigid => true,
+        .flex => |flex| switch (position) {
+            .value => true,
+            .record_row, .tag_row => flex.constraints.len() > 0,
+        },
+        .rigid => |rigid| switch (position) {
+            .value => true,
+            .record_row, .tag_row => rigid.constraints.len() > 0,
+        },
         .err, .field_presence => false,
-        .alias => |alias| try self.varHasUnresolvedContent(self.types.getAliasBackingVar(alias), visited),
-        .structure => |flat_type| try self.flatTypeHasUnresolvedContent(flat_type, visited),
+        .alias => |alias| try self.varHasUnresolvedInspectContent(self.types.getAliasBackingVar(alias), position, visited),
+        .structure => |flat_type| try self.flatTypeHasUnresolvedInspectContent(flat_type, visited),
     };
 }
 
-fn flatTypeHasUnresolvedContent(
+fn flatTypeHasUnresolvedInspectContent(
     self: *Self,
     flat_type: FlatType,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *std.AutoHashMap(Var, u8),
 ) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
-        .tuple => |tuple| try self.varsHaveUnresolvedContent(self.types.sliceVars(tuple.elems), visited),
-        .nominal_type => |nominal| try self.varsHaveUnresolvedContent(self.types.sliceNominalArgs(nominal), visited),
+        .tuple => |tuple| try self.varsHaveUnresolvedInspectContent(self.types.sliceVars(tuple.elems), visited),
+        .nominal_type => |nominal| try self.varsHaveUnresolvedInspectContent(self.types.sliceNominalArgs(nominal), visited),
         .fn_pure, .fn_effectful, .fn_unbound => false,
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
             for (fields.items(.presence)) |presence| {
                 {
                     const field_var = presence.typeVar();
-                    if (try self.varHasUnresolvedContent(field_var, visited)) break :blk true;
+                    if (try self.varHasUnresolvedInspectContent(field_var, .value, visited)) break :blk true;
                 }
             }
-            break :blk try self.varHasUnresolvedContent(record.ext, visited);
+            break :blk try self.varHasUnresolvedInspectContent(record.ext, .record_row, visited);
         },
         .record_unbound => |fields_range| blk: {
             const fields = self.types.getRecordFieldsSlice(fields_range);
             for (fields.items(.presence)) |presence| {
                 {
                     const field_var = presence.typeVar();
-                    if (try self.varHasUnresolvedContent(field_var, visited)) break :blk true;
+                    if (try self.varHasUnresolvedInspectContent(field_var, .value, visited)) break :blk true;
                 }
             }
             break :blk false;
@@ -9605,21 +9677,21 @@ fn flatTypeHasUnresolvedContent(
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |args| {
-                if (try self.varsHaveUnresolvedContent(self.types.sliceVars(args), visited)) break :blk true;
+                if (try self.varsHaveUnresolvedInspectContent(self.types.sliceVars(args), visited)) break :blk true;
             }
-            break :blk try self.varHasUnresolvedContent(tag_union.ext, visited);
+            break :blk try self.varHasUnresolvedInspectContent(tag_union.ext, .tag_row, visited);
         },
         .empty_record, .empty_tag_union => false,
     };
 }
 
-fn varsHaveUnresolvedContent(
+fn varsHaveUnresolvedInspectContent(
     self: *Self,
     vars: []const Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *std.AutoHashMap(Var, u8),
 ) std.mem.Allocator.Error!bool {
     for (vars) |var_| {
-        if (try self.varHasUnresolvedContent(var_, visited)) return true;
+        if (try self.varHasUnresolvedInspectContent(var_, .value, visited)) return true;
     }
     return false;
 }
@@ -17292,8 +17364,8 @@ fn validateToInspectMethodTypeForArg(
     const resolved = self.types.resolveVar(arg_var);
 
     if (self.exprIsTopLevelLookup(arg_expr_idx)) {
-        self.var_set.clearRetainingCapacity();
-        if (try self.varHasUnresolvedContent(arg_var, &self.var_set)) {
+        self.inspect_type_visits.clearRetainingCapacity();
+        if (try self.varHasUnresolvedInspectContent(arg_var, .value, &self.inspect_type_visits)) {
             try self.reportPolymorphicValueProblem(arg_var, arg_var, null);
             return;
         }
@@ -19745,8 +19817,8 @@ fn checkBinopExpr(
         },
         .range_exclusive, .range_inclusive => {
             const method_name = switch (binop.op) {
-                .range_exclusive => self.cir.idents.range_exclusive,
-                .range_inclusive => self.cir.idents.range_inclusive,
+                .range_exclusive => self.cir.idents.range_exclusive_to,
+                .range_inclusive => self.cir.idents.range_inclusive_to,
                 .add,
                 .sub,
                 .mul,
@@ -19778,14 +19850,14 @@ fn checkBinopExpr(
 
             const arg_var = rhs_var;
 
-            // Range binops carry the contract `ret = Iter(bound)`: the
-            // operator exists to produce an iterator over the bound type, and
-            // pinning that shape here lets context at the iterator (a `for`
-            // loop's item type, an `Iter(U8)` annotation) flow back into
+            // Range binops carry the contract `ret = Range(bound)`: the
+            // operator exists to produce a reusable range over the bound type,
+            // and pinning that shape here lets context at the range (a `for`
+            // loop's item type, a `Range(U8)` annotation) flow back into
             // still-open numeral bounds before they default.
-            const ret_var = try self.mkIterVar(arg_var, env, expr_region);
+            const ret_var = try self.mkRangeVar(arg_var, env, expr_region);
 
-            // Create the binop static dispatch function: bound.method(bound) -> Iter(bound)
+            // Create the binop static dispatch function: bound.method(bound) -> Range(bound)
             try self.mkBinopConstraint(
                 arg_var,
                 arg_var,
@@ -21210,17 +21282,37 @@ fn checkNominalTypeUsage(
 
 // validate constraints //
 
-/// Check all constraints
-/// We loop here because checkStaticDispatchConstraints and add new regular
-/// constraints.
-fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+/// Drive ordinary constraints and every runnable static-dispatch relation to
+/// quiescence. A semantic judgment can ground a dispatch receiver without
+/// adding an ordinary constraint (record-destructure binder judgment is one
+/// example), so the ordinary queue alone cannot decide whether this fixpoint
+/// has work left.
+///
+/// `anyDeferredDispatchReceiverResolved` keeps inert flex receivers parked:
+/// we only pay for a dispatch pass when at least one queued relation can make
+/// progress. Static dispatch can add ordinary constraints, and checking those
+/// constraints can ground more dispatch receivers, hence the joint loop.
+fn quiesceConstraints(
+    self: *Self,
+    env: *Env,
+    is_numeric_default_pass: bool,
+) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    while (self.constraints.items.items.len > 0) {
-        try self.checkConstraints(env);
-        try self.checkStaticDispatchConstraints(env, false);
+    while (true) {
+        if (self.constraints.items.items.len > 0) {
+            try self.checkConstraints(env);
+        }
+
+        if (!try self.anyDeferredDispatchReceiverResolved(env)) return;
+        try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
     }
+}
+
+/// Check all non-defaulting constraints.
+fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    try self.quiesceConstraints(env, false);
 }
 
 fn poisonRecursiveNonFunctionProcessingDef(
@@ -22287,6 +22379,12 @@ const LiteralDefaultUniverse = union(enum) {
 /// `anyDeferredDispatchReceiverResolved`) and its semantic dispatch-cycle
 /// detection.
 fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUniverse) std.mem.Allocator.Error!void {
+    // Round zero: semantic judgments immediately before this boundary can
+    // ground a deferred receiver without adding an ordinary constraint. Let
+    // every such relation propagate through its callable signature before we
+    // classify any literal as an unconstrained default candidate.
+    try self.quiesceConstraints(env, false);
+
     // Round-scoped scratch. Front-loaded as Check fields; cleared at the start
     // of each step. Safe despite cascade reentrancy: every buffer is cleared
     // before use and never read across the step-4 cascade.
@@ -22459,10 +22557,8 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             }
         }
 
-        // --- 4. Cascade the dispatches the commits unblocked. ---
-        while (try self.anyDeferredDispatchReceiverResolved(env)) {
-            try self.checkStaticDispatchConstraints(env, true);
-        }
+        // --- 4. Cascade the constraints the commits unblocked. ---
+        try self.quiesceConstraints(env, true);
     }
 }
 

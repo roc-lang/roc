@@ -1175,6 +1175,28 @@ test "Monotype gates divergent relations and crash dispatches before type instan
     try expectNotContains(lower_source, "fn relateTagExprAtNode(");
 }
 
+test "Monotype dispatch result modes retain graph-backed result types" {
+    const lower_source = @embedFile("monotype/lower.zig");
+    const parametric_low_level = sourceSliceBetween(
+        lower_source,
+        "if (direct_parametric_low_level) |op| {",
+        "const call_data = if (direct_graph_call)",
+    );
+    try expectContains(parametric_low_level, "applyDispatchResultMode(plan.result_mode, call_expr)");
+    try expectNotContains(parametric_low_level, "activeTypeFromNode(plan_ret_node)");
+
+    const result_mode = sourceSliceBetween(
+        lower_source,
+        "fn applyDispatchResultMode(",
+        "fn typeCellHasBuiltinOwner(",
+    );
+    try expectContains(result_mode, "self.exprTypeCell(expr)");
+    try expectContains(result_mode, "self.addExprWithTypeCell(result_cell");
+    try expectNotContains(result_mode, "Type.TypeId");
+    try expectNotContains(result_mode, "activeTypeFrom");
+    try expectNotContains(result_mode, "primitiveType(.bool)");
+}
+
 test "Monotype const type lookup remains graph-native" {
     const lower_source = @embedFile("monotype/lower.zig");
     try expectContains(lower_source, "fn constUseTypeNode");

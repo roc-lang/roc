@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Range over non-numeric type reports a missing range_exclusive method
+description=Range over non-numeric type reports a missing range_exclusive_to method
 type=snippet
 ~~~
 # SOURCE
@@ -13,17 +13,18 @@ MISSING METHOD - range_missing_method_error.md:1:5:1:14
 
 ┌────────────────┐
 │ MISSING METHOD ├─ The value before this `..<` operator has a type that ─────┐
-└┬───────────────┘  doesn't have a `range_exclusive` method.                  │
+└┬───────────────┘  doesn't have a `range_exclusive_to` method.               │
  │                                                                            │
  │  r = "a"..<"z"                                                             │
  │      ‾‾‾‾‾‾‾‾‾                                                             │
  └───────────────────────────────────────── range_missing_method_error.md:1:5 ┘
 
-    The value's type, which does not have a method named `range_exclusive`, is:
+    The value's type, which does not have a method named `range_exclusive_to`,
+    is:
 
         Str
 
-    Hint: The `..<` operator calls a method named `range_exclusive` on the
+    Hint: The `..<` operator calls a method named `range_exclusive_to` on the
     value preceding it, passing the value after the operator as the one
     argument.
 
@@ -60,7 +61,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Iter(Str)")))
+		(patt (type "Range(Str)")))
 	(expressions
-		(expr (type "Iter(Str)"))))
+		(expr (type "Range(Str)"))))
 ~~~

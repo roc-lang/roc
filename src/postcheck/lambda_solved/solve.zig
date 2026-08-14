@@ -119,6 +119,13 @@ const Solver = struct {
     /// back-references to their existing vars exactly as an eager clone's
     /// per-call memo did. Allocated on a leaf's first expansion.
     leaf_contexts: std.ArrayList(collections.DenseMap(MonoType.TypeId, Type.TypeVarId)),
+    /// Pools for the short-lived maps the solver creates per work item (clone
+    /// memos, visited sets). Their sparse chunks span the large type ID
+    /// domains, so per-item fresh maps would spend most of their time
+    /// allocating and zeroing chunks; pooled maps keep chunks across uses.
+    solved_set_pool: collections.DenseMapPool(Type.TypeVarId, void),
+    mono_set_pool: collections.DenseMapPool(MonoType.TypeId, void),
+    clone_map_pool: collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId),
 
     const FunctionShape = struct {
         args: Type.Span,
@@ -209,10 +216,16 @@ const Solver = struct {
             .contains_callable = masks.contains_callable,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
             .leaf_contexts = .empty,
+            .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
+            .mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator),
+            .clone_map_pool = collections.DenseMapPool(MonoType.TypeId, Type.TypeVarId).init(allocator),
         };
     }
 
     fn deinit(self: *Solver) void {
+        self.clone_map_pool.deinit();
+        self.mono_set_pool.deinit();
+        self.solved_set_pool.deinit();
         for (self.leaf_contexts.items) |*ctx| ctx.deinit();
         self.leaf_contexts.deinit(self.allocator);
         self.shared_clones.deinit();
@@ -1174,8 +1187,8 @@ const Solver = struct {
     }
 
     fn markErasedCallablesReachedByType(self: *Solver, ty: Type.TypeVarId) Allocator.Error!void {
-        var active = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
-        defer active.deinit();
+        var active = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&active);
         try self.markErasedCallablesReachedByTypeInner(ty, &active);
     }
 
@@ -2062,10 +2075,10 @@ const Solver = struct {
     }
 
     fn typeIsProvenUninhabited(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
-        var visiting = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
-        defer visiting.deinit();
-        var mono_visiting = collections.DenseMap(MonoType.TypeId, void).init(self.allocator);
-        defer mono_visiting.deinit();
+        var visiting = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&visiting);
+        var mono_visiting = self.mono_set_pool.acquire();
+        defer self.mono_set_pool.release(&mono_visiting);
         var cycle_hits: u64 = 0;
         return self.typeIsProvenUninhabitedInner(
             ty,
@@ -2082,12 +2095,12 @@ const Solver = struct {
     /// heavily, so allocating and walking fresh maps per expression is pure
     /// post-check waste.
     fn appendExprInhabitanceColumn(self: *Solver) Allocator.Error!void {
-        var visiting = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
-        defer visiting.deinit();
+        var visiting = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&visiting);
         var memo = collections.DenseMap(Type.TypeVarId, bool).init(self.allocator);
         defer memo.deinit();
-        var mono_visiting = collections.DenseMap(MonoType.TypeId, void).init(self.allocator);
-        defer mono_visiting.deinit();
+        var mono_visiting = self.mono_set_pool.acquire();
+        defer self.mono_set_pool.release(&mono_visiting);
         var mono_memo = collections.DenseMap(MonoType.TypeId, bool).init(self.allocator);
         defer mono_memo.deinit();
         var cycle_hits: u64 = 0;
@@ -2394,8 +2407,8 @@ const Solver = struct {
 
     fn solvedTypeDigest(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        var active = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
-        defer active.deinit();
+        var active = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&active);
         try self.writeSolvedTypeDigest(&hasher, ty, &active);
         return .{ .bytes = hasher.finalResult() };
     }
@@ -2650,12 +2663,12 @@ const TypeCloner = struct {
     fn init(solver: *Solver) TypeCloner {
         return .{
             .solver = solver,
-            .map = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
+            .map = solver.clone_map_pool.acquire(),
         };
     }
 
     fn deinit(self: *TypeCloner) void {
-        self.map.deinit();
+        self.solver.clone_map_pool.release(&self.map);
     }
 
     fn lower(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
@@ -2784,8 +2797,8 @@ const TypeCloner = struct {
         owner_def: MonoType.TypeDef,
         backing: MonoType.TypeId,
     ) Allocator.Error!MonoType.TypeId {
-        var seen = collections.DenseMap(MonoType.TypeId, void).init(self.solver.allocator);
-        defer seen.deinit();
+        var seen = self.solver.mono_set_pool.acquire();
+        defer self.solver.mono_set_pool.release(&seen);
         var current = backing;
         while (true) {
             if (seen.contains(current)) return current;
@@ -2848,6 +2861,8 @@ test "lambda solved erased callable digest includes record field default identit
     solver.allocator = gpa;
     solver.program = &program;
     solver.lifted = lifted;
+    solver.solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(gpa);
+    defer solver.solved_set_pool.deinit();
 
     const plain_digest = try solver.solvedTypeDigest(plain_ty);
     const first_default_digest = try solver.solvedTypeDigest(first_default_ty);

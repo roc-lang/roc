@@ -107,7 +107,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "y")))
-			(e-dispatch-call (method "times") (constraint-fn-var 222)
+			(e-dispatch-call (method "times") (constraint-fn-var 232)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

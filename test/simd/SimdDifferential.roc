@@ -2,7 +2,8 @@
 # independent scalar { bits : U128 } oracle. Every invocation checks every
 # supported low-level/type combination over 64 deterministic pseudo-random
 # vectors and the pinned edge corpus. Shift operations additionally cover all
-# 256 possible U8 counts without repeating count-independent operations.
+# 256 possible U8 counts on a pinned vector whose lanes distinguish every
+# effective count, without taking the Cartesian product with generated inputs.
 
 import oracle.SimdOracle
 
@@ -1320,6 +1321,24 @@ SimdDifferential := [].{
 		{}
 	}
 
+	check_shift_count_corpus : {} -> {}
+	check_shift_count_corpus = |_| {
+		# Repeated 0x81 bytes give every signed and unsigned lane width populated
+		# high and low bits, so each effective left, logical-right, and
+		# arithmetic-right count has a distinct result.
+		bits = 0x81818181818181818181818181818181.U128
+		var $count = 0.U64
+		while $count < 256 {
+			count = $count.to_u8_wrap()
+			if count < 64 {
+				check_shift_reference_count(bits, count)
+			} else {}
+			check_shift_masked_count(bits, count)
+			$count = $count + 1
+		}
+		{}
+	}
+
 	check_load_store_out_of_bounds : U128, List(U8), U64 -> {}
 	check_load_store_out_of_bounds = |bits, bytes, index| {
 		match U8x16.load(bytes, index) {
@@ -1653,6 +1672,7 @@ SimdDifferential := [].{
 	run_corpus : U128 -> Bool
 	run_corpus = |seed| {
 		check_edge_corpus({})
+		check_shift_count_corpus({})
 		var $state = seed
 		var $i = 0.U64
 		while $i < 64 {
@@ -1667,18 +1687,6 @@ SimdDifferential := [].{
 			# Count-independent operations, lane access, concat, and memory
 			# operations run once for each generated vector.
 			check_all(a, b, c, a.to_u8_wrap(), bytes)
-			# Shift semantics accept U8, so this loop proves every possible count.
-			# Canonical counts are checked directly against the scalar oracle; all
-			# other counts are proven equal to their checked modulo-width count.
-			var $count = 0.U64
-			while $count < 256 {
-				count = $count.to_u8_wrap()
-				if count < 64 {
-					check_shift_reference_count(a, count)
-				} else {}
-				check_shift_masked_count(a, count)
-				$count = $count + 1
-			}
 			$i = $i + 1
 		}
 		Bool.True

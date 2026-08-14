@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Inclusive range expression dispatches range_inclusive and types as Iter
+description=Inclusive range expression dispatches range_inclusive_to and types as Range
 type=snippet
 ~~~
 # SOURCE
@@ -36,7 +36,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "range_inclusive") (constraint-fn-var 213)
+		(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 223)
 			(receiver
 				(e-num (value "1")))
 			(args
@@ -46,7 +46,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Iter(Dec)")))
+		(patt (type "Range(Dec)")))
 	(expressions
-		(expr (type "Iter(Dec)"))))
+		(expr (type "Range(Dec)"))))
 ~~~

@@ -4284,19 +4284,22 @@ const Subst = struct {
     /// Identity a local's binder-scoped substitution is keyed by: the pattern
     /// binder together with the digest of the local's monomorphic type. Two
     /// locals that share a binder but were monomorphized at different types are
-    /// distinct bindings and must not read one another's substitution.
-    fn binderIdentityOf(program: *const Ast.Program, local: Ast.LocalId) ?BinderIdentity {
+    /// distinct bindings and must not read one another's substitution. Every
+    /// local reference resolves through here, so the digest must come from the
+    /// store's memoized construction (which is why these helpers need the
+    /// program mutable); the uncached walk re-hashes the whole type per call.
+    fn binderIdentityOf(program: *Ast.Program, local: Ast.LocalId) ?BinderIdentity {
         const local_data = program.getLocal(local);
         const binder = local_data.binder orelse return null;
         return .{
             .binder = binder,
-            .digest = program.types.typeDigest(&program.names, local_data.ty),
+            .digest = program.types.typeDigestCached(&program.names, local_data.ty, null),
         };
     }
 
     /// Resolve a local to its known value through the exact-local map, then the
     /// binder-wide map.
-    fn get(self: *const Subst, program: *const Ast.Program, local: Ast.LocalId) ?Value {
+    fn get(self: *const Subst, program: *Ast.Program, local: Ast.LocalId) ?Value {
         if (self.exact.get(local)) |value| return value;
         if (binderIdentityOf(program, local)) |identity| {
             if (self.binder_subst.get(identity)) |value| return value;
@@ -4306,7 +4309,7 @@ const Subst = struct {
 
     /// Resolve a local for emitted code, including the active value of a
     /// binder-equivalent Monotype local id.
-    fn getForClone(self: *const Subst, program: *const Ast.Program, local: Ast.LocalId) ?Value {
+    fn getForClone(self: *const Subst, program: *Ast.Program, local: Ast.LocalId) ?Value {
         if (self.exact.get(local)) |value| return value;
         if (binderIdentityOf(program, local)) |identity| {
             if (self.binder_aliases.get(identity)) |value| return value;
@@ -4327,7 +4330,7 @@ const Subst = struct {
         return self.changes.items.len;
     }
 
-    fn put(self: *Subst, program: *const Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
+    fn put(self: *Subst, program: *Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
         const previous = self.exact.get(local);
         try self.changes.append(self.allocator, .{
             .key = .{ .local = local },
@@ -4366,7 +4369,7 @@ const Subst = struct {
         try self.binder_aliases.put(identity, value);
     }
 
-    fn putLocalAlias(self: *Subst, program: *const Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
+    fn putLocalAlias(self: *Subst, program: *Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
         const identity = binderIdentityOf(program, local) orelse return;
         try self.putAlias(identity, value);
     }
@@ -4396,7 +4399,7 @@ const Subst = struct {
     /// binder-carrying local; the identity is returned whether or not a
     /// pre-loop entry existed, because the slot's reassigned copies resolve
     /// through it either way.
-    fn dropCarriedBinder(self: *Subst, program: *const Ast.Program, initial: Ast.ExprId) Allocator.Error!?BinderIdentity {
+    fn dropCarriedBinder(self: *Subst, program: *Ast.Program, initial: Ast.ExprId) Allocator.Error!?BinderIdentity {
         const local = localExpr(program, initial) orelse return null;
         const identity = binderIdentityOf(program, local) orelse return null;
         if (self.binder_subst.get(identity)) |previous| {
@@ -10070,7 +10073,7 @@ const Cloner = struct {
                 &self.pass.program.types,
                 &self.pass.program.names,
             ),
-            .callable_abi = self.pass.program.types.typeDigest(&self.pass.program.names, callable.ty),
+            .callable_abi = self.pass.program.types.typeDigestCached(&self.pass.program.names, callable.ty, null),
             .capture_abi = self.callableCaptureAbiDigest(source_captures, callable.captures),
         };
         if (self.pass.callable_workers.get(worker_key)) |worker_fn_id| {
@@ -10212,7 +10215,7 @@ const Cloner = struct {
                 Common.invariant("rewritten callable had no value for a source capture slot");
             std.mem.writeInt(u32, &word, @intFromEnum(id), .little);
             hasher.update(&word);
-            const digest = self.pass.program.types.typeDigest(&self.pass.program.names, valueType(self.pass.program, value));
+            const digest = self.pass.program.types.typeDigestCached(&self.pass.program.names, valueType(self.pass.program, value), null);
             hasher.update(&digest.bytes);
         }
         return .{ .bytes = hasher.finalResult() };
@@ -12167,11 +12170,13 @@ fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
 /// Whether two Monotype ids denote the same type. The type store is not
 /// interned: each specialization materializes its own ids, so structurally
 /// identical types reached from different specializations (a call site and
-/// the callee's own body) carry different ids and compare by digest.
-fn sameType(program: *const Ast.Program, lhs: Type.TypeId, rhs: Type.TypeId) bool {
+/// the callee's own body) carry different ids and compare by digest. Both
+/// sides digest through the store's memoized construction, which is why this
+/// probe (and everything that reaches it) takes the program mutable.
+fn sameType(program: *Ast.Program, lhs: Type.TypeId, rhs: Type.TypeId) bool {
     if (lhs == rhs) return true;
-    const lhs_digest = program.types.typeDigest(&program.names, lhs);
-    const rhs_digest = program.types.typeDigest(&program.names, rhs);
+    const lhs_digest = program.types.typeDigestCached(&program.names, lhs, null);
+    const rhs_digest = program.types.typeDigestCached(&program.names, rhs, null);
     return std.mem.eql(u8, &lhs_digest.bytes, &rhs_digest.bytes);
 }
 
@@ -12198,7 +12203,7 @@ fn typeTagByName(
     return null;
 }
 
-fn patternEql(program: *const Ast.Program, lhs: CallPattern, rhs: CallPattern) bool {
+fn patternEql(program: *Ast.Program, lhs: CallPattern, rhs: CallPattern) bool {
     if (lhs.args.len != rhs.args.len) return false;
     for (lhs.args, rhs.args) |lhs_arg, rhs_arg| {
         if (!shapeEql(program, lhs_arg, rhs_arg)) return false;
@@ -12206,7 +12211,7 @@ fn patternEql(program: *const Ast.Program, lhs: CallPattern, rhs: CallPattern) b
     return true;
 }
 
-fn shapeEql(program: *const Ast.Program, lhs: Shape, rhs: Shape) bool {
+fn shapeEql(program: *Ast.Program, lhs: Shape, rhs: Shape) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
         .any => |lhs_ty| sameType(program, lhs_ty, rhs.any),
@@ -12267,7 +12272,7 @@ fn shapeEql(program: *const Ast.Program, lhs: Shape, rhs: Shape) bool {
 /// This reads the values the caller already cloned and takes no `Cloner`, so
 /// deciding a specialization cannot clone a source argument a second time and a
 /// rejected specialization costs nothing and leaves nothing behind.
-fn callPatternMatchesValues(program: *const Ast.Program, pattern: CallPattern, values: []const Value) bool {
+fn callPatternMatchesValues(program: *Ast.Program, pattern: CallPattern, values: []const Value) bool {
     if (pattern.args.len != values.len) Common.invariant("call-pattern arity differed from direct call arity");
     for (pattern.args, values) |shape, value| {
         if (!shapeMatchesValue(program, shape, value)) return false;
@@ -12275,7 +12280,7 @@ fn callPatternMatchesValues(program: *const Ast.Program, pattern: CallPattern, v
     return true;
 }
 
-fn shapeMatchesValue(program: *const Ast.Program, shape: Shape, value: Value) bool {
+fn shapeMatchesValue(program: *Ast.Program, shape: Shape, value: Value) bool {
     const structural_value = if (value == .static_data_candidate) value.static_data_candidate.runtime.* else value;
     return switch (shape) {
         .any => true,

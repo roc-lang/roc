@@ -497,10 +497,15 @@ pub const InstGraph = struct {
     /// program for each function request.
     direct_request_selection_spans: std.ArrayList(DirectRequestSelectionSpan),
     direct_request_selections: std.ArrayList(DirectRequestSelection),
-    /// Exact producer roots that meet at one runtime-value boundary. The
-    /// roots must converge through their own producer completions and the
-    /// immediate-child interners; validating this flat pair never traverses
-    /// descendants below either root or relates either root to a checked one.
+    /// Scratch epoch marks for `compactRowParents`, indexed by node id. A
+    /// slot carrying the current epoch means its class root is already kept
+    /// in the list being compacted.
+    row_parent_seen_epochs: std.ArrayList(u64),
+    row_parent_seen_epoch: u64,
+    /// Pool for the visited sets the graph's remaining exact walks create per
+    /// query. Fresh maps re-allocate and re-zero sparse chunks across the node
+    /// ID domain on every walk; pooled maps keep their chunks.
+    node_set_pool: collections.DenseMapPool(NodeId, void),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -545,6 +550,9 @@ pub const InstGraph = struct {
             .function_result_relations = .empty,
             .direct_request_selection_spans = .empty,
             .direct_request_selections = .empty,
+            .row_parent_seen_epochs = .empty,
+            .row_parent_seen_epoch = 0,
+            .node_set_pool = collections.DenseMapPool(NodeId, void).init(allocator),
         };
         return graph;
     }
@@ -590,6 +598,8 @@ pub const InstGraph = struct {
         self.direct_request_selection_spans.deinit(allocator);
         self.request_checked_sources.deinit(allocator);
         self.function_result_relations.deinit(allocator);
+        self.row_parent_seen_epochs.deinit(allocator);
+        self.node_set_pool.deinit();
         self.row_parents.deinit();
         self.permanently_inhabited_nodes.deinit();
         self.row_exts.deinit(allocator);
@@ -1440,8 +1450,8 @@ pub const InstGraph = struct {
             self.countDiagnostic("permanent_inhabitedness_hits");
             return false;
         }
-        var visiting = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer visiting.deinit();
+        var visiting = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&visiting);
         const may_finalize = try self.mayFinalizeAsUninhabitedInner(root, &visiting);
         if (!may_finalize) try self.permanently_inhabited_nodes.put(root, {});
         return may_finalize;
@@ -1508,8 +1518,8 @@ pub const InstGraph = struct {
     /// while lowering a branch; it never manufactures a durable type view.
     pub fn finalizesAsUninhabited(self: *InstGraph, raw_node: NodeId) Allocator.Error!bool {
         self.requireFrozenRelations();
-        var visiting = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer visiting.deinit();
+        var visiting = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&visiting);
         return try self.finalizesAsUninhabitedInner(self.find(raw_node), &visiting);
     }
 
@@ -2497,14 +2507,60 @@ pub const InstGraph = struct {
         }
     }
 
+    /// Short parent lists de-duplicate exactly on insert; above this length
+    /// the insert-time scan (with a `find` per element) would make merging
+    /// two classes quadratic in their parent counts, so longer lists append
+    /// unconditionally and compact when they would otherwise grow.
+    const row_parent_exact_scan_max = 16;
+
     fn addRowParent(self: *InstGraph, ext: NodeId, row: NodeId) Allocator.Error!void {
         const entry = try self.row_parents.getOrPut(self.find(ext));
         if (!entry.found_existing) entry.value_ptr.* = .empty;
+        const list = entry.value_ptr;
         const row_root = self.find(row);
-        for (entry.value_ptr.items) |existing| {
-            if (self.find(existing) == row_root) return;
+        if (list.items.len <= row_parent_exact_scan_max) {
+            for (list.items) |existing| {
+                if (self.find(existing) == row_root) return;
+            }
+        } else if (list.items.len == list.capacity) {
+            // Duplicate class entries are tolerated by every reader (each
+            // resolves entries through `find`), so de-duplication can wait
+            // until the list is about to grow. Capacity doubles between
+            // compactions, keeping the total compaction work linear in the
+            // number of inserts.
+            try self.compactRowParents(list);
+            // Guarantee at least as many appends as surviving entries before
+            // the next compaction, so compaction cost amortizes to O(1) per
+            // insert even when it reclaims almost nothing.
+            try list.ensureUnusedCapacity(self.allocator, @max(list.items.len, row_parent_exact_scan_max));
+            for (list.items) |existing| {
+                if (existing == row_root) return;
+            }
         }
-        try entry.value_ptr.append(self.allocator, row_root);
+        try list.append(self.allocator, row_root);
+    }
+
+    /// Rewrite every entry to its current class root and drop duplicate
+    /// classes, preserving order of first occurrence.
+    fn compactRowParents(self: *InstGraph, list: *std.ArrayList(NodeId)) Allocator.Error!void {
+        const epochs_len = self.nodes.items.len;
+        if (self.row_parent_seen_epochs.items.len < epochs_len) {
+            const old_len = self.row_parent_seen_epochs.items.len;
+            try self.row_parent_seen_epochs.resize(self.allocator, epochs_len);
+            @memset(self.row_parent_seen_epochs.items[old_len..], 0);
+        }
+        self.row_parent_seen_epoch += 1;
+        const epoch = self.row_parent_seen_epoch;
+        var write: usize = 0;
+        for (list.items) |existing| {
+            const existing_root = self.find(existing);
+            const slot = &self.row_parent_seen_epochs.items[@intFromEnum(existing_root)];
+            if (slot.* == epoch) continue;
+            slot.* = epoch;
+            list.items[write] = existing_root;
+            write += 1;
+        }
+        list.shrinkRetainingCapacity(write);
     }
 
     fn removeRowParent(self: *InstGraph, ext: NodeId, row: NodeId) void {
@@ -2604,8 +2660,8 @@ pub const InstGraph = struct {
     fn typeIsResolvedInner(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
-        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
+        var seen = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&seen);
         try pending.append(self.allocator, root);
         while (pending.pop()) |raw_node| {
             const node = self.find(raw_node);
@@ -2682,8 +2738,8 @@ pub const InstGraph = struct {
     }
 
     fn rowExtensionChainResolved(self: *InstGraph, raw_root: NodeId, kind: RowKind) Allocator.Error!bool {
-        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
+        var seen = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&seen);
         var current = self.find(raw_root);
         while (true) {
             const entry = try seen.getOrPut(current);
@@ -4008,8 +4064,8 @@ pub const InstGraph = struct {
         defer tags.deinit(self.allocator);
         try tags.appendSlice(self.allocator, row.tags);
 
-        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
+        var seen = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&seen);
         try seen.put(root, {});
 
         var ext = self.find(row.ext);
@@ -4061,8 +4117,8 @@ pub const InstGraph = struct {
         defer fields.deinit(self.allocator);
         try fields.appendSlice(self.allocator, row.fields);
 
-        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
-        defer seen.deinit();
+        var seen = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&seen);
         try seen.put(root, {});
 
         var ext = self.find(row.ext);

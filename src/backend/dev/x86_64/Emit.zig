@@ -837,6 +837,52 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
         }
 
+        /// MOVSX r32, BYTE [base + disp32] (sign-extend byte to 32 bits)
+        /// 32-bit result auto-zero-extends to 64 bits on x86_64; no REX.W needed.
+        pub fn movsxBRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
+            // REX prefix only for extended registers (R8-R15), never REX.W
+            const r: u1 = dst.rexR();
+            const b: u1 = base.rexB();
+            if (r == 1 or b == 1) {
+                try self.buf.append(self.allocator, rex(0, r, 0, b));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBE); // MOVSX r32, r/m8
+
+            const base_enc = base.enc();
+            if (base_enc == 4) {
+                // RSP/R12 - needs SIB byte
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
+                try self.buf.append(self.allocator, 0x24);
+            } else {
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
+            }
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
+        /// MOVSX r32, WORD [base + disp32] (sign-extend word to 32 bits)
+        /// 32-bit result auto-zero-extends to 64 bits on x86_64; no REX.W needed.
+        pub fn movsxWRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
+            // REX prefix only for extended registers (R8-R15), never REX.W
+            const r: u1 = dst.rexR();
+            const b: u1 = base.rexB();
+            if (r == 1 or b == 1) {
+                try self.buf.append(self.allocator, rex(0, r, 0, b));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBF); // MOVSX r32, r/m16
+
+            const base_enc = base.enc();
+            if (base_enc == 4) {
+                // RSP/R12 - needs SIB byte
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
+                try self.buf.append(self.allocator, 0x24);
+            } else {
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
+            }
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
         /// LEA reg, [base + disp32] (load effective address)
         /// LEA reg, [RIP + disp32]—compute PC-relative address
         /// disp is relative to the end of this instruction (7 bytes total).

@@ -3476,12 +3476,42 @@ fn processDocsSnapshot(
         module_docs_list.deinit(allocator);
     }
 
+    var public_type_projections = std.ArrayList(docs_mod.extract.PublicTypeProjection).empty;
+    defer public_type_projections.deinit(allocator);
+    {
+        const routing_modules = try build_env.getCompiledPublicModules(allocator);
+        defer allocator.free(routing_modules);
+        for (routing_modules) |mod| {
+            const source_decl = mod.public_type_decl orelse continue;
+            const artifact = mod.semantic.checked_artifact orelse unreachable;
+            try public_type_projections.append(allocator, .{
+                .public_name = mod.name,
+                .package_name = build_env.displayNameForPackage(mod.package_name),
+                .source_env = mod.semantic.env,
+                .source_identity = &artifact.key.module_identity_hash,
+                .source_decl = source_decl,
+                .public_order = mod.public_order,
+            });
+        }
+    }
+    docs_mod.extract.sortPublicTypeProjections(public_type_projections.items);
+
     for (modules) |mod| {
         // Docs show display names (root alias, or "app"/"module" for the
         // root itself), never internal identity keys (URLs, absolute paths).
         const display_pkg_name = build_env.displayNameForPackage(mod.package_name);
         var mod_docs = docs_mod.extract.extractModuleDocsWithOptions(allocator, mod.semantic.env, display_pkg_name, mod.path, .{
             .exposed_names = mod.docs_exposed_names,
+            .public_type = if (mod.public_type_decl) |source_decl| .{
+                .public_name = mod.name,
+                .package_name = display_pkg_name,
+                .source_env = mod.semantic.env,
+                .source_identity = &(mod.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_decl = source_decl,
+                .public_order = mod.public_order,
+            } else null,
+            .public_types = public_type_projections.items,
+            .checked_artifact = mod.semantic.checked_artifact,
         }) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;

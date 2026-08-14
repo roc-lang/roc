@@ -20637,13 +20637,20 @@ const BodyContext = struct {
                     request_args[0],
                 );
             },
-            .iter_exclusive_range,
-            .numeric_range_exclusive,
-            .iter_inclusive_range,
-            .numeric_range_inclusive,
-            .numeric_to,
-            .numeric_until,
-            => {
+            .range_iter => {
+                if (request_args.len != 1) {
+                    Common.invariant("Range.iter reached Monotype with an unexpected arity");
+                }
+                const range = switch (self.graph.content(request_args[0])) {
+                    .named => |named| named,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("Range.iter received a non-nominal exact range operand"),
+                };
+                if (range.args.len != 1) {
+                    Common.invariant("Range.iter exact operand did not carry one item argument");
+                }
+                return try self.generatedIteratorNode(public_fn.ret, range.args[0]);
+            },
+            .numeric_range_delegate, .numeric_to, .numeric_until => {
                 if (request_args.len == 0) {
                     Common.invariant("range-backed iterator producer reached Monotype without an item argument");
                 }
@@ -28152,10 +28159,8 @@ const BodyContext = struct {
             .list_iter,
             .list_iter_rev,
             .iter_single,
-            .iter_exclusive_range,
-            .iter_inclusive_range,
-            .numeric_range_exclusive,
-            .numeric_range_inclusive,
+            .range_iter,
+            .numeric_range_delegate,
             .numeric_to,
             .numeric_until,
             .iter_keep_if,
@@ -36191,10 +36196,9 @@ const BodyContext = struct {
                 .op = op,
                 .args = args,
             } });
-            return try self.applyDispatchResultMode(
-                plan.result_mode,
-                call_expr,
-            );
+            // Result modes consume the graph-backed call type directly because
+            // the return node may still be an unresolved open row here.
+            return try self.applyDispatchResultMode(plan.result_mode, call_expr);
         }
         const lowered_call = if (direct_graph_call)
             try self.lowerResolvedDirectDispatchAtNode(plan, resolved, callable_node, dispatch_request.dispatcher, self, pre_lowered.items)
@@ -36204,12 +36208,7 @@ const BodyContext = struct {
             lowered_call.ret_ty,
             lowered_call.data,
         );
-        return switch (plan.result_mode) {
-            .value, .parser_for, .encoder_for, .map, .map_effectful => call_expr,
-            .equality, .hash => blk: {
-                break :blk try self.applyDispatchResultMode(plan.result_mode, call_expr);
-            },
-        };
+        return try self.applyDispatchResultMode(plan.result_mode, call_expr);
     }
 
     fn lowerClosedDirectLowLevelDispatch(
@@ -36321,13 +36320,32 @@ const BodyContext = struct {
             .map => expr,
             .map_effectful => expr,
             .equality => |eq| if (eq.negated) blk: {
-                break :blk try self.addExprWithTypeCell(self.exprTypeCell(expr), .{ .low_level = .{
+                const result_cell = self.exprTypeCell(expr);
+                if (!self.typeCellHasBuiltinOwner(result_cell, .bool)) {
+                    Common.invariant("checked equality dispatch returned a non-Bool value");
+                }
+                break :blk try self.addExprWithTypeCell(result_cell, .{ .low_level = .{
                     .op = .bool_not,
                     .args = try self.addExprSpan(&.{expr}),
                 } });
             } else expr,
             // A resolved `to_hash` dispatch returns its Hasher result directly.
             .hash => expr,
+        };
+    }
+
+    fn typeCellHasBuiltinOwner(
+        self: *BodyContext,
+        cell: DraftTypeCell,
+        expected: static_dispatch.BuiltinOwner,
+    ) bool {
+        const owner = switch (cell) {
+            .graph_node => |node| self.methodOwnerFromNode(node),
+            .sealed => |ty| methodOwnerFromType(&self.builder.program.types, ty),
+        } orelse return false;
+        return switch (owner) {
+            .builtin => |actual| actual == expected,
+            .nominal => false,
         };
     }
 

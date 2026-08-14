@@ -1238,7 +1238,7 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "Json", "Encoding", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Crypto" };
+    const builtin_types = [_][]const u8{ "Bool", "Json", "Encoding", "Try", "Dict", "Set", "Str", "Iter", "Range", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Crypto" };
     for (builtin_types) |type_name_text| {
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
@@ -1727,21 +1727,34 @@ fn typeStatementForPath(self: *const Self, path: AST.DeclIndex.TypePathIdx) ?Sta
 }
 
 /// The qualifier chain joined with dots, e.g. tokens for `Api` and
-/// `ThingAlias` produce the ident `Api.ThingAlias`. Null when a qualifier
-/// token is not an identifier.
+/// `ThingAlias` produce the ident `Api.ThingAlias`.
 fn joinedQualifierIdent(
     self: *Self,
     qualifier_tokens: []const u32,
-) std.mem.Allocator.Error!?Ident.Idx {
+) std.mem.Allocator.Error!Ident.Idx {
+    std.debug.assert(qualifier_tokens.len > 0);
+    const final_ident = self.parse_ir.tokens.resolveIdentifier(@intCast(qualifier_tokens[qualifier_tokens.len - 1])) orelse unreachable;
+    return self.joinedQualifiedIdent(qualifier_tokens[0 .. qualifier_tokens.len - 1], final_ident);
+}
+
+/// A complete qualified name assembled from parser-produced identifier tokens.
+/// Source trivia between the segments is intentionally not part of its identity.
+fn joinedQualifiedIdent(
+    self: *Self,
+    qualifier_tokens: []const u32,
+    final_ident: Ident.Idx,
+) std.mem.Allocator.Error!Ident.Idx {
     const bytes_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(bytes_top);
-    var first = true;
-    for (qualifier_tokens) |raw_tok| {
-        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse return null;
-        if (!first) try self.scratchAppendByte('.');
+
+    for (qualifier_tokens, 0..) |raw_tok, index| {
+        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse unreachable;
+        if (index > 0) try self.scratchAppendByte('.');
         try self.scratchAppendSlice(self.env.getIdent(segment));
-        first = false;
     }
+
+    if (qualifier_tokens.len > 0) try self.scratchAppendByte('.');
+    try self.scratchAppendSlice(self.env.getIdent(final_ident));
     return try self.env.insertIdent(base.Ident.for_text(self.scratchBytesFrom(bytes_top)));
 }
 
@@ -7616,7 +7629,7 @@ fn canonicalizeIdentExpr(
     if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
         const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
         if (qualifier_tokens.len > 0) {
-            if (try self.canonicalizeQualifiedIdentExpr(e, ident, region, qualifier_tokens)) |expr| {
+            if (try self.canonicalizeQualifiedIdentExpr(ident, region, qualifier_tokens)) |expr| {
                 return expr;
             }
         }
@@ -7633,18 +7646,11 @@ fn canonicalizeIdentExpr(
 
 fn canonicalizeQualifiedIdentExpr(
     self: *Self,
-    e: @TypeOf(@as(AST.Expr, undefined).ident),
     ident: Ident.Idx,
     region: Region,
     qualifier_tokens: []const u32,
 ) std.mem.Allocator.Error!?CanonicalizedExpr {
-    const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotLowerIdent};
-    const qualified_name_text = self.parse_ir.resolveQualifiedName(
-        e.qualifiers,
-        e.token,
-        &strip_tokens,
-    );
-    const qualified_ident = try self.env.insertIdent(base.Ident.for_text(qualified_name_text));
+    const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
 
     switch (self.scopeLookup(.ident, qualified_ident)) {
         .found => |found_pattern_idx| {
@@ -7665,7 +7671,7 @@ fn canonicalizeQualifiedIdentExpr(
         }
         if (self.typeStatementForPath(owner_path)) |type_stmt_idx| {
             if (self.env.store.getStatement(type_stmt_idx) == .s_alias_decl) {
-                const type_ident = (try self.joinedQualifierIdent(qualifier_tokens)) orelse qualified_ident;
+                const type_ident = try self.joinedQualifierIdent(qualifier_tokens);
                 return try self.canonicalizedLocalAssociatedLookup(
                     @intFromEnum(type_stmt_idx),
                     type_ident,
@@ -7704,13 +7710,12 @@ fn canonicalizeQualifiedIdentExpr(
             // A multi-segment chain rooted at a type resolved no associated
             // item; the report names the full path rather than collapsing it
             // to its first segment.
-            if (try self.joinedQualifierIdent(qualifier_tokens)) |parent_ident| {
-                return try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
-                    .parent_name = parent_ident,
-                    .nested_name = ident,
-                    .region = region,
-                } });
-            }
+            const parent_ident = try self.joinedQualifierIdent(qualifier_tokens);
+            return try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
+                .parent_name = parent_ident,
+                .nested_name = ident,
+                .region = region,
+            } });
         }
 
         return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
@@ -7933,7 +7938,7 @@ fn canonicalizeModuleQualifiedIdent(
                     if (module_env.getExposedTypeNodeIndexById(type_qname_ident)) |type_node_idx| {
                         const type_stmt: Statement.Idx = @enumFromInt(type_node_idx);
                         if (module_env.store.getStatement(type_stmt) == .s_alias_decl) {
-                            const type_ident = (try self.joinedQualifierIdent(qualifier_tokens)) orelse module_name;
+                            const type_ident = try self.joinedQualifierIdent(qualifier_tokens);
                             return try self.canonicalizedExternalAssociatedLookup(
                                 import_idx,
                                 type_node_idx,
@@ -14308,7 +14313,6 @@ fn finishNominalConstructionForType(
     }
 
     const qualifier_toks = self.parse_ir.store.tokenSlice(type_expr.qualifiers);
-    const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
     const first_tok_idx = qualifier_toks[0];
     const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse {
         return CanonicalizedExpr{
@@ -14319,12 +14323,18 @@ fn finishNominalConstructionForType(
         };
     };
     const is_imported = (try self.scopeLookupOrPrepareModule(first_tok_ident)) != null;
-    const full_type_name = self.parse_ir.resolveQualifiedName(type_expr.qualifiers, type_expr.token, &strip_tokens);
-
+    const final_type_ident = self.parse_ir.tokens.resolveIdentifier(type_expr.token) orelse {
+        return CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } }),
+            .free_vars = DataSpan.empty(),
+        };
+    };
+    const full_type_ident = try self.joinedQualifiedIdent(qualifier_toks, final_type_ident);
     if (self.lookupAvailableModuleEnv(first_tok_ident)) |auto_imported_type| {
-        if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_tok_ident, full_type_name)) |target_node_idx| {
+        if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_tok_ident, self.env.getIdent(full_type_ident))) |target_node_idx| {
             const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type);
-            const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
 
             if (try self.validateImportedNominalTagTarget(Expr.Idx, auto_imported_type.env, target_node_idx, first_tok_ident, full_type_ident, type_region)) |malformed_idx| {
                 return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
@@ -14343,7 +14353,6 @@ fn finishNominalConstructionForType(
     }
 
     if (!is_imported) {
-        const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
         const nominal_type_decl_stmt_idx = (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) orelse {
             return CanonicalizedExpr{
                 .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
@@ -14397,11 +14406,7 @@ fn finishNominalConstructionForType(
         };
     };
 
-    const first_alias_len = self.env.getIdent(first_tok_ident).len;
-    std.debug.assert(full_type_name.len > first_alias_len);
-    std.debug.assert(full_type_name[first_alias_len] == '.');
-    const type_name = full_type_name[first_alias_len + 1 ..];
-    const type_name_ident = try self.env.insertIdent(base.Ident.for_text(type_name));
+    const type_name_ident = try self.joinedQualifiedIdent(qualifier_toks[1..], final_type_ident);
     const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
         return CanonicalizedExpr{
             .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
@@ -14412,7 +14417,7 @@ fn finishNominalConstructionForType(
             .free_vars = DataSpan.empty(),
         };
     };
-    const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, type_name)) orelse {
+    const target_node_idx = (try self.lookupImportedExposedTypeNode(imported_type.env, self.env.getIdent(type_name_ident))) orelse {
         return CanonicalizedExpr{
             .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                 .module_name = module_name,
@@ -14691,7 +14696,6 @@ fn finishTagExprWithArgs(
         // If it does, look up the type in that module; otherwise, look up locally.
 
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
-        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
 
         // Check if the first qualifier is an imported name
         const first_tok_idx = qualifier_toks[0];
@@ -14703,13 +14707,7 @@ fn finishTagExprWithArgs(
         const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
-        const full_type_name = self.parse_ir.resolveQualifiedName(
-            e.qualifiers,
-            qualifier_toks[qualifier_toks.len - 1],
-            &strip_tokens,
-        );
-        const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
-
+        const full_type_ident = try self.joinedQualifierIdent(qualifier_toks);
         if (!is_imported) {
             // Local reference: look up the type locally
             if (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) |nominal_type_decl_stmt_idx| {
@@ -14753,7 +14751,7 @@ fn finishTagExprWithArgs(
             }
 
             if (self.lookupAvailableModuleEnv(first_tok_ident)) |auto_imported_type| {
-                if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_tok_ident, full_type_name)) |target_node_idx| {
+                if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_tok_ident, self.env.getIdent(full_type_ident))) |target_node_idx| {
                     const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type);
 
                     if (try self.validateImportedNominalTagTarget(Expr.Idx, auto_imported_type.env, target_node_idx, first_tok_ident, full_type_ident, type_tok_region)) |malformed_idx| {
@@ -14803,13 +14801,9 @@ fn finishTagExprWithArgs(
             } }), .free_vars = DataSpan.empty() };
         };
 
-        // Build the type name from all qualifiers except the first (module name)
-        // For Imported.Foo.Bar.X: qualifiers=[Imported, Foo, Bar], type="Foo.Bar"
-        const first_alias_len = self.env.getIdent(first_tok_ident).len;
-        std.debug.assert(full_type_name.len > first_alias_len);
-        std.debug.assert(full_type_name[first_alias_len] == '.');
-        const type_name = full_type_name[first_alias_len + 1 ..];
-        const type_name_ident = try self.env.insertIdent(base.Ident.for_text(type_name));
+        // For Imported.Foo.Bar.X, qualifiers=[Imported, Foo, Bar], so the
+        // imported nominal type is the structural qualifier suffix Foo.Bar.
+        const type_name_ident = try self.joinedQualifierIdent(qualifier_toks[1..]);
 
         const imported_type = self.lookupAvailableModuleEnv(module_name) orelse {
             return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_from_missing_module = .{
@@ -14821,7 +14815,7 @@ fn finishTagExprWithArgs(
 
         // Look up the target node index in the imported file's exposed_nodes
         const target_node_idx = blk: {
-            const other_module_node_id = (try self.lookupImportedExposedTypeNode(imported_type.env, type_name)) orelse {
+            const other_module_node_id = (try self.lookupImportedExposedTypeNode(imported_type.env, self.env.getIdent(type_name_ident))) orelse {
                 // Type is not exposed by the imported file
                 return CanonicalizedExpr{ .idx = try self.env.pushMalformed(Expr.Idx, CIR.Diagnostic{ .type_not_exposed = .{
                     .module_name = module_name,
