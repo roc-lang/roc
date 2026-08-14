@@ -10488,8 +10488,8 @@ only retains and releases descriptor references. Calls that entered old code
 before the swap keep executing old code safely while new entrypoint calls use
 the new image.
 
-The compiler parent process is the sole owner of publication and shared-memory image-byte
-reclamation. It keeps unbounded process-local lists of descriptor offsets,
+The compiler parent process is the sole owner of committing candidate descriptor offsets
+and shared-memory image-byte reclamation. It keeps unbounded process-local lists of descriptor offsets,
 reclaimed descriptor slots, and reclaimed image regions. After a rebuild commits
 a descriptor, after the host acknowledges, and before choosing storage for
 another rebuild, the parent sweeps all known descriptors. The current descriptor
