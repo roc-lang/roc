@@ -3540,6 +3540,15 @@ request. Checking makes this distinction once from checked data. Monotype must
 not inspect the root payload to rediscover it, and the presence of a concrete
 recipe never permits a completed runtime value to be replaced.
 
+Materializing any argument, result, or dispatcher root obeys the same authority
+rule. A produced root selection is the completed value and is returned
+atomically. A request root selection is only input to construction: lowering
+omits that root selection and builds the checker-authored immediate compound
+from its selected children. An open identity request therefore cannot hide a
+tuple, function, record, tag row, or nominal recipe that a contextual operand
+needs in order to lower. This choice depends only on the recorded authority,
+never on inspecting the selected node's shape.
+
 The checker compiles the immutable slot and direct-child structure once for
 each distinct tuple of checker-authored call inputs and interns it behind a
 dense `SpecializationCallShapeId`. Each expression edge stores only that dense
@@ -3604,6 +3613,13 @@ atomic exact node; conversion never enters its backing or asks whether an
 enclosing recipe contains one. This prevents checked recipes from escaping as
 runtime values without adding a repeated whole-graph interning pass.
 
+Transparent alias nodes belong only to the immutable checked-base domain where
+source identity is still useful. Every non-checked-base occurrence instantiates
+the alias backing directly; it does not allocate a named alias shell,
+instantiate its arguments, and then discard that work while selecting the
+backing. A checker-authored alias-backing edge therefore becomes an identity
+edge once it reaches a runtime occurrence.
+
 When one generated nominal's public arguments mention another generated
 nominal, checking stores their construction slots in dependency order. Lowering
 makes one forward pass over those slots. It must not retry unresolved slots to
@@ -3658,6 +3674,14 @@ which receives that list can later complete `forward_item` from the exact item
 its body produces. Both operands share the one cell through the call's flat
 selection span. If no runtime edge ever selects the cell, normal Monotype
 sealing consumes its checker-recorded language default.
+
+Presence in a selection column is not itself production evidence. A selection
+with request authority remains only producer input and cannot suppress the
+checker-authored operation that constructs that slot. Generated-slot scheduling
+therefore skips a slot only after it carries produced authority; when a producer
+returns, its exact generated nominal atomically replaces the prior request
+selection. This is the same request-to-produced transition used by ordinary
+operands, not a generated-type exception.
 
 A compound formed around such a forward cell is not repeatedly constructed,
 re-interned after child completion, or eagerly propagated through its
@@ -4318,6 +4342,16 @@ restoration preserves it. A call site may author `exact_destination`; a lambda,
 closure, or stored callable used merely as a value authors `produced`. Lowering
 never derives this direction from the outer container or silently replaces an
 already-authored relation.
+
+Materializing an independently produced call always supplies that result
+request to the checker-authored selection plan, but the request never becomes
+the call's output by being present. If the plan has already recorded a produced
+result root, lowering consumes that root atomically. Otherwise it omits the
+request root itself while constructing only the requested descendants and the
+body later completes the separate forward output cell. Compile-time constant
+restoration observes the same separation: it lowers the constant body from its
+request recipe, then completes the stable result cell with the body's exact
+output.
 
 Checked output records exact-result production for local procedures as well as
 top-level and imported procedures. Direct calls, first-class uses, recursive

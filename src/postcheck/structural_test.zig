@@ -466,6 +466,10 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(lower_source, "sameFieldHandleType");
 
     try expectNotContains(lower_source, "selectExprRepresentationAtNode");
+    try expectContains(lower_source, ".checked_base, .request_occurrence => false");
+    try expectContains(lower_source, ".concrete_checked, .produced_occurrence => true");
+    try expectContains(lower_source, ".alias => |alias| if (self.instantiation.authority == .checked_base)");
+    try expectContains(lower_source, ".{ .existing = try self.instNode(alias.backing) }");
 
     const call_selection = sourceSliceBetween(
         lower_source,
@@ -568,7 +572,8 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn materializeCallSelectionEdgeSubtree(",
         "fn checkedCallRootEdge(",
     );
-    try expectContains(selection_edge_application, "self.materializeCheckedCallNode(");
+    try expectContains(selection_edge_application, "self.materializeExactCheckedCallNode(");
+    try expectContains(selection_edge_application, ".request,");
     const checked_materialization = sourceSliceBetween(
         lower_source,
         "fn materializeCheckedCallNode(",
@@ -599,6 +604,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "// Checking stores generated slots after every generated dependency.",
         "// Result-context identities may themselves be supplied by an operand",
     );
+    try expectContains(generated_call_slots, "if (existing.authority == .produced) continue;");
     try expectContains(generated_call_slots, "generatedNominalFromSelectedArguments(\n                plan,\n                slot,\n                selections.items,");
     try expectNotContains(generated_call_slots, "instantiateProducedOccurrenceWithSelections(slot.checked");
 
@@ -667,13 +673,36 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn exactMethodTargetNode(",
     );
     try expectContains(target_request, "callsite.args,\n            available,");
-    try expectContains(target_request, "const include_result = result_relation == .exact_destination;");
+    try expectNotContains(target_request, "include_result");
     try expectContains(target_request, "const checked_target = try self.persistentCheckedBaseNode(lookup.target.callable_ty);");
     try expectContains(target_request, "const plan = lookup.view.templates.specializationCallPlanForCallable(lookup.target.callable_ty)");
-    try expectContains(target_request, ".{\n                .node = dispatcher_edge.produced,\n                .authority = dispatcher_edge.authority,\n            },\n            callsite.ret,");
+    try expectContains(target_request, ".{\n                .node = dispatcher_edge.produced,\n                .authority = dispatcher_edge.authority,\n            },\n            callsite.ret,\n            .request,");
     try expectNotContains(target_request, "active_checked_selections");
     try expectNotContains(target_request, "methodTargetSignatureNode(lookup)");
     try expectNotContains(target_request, "const checked_target = try self.instNode(");
+
+    const exact_call_materialization = sourceSliceBetween(
+        lower_source,
+        "fn materializeExactCheckedCallNode(",
+        "fn exactCheckedCallNodeAuthority(",
+    );
+    try expectContains(exact_call_materialization, "if (root_selection.authority == .produced)");
+    try expectContains(exact_call_materialization, "return self.constructorRepresentationNode(root_selection.produced)");
+
+    const iterator_producer_selection = sourceSliceBetween(
+        lower_source,
+        "fn applyIteratorProducerToSelectionSpan(",
+        "fn lowerCall(self:",
+    );
+    try expectContains(iterator_producer_selection, "selected.authority == .produced");
+
+    const const_eval_restoration = sourceSliceBetween(
+        lower_source,
+        "fn lowerConstEvalTemplateUseAtNode(",
+        "fn restoreConstNode(",
+    );
+    try expectContains(const_eval_restoration, "DraftTypeCell.fromGraphNode(request_node),\n            destination_relation,");
+    try expectContains(const_eval_restoration, "completeProducedSelection(result_node, restored_node)");
 }
 
 test "contextual call bindings read their exact source without a plan scan" {
@@ -1008,9 +1037,11 @@ test "Monotype producers never infer uninhabited results from checked recipes" {
     );
 
     try expectContains(branch, ".exact_request => if (try self.nodeIsProvenUninhabited(");
-    try expectContains(branch, ".checked_mapping, .exact_producer => try self.lowerExpr(body)");
+    try expectContains(branch, ".checked_mapping => try self.lowerExpr(body)");
+    try expectContains(branch, ".exact_producer => try self.lowerExprAtTypeCellWithDemandAndRelation(");
     try expectContains(block, ".exact_request => if (try self.nodeIsProvenUninhabited(");
-    try expectContains(block, ".checked_mapping, .exact_producer => try self.lowerExpr(block.final_expr)");
+    try expectContains(block, ".checked_mapping => try self.lowerExpr(block.final_expr)");
+    try expectContains(block, ".exact_producer => try self.lowerExprAtTypeCellWithDemandAndRelation(");
 }
 
 test "Monotype direct uninhabited calls lower argument through graph cell" {
@@ -1418,7 +1449,7 @@ test "Monotype call requests retain defaults in explicit forward cells" {
         "fn selectionEdgeArgumentNode(",
         "fn materializeCurrentCallRequest(",
     );
-    try expectContains(requested_argument, ".request_occurrence");
+    try expectContains(requested_argument, "materializeCallSelectionEdgeSubtree(");
     try expectNotContains(requested_argument, ".produced_occurrence");
 
     const refreshed_request = sourceSliceBetween(
@@ -1426,7 +1457,7 @@ test "Monotype call requests retain defaults in explicit forward cells" {
         "fn materializeCallRequestFromSelections(",
         "fn materializeCallSelectionSpan(",
     );
-    try expectContains(refreshed_request, ".request_occurrence");
+    try expectContains(refreshed_request, "materializeCallSelectionEdgeSubtree(");
     try expectNotContains(refreshed_request, ".produced_occurrence");
 
     const completed_request = sourceSliceBetween(
@@ -1434,7 +1465,8 @@ test "Monotype call requests retain defaults in explicit forward cells" {
         "fn materializeCallSelectionSpan(",
         "fn iteratorProducerOperandsReady(",
     );
-    try expectContains(completed_request, ".request_occurrence");
+    try expectContains(completed_request, "materializeExactCheckedCallNode(");
+    try expectContains(completed_request, ".request,");
     try expectNotContains(completed_request, ".produced_occurrence");
 
     const representation_selection = sourceSliceBetween(
