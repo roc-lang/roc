@@ -3728,7 +3728,7 @@ value carries the identity produced by the `iter_from_step` call within that
 body.
 
 The recursive callback interface must name `Iter(item)` before the callback
-body can be lowered. Checking therefore publishes three flat facts: the outer
+body can be lowered. Checking therefore records three flat relations: the outer
 result constructs from the callback's explicit item selection; each generated
 iterator produced by the callback reserves that same declaration-plus-item
 construction; and every recursive `rest` consumer in the callback points
@@ -3749,7 +3749,7 @@ compared for generated equality, or used by a later stage. Reaching relation
 freeze with an unstamped reservation is a compiler invariant violation; freeze
 never completes one.
 
-A recursive `rest` consumer follows its checker-published direct edge to that
+A recursive `rest` consumer follows its checker-recorded direct edge to that
 early reservation or completed content address. It does not independently ask
 a containment question, copy the outer result's private backing, or construct
 or hash equivalent inputs twice. The reservation does not turn the enclosing
@@ -4504,7 +4504,7 @@ root distinct, even when another request has identical immediate type
 children. Exact produced function types are interned as soon as their immediate
 children are known. A contextual function value that independently produces
 its body first creates a fresh request root around those exact child nodes, so
-two use sites can never attach different directional facts to a shared type
+two use sites can never attach different directional entries to a shared type
 node. An exact destination is already the occurrence-owned root supplied by
 its parent and remains that root; creating another wrapper would duplicate the
 request rather than isolate it.

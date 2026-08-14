@@ -802,7 +802,7 @@ pub const InstGraph = struct {
     /// Register the complete specialization meaning of one function request
     /// at the construction site that owns it. A checked source, positional
     /// authorities, result authority, and flat selection edges are one
-    /// indivisible protocol; later code must never recover an omitted member
+    /// indivisible protocol; later code must never infer an omitted member
     /// from the function graph.
     pub fn registerSpecializationRequest(
         self: *InstGraph,
@@ -2201,7 +2201,7 @@ pub const InstGraph = struct {
                 // argument cells was selected. Its original interner bucket
                 // is then keyed by the old argument roots. Re-register the
                 // finished identity under its current immediate arguments so
-                // later compound producers consume one canonical child.
+                // later compound producers consume one interned child.
                 if (self.existingNamedIdentity(named)) |existing| break :blk existing;
                 try self.registerNamedIdentity(node, named);
                 break :blk node;

@@ -4518,7 +4518,7 @@ const Builder = struct {
             },
         };
 
-        var canonical_pending: ?Common.StaticDataId = null;
+        var representative_pending: ?Common.StaticDataId = null;
         var final_id: ?Common.StaticDataId = null;
         for (self.static_data_uses.items[0..index], 0..) |prior, prior_index| {
             const prior_final = prior.final_id orelse continue;
@@ -4533,7 +4533,7 @@ const Builder = struct {
                 .graph_node => Common.invariant("finalized static-data use retained a graph-local type"),
             };
             if (!try self.program.types.typeEql(&self.program.names, prior_ty, exact_ty)) continue;
-            canonical_pending = @enumFromInt(@as(u32, @intCast(prior_index)));
+            representative_pending = @enumFromInt(@as(u32, @intCast(prior_index)));
             final_id = prior_final;
             break;
         }
@@ -4549,7 +4549,7 @@ const Builder = struct {
         };
         self.static_data_uses.items[index].key = sealed_key;
         self.static_data_uses.items[index].final_id = resolved;
-        try self.static_data_ids.put(sealed_key, canonical_pending orelse pending);
+        try self.static_data_ids.put(sealed_key, representative_pending orelse pending);
         return resolved;
     }
 
@@ -16164,8 +16164,8 @@ const BodyContext = struct {
         const source = try self.graph.functionRequestRoot(raw_function);
         // A call schedule may already have authored exact positional producer
         // edges on this request. The surrounding callable-value context adds
-        // only the missing metadata; it must not replace those producer facts
-        // with a uniform request vector.
+        // only the missing positional authority; it must not replace those
+        // producer selections with a uniform request vector.
         if (self.graph.functionArgumentAuthorities(source) != null) return source;
         const function = try self.graph.functionNodes(source);
         const request = if (result_relation == .exact_destination)
@@ -28208,9 +28208,9 @@ const BodyContext = struct {
             changed = true;
         }
         if (!changed) return null;
-        // Reservations are producer outputs for every checker-published
-        // identity-preserving edge in the recursive callback interface. Apply
-        // those flat edges now, before the callback consumes its request.
+        // Reservations supply every checker-recorded identity-preserving edge
+        // in the recursive callback interface. Apply those flat edges now,
+        // before the callback consumes its request.
         try self.applyCallOperationSources(plan, &selections);
         try self.applyCallConsumerBindingsToSelections(
             plan.selection_bindings,
@@ -35161,7 +35161,7 @@ const BodyContext = struct {
         if (destination_relation == .public_request) {
             // The public nominal supplies its immediate backing request, but
             // the backing expression still owns the exact value it produces.
-            // Rebuild only this nominal layer around that produced child so a
+            // Construct only this nominal layer around that produced child so a
             // generated identity encountered inside the backing is retained.
             const checked_node = try self.lowerExprTypeNode(checked_expr);
             const nominal_node = try self.explicitNominalConstructorNode(checked_node, expected_node);

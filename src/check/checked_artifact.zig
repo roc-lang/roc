@@ -20951,14 +20951,14 @@ fn specializationRecordFieldSelectionsReady(
     return true;
 }
 
-/// Publish the exact evaluation roots for a record's contextual fields. A
+/// Record the exact evaluation roots for a record's contextual fields. A
 /// completed producer makes only its checker-authored slot occurrences
 /// available. Requested fields whose bindings are then ready extend that set.
 /// If a dependency component has no incoming exact edge, only a field with no
 /// consumer bindings may be its explicit checked-root seed. A cycle made only
 /// of consumer bindings is missing a producer; selecting one member by source
-/// order would be a heuristic and would silently discard an exact enclosing
-/// input.
+/// order has no checker-authored direction and would silently discard an exact
+/// enclosing input.
 fn finalizeSpecializationRecordFieldSchedule(
     allocator: Allocator,
     shape: SpecializationCallShape,
