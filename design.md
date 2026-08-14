@@ -3997,6 +3997,13 @@ polymorphic occurrences therefore cannot disagree: specializing
 lowered. An ordinary compound is constructed once from those exact children,
 and an exact generated nominal is returned atomically rather than opened as a
 graph to scan.
+An occurrence-local request is only context for lowering that occurrence; it is
+never installed as the flat slot's selected identity. Multiple result or
+argument paths may name the same checked slot while owning different request
+cells or shells. The checker-designated seed for the dependency component is
+the only occurrence that may publish request authority. Otherwise the slot is
+constructed once from its explicit flat inputs. Only a completed runtime
+producer may replace that request with its exact output atomically.
 Two different exact values for the same checked slot must select the same exact
 type at that call boundary; they are never resolved by last-write-wins
 substitution or a later whole-type merge.

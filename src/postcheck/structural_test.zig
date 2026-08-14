@@ -2398,6 +2398,11 @@ test "Monotype generated-private call requests retain separate request nodes" {
         "fn lowerIteratorDispatch(",
         "fn iteratorMethodLookup(",
     );
+    const call_selection = sourceSliceBetween(
+        lower_source,
+        "fn refineDirectSelectionsForCall(",
+        "fn applyCallOperationSources(",
+    );
 
     try expectContains(full_request, "directSelectionsForCall(");
     try expectContains(full_request, "materializeCallSelectionSpan(");
@@ -2412,6 +2417,9 @@ test "Monotype generated-private call requests retain separate request nodes" {
     try expectNotContains(lower_source, "checkedMonoRequestNode");
     try expectNotContains(lower_source, "functionRequestFromProducedArgumentsWithGeneratedInterner");
     try expectNotContains(lower_source, "instantiateIteratorPlanCallNodeFromCaller");
+    try expectContains(call_selection, "const request_seed = occurrence_root.step == .argument");
+    try expectContains(call_selection, "self.callArgumentUsesCheckedSeed(plan, occurrence_root.index)");
+    try expectContains(call_selection, "slot.exact_identity and\n                    candidate.authority == .request and\n                    !request_seed");
 }
 
 test "Monotype lowering never reconciles complete runtime type graphs" {

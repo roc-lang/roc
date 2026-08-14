@@ -27190,12 +27190,22 @@ const BodyContext = struct {
                     .authority = root_authority,
                 });
                 // This edge reads the exact subtree returned by the completed
-                // runtime producer. An exact compound is therefore selected
-                // atomically here just like an exact leaf; only a slot with no
-                // completed occurrence is constructed from its explicit flat
-                // dependencies below.
+                // runtime producer. An exact produced compound is therefore
+                // selected atomically here just like an exact leaf. An exact
+                // request is only one occurrence's lowering context, not the
+                // slot's exact value. Only the checker-designated seed for a
+                // dependency component may publish request authority; every
+                // other request is constructed from the call's flat inputs.
                 if (slot.kind == .generated_nominal and
                     !self.graph.nodeIsGeneratedNominal(candidate.node)) continue;
+                const request_seed = occurrence_root.step == .argument and
+                    self.callArgumentUsesCheckedSeed(plan, occurrence_root.index);
+                if (slot.exact_identity and
+                    candidate.authority == .request and
+                    !request_seed)
+                {
+                    continue;
+                }
                 try self.recordCallSelection(selections, .{
                     .base = base_id,
                     .produced = candidate.node,
