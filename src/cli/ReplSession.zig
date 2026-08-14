@@ -3076,7 +3076,7 @@ test "Repl - List.append" {
 }
 
 test "Repl - range_to" {
-    try expectInterpreter("Iter.fold(1..=3, [], |acc, item| acc.append(item))", "[1.0, 2.0, 3.0]");
+    try expectInterpreter("Iter.fold((1..=3).iter(), [], |acc, item| acc.append(item))", "[1.0, 2.0, 3.0]");
 }
 
 test "Repl - list_sort_with lengths" {

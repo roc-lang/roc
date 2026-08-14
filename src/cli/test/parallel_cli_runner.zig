@@ -6904,7 +6904,7 @@ fn customIssue10015UrlRandomTestSize(
         \\    always_five = Random.static(5)
         \\
         \\    Iter.fold(
-        \\        0..<1,
+        \\        (0..<1).iter(),
         \\        True,
         \\        |all_passed, seed_num| {
         \\            generation = Random.step(Random.seed(seed_num), always_five)

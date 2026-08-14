@@ -3045,99 +3045,6 @@ Builtin :: [].{
 					},
 			)
 
-		## Iterator over `num` values from `start` up to but not including `end`.
-		## Returns an empty iterator if `start >= end`. Generic sugar for the
-		## `range_exclusive` method that `start..<end` dispatches on the bound type.
-		range_exclusive : num, num -> Iter(num)
-			where [num.range_exclusive : num, num -> Iter(num)]
-		range_exclusive = |start, end| start.range_exclusive(end)
-
-		## Iterator over `num` values from `start` up to and including `end`.
-		## Returns an empty iterator if `start > end`. Generic sugar for the
-		## `range_inclusive` method that `start..=end` dispatches on the bound type.
-		range_inclusive : num, num -> Iter(num)
-			where [num.range_inclusive : num, num -> Iter(num)]
-		range_inclusive = |start, end| start.range_inclusive(end)
-
-		# Flat step loop behind the numeric types' `range_exclusive` methods. The
-		# self-recursive `rest` builds the same monomorphic range iterator (never
-		# a distinct chain component), so an adapter wrapping a range carries its
-		# state by value. `len_if_known`, when `Known`, is the exact remaining
-		# yield count: each step decrements it and the final `range_done()` is
-		# `Known(0)`.
-		exclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
-			where [
-				num.is_lt : num, num -> Bool,
-				num.plus_try : num, num -> Try(num, [Overflow]),
-				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-			]
-		exclusive_range = |start, end, len_if_known|
-			iter_from_step(
-				len_if_known,
-				||
-					if start < end {
-						One({
-							item: start,
-							rest: match start.plus_try(1) {
-								Ok(next) => if next < end {
-									Iter.exclusive_range(
-										next,
-										end,
-										match len_if_known {
-											Known(l) => Known(l - 1)
-											Unknown => Unknown
-										},
-									)
-								} else {
-									range_done()
-								}
-								Err(Overflow) => range_done()
-							},
-						})
-					} else {
-						Done
-					},
-			)
-
-		# Flat step loop behind the numeric types' `range_inclusive` methods; same
-		# `len_if_known` contract as `exclusive_range`. Each step yields `start`
-		# and continues from `start + 1`; the final value is yielded before `Done`,
-		# including when stepping past it would overflow (that step reaches
-		# `range_done()` after the yield rather than before it).
-		inclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
-			where [
-				num.is_lte : num, num -> Bool,
-				num.plus_try : num, num -> Try(num, [Overflow]),
-				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-			]
-		inclusive_range = |start, end, len_if_known|
-			iter_from_step(
-				len_if_known,
-				||
-					if start <= end {
-						One({
-							item: start,
-							rest: match start.plus_try(1) {
-								Ok(next) => if next <= end {
-									Iter.inclusive_range(
-										next,
-										end,
-										match len_if_known {
-											Known(l) => Known(l - 1)
-											Unknown => Unknown
-										},
-									)
-								} else {
-									range_done()
-								}
-								Err(Overflow) => range_done()
-							},
-						})
-					} else {
-						Done
-					},
-			)
-
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
@@ -3333,7 +3240,7 @@ Builtin :: [].{
 		## the rest, so a single-item iterator returns that item without calling
 		## either method, and `default` does not need to be an identity value for `plus`.
 		## ```roc
-		## expect (1..=4).sum() == 10
+		## expect (1..=4).iter().sum() == 10
 		##
 		## expect [42.I64].iter().sum() == 42
 		##
@@ -3358,7 +3265,7 @@ Builtin :: [].{
 		## not for `times`, so there is no value it could return for an empty iterator
 		## that would keep `product` consistent with multiplication.
 		## ```roc
-		## expect (1..=4).product() == Ok(24)
+		## expect (1..=4).iter().product() == Ok(24)
 		##
 		## expect [42.I64].iter().product() == Ok(42)
 		##
@@ -6473,6 +6380,91 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
+
+		## A reusable numeric range description. Range syntax constructs one of these
+		## values; call [Range.iter] to iterate it, or use it directly in a `for` loop.
+		##
+		## `lower` anchors the range's members even when `direction` is `From`. The
+		## `upper_bound` therefore always applies to `upper`, and [Range.step_by]
+		## replaces `step` rather than composing it with the previous step.
+		Range(num) :: {
+			lower : num,
+			upper : num,
+			step : num,
+			upper_bound : [Exclusive, Inclusive],
+			direction : [To, From],
+			len_if_known : [Known(U64), Unknown],
+		}.{
+
+			## Construct a range description for a builtin or third-party numeric type.
+			## A `Known` length must be the exact number of values the range will yield.
+			custom : {
+				lower : num,
+				upper : num,
+				step : num,
+				upper_bound : [Exclusive, Inclusive],
+				direction : [To, From],
+				len_if_known : [Known(U64), Unknown],
+			} -> Range(num)
+			custom = |config|
+				Range.{
+					lower: config.lower,
+					upper: config.upper,
+					step: config.step,
+					upper_bound: config.upper_bound,
+					direction: config.direction,
+					len_if_known: config.len_if_known,
+				}
+
+			## Return the exact range length when it fits in a [U64].
+			size_hint : Range(num) -> [Known(U64), Unknown]
+			size_hint = |Range.{ len_if_known, .. }| len_if_known
+
+			## Replace this range's absolute step. The new step is expressed in the
+			## range's numeric type so third-party numbers need no [U64] conversion.
+			step_by : Range(num), num -> Range(num)
+				where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
+			step_by = |Range.{ lower, upper, upper_bound, direction, .. }, new_step|
+				Range.{
+					lower,
+					upper,
+					step: new_step,
+					upper_bound,
+					direction,
+					len_if_known: lower.range_len_if_known(upper, new_step, upper_bound),
+				}
+
+			## Iterate this range in its stored direction.
+			iter : Range(num) -> Iter(num)
+				where [num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)]
+			iter = |Range.{ lower, upper, step, upper_bound, direction, len_if_known }|
+				lower.range_iter(upper, step, upper_bound, direction, len_if_known)
+
+			## Iterate this range in the opposite direction. Reversal reconstructs the
+			## corresponding range through the numeric type's `_to`/`_from` methods,
+			## which means a type can support forward ranges without claiming that its
+			## ranges are exactly reversible.
+			iter_rev : Range(num) -> Iter(num)
+				where [
+					num.range_exclusive_to : num, num -> Range(num),
+					num.range_inclusive_to : num, num -> Range(num),
+					num.range_exclusive_from : num, num -> Range(num),
+					num.range_inclusive_from : num, num -> Range(num),
+					num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown],
+					num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num),
+				]
+			iter_rev = |Range.{ lower, upper, step, upper_bound, direction, .. }| {
+				reversed = match (direction, upper_bound) {
+					(To, Exclusive) => upper.range_exclusive_from(lower)
+					(To, Inclusive) => upper.range_inclusive_from(lower)
+					(From, Exclusive) => lower.range_exclusive_to(upper)
+					(From, Inclusive) => lower.range_inclusive_to(upper)
+				}
+
+				Range.iter(Range.step_by(reversed, step))
+			}
+		}
+
 		Numeral :: [
 			Literal(
 				{ # TODO get rid of this wrapper once we have nominal records"
@@ -6683,31 +6675,28 @@ Builtin :: [].{
 			plus_try : U8, U8 -> Try(U8, [Overflow, ..])
 			plus_try = |a, b| unsigned_plus_try(U8.highest, a, b)
 
-			## Iterator over [U8] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U8] values.
-			range_exclusive : U8, U8 -> Iter(U8)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : U8, U8, U8, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U8, U8, U8, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U8)
+			range_iter = range_iter_standard
 
-			## Iterator over [U8] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U8] values.
-			range_inclusive : U8, U8 -> Iter(U8)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : U8, U8 -> Range(U8)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U8, U8 -> Range(U8)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U8, U8 -> Range(U8)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U8, U8 -> Range(U8)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U8] values, saturating at [U8.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -7367,31 +7356,28 @@ Builtin :: [].{
 			plus_try : I8, I8 -> Try(I8, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(I8.lowest, I8.highest, 0, a, b)
 
-			## Iterator over [I8] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I8] values.
-			range_exclusive : I8, I8 -> Iter(I8)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : I8, I8, I8, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I8, I8, I8, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I8)
+			range_iter = range_iter_standard
 
-			## Iterator over [I8] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I8] values.
-			range_inclusive : I8, I8 -> Iter(I8)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : I8, I8 -> Range(I8)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I8, I8 -> Range(I8)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I8, I8 -> Range(I8)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I8, I8 -> Range(I8)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I8] values, saturating at [I8.highest] or [I8.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -8123,31 +8109,28 @@ Builtin :: [].{
 			plus_try : U16, U16 -> Try(U16, [Overflow, ..])
 			plus_try = |a, b| unsigned_plus_try(U16.highest, a, b)
 
-			## Iterator over [U16] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U16] values.
-			range_exclusive : U16, U16 -> Iter(U16)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : U16, U16, U16, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U16, U16, U16, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U16)
+			range_iter = range_iter_standard
 
-			## Iterator over [U16] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U16] values.
-			range_inclusive : U16, U16 -> Iter(U16)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : U16, U16 -> Range(U16)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U16, U16 -> Range(U16)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U16, U16 -> Range(U16)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U16, U16 -> Range(U16)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U16] values, saturating at [U16.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -8866,31 +8849,28 @@ Builtin :: [].{
 			plus_try : I16, I16 -> Try(I16, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(I16.lowest, I16.highest, 0, a, b)
 
-			## Iterator over [I16] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I16] values.
-			range_exclusive : I16, I16 -> Iter(I16)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : I16, I16, I16, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I16, I16, I16, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I16)
+			range_iter = range_iter_standard
 
-			## Iterator over [I16] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I16] values.
-			range_inclusive : I16, I16 -> Iter(I16)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : I16, I16 -> Range(I16)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I16, I16 -> Range(I16)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I16, I16 -> Range(I16)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I16, I16 -> Range(I16)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I16] values, saturating at [I16.highest] or [I16.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -9663,31 +9643,28 @@ Builtin :: [].{
 			plus_try : U32, U32 -> Try(U32, [Overflow, ..])
 			plus_try = |a, b| unsigned_plus_try(U32.highest, a, b)
 
-			## Iterator over [U32] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U32] values.
-			range_exclusive : U32, U32 -> Iter(U32)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : U32, U32, U32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U32, U32, U32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U32)
+			range_iter = range_iter_standard
 
-			## Iterator over [U32] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U32] values.
-			range_inclusive : U32, U32 -> Iter(U32)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : U32, U32 -> Range(U32)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U32, U32 -> Range(U32)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U32, U32 -> Range(U32)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U32, U32 -> Range(U32)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U32] values, saturating at [U32.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -10438,31 +10415,28 @@ Builtin :: [].{
 			plus_try : I32, I32 -> Try(I32, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(I32.lowest, I32.highest, 0, a, b)
 
-			## Iterator over [I32] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I32] values.
-			range_exclusive : I32, I32 -> Iter(I32)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : I32, I32, I32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I32, I32, I32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I32)
+			range_iter = range_iter_standard
 
-			## Iterator over [I32] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I32] values.
-			range_inclusive : I32, I32 -> Iter(I32)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : I32, I32 -> Range(I32)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I32, I32 -> Range(I32)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I32, I32 -> Range(I32)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I32, I32 -> Range(I32)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I32] values, saturating at [I32.highest] or [I32.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -11252,34 +11226,28 @@ Builtin :: [].{
 			plus_try : U64, U64 -> Try(U64, [Overflow, ..])
 			plus_try = |a, b| unsigned_plus_try(U64.highest, a, b)
 
-			## Iterator over [U64] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U64] values.
-			range_exclusive : U64, U64 -> Iter(U64)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end))
-				else
+			range_len_if_known : U64, U64, U64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper), step, upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U64, U64, U64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U64)
+			range_iter = range_iter_standard
 
-			## Iterator over [U64] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U64] values.
-			range_inclusive : U64, U64 -> Iter(U64)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).plus_try(1) {
-						Ok(len) => Known(len)
-						Err(Overflow) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : U64, U64 -> Range(U64)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U64, U64 -> Range(U64)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U64, U64 -> Range(U64)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U64, U64 -> Range(U64)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U64] values, saturating at [U64.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -12093,34 +12061,28 @@ Builtin :: [].{
 			plus_try : I64, I64 -> Try(I64, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(I64.lowest, I64.highest, 0, a, b)
 
-			## Iterator over [I64] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I64] values.
-			range_exclusive : I64, I64 -> Iter(I64)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end))
-				else
+			range_len_if_known : I64, I64, I64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper), step.abs_diff(0), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I64, I64, I64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I64)
+			range_iter = range_iter_standard
 
-			## Iterator over [I64] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I64] values.
-			range_inclusive : I64, I64 -> Iter(I64)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).plus_try(1) {
-						Ok(len) => Known(len)
-						Err(Overflow) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : I64, I64 -> Range(I64)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I64, I64 -> Range(I64)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I64, I64 -> Range(I64)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I64, I64 -> Range(I64)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I64] values, saturating at [I64.highest] or [I64.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -12932,40 +12894,28 @@ Builtin :: [].{
 			plus_try : U128, U128 -> Try(U128, [Overflow, ..])
 			plus_try = |a, b| unsigned_plus_try(U128.highest, a, b)
 
-			## Iterator over [U128] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U128] values.
-			range_exclusive : U128, U128 -> Iter(U128)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => Known(steps)
-						Err(OutOfRange) => Unknown
-					}
-				else
+			range_len_if_known : U128, U128, U128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u128(lower.abs_diff(upper), step, upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U128, U128, U128, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U128)
+			range_iter = range_iter_standard
 
-			## Iterator over [U128] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U128] values.
-			range_inclusive : U128, U128 -> Iter(U128)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => match steps.plus_try(1) {
-							Ok(len) => Known(len)
-							Err(Overflow) => Unknown
-						}
-						Err(OutOfRange) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : U128, U128 -> Range(U128)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U128, U128 -> Range(U128)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U128, U128 -> Range(U128)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U128, U128 -> Range(U128)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U128] values, saturating at [U128.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -13793,40 +13743,28 @@ Builtin :: [].{
 			plus_try : I128, I128 -> Try(I128, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(I128.lowest, I128.highest, 0, a, b)
 
-			## Iterator over [I128] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I128] values.
-			range_exclusive : I128, I128 -> Iter(I128)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => Known(steps)
-						Err(OutOfRange) => Unknown
-					}
-				else
+			range_len_if_known : I128, I128, I128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u128(lower.abs_diff(upper), step.abs_diff(0), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I128, I128, I128, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I128)
+			range_iter = range_iter_standard
 
-			## Iterator over [I128] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I128] values.
-			range_inclusive : I128, I128 -> Iter(I128)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => match steps.plus_try(1) {
-							Ok(len) => Known(len)
-							Err(Overflow) => Unknown
-						}
-						Err(OutOfRange) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : I128, I128 -> Range(I128)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I128, I128 -> Range(I128)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I128, I128 -> Range(I128)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I128, I128 -> Range(I128)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I128] values, saturating at [I128.highest] or [I128.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -14710,28 +14648,23 @@ Builtin :: [].{
 			plus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
-			## Conservative placeholder: always returns `Unknown`. Counting the steps
-			## in a fractional `[start, end)` range advancing by `1` would require
-			## `ceil(end - start)`; until that is implemented, `Unknown` is always a
-			## correct (if imprecise) length hint.
-			## Iterator over [Dec] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [Dec] values.
-			range_exclusive : Dec, Dec -> Iter(Dec)
-			range_exclusive = |start, end| range_exclusive_with_len(start, end, Unknown)
+			range_len_if_known : Dec, Dec, Dec, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = range_len_dec
 
-			## Iterator over [Dec] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [Dec] values.
-			range_inclusive : Dec, Dec -> Iter(Dec)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Unknown
-				else
-					Known(0)
+			range_iter : Dec, Dec, Dec, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(Dec)
+			range_iter = range_iter_standard
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_exclusive_to : Dec, Dec -> Range(Dec)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
+
+			range_inclusive_to : Dec, Dec -> Range(Dec)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : Dec, Dec -> Range(Dec)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : Dec, Dec -> Range(Dec)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [Dec] values, saturating at [Dec.highest] or [Dec.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -16130,49 +16063,18 @@ Builtin :: [].{
 			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| f32_from_str(str))
 
-			## Iterator over [F32] values from `start` up to but not including `end`,
-			## incrementing by 1. Returns an empty iterator if `start >= end`.
-			## This is what `start..<end` desugars to when the bounds are [F32] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_exclusive : F32, F32 -> Iter(F32)
-			range_exclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done or cur >= end {
-							Err(NoMore)
-						} else {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						},
-				)
+			range_len_if_known : F32, F32, F32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) Known(0) else Unknown
 
-			## Iterator over [F32] values from `start` up to and including `end`,
-			## incrementing by 1. Returns an empty iterator if `start > end`.
-			## This is what `start..=end` desugars to when the bounds are [F32] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_inclusive : F32, F32 -> Iter(F32)
-			range_inclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done {
-							Err(NoMore)
-						} else if cur < end {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						} else if cur == end {
-							Ok((cur, (cur, True)))
-						} else {
-							Err(NoMore)
-						},
-				)
+			range_iter : F32, F32, F32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(F32)
+			range_iter = range_iter_float
+
+			range_exclusive_to : F32, F32 -> Range(F32)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
+
+			range_inclusive_to : F32, F32 -> Range(F32)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
 
 			## Parse an [F32] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -17077,49 +16979,18 @@ Builtin :: [].{
 			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| f64_from_str(str))
 
-			## Iterator over [F64] values from `start` up to but not including `end`,
-			## incrementing by 1. Returns an empty iterator if `start >= end`.
-			## This is what `start..<end` desugars to when the bounds are [F64] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_exclusive : F64, F64 -> Iter(F64)
-			range_exclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done or cur >= end {
-							Err(NoMore)
-						} else {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						},
-				)
+			range_len_if_known : F64, F64, F64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) Known(0) else Unknown
 
-			## Iterator over [F64] values from `start` up to and including `end`,
-			## incrementing by 1. Returns an empty iterator if `start > end`.
-			## This is what `start..=end` desugars to when the bounds are [F64] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_inclusive : F64, F64 -> Iter(F64)
-			range_inclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done {
-							Err(NoMore)
-						} else if cur < end {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						} else if cur == end {
-							Ok((cur, (cur, True)))
-						} else {
-							Err(NoMore)
-						},
-				)
+			range_iter : F64, F64, F64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(F64)
+			range_iter = range_iter_float
+
+			range_exclusive_to : F64, F64 -> Range(F64)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
+
+			range_inclusive_to : F64, F64 -> Range(F64)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
 
 			## Parse an [F64] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -22439,6 +22310,257 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 
 numeric_compare : item, item -> [LT, EQ, GT]
 
+range_with_step : num, num, num, [Exclusive, Inclusive], [To, From] -> Num.Range(num)
+	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
+range_with_step = |lower, upper, step, upper_bound, direction|
+	Num.Range.custom({
+		lower,
+		upper,
+		step,
+		upper_bound,
+		direction,
+		len_if_known: lower.range_len_if_known(upper, step, upper_bound),
+	})
+
+range_len_u64 : U64, U64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_u64 = |distance, step, upper_bound|
+	if step == 0 {
+		Known(0)
+	} else {
+		match upper_bound {
+			Exclusive => Known((distance - 1) / step + 1)
+			Inclusive => match (distance / step).plus_try(1) {
+				Ok(len) => Known(len)
+				Err(Overflow) => Unknown
+			}
+		}
+	}
+
+range_len_u128 : U128, U128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_u128 = |distance, step, upper_bound|
+	if step == 0 {
+		Known(0)
+	} else {
+		base = match upper_bound {
+			Exclusive => (distance - 1) / step
+			Inclusive => distance / step
+		}
+		match base.plus_try(1) {
+			Err(Overflow) => Unknown
+			Ok(len_u128) => match len_u128.to_u64_try() {
+				Ok(len) => Known(len)
+				Err(OutOfRange) => Unknown
+			}
+		}
+	}
+
+range_len_dec : Dec, Dec, Dec, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_dec = |lower, upper, step, upper_bound| {
+	has_members = step > 0 and match upper_bound {
+		Exclusive => lower < upper
+		Inclusive => lower <= upper
+	}
+	if !has_members {
+		Known(0)
+	} else {
+		match upper.minus_try(lower) {
+			Err(Overflow) => Unknown
+			Ok(distance) => {
+				count_try = match upper_bound {
+					Exclusive => (distance / step).ceiling_to_u64_try()
+					Inclusive => match (distance / step).floor_to_u64_try() {
+						Err(OutOfRange) => Err(OutOfRange)
+						Ok(base) => base.plus_try(1)
+					}
+				}
+				match count_try {
+					Ok(len) => Known(len)
+					Err(_) => Unknown
+				}
+			}
+		}
+	}
+}
+
+# Return `value mod step` normalized into `[0, step)`. The explicit checked
+# arithmetic is shared by signed integers and Dec; unsigned remainders simply
+# take the nonnegative branch.
+range_nonnegative_rem : num, num -> Try(num, [NoMore])
+	where [
+		num.is_lt : num, num -> Bool,
+		num.plus_try : num, num -> Try(num, [Overflow]),
+		num.rem_by : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_nonnegative_rem = |value, step| {
+	raw = value.rem_by(step)
+	if raw < 0 {
+		match raw.plus_try(step) {
+			Ok(normalized) => Ok(normalized)
+			Err(Overflow) => Err(NoMore)
+		}
+	} else {
+		Ok(raw)
+	}
+}
+
+# Find the greatest member of the lower-anchored progression which satisfies
+# the upper bound. Computing the distance modulo `step` from endpoint
+# remainders avoids ever materializing `upper - lower`, which can overflow for
+# a full-width signed range even though the aligned final member is valid.
+range_standard_last : num, num, num, [Exclusive, Inclusive] -> Try(num, [NoMore])
+	where [
+		num.is_eq : num, num -> Bool,
+		num.is_lt : num, num -> Bool,
+		num.is_lte : num, num -> Bool,
+		num.is_gt : num, num -> Bool,
+		num.is_gte : num, num -> Bool,
+		num.minus : num, num -> num,
+		num.minus_try : num, num -> Try(num, [Overflow]),
+		num.plus_try : num, num -> Try(num, [Overflow]),
+		num.rem_by : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_standard_last = |lower, upper, step, upper_bound| {
+	has_members = step > 0 and match upper_bound {
+		Exclusive => lower < upper
+		Inclusive => lower <= upper
+	}
+
+	if !has_members {
+		Err(NoMore)
+	} else {
+		lower_rem = range_nonnegative_rem(lower, step)?
+		upper_rem = range_nonnegative_rem(upper, step)?
+		distance_rem = if upper_rem >= lower_rem {
+			upper_rem - lower_rem
+		} else {
+			step - (lower_rem - upper_rem)
+		}
+
+		amount_below_upper = match upper_bound {
+			Inclusive => distance_rem
+			Exclusive => if distance_rem == 0 step else distance_rem
+		}
+
+		match upper.minus_try(amount_below_upper) {
+			Ok(last) => if last >= lower Ok(last) else Err(NoMore)
+			Err(Overflow) => Err(NoMore)
+		}
+	}
+}
+
+# Shared range iterator for integers and Dec. Concrete numeric `range_iter`
+# methods call this helper after static dispatch has selected their arithmetic.
+# Both directions use one tagged seed shape, so the public Range source owns a
+# single flat iterator representation even when `direction` is only known at
+# runtime.
+range_iter_standard : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)
+	where [
+		num.is_eq : num, num -> Bool,
+		num.is_lt : num, num -> Bool,
+		num.is_lte : num, num -> Bool,
+		num.is_gt : num, num -> Bool,
+		num.is_gte : num, num -> Bool,
+		num.minus : num, num -> num,
+		num.minus_try : num, num -> Try(num, [Overflow]),
+		num.plus_try : num, num -> Try(num, [Overflow]),
+		num.rem_by : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_iter_standard = |lower, upper, step, upper_bound, direction, len_if_known| {
+	initial = match direction {
+		To => if step > 0 {
+			RangeAt(lower)
+		} else {
+			RangeDone
+		}
+		From => match range_standard_last(lower, upper, step, upper_bound) {
+			Ok(last) => RangeAt(last)
+			Err(NoMore) => RangeDone
+		}
+	}
+
+	Iter.custom(
+		initial,
+		len_if_known,
+		|state|
+			match state {
+				RangeDone => Err(NoMore)
+				RangeAt(current) => match direction {
+					To => {
+						within_upper = match upper_bound {
+							Exclusive => current < upper
+							Inclusive => current <= upper
+						}
+						if step > 0 and within_upper {
+							next_state = match current.plus_try(step) {
+								Ok(next) => if next > current RangeAt(next) else RangeDone
+								Err(Overflow) => RangeDone
+							}
+							Ok((current, next_state))
+						} else {
+							Err(NoMore)
+						}
+					}
+					From => if step > 0 and current >= lower {
+						next_state = if current == lower {
+							RangeDone
+						} else {
+							match current.minus_try(step) {
+								Ok(next) => if next < current and next >= lower RangeAt(next) else RangeDone
+								Err(Overflow) => RangeDone
+							}
+						}
+						Ok((current, next_state))
+					} else {
+						Err(NoMore)
+					}
+				}
+			},
+	)
+}
+
+# IEEE floats deliberately support only `_to` constructors. This helper keeps
+# their existing repeated-addition/stall semantics; a manually-constructed
+# `From` float range is empty because floats do not claim exact reversibility.
+range_iter_float : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)
+	where [
+		num.is_lt : num, num -> Bool,
+		num.is_lte : num, num -> Bool,
+		num.is_gt : num, num -> Bool,
+		num.plus : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_iter_float = |current, upper, step, upper_bound, direction, len_if_known| {
+	initial = match direction {
+		From => RangeDone
+		To => if step > 0 RangeAt(current) else RangeDone
+	}
+	Iter.custom(
+		initial,
+		len_if_known,
+		|state|
+			match state {
+				RangeDone => Err(NoMore)
+				RangeAt(item) => {
+					within_upper = match upper_bound {
+						Exclusive => item < upper
+						Inclusive => item <= upper
+					}
+
+					if step > 0 and within_upper {
+						next = item + step
+						next_state = if next > item RangeAt(next) else RangeDone
+						Ok((item, next_state))
+					} else {
+						Err(NoMore)
+					}
+				}
+			},
+	)
+}
+
 iter_from_step : [Known(U64), Unknown], (() -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]) -> Iter(item)
 iter_from_step = |len_if_known, step| {
 	len_if_known,
@@ -22450,43 +22572,6 @@ range_done = || iter_from_step(
 	Known(0),
 	|| Done,
 )
-
-# Shared state machine behind the numeric types' `range_exclusive` methods.
-# Each caller supplies `len_if_known` computed from its own representation;
-# when it is `Known`, it must be the exact yield count.
-range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
-	where [
-		num.is_lt : num, num -> Bool,
-		num.plus_try : num, num -> Try(num, [Overflow]),
-		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-	]
-range_exclusive_with_len = |start, end, len_if_known|
-	Iter.custom(
-		start,
-		len_if_known,
-		|current|
-			if current < end {
-				match current.plus_try(1) {
-					Ok(next) => Ok((current, next))
-					Err(Overflow) => Ok((current, end))
-				}
-			} else {
-				Err(NoMore)
-			},
-	)
-
-# Shared step loop behind the numeric types' `range_inclusive` methods; same
-# `len_if_known` contract as `range_exclusive_with_len`. The construction is
-# `Iter.inclusive_range`, whose flat self-recursive shape keeps a range's state
-# unboxed when an adapter wraps it.
-range_inclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
-	where [
-		num.is_lte : num, num -> Bool,
-		num.plus_try : num, num -> Try(num, [Overflow]),
-		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-	]
-range_inclusive_with_len = |start, end, len_if_known|
-	Iter.inclusive_range(start, end, len_if_known)
 
 ## The result of scanning a JSON string body; all fields are zero-copy slices.
 ## `after` is the text following the closing quote. The body is:

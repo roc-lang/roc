@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Exclusive range expression dispatches range_exclusive and types as Iter
+description=Exclusive range expression dispatches range_exclusive_to and types as Range
 type=snippet
 ~~~
 # SOURCE
@@ -36,7 +36,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "range_exclusive") (constraint-fn-var 213)
+		(e-dispatch-call (method "range_exclusive_to") (constraint-fn-var 223)
 			(receiver
 				(e-num (value "1")))
 			(args
@@ -46,7 +46,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Iter(Dec)")))
+		(patt (type "Range(Dec)")))
 	(expressions
-		(expr (type "Iter(Dec)"))))
+		(expr (type "Range(Dec)"))))
 ~~~
