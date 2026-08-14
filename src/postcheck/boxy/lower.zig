@@ -21701,6 +21701,9 @@ const ProcBodyBuilder = struct {
         field_type: Plan.CheckedTypeIdentity,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        // Per-specialization materialization (design.md "Defaulted Fields"):
+        // lower the declaring module's archived checked default expression
+        // into the omitted field's slot—no archived constant, no root.
         const origin = default.origin() orelse
             boxyLowerInvariant("defaulted record field carried no declaring module identity");
         const origin_hash = self.module.canonical_names.moduleIdentityBytes(origin);
@@ -21708,15 +21711,39 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("defaulted record field's declaring module was absent from boxy lowering");
         const default_expr = declaring_module.checked_bodies.defaultExpr(default.expr_node) orelse
             boxyLowerInvariant("defaulted record field's expression was not archived");
-        const root = declaring_module.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr) orelse
-            boxyLowerInvariant("defaulted record field's expression had no compile-time root");
-        const node = switch (root.payload) {
-            .const_node => |node| node,
-            .pending => boxyLowerInvariant("pending field-default root reached runtime boxy lowering"),
-            .fn_value, .discarded, .expect => boxyLowerInvariant("field-default root did not contain constant data"),
-        };
-        const type_module = procedureModuleById(self.parent.modules, field_type.module);
-        return try self.restoreConstNodeInto(target, declaring_module, type_module, node, field_type.ty, next);
+        const default_ty = declaring_module.checked_bodies.expr(default_expr).ty;
+        const expr_rep = self.repForModuleType(declaring_module, default_ty);
+        const field_rep = self.repForTypeRef(field_type);
+        const value_local = try self.addFrameLocalForRep(expr_rep);
+        const assign = try self.assignRepresentationBoundaryConsumingSource(target, value_local, field_rep, expr_rep, next);
+        return try self.lowerModuleExprInto(declaring_module, value_local, default_expr, assign);
+    }
+
+    /// Lower a closed checked expression that belongs to `expr_module` into
+    /// a local of this procedure: a scoped module-context swap, the boxy
+    /// mirror of monotype lowering's view swap. The per-lambda contextual
+    /// rep mapping is neutralized for the duration—its pattern ids are
+    /// meaningless against the swapped module's stores, and a closed
+    /// expression has no lambda context.
+    fn lowerModuleExprInto(
+        self: *ProcBodyBuilder,
+        expr_module: ProcedureModuleView,
+        target: LIR.LocalId,
+        expr_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const previous_module = self.module;
+        const previous_lambda_arg_patterns = self.lambda_arg_patterns;
+        const previous_lambda_arg_worker_reps = self.lambda_arg_worker_reps;
+        self.module = expr_module;
+        self.lambda_arg_patterns = &.{};
+        self.lambda_arg_worker_reps = &.{};
+        defer {
+            self.module = previous_module;
+            self.lambda_arg_patterns = previous_lambda_arg_patterns;
+            self.lambda_arg_worker_reps = previous_lambda_arg_worker_reps;
+        }
+        return try self.lowerExprInto(target, expr_id, next);
     }
 
     fn moduleForIdentityHash(

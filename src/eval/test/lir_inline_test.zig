@@ -6975,7 +6975,7 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
 }
 
-test "custom literal field default owns its conversion root" {
+test "custom literal field default gets an ordinary conversion root" {
     const allocator = std.testing.allocator;
     const source =
         \\MyNum := [Value(U64)].{
@@ -7005,16 +7005,23 @@ test "custom literal field default owns its conversion root" {
     );
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
-    var default_count: usize = 0;
-    for (resources.checked_artifact.compile_time_roots.roots) |root| {
-        if (root.kind != .field_default) continue;
-        default_count += 1;
-        try std.testing.expect(root.literalConversionKind() != null);
-        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(root.expr) orelse
+    // Per-specialization defaults have no root of their own; each default's
+    // custom literal conversion is an ORDINARY conversion root in the
+    // declaring module, so compile-time `Err` reporting is unchanged
+    // (design.md "Defaulted Fields").
+    var numeral_roots: usize = 0;
+    var quote_roots: usize = 0;
+    for (resources.checked_artifact.checked_bodies.default_exprs.items) |entry| {
+        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(entry.checked_expr) orelse
             return error.TestUnexpectedResult;
-        try std.testing.expectEqual(root.id, conversion.id);
+        switch (conversion.kind) {
+            .numeral_conversion => numeral_roots += 1,
+            .quote_conversion => quote_roots += 1,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => return error.TestUnexpectedResult,
+        }
     }
-    try std.testing.expectEqual(@as(usize, 2), default_count);
+    try std.testing.expectEqual(@as(usize, 1), numeral_roots);
+    try std.testing.expectEqual(@as(usize, 1), quote_roots);
 }
 
 test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {

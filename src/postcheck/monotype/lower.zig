@@ -16106,6 +16106,12 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         mono_ty: Type.TypeId,
     ) Allocator.Error!void {
+        // The graph cross-check can only run while relations are producing.
+        // A frozen-graph consumer—a generated parser body materializing a
+        // field default per specialization (design.md "Defaulted Fields")—
+        // lowers sealed expressions whose produced type is verified by the
+        // `sameType` check every such call path performs on the result.
+        if (!self.graph.acceptsRelationMutation()) return;
         try self.constrainTypeToMono(checked_ty, mono_ty);
     }
 
@@ -17140,22 +17146,17 @@ const BodyContext = struct {
             .expect,
             .numeral_conversion,
             .quote_conversion,
-            .field_default,
             => saved_source_region_override,
         };
         const body = if (root.literalConversionKind() != null) blk: {
             const ret_ty = try self.activeTypeFromCell(ret_cell);
             break :blk try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty);
         } else switch (root.kind) {
-            // A field default's root body is an ordinary pure expression
-            // (design.md "Defaulted Fields"); it lowers through the general
-            // comptime-root path.
             .constant,
             .hoisted_constant,
             .hoisted_validation,
             .callable_binding,
             .expect,
-            .field_default,
             => try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell),
             .numeral_conversion,
             .quote_conversion,
@@ -32535,29 +32536,56 @@ const BodyContext = struct {
         return try self.defaultedFieldValueAt(self.builder.program.names.moduleIdentityBytes(default.module), default.expr_node, field_ty);
     }
 
-    /// Restore a default from its declaring module, including during local root finalization.
+    /// Materialize a default by lowering its declaring module's archived
+    /// checked expression at the construction site's field monotype—
+    /// per-specialization materialization (design.md "Defaulted Fields").
+    /// There is no archived VALUE and no cross-root ordering: the inlined
+    /// expression evaluates as part of whatever body consumes it (a comptime
+    /// root's evaluation, or a runtime body). A foreign default lowers under
+    /// a scoped view swap, mirroring `lowerDraftLocalProcAtNode`.
     fn defaultedFieldValueAt(
         self: *BodyContext,
         origin_hash: *const [32]u8,
         expr_node: u32,
         field_ty: Type.TypeId,
     ) Allocator.Error!?DraftExprId {
-        const declaring_view = if (moduleViewIdentityMatches(self.view, origin_hash))
-            self.view
-        else
-            self.builder.moduleForIdentityHash(origin_hash) orelse
-                Common.invariant("defaulted field's declaring module was not present in the lowering input");
+        if (moduleViewIdentityMatches(self.view, origin_hash)) {
+            const default_expr = self.view.bodies.defaultExpr(expr_node) orelse
+                Common.invariant("defaulted field's default expression was not archived");
+            return try self.lowerExprAtType(default_expr, field_ty);
+        }
+        const declaring_view = self.builder.moduleForIdentityHash(origin_hash) orelse
+            Common.invariant("defaulted field's declaring module was not present in the lowering input");
         const default_expr = declaring_view.bodies.defaultExpr(expr_node) orelse
             Common.invariant("defaulted field's default expression was not archived");
-        // Local roots may still be pending; imported roots must be finalized.
-        if (declaring_view.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr)) |root| {
-            switch (root.payload) {
-                .const_node => |node| return try self.restoreConstNodeAtType(declaring_view, declaring_view, node, field_ty),
-                .pending, .fn_value, .discarded, .expect => {},
-            }
+
+        const previous_view = self.view;
+        const previous_source_file_id = self.source_file_id;
+        const previous_instantiation = self.instantiation;
+        self.view = declaring_view;
+        self.source_file_id = try self.draft.sourceFileIdFor(declaring_view.module_identity.module_idx, declaring_view.module_env.module_name);
+        // Checked-type lookups validate instantiation-context ownership, so
+        // the foreign expression gets its own context, exactly like a
+        // foreign nominal backing instantiation.
+        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), declaring_view.key.bytes);
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+            self.view = previous_view;
+            self.source_file_id = previous_source_file_id;
         }
-        if (!moduleViewIdentityMatches(self.view, origin_hash)) {
-            Common.invariant("imported defaulted field's default constant was not finalized");
+        // The default is a closed expression: it binds nothing from the
+        // consuming body, so foreign lowering gets fresh binder state
+        // exactly like a cross-module local procedure.
+        const previous_binders = self.binders;
+        const previous_typed_binders = self.typed_binders;
+        self.binders = try BinderMap.init(self.allocator, declaring_view.bodies.patternBinderCount());
+        self.typed_binders = TypedBinders.init(self.allocator);
+        defer {
+            self.binders.deinit();
+            self.typed_binders.deinit();
+            self.binders = previous_binders;
+            self.typed_binders = previous_typed_binders;
         }
         return try self.lowerExprAtType(default_expr, field_ty);
     }

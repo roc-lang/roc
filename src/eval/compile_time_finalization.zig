@@ -289,7 +289,7 @@ fn finalize(
             const root_id = state.rootIdForRequestIndex(request_index);
             if (!state.dependenciesComplete(request)) {
                 if (batch_requests.items.len == 0) {
-                    finalizationInvariant("compile-time root request order placed a root before its field defaults or another dependency");
+                    finalizationInvariant("compile-time root request order placed a root before another root it depends on");
                 }
                 _ = try lowerEvalAndFinishRoots(
                     allocator,
@@ -356,15 +356,6 @@ const RootCompletionState = struct {
     visited_templates: []u32,
     visit: u32,
     current_root_id: ?checked.ComptimeRootId = null,
-    /// Requested `field_default` roots not yet finished. Derived parsers
-    /// restore archived default constants from within OTHER roots' lowering
-    ///—which happens before those roots' own evaluation—so every
-    /// non-default root carries an implicit dependency edge on ALL field
-    /// defaults (design.md "Defaulted Fields"). The checked-artifact request
-    /// scheduler records those edges explicitly; this counter validates the
-    /// durable order and makes the defaults evaluate as their own leading
-    /// batch.
-    pending_field_defaults: usize,
 
     fn init(
         allocator: Allocator,
@@ -394,13 +385,6 @@ const RootCompletionState = struct {
         errdefer allocator.free(visited_templates);
         @memset(visited_templates, 0);
 
-        var pending_field_defaults: usize = 0;
-        for (module.compile_time_roots.roots, 0..) |root, i| {
-            if (root.kind == .field_default and requested_roots[i]) {
-                pending_field_defaults += 1;
-            }
-        }
-
         return .{
             .allocator = allocator,
             .module = module,
@@ -409,7 +393,6 @@ const RootCompletionState = struct {
             .request_root_ids = request_root_ids,
             .visited_templates = visited_templates,
             .visit = 0,
-            .pending_field_defaults = pending_field_defaults,
         };
     }
 
@@ -427,13 +410,7 @@ const RootCompletionState = struct {
     }
 
     fn markDone(self: *RootCompletionState, root_id: checked.ComptimeRootId) void {
-        const raw = @intFromEnum(root_id);
-        if (self.statuses[raw] != .done and
-            self.module.compile_time_roots.roots[raw].kind == .field_default)
-        {
-            self.pending_field_defaults -= 1;
-        }
-        self.statuses[raw] = .done;
+        self.statuses[@intFromEnum(root_id)] = .done;
     }
 
     fn rootIdForRequestIndex(self: *const RootCompletionState, request_index: usize) checked.ComptimeRootId {
@@ -448,14 +425,6 @@ const RootCompletionState = struct {
         request: checked.RootRequest,
     ) bool {
         const request_root_id = compileTimeRootForRequest(self.module, request);
-        // Every non-default root depends on ALL field defaults (see
-        // `pending_field_defaults`).
-        if (self.pending_field_defaults != 0 and
-            self.module.compile_time_roots.roots[@intFromEnum(request_root_id)].kind != .field_default)
-        {
-            return false;
-        }
-
         const saved_current_root_id = self.current_root_id;
         defer self.current_root_id = saved_current_root_id;
         self.current_root_id = request_root_id;
@@ -887,7 +856,6 @@ fn lowerEvalAndFinishRoots(
             .expect,
             .numeral_conversion,
             .quote_conversion,
-            .field_default,
             => null,
         };
         finishConstRoot(module, compile_time_root, payload, stored_root_type);
@@ -1510,7 +1478,6 @@ fn lowerDevEvalAndFinishRoots(
             .expect,
             .numeral_conversion,
             .quote_conversion,
-            .field_default,
             => null,
         };
         finishConstRoot(module, job.compile_time_root, payload, stored_root_type);
@@ -1946,7 +1913,6 @@ fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
         .expect,
         .numeral_conversion,
         .quote_conversion,
-        .field_default,
         => true,
         .hoisted_constant,
         .hoisted_validation,
@@ -2091,7 +2057,6 @@ fn failedRootPayload(
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
-        .field_default,
         => .{ .const_node = try appendCrashConst(module, message) },
     };
 }
@@ -2158,7 +2123,7 @@ fn compileTimeRootForRequest(
     }
     const root = module.compile_time_roots.roots[raw];
     const kind_matches = switch (request.kind) {
-        .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .field_default,
+        .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion,
         .compile_time_callable => root.kind == .callable_binding,
         .runtime_entrypoint,
         .provided_export,
@@ -2214,7 +2179,6 @@ fn finishConstRoot(
         .expect,
         .numeral_conversion,
         .quote_conversion,
-        .field_default,
         => unreachable,
     };
     const stored = checked.StoredConstTemplate{

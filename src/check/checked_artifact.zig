@@ -1104,7 +1104,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .field_default => .compile_time_constant,
+                    .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                 },
@@ -1113,7 +1113,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .compile_time,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -1231,21 +1231,6 @@ const CompileTimeRequestScheduleEntry = struct {
     original_order: u32,
 };
 
-fn collectScheduledFieldDefaultRoots(
-    allocator: Allocator,
-    compile_time_roots: *const CompileTimeRootTable,
-    entries: []const CompileTimeRequestScheduleEntry,
-) Allocator.Error![]ComptimeRootId {
-    var roots = std.ArrayList(ComptimeRootId).empty;
-    errdefer roots.deinit(allocator);
-    for (entries) |entry| {
-        if (compile_time_roots.root(entry.root_id).kind == .field_default) {
-            try roots.append(allocator, entry.root_id);
-        }
-    }
-    return try roots.toOwnedSlice(allocator);
-}
-
 fn collectCompileTimeRootRequests(
     allocator: Allocator,
     requests: []const RootRequest,
@@ -1308,7 +1293,6 @@ const CompileTimeRequestScheduler = struct {
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
     entries: []const CompileTimeRequestScheduleEntry,
-    field_default_roots: []const ComptimeRootId,
     root_to_request_index: []?usize,
     dependents: []std.ArrayList(usize),
     indegrees: []u32,
@@ -1334,9 +1318,6 @@ const CompileTimeRequestScheduler = struct {
         const_templates: *const ConstTemplateTable,
         entries: []const CompileTimeRequestScheduleEntry,
     ) Allocator.Error!CompileTimeRequestScheduler {
-        const field_default_roots = try collectScheduledFieldDefaultRoots(allocator, compile_time_roots, entries);
-        errdefer allocator.free(field_default_roots);
-
         const root_to_request_index = try allocator.alloc(?usize, compile_time_roots.roots.len);
         errdefer allocator.free(root_to_request_index);
         @memset(root_to_request_index, null);
@@ -1382,7 +1363,6 @@ const CompileTimeRequestScheduler = struct {
             .hoisted_constants = hoisted_constants,
             .const_templates = const_templates,
             .entries = entries,
-            .field_default_roots = field_default_roots,
             .root_to_request_index = root_to_request_index,
             .dependents = dependents,
             .indegrees = indegrees,
@@ -1400,7 +1380,6 @@ const CompileTimeRequestScheduler = struct {
         for (self.dependents) |*list| list.deinit(self.allocator);
         self.allocator.free(self.dependents);
         self.allocator.free(self.root_to_request_index);
-        self.allocator.free(self.field_default_roots);
         self.* = undefined;
     }
 
@@ -1441,12 +1420,6 @@ const CompileTimeRequestScheduler = struct {
         for (self.entries, 0..) |entry, i| {
             self.current_request_index = i;
             self.current_root_id = entry.root_id;
-
-            if (self.field_default_roots.len != 0 and self.compile_time_roots.root(entry.root_id).kind != .field_default) {
-                for (self.field_default_roots) |field_default_root| {
-                    try self.addUnconditionalRootDependency(field_default_root);
-                }
-            }
 
             self.beginDependencyVisit();
             const template_ref = entry.request.procedure_template orelse {
@@ -2023,7 +1996,7 @@ fn compileTimeRootKindMatchesRequest(
         .constant, .hoisted_constant, .hoisted_validation => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
-        .numeral_conversion, .quote_conversion, .field_default => request_kind == .compile_time_constant,
+        .numeral_conversion, .quote_conversion => request_kind == .compile_time_constant,
     };
 }
 
@@ -2094,7 +2067,6 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
-        .field_default,
         => exprDependsOnUnboundPlatformRequirement(
             checked_bodies,
             resolved_value_refs,
@@ -18401,7 +18373,6 @@ fn sealConstEvalTemplatesForRoots(
             .expect,
             .numeral_conversion,
             .quote_conversion,
-            .field_default,
             => checkedArtifactInvariant("non-constant root reached const eval template sealing", .{}),
         };
         const body = checked_const_bodies.bodyForRoot(root.id) orelse {
@@ -19517,7 +19488,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .comptime_only,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion => .comptime_only,
                 },
             });
         }
@@ -23652,16 +23623,12 @@ pub const CompileTimeRootKind = enum {
     /// non-builtin nominal type; works exactly like `numeral_conversion` with
     /// `Err(BadQuotedBytes(..))` reported as the checking problem.
     quote_conversion,
-    /// A record field default (`a : U8 ?? expr`, design.md "Defaulted
-    /// Fields"): the declaring module evaluates the pure default once, and
-    /// construction sites—local and cross-module—restore the archived
-    /// constant instead of re-lowering the expression.
-    field_default,
 };
 
-/// A field-default root can also own the checked literal conversion for its
-/// body. In that case its wrapper returns the conversion's `Try` and
-/// finalization archives the `Ok` payload as the field default constant.
+/// The two literal-conversion root kinds, as a payload-free classification
+/// (design.md "Defaulted Fields": a defaulted field's conversion literal
+/// gets an ordinary conversion root in its declaring module; there is no
+/// separate field-default root kind).
 pub const CompileTimeLiteralConversionKind = enum(u8) {
     numeral,
     quote,
@@ -23694,7 +23661,6 @@ pub const CompileTimeRoot = struct {
     pattern: ?CheckedPatternId,
     expr: CheckedExprId,
     checked_type: CheckedTypeId,
-    literal_conversion: ?CompileTimeLiteralConversionKind = null,
     request_eligibility: CompileTimeRootRequestEligibility,
     payload: CompileTimeRootPayload,
 
@@ -23702,7 +23668,6 @@ pub const CompileTimeRoot = struct {
         return switch (self.kind) {
             .numeral_conversion => .numeral,
             .quote_conversion => .quote,
-            .field_default => self.literal_conversion,
             .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => null,
         };
     }
@@ -23744,34 +23709,13 @@ pub const CompileTimeRootTable = struct {
             roots.deinit(allocator);
         }
 
-        var field_default_root_by_expr = std.AutoHashMapUnmanaged(CheckedExprId, usize){};
-        defer field_default_root_by_expr.deinit(allocator);
-
-        // Every archived field default is a compile-time constant root
-        // (design.md "Defaulted Fields"): the declaring module evaluates the
-        // pure default once, and construction sites—local and
-        // cross-module—restore the archived constant. Registered FIRST:
-        // defaults are closed literals with no dependencies (literals-only
-        // rule), and derived parsers restore them from within OTHER roots'
-        // compile-time evaluation, so every default must finalize before
-        // any ordinary root evaluates.
-        for (checked_bodies.default_exprs.items) |entry| {
-            try appendCompileTimeRoot(&roots, allocator, .{
-                .module_idx = module.moduleIndex(),
-                .kind = .field_default,
-                .source = .{ .expr = @enumFromInt(entry.expr_node) },
-                .pattern = null,
-                .expr = entry.checked_expr,
-                .checked_type = checked_bodies.expr(entry.checked_expr).ty,
-                .payload = .pending,
-            });
-            const inserted = try field_default_root_by_expr.getOrPut(allocator, entry.checked_expr);
-            if (inserted.found_existing) {
-                checkedArtifactInvariant("field default expression was registered as more than one root", .{});
-            }
-            inserted.value_ptr.* = roots.items.len - 1;
-        }
-
+        // Field defaults get no root of their own (design.md "Defaulted
+        // Fields"): every construction site that omits a defaulted field
+        // lowers the declaring module's archived checked expression at the
+        // site's monotype—per-specialization materialization. A default
+        // whose literal needs a custom `from_numeral`/`from_quote`
+        // conversion still gets an ORDINARY conversion root below, so the
+        // conversion's compile-time `Err` reporting is unchanged.
         const module_env = module.moduleEnvConst();
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
@@ -23869,11 +23813,6 @@ pub const CompileTimeRootTable = struct {
             }
             const try_ty = fn_payload.function.ret;
             const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
-            if (field_default_root_by_expr.get(checked_expr)) |root_index| {
-                roots.items[root_index].checked_type = try_ty;
-                roots.items[root_index].literal_conversion = .numeral;
-                continue;
-            }
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .numeral_conversion,
@@ -23906,11 +23845,6 @@ pub const CompileTimeRootTable = struct {
             }
             const try_ty = fn_payload.function.ret;
             const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
-            if (field_default_root_by_expr.get(checked_expr)) |root_index| {
-                roots.items[root_index].checked_type = try_ty;
-                roots.items[root_index].literal_conversion = .quote;
-                continue;
-            }
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .quote_conversion,
@@ -23958,16 +23892,6 @@ pub const CompileTimeRootTable = struct {
             return entry.payload == .discarded;
         }
         return false;
-    }
-
-    /// Look up the field-default root (design.md "Defaulted Fields") whose
-    /// body is the given checked expression.
-    pub fn lookupFieldDefaultRootByExpr(self: *const CompileTimeRootTable, expr: CheckedExprId) ?CompileTimeRoot {
-        for (self.roots) |entry| {
-            if (entry.expr != expr) continue;
-            if (entry.kind == .field_default) return entry;
-        }
-        return null;
     }
 
     /// Look up the literal-conversion (from_numeral or from_quote) root whose
@@ -24140,7 +24064,7 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
             .expect => true,
             .pending, .const_node, .fn_value, .discarded => false,
         },
-        .numeral_conversion, .quote_conversion, .field_default => switch (payload) {
+        .numeral_conversion, .quote_conversion => switch (payload) {
             .const_node => true,
             .pending, .fn_value, .discarded, .expect => false,
         },
@@ -24149,26 +24073,12 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
     checkedArtifactInvariant("compile-time root payload does not match root kind", .{});
 }
 
-fn verifyCompileTimeRootLiteralConversion(root: CompileTimeRoot) void {
-    switch (root.kind) {
-        .field_default => {},
-        .constant,
-        .hoisted_constant,
-        .hoisted_validation,
-        .callable_binding,
-        .expect,
-        .numeral_conversion,
-        .quote_conversion,
-        => std.debug.assert(root.literal_conversion == null),
-    }
-}
-
 fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
     return switch (kind) {
         .constant, .hoisted_constant => true,
         // A field default's constant is restored by expression lookup at
         // construction sites, never exported as a named data constant.
-        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .field_default => false,
+        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion => false,
     };
 }
 
@@ -24624,10 +24534,6 @@ fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
         .hoisted_validation,
         .numeral_conversion,
         .quote_conversion,
-        // A default expression never occurs in a runtime body: any
-        // exhaustiveness site inside it belongs to its compile-time
-        // evaluation (design.md "Defaulted Fields").
-        .field_default,
         => true,
         .callable_binding,
         .expect,
@@ -29250,7 +29156,11 @@ pub const CheckedModuleArtifact = struct {
     // Version 70 carries unset (`name: _`) field labels on checked record
     // expressions (`record_unset_label_pool`, design.md "In Progress:
     // Unsetting an Optional Field").
-    const serialized_layout_version: u32 = 70;
+    // Version 71 removes the field-default root kind: defaults materialize
+    // per specialization from the archived checked expression, and a
+    // default's literal conversion is an ordinary conversion root
+    // (design.md "Defaulted Fields").
+    const serialized_layout_version: u32 = 71;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29447,10 +29357,9 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.id) == i);
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprCount());
-            verifyCompileTimeRootLiteralConversion(root);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             switch (root.kind) {
-                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => switch (root.payload) {
+                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion => switch (root.payload) {
                     .pending => {},
                     .const_node,
                     .fn_value,
@@ -30200,7 +30109,6 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(root.id) == i);
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
             std.debug.assert(@intFromEnum(root.expr) < self.checked_bodies.exprCount());
-            verifyCompileTimeRootLiteralConversion(root);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             if (root.kind == .expect) {
                 switch (root.payload) {
@@ -35217,32 +35125,6 @@ test "module source input hash uses explicit file dependency state" {
     try std.testing.expect(unreadable_bits != present_bits);
 }
 
-test "compile-time scheduler precollects only requested field-default roots" {
-    const root_0 = testIndexId(ComptimeRootId, 0);
-    const root_1: ComptimeRootId = @enumFromInt(1);
-    const root_2: ComptimeRootId = @enumFromInt(2);
-    const checked_expr = testIndexId(CheckedExprId, 0);
-    const checked_type = testIndexId(CheckedTypeId, 0);
-    const source_0 = testIndexId(CIR.Expr.Idx, 10);
-    const source_1 = testIndexId(CIR.Expr.Idx, 11);
-    const source_2 = testIndexId(CIR.Expr.Idx, 12);
-
-    var roots = [_]CompileTimeRoot{
-        .{ .id = root_0, .module_idx = 0, .kind = .constant, .source = .{ .expr = source_0 }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
-        .{ .id = root_1, .module_idx = 0, .kind = .field_default, .source = .{ .expr = source_1 }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
-        .{ .id = root_2, .module_idx = 0, .kind = .field_default, .source = .{ .expr = source_2 }, .pattern = null, .expr = checked_expr, .checked_type = checked_type, .request_eligibility = .eligible, .payload = .pending },
-    };
-    const root_table = CompileTimeRootTable{ .roots = &roots };
-    const entries = [_]CompileTimeRequestScheduleEntry{
-        .{ .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = .{ .expr = source_2 }, .compile_time_root = root_2, .checked_type = checked_type, .abi = .compile_time, .exposure = .private }, .root_id = root_2, .original_order = 0 },
-        .{ .request = .{ .order = 1, .module_idx = 0, .kind = .compile_time_constant, .source = .{ .expr = source_0 }, .compile_time_root = root_0, .checked_type = checked_type, .abi = .compile_time, .exposure = .private }, .root_id = root_0, .original_order = 1 },
-    };
-
-    const field_defaults = try collectScheduledFieldDefaultRoots(std.testing.allocator, &root_table, &entries);
-    defer std.testing.allocator.free(field_defaults);
-    try std.testing.expectEqualSlices(ComptimeRootId, &.{root_2}, field_defaults);
-}
-
 test "checked divergence publishes both inline-expect runtime modes" {
     var exprs = [_]CheckedExpr{
         .{
@@ -35407,8 +35289,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x4B, 0x99, 0x42, 0x52, 0x7C, 0x7C, 0xF3, 0x83, 0x5D, 0x77, 0x2C, 0x2C, 0xE1, 0x22, 0x29, 0xEB,
-        0x13, 0xE0, 0x21, 0xA0, 0x14, 0xAA, 0x6A, 0xE0, 0x10, 0x67, 0xF1, 0x07, 0x7D, 0xED, 0xB2, 0x4C,
+        0x28, 0x23, 0x9E, 0xE8, 0x05, 0x2C, 0xA6, 0x03, 0x16, 0x47, 0xEC, 0xAA, 0x87, 0x31, 0xA6, 0x08,
+        0x5A, 0xA1, 0xC4, 0xCE, 0x41, 0x80, 0xF9, 0x44, 0x8C, 0x58, 0xC9, 0xE8, 0xFD, 0x90, 0xA8, 0xFF,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
