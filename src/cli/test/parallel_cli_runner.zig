@@ -3779,7 +3779,7 @@ fn customHotReloadDevShim(
         return failureFromRun(allocator, timer, result, "new generation did not complete before old in-flight call returned");
     }
 
-    const published_count = countOccurrences(result.stderr, "published");
+    const published_count = countOccurrences(result.stderr, " published ---\n");
     if (published_count != 14) {
         return failureFromRun(
             allocator,
