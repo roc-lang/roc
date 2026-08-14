@@ -1742,6 +1742,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .erroneous_value_expr,
         .qualified_ident_does_not_exist,
         .invalid_top_level_statement,
+        .invalid_associated_statement,
         .expr_not_canonicalized,
         .range_op_chained,
         .invalid_string_interpolation,

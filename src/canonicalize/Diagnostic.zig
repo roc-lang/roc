@@ -110,6 +110,10 @@ pub const Diagnostic = union(enum) {
         stmt: StringLiteral.Idx,
         region: Region,
     },
+    invalid_associated_statement: struct {
+        stmt: StringLiteral.Idx,
+        region: Region,
+    },
     expr_not_canonicalized: struct {
         region: Region,
     },
@@ -446,6 +450,7 @@ pub const Diagnostic = union(enum) {
             .erroneous_value_expr => |d| d.region,
             .qualified_ident_does_not_exist => |d| d.region,
             .invalid_top_level_statement => |d| d.region,
+            .invalid_associated_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
             .invalid_string_interpolation => |d| d.region,
             .unreachable_string_pattern_capture => |d| d.region,

@@ -34615,7 +34615,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 74;
+    const serialized_layout_version: u32 = 75;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -37710,6 +37710,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_erroneous_value_expr,
             .diag_qualified_ident_does_not_exist,
             .diag_invalid_top_level_statement,
+            .diag_invalid_associated_statement,
             .diag_expr_not_canonicalized,
             .diag_invalid_string_interpolation,
             .diag_unreachable_string_pattern_capture,
@@ -41182,8 +41183,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x28, 0xE8, 0x0D, 0x0B, 0xF7, 0x72, 0xCB, 0xD8, 0x21, 0xC3, 0x79, 0xD2, 0xAB, 0x94, 0x22, 0xC1,
-        0x15, 0xF6, 0xDF, 0x6A, 0x25, 0x73, 0x35, 0x9B, 0xD0, 0x91, 0xD5, 0x31, 0x3B, 0x33, 0x60, 0x1A,
+        0x96, 0xA0, 0xB8, 0x9F, 0x37, 0x3E, 0x1C, 0x80, 0x90, 0x9A, 0x8A, 0xA4, 0x9C, 0xA8, 0xA2, 0xBD,
+        0x62, 0x2C, 0x5C, 0xF0, 0xC2, 0xAB, 0x52, 0x52, 0xD6, 0x4E, 0x16, 0x25, 0xE8, 0x3C, 0x97, 0x42,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -2001,6 +2001,29 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .invalid_associated_statement => |data| blk: {
+            const stmt_name = self.getString(data.stmt);
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Invalid Statement", "", .runtime_error);
+            const owned_stmt = try report.addOwnedString(stmt_name);
+            try report.headline.addReflowingText("The statement ");
+            try report.headline.addInlineCode(owned_stmt);
+            try report.headline.addReflowingText(" is not allowed in an associated block.");
+            try report.document.addReflowingText("Only associated values, type declarations, and type annotations are allowed in an associated block.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .used_underscore_variable => |data| blk: {
             const ident_name = self.getIdent(data.ident);
             const region_info = self.calcRegionInfo(data.region);

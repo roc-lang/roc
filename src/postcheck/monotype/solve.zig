@@ -3876,6 +3876,12 @@ pub const InstGraph = struct {
             compressed.backing = .{ .node = backing_node, .use = declared_backing.use, .authority = declared_backing.authority };
             try self.setContent(named_node, .{ .named = compressed });
         }
+        // The named node already owns this exact structural backing. This
+        // relation arises when a checked function interface names the wrapper
+        // while its constructor pattern names the backing. Redirecting the
+        // backing into its owner would destroy the explicit backing edge and
+        // leave a non-recursive named type pointing to itself.
+        if (backing_node == other) return;
         if (named.kind == .alias) {
             try pending.append(self.allocator, .{ .left = backing_node, .right = other });
             return;
@@ -5675,7 +5681,7 @@ test "nominal unification with its own backing preserves a distinct backing node
     } });
 
     try graph.unify(nominal, backing);
-    try std.testing.expect(graph.sameClass(nominal, backing));
+    try std.testing.expect(!graph.sameClass(nominal, backing));
 
     const named = graph.content(nominal).named;
     const retained_backing = named.backing orelse return error.TestExpectedEqual;
@@ -6208,6 +6214,45 @@ test "recursive generated iterator reservation completes at its producer boundar
     try graph.freezeRelations();
 }
 
+test "named type relation to its own backing preserves the backing edge" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x17} ** 32));
+    const type_name = try name_store.internTypeName("State");
+    const field_name = try name_store.internRecordFieldLabel("value");
+    const field_ty = try graph.newNode(.{ .primitive = .u64 });
+    const fields = try graph.arena().dupe(InstField, &.{.{ .name = field_name, .ty = field_ty, .default = null }});
+    const backing = try graph.newNode(.{ .record = .{
+        .fields = fields,
+        .ext = try graph.newNode(.empty_record),
+    } });
+    const named = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = backing, .use = .runtime_layout_only },
+    } });
+
+    try graph.unify(named, backing);
+
+    try std.testing.expect(!graph.sameClass(named, backing));
+    const retained = graph.content(named).named.backing.?;
+    try std.testing.expectEqual(backing, retained.node);
+    try std.testing.expectEqual(Type.BackingUse.runtime_layout_only, retained.use);
+    try std.testing.expectEqual(@as(usize, 1), (try graph.recordConstructionNodes(named)).fields.len);
+}
+
 test "ordinary nominal reservation checks exact roots before normalizing row decompositions" {
     const gpa = std.testing.allocator;
 
@@ -6460,7 +6505,7 @@ test "issue 9647: same nominal backing wrapper resolves to structural backing on
 
     try std.testing.expect(graph.sameClass(inner_named, outer_named));
     try std.testing.expectEqual(structural_backing, other);
-    try std.testing.expectEqual(before_nodes + 1, graph.nodes.items.len);
+    try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
     const outer_content = graph.content(outer_named);
     if (outer_content != .named) return error.TestUnexpectedResult;
     const compressed = outer_content.named;
