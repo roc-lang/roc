@@ -865,13 +865,13 @@ test "Monotype producers return and compose exact graph nodes directly" {
         "fn lowerTagConstructorAtNodeWithRelation(",
         "fn lowerNominalConstructorAtNode(",
     );
-    try expectContains(tag, "produced_payload.* = try self.builder.completePendingProducedNode(");
+    try expectContains(tag, "produced_payload.* = try self.builder.completePendingProducedRepresentationNode(");
     try expectContains(tag, "try self.exprTypeCell(payload_expr).toGraphNode(self.graph)");
     try expectContains(tag, "const request_row = try self.graph.tagConstructionRow(tag_node)");
     try expectContains(tag, "const produced_tags = try self.graph.arena().dupe(InstTag, request_row.tags)");
     try expectContains(tag, "produced_tag.payloads = produced_payloads");
-    try expectContains(tag, "if (destination_relation == .exact_request)");
-    try expectContains(tag, "self.addConstructorExprAtNode(tag_node");
+    try expectNotContains(tag, "if (destination_relation == .exact_request)");
+    try expectNotContains(tag, "self.addConstructorExprAtNode(tag_node");
     try expectNotContains(tag, "checkedDefaultNode(");
     try expectContains(tag, "self.graph.newProducedTagUnion(");
 
@@ -2172,7 +2172,7 @@ test "Monotype generated-private call requests retain separate request nodes" {
         "fn iteratorMethodLookup(",
     );
 
-    try expectContains(full_request, "directCallSelectionsFromRecordedPlan(");
+    try expectContains(full_request, "directSelectionsForCall(");
     try expectContains(full_request, "materializeCallSelectionSpan(");
     try expectNotContains(full_request, "functionRequestNode(");
     try expectNotContains(lower_source, "instantiateTargetCallNodeFromMonoArgAtIndex");
