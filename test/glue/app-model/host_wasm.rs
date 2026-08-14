@@ -1,3 +1,4 @@
+#![no_std]
 #![allow(improper_ctypes)]
 #![allow(improper_ctypes_definitions)]
 
@@ -5,8 +6,13 @@
 mod abi;
 
 use core::ffi::c_void;
-use core::fmt::{self, Write};
+use core::panic::PanicInfo;
 use core::ptr;
+
+#[panic_handler]
+fn panic(_info: &PanicInfo<'_>) -> ! {
+    core::arch::wasm32::unreachable()
+}
 
 const MAX_ALLOCATIONS: usize = 512;
 const CANARY_SIZE: usize = 16;
@@ -60,31 +66,31 @@ impl ContractEnv {
         *self = Self::new();
     }
 
-    fn fail(&mut self, args: fmt::Arguments<'_>) {
+    fn set_report(&mut self, prefix: &[u8], message: &[u8]) {
+        let prefix_len = prefix.len().min(self.report.len());
+        self.report[..prefix_len].copy_from_slice(&prefix[..prefix_len]);
+        let message_len = message.len().min(self.report.len() - prefix_len);
+        self.report[prefix_len..prefix_len + message_len].copy_from_slice(&message[..message_len]);
+        self.report_len = prefix_len + message_len;
+    }
+
+    fn fail(&mut self, message: &str) {
         if self.failure_count == 0 {
-            let mut writer = ReportWriter::new(&mut self.report);
-            let _ = writer.write_str("FAIL app-model RustGlue wasm32: ");
-            let _ = writer.write_fmt(args);
-            self.report_len = writer.len;
+            self.set_report(b"FAIL app-model RustGlue wasm32: ", message.as_bytes());
         }
         self.failure_count += 1;
     }
 
-    fn allocator_fail(&mut self, args: fmt::Arguments<'_>) {
+    fn allocator_fail(&mut self, message: &str) {
         self.allocator_error_count += 1;
         if self.failure_count == 0 {
-            let mut writer = ReportWriter::new(&mut self.report);
-            let _ = writer.write_str("FAIL app-model RustGlue wasm32 allocator: ");
-            let _ = writer.write_fmt(args);
-            self.report_len = writer.len;
+            self.set_report(b"FAIL app-model RustGlue wasm32 allocator: ", message.as_bytes());
         }
         self.failure_count += 1;
     }
 
     fn finish_pass(&mut self) {
-        let mut writer = ReportWriter::new(&mut self.report);
-        let _ = writer.write_str("PASS glue-runtime app-model RustGlue wasm32");
-        self.report_len = writer.len;
+        self.set_report(b"", b"PASS glue-runtime app-model RustGlue wasm32");
     }
 
     fn check_canaries(&mut self, allocation: &Allocation) -> bool {
@@ -92,11 +98,11 @@ impl ContractEnv {
             let prefix = unsafe { *allocation.user.sub(CANARY_SIZE).add(offset) };
             let suffix = unsafe { *allocation.user.add(allocation.length + offset) };
             if prefix != CANARY_BYTE {
-                self.allocator_fail(format_args!("prefix canary changed"));
+                self.allocator_fail("prefix canary changed");
                 return false;
             }
             if suffix != CANARY_BYTE {
-                self.allocator_fail(format_args!("suffix canary changed"));
+                self.allocator_fail("suffix canary changed");
                 return false;
             }
         }
@@ -119,11 +125,11 @@ impl ContractEnv {
         }
         let raw = align_forward(self.heap_cursor, alignment);
         let Some(end) = raw.checked_add(total) else {
-            self.allocator_fail(format_args!("bump allocation overflow"));
+            self.allocator_fail("bump allocation overflow");
             return ptr::null_mut();
         };
         if !self.ensure_wasm_memory(end) {
-            self.allocator_fail(format_args!("wasm memory grow failed"));
+            self.allocator_fail("wasm memory grow failed");
             return ptr::null_mut();
         }
         self.heap_cursor = end;
@@ -132,11 +138,11 @@ impl ContractEnv {
 
     fn alloc(&mut self, length: usize, alignment: usize) -> *mut c_void {
         if alignment == 0 || (alignment & (alignment - 1)) != 0 {
-            self.allocator_fail(format_args!("invalid alignment {alignment}"));
+            self.allocator_fail("invalid alignment");
             return ptr::null_mut();
         }
         if length > usize::MAX - CANARY_SIZE - CANARY_SIZE - alignment {
-            self.allocator_fail(format_args!("allocation size overflow length={length} alignment={alignment}"));
+            self.allocator_fail("allocation size overflow");
             return ptr::null_mut();
         }
 
@@ -149,12 +155,12 @@ impl ContractEnv {
         let user_addr = align_forward(unsafe { raw.add(CANARY_SIZE) } as usize, alignment);
         let user = user_addr as *mut u8;
         if user_addr % alignment != 0 {
-            self.allocator_fail(format_args!("returned pointer is not aligned to {alignment}"));
+            self.allocator_fail("returned pointer is not aligned");
             return ptr::null_mut();
         }
 
         let Some(slot) = self.allocations.iter_mut().find(|allocation| !allocation.live) else {
-            self.allocator_fail(format_args!("allocation table exhausted"));
+            self.allocator_fail("allocation table exhausted");
             return ptr::null_mut();
         };
 
@@ -184,15 +190,12 @@ impl ContractEnv {
             .iter()
             .position(|allocation| allocation.live && allocation.user == ptr as *mut u8)
         else {
-            self.allocator_fail(format_args!("unknown or double free for {ptr:p}"));
+            self.allocator_fail("unknown or double free");
             return;
         };
         let allocation = self.allocations[index];
         if allocation.alignment != alignment {
-            self.allocator_fail(format_args!(
-                "dealloc alignment mismatch allocated={} freed={alignment}",
-                allocation.alignment
-            ));
+            self.allocator_fail("dealloc alignment mismatch");
         }
         let _ = self.check_canaries(&allocation);
         unsafe {
@@ -212,15 +215,12 @@ impl ContractEnv {
             .iter()
             .position(|allocation| allocation.live && allocation.user == ptr as *mut u8)
         else {
-            self.allocator_fail(format_args!("realloc unknown pointer {ptr:p}"));
+            self.allocator_fail("realloc unknown pointer");
             return ptr::null_mut();
         };
         let old = self.allocations[index];
         if old.alignment != alignment {
-            self.allocator_fail(format_args!(
-                "realloc alignment mismatch allocated={} requested={alignment}",
-                old.alignment
-            ));
+            self.allocator_fail("realloc alignment mismatch");
             return ptr::null_mut();
         }
         if !self.check_canaries(&old) {
@@ -237,32 +237,11 @@ impl ContractEnv {
             let old_bytes = core::slice::from_raw_parts(old.user, copy_length);
             let new_bytes = core::slice::from_raw_parts(new_ptr as *const u8, copy_length);
             if old_bytes != new_bytes {
-                self.allocator_fail(format_args!("realloc did not preserve old bytes"));
+                self.allocator_fail("realloc did not preserve old bytes");
             }
         }
         self.dealloc(ptr, alignment);
         new_ptr
-    }
-}
-
-struct ReportWriter<'a> {
-    buf: &'a mut [u8],
-    len: usize,
-}
-
-impl<'a> ReportWriter<'a> {
-    fn new(buf: &'a mut [u8]) -> Self {
-        Self { buf, len: 0 }
-    }
-}
-
-impl Write for ReportWriter<'_> {
-    fn write_str(&mut self, value: &str) -> fmt::Result {
-        let remaining = self.buf.len().saturating_sub(self.len);
-        let write_len = remaining.min(value.len());
-        self.buf[self.len..self.len + write_len].copy_from_slice(&value.as_bytes()[..write_len]);
-        self.len += write_len;
-        Ok(())
     }
 }
 
@@ -295,12 +274,12 @@ extern "C" fn host_dbg(_host: *mut abi::RocHost, _bytes: *const u8, _len: usize)
 
 extern "C" fn host_expect_failed(host: *mut abi::RocHost, _bytes: *const u8, _len: usize) {
     let env = unsafe { &mut *((*host).env as *mut ContractEnv) };
-    env.fail(format_args!("roc_expect_failed"));
+    env.fail("roc_expect_failed");
 }
 
 extern "C" fn host_crashed(host: *mut abi::RocHost, _bytes: *const u8, _len: usize) {
     let env = unsafe { &mut *((*host).env as *mut ContractEnv) };
-    env.fail(format_args!("roc_crashed"));
+    env.fail("roc_crashed");
 }
 
 #[no_mangle]
@@ -323,12 +302,12 @@ pub extern "C" fn roc_dbg(_bytes: *const u8, _len: usize) {}
 
 #[no_mangle]
 pub extern "C" fn roc_expect_failed(_bytes: *const u8, _len: usize) {
-    env_mut().fail(format_args!("roc_expect_failed"));
+    env_mut().fail("roc_expect_failed");
 }
 
 #[no_mangle]
 pub extern "C" fn roc_crashed(_bytes: *const u8, _len: usize) {
-    env_mut().fail(format_args!("roc_crashed"));
+    env_mut().fail("roc_crashed");
 }
 
 fn reset_msg() -> abi::Msg {
@@ -352,31 +331,29 @@ fn run_contract() {
     let updated = unsafe { abi::roc_update(initial, reset_msg()) };
     let view = unsafe { abi::roc_render(updated) };
     if view.title.as_slice() != b"ready" {
-        env_mut().fail(format_args!("render title mismatch"));
+        env_mut().fail("render title mismatch");
     }
     if view.lifecycle.tag != abi::FailedOrReadyOrWaitingTag::Ready {
-        env_mut().fail(format_args!("render lifecycle expected Ready got {:?}", view.lifecycle.tag));
+        env_mut().fail("render lifecycle mismatch");
     }
     if view.messages.length != 0 {
-        env_mut().fail(format_args!("render messages expected empty got {}", view.messages.length));
+        env_mut().fail("render messages expected empty");
     }
     unsafe {
         view.decref(&host);
     }
 
     if env_mut().allocator_error_count != 0 {
-        let count = env_mut().allocator_error_count;
-        env_mut().fail(format_args!("allocator recorded {count} errors"));
+        env_mut().fail("allocator recorded errors");
     }
     if env_mut().live_alloc_count != 0 {
-        let count = env_mut().live_alloc_count;
-        env_mut().fail(format_args!("live allocations after scenario: {count}"));
+        env_mut().fail("live allocations after scenario");
     }
 
     if env_mut().failure_count == 0 {
         env_mut().finish_pass();
     } else if env_mut().report_len == 0 {
-        env_mut().fail(format_args!("unknown failure"));
+        env_mut().fail("unknown failure");
     }
 }
 
