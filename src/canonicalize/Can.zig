@@ -19,6 +19,7 @@ const tracy = @import("tracy");
 const CoreCtx = ctx_mod.CoreCtx;
 
 const CIR = @import("CIR.zig");
+const DefaultCycles = @import("DefaultCycles.zig");
 const Scope = @import("Scope.zig");
 
 const tokenize = parse.tokenize;
@@ -4666,6 +4667,14 @@ pub fn canonicalizeFile(
 
     self.env.finalizeMethodTables();
 
+    // Reject name-resolvable default-materialization cycles: reference
+    // edges through same-module defs plus omission edges at local nominal
+    // constructions. Cyclic defaults report once per cycle and are dropped
+    // here, so check and lowering never see them; dispatch-mediated and
+    // foreign-omission cycles are the checker's residue (design.md
+    // "Defaulted Fields").
+    try DefaultCycles.checkDefaultCycles(self.env, self.env.gpa);
+
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
 
@@ -7597,109 +7606,6 @@ fn canonicalizedRuntimeErrorExpr(self: *Self, diagnostic: Diagnostic) std.mem.Al
         .idx = try self.env.pushRuntimeErrorExpr(Expr.Idx, diagnostic),
         .free_vars = DataSpan.empty(),
     };
-}
-
-/// Judge whether a canonicalized record-field default expression is a closed
-/// literal: a numeric literal (including a negated numeral), an
-/// interpolation-free string literal, a tag literal (bare or applied, plain or
-/// nominal-qualified), or a list / record / tuple literal whose components are
-/// all literals. Nothing else—in particular no name reference of any kind—
-/// so a default cannot participate in a value-reference evaluation cycle.
-/// Literal aggregates can still omit fields that materialize other defaults;
-/// the checker follows those explicit `DefaultId` dependencies and rejects
-/// cycles after field kinds are solved (design.md "Defaulted Fields").
-///
-/// Returns the first non-literal node found (for the diagnostic to point at),
-/// or null when the whole expression is a literal. The walk is an explicit
-/// worklist over the CIR (zero-recursion policy) reusing `scratch_expr_ids`.
-fn defaultNonLiteralNode(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!?Expr.Idx {
-    const walk_top = self.scratch_expr_ids.top();
-    defer self.scratch_expr_ids.clearFrom(walk_top);
-    try self.scratch_expr_ids.append(root);
-    while (self.scratch_expr_ids.top() > walk_top) {
-        const expr_idx = self.scratch_expr_ids.pop() orelse unreachable;
-        const expr = self.env.store.getExpr(expr_idx);
-        const tag = std.meta.activeTag(expr);
-        // Numeric literals (the numeral table variants store their exact
-        // value in ModuleEnv; they are still literals).
-        if (tag == .e_num or tag == .e_frac_f32 or tag == .e_frac_f64 or
-            tag == .e_dec or tag == .e_dec_small or tag == .e_num_from_numeral or
-            tag == .e_typed_int or tag == .e_typed_frac or tag == .e_typed_num_from_numeral)
-        {
-            continue;
-        }
-        // A negated numeral. When the minus is not folded into the token,
-        // it canonicalizes as `e_unary_minus` over the numeric literal;
-        // exactly that shape counts. Negation of anything else (including
-        // a nested negation) is an operation, not a literal.
-        if (tag == .e_unary_minus) {
-            const inner = std.meta.activeTag(self.env.store.getExpr(expr.e_unary_minus.expr));
-            if (inner == .e_num or inner == .e_frac_f32 or inner == .e_frac_f64 or
-                inner == .e_dec or inner == .e_dec_small or inner == .e_num_from_numeral or
-                inner == .e_typed_int or inner == .e_typed_frac or inner == .e_typed_num_from_numeral)
-            {
-                continue;
-            }
-            return expr_idx;
-        }
-        // String literals. An interpolated string canonicalizes to
-        // `e_interpolation` (which references bindings and dispatches),
-        // so it falls to the rejecting return below; a plain string is a
-        // span of `e_str_segment`s.
-        if (tag == .e_str_segment) continue;
-        if (tag == .e_str) {
-            for (self.env.store.sliceExpr(expr.e_str.span)) |segment| {
-                try self.scratch_expr_ids.append(segment);
-            }
-            continue;
-        }
-        // Tag literals, including the nominal wrapper Can itself puts
-        // around a tag/record/tuple literal that resolves to a nominal
-        // type (e.g. a bare `True`): the wrapper names a type
-        // declaration, not a value, so it cannot form a value cycle.
-        if (tag == .e_zero_argument_tag) continue;
-        if (tag == .e_tag) {
-            for (self.env.store.sliceExpr(expr.e_tag.args)) |arg| {
-                try self.scratch_expr_ids.append(arg);
-            }
-            continue;
-        }
-        if (tag == .e_nominal) {
-            try self.scratch_expr_ids.append(expr.e_nominal.backing_expr);
-            continue;
-        }
-        if (tag == .e_nominal_external) {
-            try self.scratch_expr_ids.append(expr.e_nominal_external.backing_expr);
-            continue;
-        }
-        // Aggregate literals whose components must all be literals. A
-        // record UPDATE (`{ ..base, .. }`) is not a record literal.
-        if (tag == .e_empty_list or tag == .e_empty_record) continue;
-        if (tag == .e_list) {
-            for (self.env.store.sliceExpr(expr.e_list.elems)) |elem| {
-                try self.scratch_expr_ids.append(elem);
-            }
-            continue;
-        }
-        if (tag == .e_tuple) {
-            for (self.env.store.sliceExpr(expr.e_tuple.elems)) |elem| {
-                try self.scratch_expr_ids.append(elem);
-            }
-            continue;
-        }
-        if (tag == .e_record) {
-            if (expr.e_record.ext != null) return expr_idx;
-            for (self.env.store.sliceRecordFields(expr.e_record.fields)) |field_idx| {
-                const field = self.env.store.getRecordField(field_idx);
-                try self.scratch_expr_ids.append(field.value);
-            }
-            continue;
-        }
-        // Everything else—name references, calls, operators, lambdas,
-        // control flow, blocks—is not a literal.
-        return expr_idx;
-    }
-    return null;
 }
 
 fn canonicalizedLocalLookup(
@@ -19093,23 +18999,14 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         .record_after_field => {
             const state = stacks.takeRecordAfterField();
             const canonicalized_ty = last orelse unreachable;
-            // Canonicalize the default value expression (an ordinary
-            // expression in the enclosing scope); the checker types it
-            // against the field's type (design.md "Defaulted Fields").
+            // Canonicalize the default value expression: any PURE
+            // expression, an ordinary expression in the enclosing (module
+            // top-level) scope. The checker types it against the field's
+            // type and rejects effectful defaults; the end-of-module cycle
+            // pass rejects name-resolvable materialization cycles
+            // (design.md "Defaulted Fields").
             const default_value: ?CIR.Expr.Idx = if (state.ast_default_value) |ast_default| blk: {
                 const can_default = (try self.canonicalizeExpr(ast_default)) orelse break :blk null;
-                // A default must be a closed literal: it is materialized by
-                // the compiler at construction sites, and anything that
-                // refers to another value could form an evaluation cycle the
-                // compiler will not chase (design.md "Defaulted Fields").
-                // The default is dropped and the error reported.
-                if (try self.defaultNonLiteralNode(can_default.idx)) |non_literal_idx| {
-                    try self.env.pushDiagnostic(Diagnostic{ .record_default_not_literal = .{
-                        .field_name = state.field_name,
-                        .region = self.env.store.getExprRegion(non_literal_idx),
-                    } });
-                    break :blk null;
-                }
                 break :blk can_default.idx;
             } else null;
             const field_cir_idx = try self.env.addAnnoRecordField(.{

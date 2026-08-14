@@ -233,7 +233,7 @@ const DiagnosticNodeTag = enum {
     diag_open_ext_not_allowed_in_type_decl,
     diag_unnamed_field_not_allowed_in_structural_record,
     diag_optional_field_cannot_have_default,
-    diag_record_default_not_literal,
+    diag_record_default_reference_cycle,
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
@@ -3967,6 +3967,26 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
     return @enumFromInt(@intFromEnum(nid));
 }
 
+/// Drop the `??` default from a defaulted annotation record field, degrading
+/// it to a plain required field in place. The default-cycle pass uses this as
+/// its recovery so check and lowering never see a cyclic default (design.md
+/// "Defaulted Fields"); the default expression node stays in the store (it
+/// was canonicalized and diagnosed) but nothing references it.
+pub fn dropAnnoRecordFieldDefault(store: *NodeStore, field_idx: CIR.TypeAnno.RecordField.Idx) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(field_idx));
+    var node = store.nodes.get(node_idx);
+    std.debug.assert(node.tag == .ty_record_field_defaulted);
+    const payload = node.getPayload().ty_record_field_defaulted;
+    node = Node.init(.ty_record_field);
+    node.setPayload(.{ .ty_record_field = .{
+        .name = payload.name,
+        .ty = payload.ty,
+        .is_optional = false,
+        .is_unnamed = false,
+    } });
+    store.nodes.set(node_idx, node);
+}
+
 /// Adds an annotation to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
@@ -5235,8 +5255,8 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_default_not_allowed_in_structural_record;
             region = r.region;
         },
-        .record_default_not_literal => |r| {
-            node.tag = .diag_record_default_not_literal;
+        .record_default_reference_cycle => |r| {
+            node.tag = .diag_record_default_reference_cycle;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.field_name) } });
         },
@@ -5829,7 +5849,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_default_not_allowed_in_structural_record => return CIR.Diagnostic{ .default_not_allowed_in_structural_record = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_record_default_not_literal => return CIR.Diagnostic{ .record_default_not_literal = .{
+        .diag_record_default_reference_cycle => return CIR.Diagnostic{ .record_default_reference_cycle = .{
             .field_name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },

@@ -1434,7 +1434,7 @@ test "check type - record - default - rendered type shows the default" {
     // A nominal-backed value renders as its nominal name; the backing row's
     // `?? <default>` rendering (discoverability + distinguishable identity
     // mismatches) is pinned by the snapshot type sections
-    // (test/snapshots/record_default_literals.md), since structural rows can
+    // (test/snapshots/record_default_expressions.md), since structural rows can
     // no longer carry defaults from source (design.md "Defaulted Fields").
     try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
         \\MyRecord
@@ -1649,7 +1649,7 @@ fn resolveOnlyFieldKindContent(test_env: *TestEnv, def_name: []const u8) error{ 
     return error.TestUnexpectedResult;
 }
 
-test "check type - record - default - type-decl default referencing a def is rejected at Can" {
+test "check type - record - default - def-referencing default checks against the field type" {
     const source =
         \\main! = |_| {}
         \\
@@ -1660,18 +1660,13 @@ test "check type - record - default - type-decl default referencing a def is rej
         \\other : U64
         \\other = foo
     ;
-    // A default must be a closed literal (design.md "Defaulted Fields"): the
-    // reference to `foo` is rejected at canonicalization and the default
-    // dropped, so the checker never sees it—`other` freely pins
-    // `foo := U64` with no U8-typed default to conflict with.
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
-    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+    // A default is any pure expression, typed at finalize against an
+    // instantiated copy of its field type. `other` pins `foo : U64`, so the
+    // U8 field's default mismatches—through the reference, not a literal.
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - record - default - type-decl default referencing a def is the closed alias gap" {
+test "check type - record - default - def-referencing default is accepted" {
     const source =
         \\main! = |_| {}
         \\
@@ -1685,21 +1680,19 @@ test "check type - record - default - type-decl default referencing a def is the
         \\
         \\use_it = c.a
     ;
-    // THIS is the alias-mediated gap the literal-only rule closes by
-    // construction: a def-referencing default carried by a type declaration
-    // could form an evaluation cycle through any value annotated with the
-    // alias, a shape the deleted def-dependency demand edges never followed
-    // (they stopped at alias lookups). The reference is rejected at
-    // canonicalization; the rest of the module still checks (the default is
-    // dropped, and `c` supplies the now-required field).
+    // The heir of the old "alias-mediated gap" scenario: a def-referencing
+    // default is now legal, and the cycle it COULD form is what the
+    // canonicalization cycle pass and the checker's dispatch residue judge
+    // (design.md "Defaulted Fields"). No cycle here: `foo` never touches
+    // `Cfg`, so everything checks cleanly.
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
+    try test_env.assertCanErrors(&.{});
     try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - effectful default via type decl rejected at Can as non-literal" {
+test "check type - record - default - effectful default via type decl rejected at finalize" {
     const source =
         \\main! = |_| {}
         \\
@@ -1711,18 +1704,14 @@ test "check type - record - default - effectful default via type decl rejected a
         \\c : Cfg
         \\c = Cfg.{ a: 1 }
     ;
-    // A call is not a literal, so an effectful default can no longer reach
-    // the checker: it is rejected at canonicalization and the default
-    // dropped. The finalize-time purity judgment (`Effectful Default Value`)
-    // remains as a cheap backstop invariant but is unreachable from source.
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
-    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+    // The LIVE purity judgment (design.md "Defaulted Fields"): the compiler
+    // materializes a default at every omitting construction site, so an
+    // effectful default is rejected at finalize—even though every
+    // construction in this module supplies the field.
+    try checkTypesModule(source, .fail_first, "Effectful Default Value");
 }
 
-test "check type - record - default - parametric default rejected (review H6)" {
+test "check type - record - default - parametric default accepted (review H6)" {
     const source =
         \\main! = |_| {}
         \\
@@ -1731,16 +1720,16 @@ test "check type - record - default - parametric default rejected (review H6)" {
         \\p : Pair(U8)
         \\p = Pair.{}
     ;
-    // A default is evaluated once at compile time: a non-concrete default
-    // type has no single runtime representation, so it is rejected instead
-    // of panicking at cross-module construction (design.md "Defaulted
-    // Fields"). `[]` IS a literal—it passes the canonicalization literal
-    // judgment (pinned in optional_field_test.zig)—so concreteness must
-    // stay a separate finalize-time judgment.
-    try checkTypesModule(source, .fail_first, "Default Value Not Concrete");
+    // Defaults materialize PER SPECIALIZATION (design.md "Defaulted
+    // Fields"): a parametric field lowers its default at each site's
+    // monotype, so `?? []` on `List(x)` is legal and `Pair(U8)` gets a
+    // `List(U8)` default.
+    try checkTypesModule(source, .{ .pass = .{ .def = "p" } },
+        \\Pair(U8)
+    );
 }
 
-test "check type - record - default - concrete literal cannot default a parametric field" {
+test "check type - record - default - parametric literal default rejected" {
     const source =
         \\main! = |_| {}
         \\
@@ -1749,10 +1738,15 @@ test "check type - record - default - concrete literal cannot default a parametr
         \\config : Config(Str)
         \\config = Config.{}
     ;
-    try checkTypesModule(source, .fail_first, "Default Value Not Concrete");
+    // The default EXPRESSION may be polymorphic (`?? []` is pinned accepted
+    // above), but a numeral/quote literal inside it lowers through the
+    // materialization site's type—`Config(Str)` would dispatch
+    // `from_numeral` on Str—so a literal whose own type stays parametric
+    // at the declaration is rejected (design.md "Defaulted Fields").
+    try checkTypesModule(source, .fail_first, "Default Literal Needs A Concrete Type");
 }
 
-test "check type - record - default - indirect self-reference cycle rejected at Can as non-literal" {
+test "check type - record - default - indirect reference that never omits is accepted" {
     const source =
         \\main! = |_| {}
         \\
@@ -1763,21 +1757,19 @@ test "check type - record - default - indirect self-reference cycle rejected at 
         \\
         \\helper = x.a
     ;
-    // This indirect cycle—the default references `helper`, whose body
-    // reads the very field the default fills—used to be caught by
-    // def-dependency demand edges from annotation defaults. With defaults
-    // restricted to closed literals, the reference itself is rejected at
-    // canonicalization: the cycle can never form, and the demand-edge
-    // machinery is gone. The default is dropped, so `x` supplies the
-    // now-required field and no def cycle or type problem remains.
+    // The default references `helper`, which reads the very field the
+    // default fills—but through a construction that SUPPLIES the field, so
+    // no materialization cycle exists and the cycle pass accepts it
+    // (design.md "Defaulted Fields"; the omitting variant is pinned as a
+    // rejection in src/canonicalize/test/optional_field_test.zig).
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
+    try test_env.assertCanErrors(&.{});
     try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - omitted recursive default is rejected" {
+test "check type - record - default - omitted recursive default is rejected at Can" {
     const source =
         \\main! = |_| {}
         \\
@@ -1786,11 +1778,17 @@ test "check type - record - default - omitted recursive default is rejected" {
         \\root : Node
         \\root = Node.{}
     ;
-    // `Node.{}` is syntactically a closed literal, but constructing it omits
-    // `next` and therefore materializes this same default again. The checker
-    // must reject that explicit default-materialization cycle before the
-    // checked module reaches postcheck lowering.
-    try checkTypesModule(source, .fail_first, "Recursive Default Value");
+    // `Node.{}` inside the default omits `next` and therefore materializes
+    // this same default again: a pure omission self-edge, caught by the
+    // canonicalization cycle pass now that omission sites are explicit
+    // nominal constructions (the checker's residue only judges edges CAN
+    // cannot see). The default is dropped, `next` degrades to required, and
+    // the follow-on missing-field type error on `root` is expected—only the
+    // CAN error set is asserted here.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{"Default Value Cycle"});
 }
 
 test "check type - record - default - nested omitted defaults terminate" {
@@ -1808,7 +1806,7 @@ test "check type - record - default - nested omitted defaults terminate" {
     try checkTypesModule(source, .{ .pass = .{ .def = "value" } }, "U8");
 }
 
-test "check type - record - default - module-constant default rejected at Can as non-literal" {
+test "check type - record - default - module-constant default accepted and materialized" {
     const source =
         \\main! = |_| {}
         \\
@@ -1818,41 +1816,38 @@ test "check type - record - default - module-constant default rejected at Can as
         \\X := { a: U8 ?? ten }
         \\
         \\x : X
-        \\x = X.{ a: 1 }
+        \\x = X.{}
         \\
         \\use_it = x.a
     ;
-    // Even a benign, non-cycling reference to a module constant is rejected:
-    // the literal-only rule is judged on the default's shape at
-    // canonicalization, not on whether a cycle actually forms—that is what
-    // lets the checker drop the reference-cycle machinery outright.
+    // A non-cycling reference to a module constant is an ordinary pure
+    // default: accepted, typed against the field, and materialized at the
+    // omitting construction (runtime value pinned in eval tests).
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
+    try test_env.assertCanErrors(&.{});
     try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - effectful default rejected at Can as non-literal" {
+test "check type - record - default - pure call default accepted" {
     const source =
         \\main! = |_| {}
         \\
-        \\get_default! : {} => U8
-        \\get_default! = |_| 5
+        \\get_default : {} -> U8
+        \\get_default = |_| 5
         \\
-        \\MyRecord := { count: U8 ?? get_default!({}) }
+        \\MyRecord := { count: U8 ?? get_default({}) }
         \\
         \\my_record : MyRecord
         \\my_record = MyRecord.{ count: 1 }
     ;
-    // A call is not a literal—effectful or not—so the rejection happens
-    // at canonicalization, before purity is even a question. The
-    // finalize-time `Effectful Default Value` judgment stays as a backstop
-    // invariant but is unreachable from source.
+    // A PURE call is a legal default; only effectful defaults are rejected
+    // (the finalize-time purity judgment, pinned above).
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
+    try test_env.assertCanErrors(&.{});
     try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 

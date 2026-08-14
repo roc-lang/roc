@@ -22815,12 +22815,11 @@ fn defaultLiteralFieldKinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
 fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.pending_default_checks.items) |pending| {
         const default_does_fx = try self.checkExpr(pending.default_expr, env, .{});
-        // BACKSTOP invariant: canonicalization restricts defaults to closed
-        // literals (design.md "Defaulted Fields"), and a literal is never
-        // effectful, so this branch is unreachable from source. It stays as
-        // a cheap guard because a default that somehow carried effects would
-        // be materialized at construction sites where running them is
-        // unpredictable.
+        // The LIVE purity judgment (design.md "Defaulted Fields"): a default
+        // is any pure expression, and the compiler materializes it at every
+        // construction site that omits the field—running effects at those
+        // unpredictable points is rejected here, after callee effects have
+        // resolved.
         if (default_does_fx) {
             _ = try self.problems.appendProblem(self.gpa, .{ .effectful_default_value = .{
                 .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
@@ -22837,38 +22836,45 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         }
         const expected_field_type = try self.instantiateVar(pending.field_type_var, env, .use_last_var);
         _ = try self.unify(ModuleEnv.varFrom(pending.default_expr), expected_field_type, env);
+        // Judged HERE, before the numeric-defaulting rounds commit still-flex
+        // literals: a literal left non-concrete by the field unification sits
+        // in a parametric position of the declared field type, and its
+        // dispatch has no implementation to resolve to at some
+        // instantiations (see `checkDefaultLiteralDispatchConcrete`).
+        try self.checkDefaultLiteralDispatchConcrete(pending);
     }
     // The list is kept for `checkDefaultRestrictions`, which runs after the
     // defaulting rounds and constraint validation settle the types.
 }
 
-/// Post-settlement restriction on defaults (design.md "Defaulted Fields"):
-/// the reusable field/default pair must be CONCRETE (the default is evaluated
-/// once at compile time and materialized at every construction site, so the
-/// field must have exactly one runtime representation—judged after the
-/// defaulting rounds so numeral defaults have committed). Checking only the
-/// default expression is insufficient: unifying a literal with an instantiated
-/// copy of a parametric field type can make that copy concrete while leaving
-/// the declared field polymorphic.
+/// Post-settlement cycle residue on defaults (design.md "Defaulted Fields"):
+/// canonicalization's end-of-module pass already rejected every
+/// name-resolvable materialization cycle (and dropped those defaults, so
+/// they never reach this list); what remains here are the edges only type
+/// checking can see—dispatch-resolved call targets and foreign-omission
+/// rows—judged after the defaulting rounds and constraint validation so
+/// dispatch targets have been stamped. (Concreteness is no longer judged:
+/// defaults materialize per specialization, so a parametric field lowers its
+/// default at each site's monotype.)
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     var recursive_defaults: std.ArrayList(PendingDefaultCheck) = .empty;
     defer recursive_defaults.deinit(self.gpa);
 
+    // Top-level binder pattern -> def body, for following reference edges
+    // through def bodies during the residue walk.
+    var pattern_to_def_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty;
+    defer pattern_to_def_expr.deinit(self.gpa);
+    for (self.cir.store.sliceDefs(self.cir.all_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        try pattern_to_def_expr.put(self.gpa, def.pattern, def.expr);
+    }
+
     for (self.pending_default_checks.items) |pending| {
         // An erroring default already reported (effectful poisoning above, or
         // a unify mismatch against its field type—both leave the var `.err`);
-        // judging concreteness of an err var would cascade a second problem
-        // onto the same default.
+        // walking it would cascade a second problem onto the same default.
         if (self.types.resolveVar(ModuleEnv.varFrom(pending.default_expr)).desc.content == .err) continue;
-        const default_is_concrete = try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pending.default_expr));
-        const field_is_concrete = try self.varIsConcreteHoistedConstType(pending.field_type_var);
-        if (!default_is_concrete or !field_is_concrete) {
-            _ = try self.problems.appendProblem(self.gpa, .{ .non_concrete_default_value = .{
-                .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
-                .field_name = pending.field_name,
-            } });
-        }
-        if (try self.defaultMaterializationIsRecursive(pending.default_expr)) {
+        if (try self.defaultMaterializationIsRecursive(pending.default_expr, &pattern_to_def_expr)) {
             try recursive_defaults.append(self.gpa, pending);
         }
     }
@@ -22917,13 +22923,165 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     self.pending_default_checks.clearRetainingCapacity();
 }
 
-/// Whether materializing `root` transitively omits a field carrying `root` as
-/// its own default. This is an explicit dependency walk over checked literal
-/// expressions and their solved record rows: every omitted defaulted field
-/// contributes its `DefaultId`, and local identities resolve directly to the
-/// corresponding CIR expression. Foreign defaults were already validated in
-/// their declaring module, and the module import graph cannot cycle.
-fn defaultMaterializationIsRecursive(self: *Self, root: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
+/// Judge the literal-dispatch concreteness of a default's DIRECT expression
+/// subtree (design.md "Defaulted Fields"): materialization lowers the
+/// expression at each site's monotype, and a numeral/quote literal's
+/// lowering dispatches `from_numeral`/`from_quote` on that monotype—so a
+/// literal whose solved type is still parametric at finalize has
+/// instantiations with no implementation to dispatch to. The walk does NOT
+/// follow references: a referenced def's literals are typed in that def's
+/// own context (the constraint-carrying polymorphic-reference residue is a
+/// documented gap, see design.md).
+fn checkDefaultLiteralDispatchConcrete(self: *Self, pending: PendingDefaultCheck) std.mem.Allocator.Error!void {
+    var expr_work: std.ArrayList(CIR.Expr.Idx) = .empty;
+    defer expr_work.deinit(self.gpa);
+    try expr_work.append(self.gpa, pending.default_expr);
+
+    while (expr_work.pop()) |expr_idx| {
+        const expr = self.cir.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str,
+            => {
+                if (!try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(expr_idx))) {
+                    _ = try self.problems.appendProblem(self.gpa, .{ .default_literal_not_concrete = .{
+                        .region = self.cir.store.getExprRegion(expr_idx),
+                        .field_name = pending.field_name,
+                    } });
+                    return;
+                }
+                if (expr == .e_str) {
+                    try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(expr.e_str.span));
+                }
+            },
+            .e_unary_minus => |unary| try expr_work.append(self.gpa, unary.expr),
+            .e_unary_not => |unary| try expr_work.append(self.gpa, unary.expr),
+            .e_list => |list| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
+            .e_tuple => |tuple| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tuple.elems)),
+            .e_tag => |tag| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tag.args)),
+            .e_nominal => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
+            .e_nominal_external => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
+            .e_record => |record| {
+                for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
+                    try expr_work.append(self.gpa, self.cir.store.getRecordField(field_idx).value);
+                }
+                if (record.ext) |ext_idx| try expr_work.append(self.gpa, ext_idx);
+            },
+            .e_call => |call| {
+                try expr_work.append(self.gpa, call.func);
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+            },
+            .e_if => |if_expr| {
+                for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = self.cir.store.getIfBranch(branch_idx);
+                    try expr_work.append(self.gpa, branch.cond);
+                    try expr_work.append(self.gpa, branch.body);
+                }
+                try expr_work.append(self.gpa, if_expr.final_else);
+            },
+            .e_match => |match_expr| {
+                try expr_work.append(self.gpa, match_expr.cond);
+                for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = self.cir.store.getMatchBranch(branch_idx);
+                    try expr_work.append(self.gpa, branch.value);
+                    if (branch.guard) |guard_idx| try expr_work.append(self.gpa, guard_idx);
+                }
+            },
+            .e_block => |block| {
+                for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    try self.appendDefaultWalkStmtExprs(stmt_idx, &expr_work);
+                }
+                try expr_work.append(self.gpa, block.final_expr);
+            },
+            .e_binop => |binop| {
+                try expr_work.append(self.gpa, binop.lhs);
+                try expr_work.append(self.gpa, binop.rhs);
+            },
+            .e_field_access => |access| try expr_work.append(self.gpa, access.receiver),
+            .e_tuple_access => |access| try expr_work.append(self.gpa, access.tuple),
+            .e_interpolation => |interpolation| {
+                try expr_work.append(self.gpa, interpolation.first);
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(interpolation.parts));
+            },
+            .e_lambda => |lambda| try expr_work.append(self.gpa, lambda.body),
+            .e_closure => |closure| try expr_work.append(self.gpa, closure.lambda_idx),
+            .e_method_call => |call| {
+                try expr_work.append(self.gpa, call.receiver);
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+            },
+            .e_dispatch_call => |call| {
+                try expr_work.append(self.gpa, call.receiver);
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+            },
+            .e_type_method_call => |call| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args)),
+            .e_type_dispatch_call => |call| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args)),
+            .e_structural_eq => |eq| {
+                try expr_work.append(self.gpa, eq.lhs);
+                try expr_work.append(self.gpa, eq.rhs);
+            },
+            .e_structural_hash => |h| {
+                try expr_work.append(self.gpa, h.value);
+                try expr_work.append(self.gpa, h.hasher);
+            },
+            .e_method_eq => |eq| {
+                try expr_work.append(self.gpa, eq.lhs);
+                try expr_work.append(self.gpa, eq.rhs);
+            },
+            .e_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
+            .e_expect_err => |expect_err| try expr_work.append(self.gpa, expect_err.expr),
+            .e_expect => |expect| try expr_work.append(self.gpa, expect.body),
+            .e_return => |ret| try expr_work.append(self.gpa, ret.expr),
+            .e_for => |for_expr| {
+                try expr_work.append(self.gpa, for_expr.expr);
+                try expr_work.append(self.gpa, for_expr.body);
+            },
+            .e_run_low_level => |run_ll| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(run_ll.args)),
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_lookup_required,
+            .e_runtime_error,
+            .e_crash,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_break,
+            .e_hosted_lambda,
+            => {},
+        }
+    }
+}
+
+/// Whether materializing `root` transitively reaches a construction omitting
+/// the field that carries `root` as its own default. The walk descends every
+/// expression form and follows the edges only type checking can resolve—
+/// same-module reference edges into def bodies (re-traversed by necessity: a
+/// mixed cycle needs its whole path, though purely name-resolvable cycles
+/// were already dropped by canonicalization's cycle pass), dispatch-resolved
+/// call targets (`dispatch_target_instantiations`, stamped by constraint
+/// validation), type-dispatch method bindings, and every omitted defaulted
+/// field on a construction's SOLVED row. Foreign defaults were validated in
+/// their declaring module, which cannot reference this one.
+fn defaultMaterializationIsRecursive(
+    self: *Self,
+    root: CIR.Expr.Idx,
+    pattern_to_def_expr: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
+) std.mem.Allocator.Error!bool {
     const target_expr_node: u32 = @intFromEnum(root);
     const self_module = self.cir.selfModuleIdentity();
 
@@ -22933,17 +23091,54 @@ fn defaultMaterializationIsRecursive(self: *Self, root: CIR.Expr.Idx) std.mem.Al
 
     var visited_defaults: std.AutoHashMapUnmanaged(u32, void) = .empty;
     defer visited_defaults.deinit(self.gpa);
+    var visited_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
+    defer visited_exprs.deinit(self.gpa);
 
     while (expr_work.pop()) |expr_idx| {
+        const seen = try visited_exprs.getOrPut(self.gpa, expr_idx);
+        if (seen.found_existing) continue;
         const expr = self.cir.store.getExpr(expr_idx);
         switch (expr) {
-            .e_unary_minus => |unary| try expr_work.append(self.gpa, unary.expr),
-            .e_str => |str| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(str.span)),
-            .e_list => |list| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
-            .e_tuple => |tuple| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tuple.elems)),
-            .e_tag => |tag| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tag.args)),
-            .e_nominal => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
-            .e_nominal_external => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
+            .e_lookup_local => |lookup| {
+                if (pattern_to_def_expr.get(lookup.pattern_idx)) |def_expr| {
+                    try expr_work.append(self.gpa, def_expr);
+                }
+            },
+            .e_lookup_associated_resolved => |lookup| {
+                if (lookup.module_identity == self_module) {
+                    try expr_work.append(self.gpa, self.cir.store.getDef(lookup.target_def_idx).expr);
+                }
+            },
+            .e_dispatch_call => |call| {
+                // The edge canonicalization cannot see: this call's stamped
+                // target. A same-module target's body joins the walk.
+                const call_fn_var = self.types.resolveVar(call.constraint_fn_var).var_;
+                for (self.dispatch_target_instantiations.items) |instantiation| {
+                    if (self.types.resolveVar(instantiation.constraint_fn_var).var_ != call_fn_var) continue;
+                    if (instantiation.target_env != self.cir) continue;
+                    try expr_work.append(self.gpa, self.cir.store.getDef(instantiation.target_binding.def_idx).expr);
+                }
+                try expr_work.append(self.gpa, call.receiver);
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+            },
+            .e_type_dispatch_call => |call| {
+                if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
+                    try expr_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
+                }
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+            },
+            .e_type_method_call => |call| {
+                if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
+                    try expr_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
+                }
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+            },
+            .e_method_call => |call| {
+                // An unreplaced method call carries no stamped target (it is
+                // an already-diagnosed error form by finalize); walk operands.
+                try expr_work.append(self.gpa, call.receiver);
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+            },
             .e_empty_record => {
                 if (try self.appendOmittedDefaultDependencies(
                     expr_idx,
@@ -22956,18 +23151,99 @@ fn defaultMaterializationIsRecursive(self: *Self, root: CIR.Expr.Idx) std.mem.Al
             },
             .e_record => |record| {
                 const fields = self.cir.store.sliceRecordFields(record.fields);
-                if (try self.appendOmittedDefaultDependencies(
-                    expr_idx,
-                    fields,
-                    self_module,
-                    target_expr_node,
-                    &visited_defaults,
-                    &expr_work,
-                )) return true;
+                if (record.ext == null) {
+                    if (try self.appendOmittedDefaultDependencies(
+                        expr_idx,
+                        fields,
+                        self_module,
+                        target_expr_node,
+                        &visited_defaults,
+                        &expr_work,
+                    )) return true;
+                } else {
+                    // An UPDATE omits nothing: unmentioned fields copy from
+                    // the base value, which the walk reaches through `ext`.
+                    try expr_work.append(self.gpa, record.ext.?);
+                }
                 for (fields) |field_idx| {
                     try expr_work.append(self.gpa, self.cir.store.getRecordField(field_idx).value);
                 }
             },
+            .e_unary_minus => |unary| try expr_work.append(self.gpa, unary.expr),
+            .e_unary_not => |unary| try expr_work.append(self.gpa, unary.expr),
+            .e_str => |str| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(str.span)),
+            .e_list => |list| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
+            .e_tuple => |tuple| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tuple.elems)),
+            .e_tag => |tag| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tag.args)),
+            .e_nominal => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
+            .e_nominal_external => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
+            .e_call => |call| {
+                try expr_work.append(self.gpa, call.func);
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+            },
+            .e_lambda => |lambda| try expr_work.append(self.gpa, lambda.body),
+            .e_closure => |closure| {
+                try expr_work.append(self.gpa, closure.lambda_idx);
+                for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
+                    const capture = self.cir.store.getCapture(capture_idx);
+                    if (pattern_to_def_expr.get(capture.pattern_idx)) |def_expr| {
+                        try expr_work.append(self.gpa, def_expr);
+                    }
+                }
+            },
+            .e_if => |if_expr| {
+                for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = self.cir.store.getIfBranch(branch_idx);
+                    try expr_work.append(self.gpa, branch.cond);
+                    try expr_work.append(self.gpa, branch.body);
+                }
+                try expr_work.append(self.gpa, if_expr.final_else);
+            },
+            .e_match => |match_expr| {
+                try expr_work.append(self.gpa, match_expr.cond);
+                for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = self.cir.store.getMatchBranch(branch_idx);
+                    try expr_work.append(self.gpa, branch.value);
+                    if (branch.guard) |guard_idx| try expr_work.append(self.gpa, guard_idx);
+                }
+            },
+            .e_block => |block| {
+                for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    try self.appendDefaultWalkStmtExprs(stmt_idx, &expr_work);
+                }
+                try expr_work.append(self.gpa, block.final_expr);
+            },
+            .e_binop => |binop| {
+                try expr_work.append(self.gpa, binop.lhs);
+                try expr_work.append(self.gpa, binop.rhs);
+            },
+            .e_field_access => |access| try expr_work.append(self.gpa, access.receiver),
+            .e_tuple_access => |access| try expr_work.append(self.gpa, access.tuple),
+            .e_interpolation => |interpolation| {
+                try expr_work.append(self.gpa, interpolation.first);
+                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(interpolation.parts));
+            },
+            .e_structural_eq => |eq| {
+                try expr_work.append(self.gpa, eq.lhs);
+                try expr_work.append(self.gpa, eq.rhs);
+            },
+            .e_structural_hash => |h| {
+                try expr_work.append(self.gpa, h.value);
+                try expr_work.append(self.gpa, h.hasher);
+            },
+            .e_method_eq => |eq| {
+                try expr_work.append(self.gpa, eq.lhs);
+                try expr_work.append(self.gpa, eq.rhs);
+            },
+            .e_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
+            .e_expect_err => |expect_err| try expr_work.append(self.gpa, expect_err.expr),
+            .e_expect => |expect| try expr_work.append(self.gpa, expect.body),
+            .e_return => |ret| try expr_work.append(self.gpa, ret.expr),
+            .e_for => |for_expr| {
+                try expr_work.append(self.gpa, for_expr.expr);
+                try expr_work.append(self.gpa, for_expr.body);
+            },
+            .e_run_low_level => |run_ll| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(run_ll.args)),
             .e_num,
             .e_frac_f32,
             .e_frac_f64,
@@ -22978,55 +23254,62 @@ fn defaultMaterializationIsRecursive(self: *Self, root: CIR.Expr.Idx) std.mem.Al
             .e_typed_frac,
             .e_typed_num_from_numeral,
             .e_str_segment,
+            .e_bytes_literal,
             .e_empty_list,
             .e_zero_argument_tag,
-            => {},
-            // Canonicalization admits only the literal forms above. An error
-            // elsewhere can replace a child with another expression kind; it
-            // has already produced a diagnostic and contributes no usable
-            // default-materialization dependency.
-            .e_bytes_literal,
-            .e_lookup_local,
             .e_lookup_external,
             .e_lookup_associated_local,
             .e_lookup_associated,
-            .e_lookup_associated_resolved,
             .e_lookup_required,
-            .e_block,
-            .e_match,
-            .e_if,
-            .e_call,
-            .e_closure,
-            .e_lambda,
-            .e_binop,
-            .e_unary_not,
-            .e_field_access,
-            .e_method_call,
-            .e_dispatch_call,
-            .e_interpolation,
-            .e_structural_eq,
-            .e_structural_hash,
-            .e_method_eq,
-            .e_type_method_call,
-            .e_type_dispatch_call,
-            .e_tuple_access,
             .e_runtime_error,
             .e_crash,
-            .e_dbg,
-            .e_expect_err,
-            .e_expect,
             .e_ellipsis,
             .e_anno_only,
             .e_derived_method,
-            .e_return,
-            .e_for,
             .e_break,
             .e_hosted_lambda,
-            .e_run_low_level,
             => {},
         }
     }
     return false;
+}
+
+/// Statement descent for the default-materialization residue walk.
+fn appendDefaultWalkStmtExprs(
+    self: *Self,
+    stmt_idx: CIR.Statement.Idx,
+    expr_work: *std.ArrayList(CIR.Expr.Idx),
+) std.mem.Allocator.Error!void {
+    switch (self.cir.store.getStatement(stmt_idx)) {
+        .s_decl => |decl| try expr_work.append(self.gpa, decl.expr),
+        .s_var => |var_stmt| try expr_work.append(self.gpa, var_stmt.expr),
+        .s_reassign => |reassign| try expr_work.append(self.gpa, reassign.expr),
+        .s_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
+        .s_expr => |expr_stmt| try expr_work.append(self.gpa, expr_stmt.expr),
+        .s_expect => |expect| try expr_work.append(self.gpa, expect.body),
+        .s_return => |ret| try expr_work.append(self.gpa, ret.expr),
+        .s_for => |for_stmt| {
+            try expr_work.append(self.gpa, for_stmt.expr);
+            try expr_work.append(self.gpa, for_stmt.body);
+        },
+        .s_while => |while_stmt| {
+            try expr_work.append(self.gpa, while_stmt.cond);
+            try expr_work.append(self.gpa, while_stmt.body);
+        },
+        .s_infinite_loop => |loop_stmt| try expr_work.append(self.gpa, loop_stmt.body),
+        .s_breakable_loop => |loop_stmt| try expr_work.append(self.gpa, loop_stmt.body),
+        .s_var_uninitialized,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_crash,
+        .s_runtime_error,
+        .s_break,
+        => {},
+    }
 }
 
 fn recordLiteralSuppliesField(

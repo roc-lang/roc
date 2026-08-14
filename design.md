@@ -4939,45 +4939,64 @@ Restrictions:
 - `?:` and `??` do not combine: a default makes the field never missing,
   which makes the tagged slot and `.?` pointless—`a ?: U8 ?? 10` is
   rejected at canonicalization with exactly that explanation.
-- The default must be a LITERAL, defined recursively: a numeric literal
-  (including a negated numeral), an interpolation-free string literal (an
-  interpolated string references bindings), a tag literal—bare or
-  applied, plain or nominal-qualified (the nominal wrapper names a type
-  declaration, not a value)—or a list / record / tuple literal whose
-  components are all literals. Nothing else: no operators, no calls, no
-  lambdas, no control flow, and no name reference of any kind (local,
-  module-level, or imported). Judged at canonicalization
-  (`Can.defaultNonLiteralNode`, diagnostic `record_default_not_literal`)
-  by walking the canonicalized default; on rejection the default is
-  dropped. The rule exists because defaults are compiler-materialized at
-  construction sites: a reference could form an evaluation cycle the
-  compiler will not chase. Banning references bans every VALUE-REFERENCE
-  cycle—the direct self-reference judgment, the local-capture (free-variables)
-  judgment, and the def-dependency demand edges from annotation defaults were
-  all subsumed and deleted, including the
-  alias-mediated gap none of them covered (a type declaration's default
-  referencing a def, cycling through a value annotated with the alias—
-  the demand walk never followed alias lookups). Supporting references
-  later is future work that needs declaration-aware cycle edges: demand
-  edges that follow a value annotation's alias/apply lookups into the
-  referenced declarations' defaults.
-- Literal aggregates can still introduce a cycle IMPLICITLY by omitting a
-  defaulted field—for example, `Node := { next : Node ?? Node.{} }`. After
-  default expressions are checked and field kinds are solved, the checker
-  walks each literal and its solved record rows. Every omitted defaulted field
-  contributes an explicit `DefaultId` dependency; following those local
-  identities back to the starting default is rejected as `recursive_default_value`.
-  This judgment runs before building `CheckedModule`, so postcheck lowering
-  only receives defaults whose materialization graph is acyclic.
-- The declared FIELD type of a default must be CONCRETE: the one declared
-  default is materialized at every construction site, so a parametric field
-  has no single runtime representation even when the default literal itself
-  happens to settle concretely in an instantiated check copy. Judged at
-  finalize, after the defaulting rounds so numeral defaults commit first—a
-  literal (`?? []`) can still be non-concrete, which is why this axis survives
-  the literal restriction. (Purity needs no axis of its own anymore: a literal
-  is never effectful, so the finalize-time `effectful_default_value` judgment
-  remains only as a backstop invariant.)
+- The default may be ANY PURE EXPRESSION—operators, calls, control flow,
+  lambdas, and references to (same-module or imported) top-level defs all
+  included. Purity is the LIVE finalize judgment: the compiler materializes
+  a default at every construction site that omits the field, so an
+  effectful default (`does_fx` after callee effects resolve) is rejected as
+  `effectful_default_value` in `checkPendingDefaults`, which also types the
+  default against an instantiated copy of its field's type. Nominal
+  declarations are top-level, so a default canonicalizes in module
+  top-level scope and can never capture a local binding.
+- Materialization CYCLES are rejected in two stages, split by what each
+  stage can resolve:
+  - CANONICALIZATION owns every NAME-RESOLVABLE cycle
+    (src/canonicalize/DefaultCycles.zig, run at the end of
+    `canonicalizeFile`): one Tarjan SCC pass over a graph whose nodes are
+    the module's defaults and top-level defs, with REFERENCE edges
+    (lookups resolving to same-module defs, walked into their bodies) and
+    OMISSION edges (a LOCAL nominal construction whose literal omits a
+    declared defaulted field—syntactically explicit post the nominal-only
+    restriction). Value references only point down the import DAG, so a
+    name-resolvable cycle can never leave the declaring module; the pass
+    is module-local without loss. Each cyclic SCC containing a default
+    reports `record_default_reference_cycle` ("Default Value Cycle")
+    ONCE—on its first default in source order—and EVERY default in the
+    SCC is dropped (fields degrade to required), so check and lowering
+    never see a CAN-caught cycle. The walk is conservative by
+    reachability: an omission on a dead branch still counts. Dispatch
+    calls, calls through function parameters, and foreign lookups
+    terminate edges here by principle.
+  - CHECK owns the residue only type checking can see: the extended
+    `defaultMaterializationIsRecursive` walk descends every expression
+    form and additionally follows same-module reference edges,
+    DISPATCH-RESOLVED call targets (`dispatch_target_instantiations`,
+    joined on the call's constraint fn var), type-dispatch method
+    bindings, and omitted defaulted fields on SOLVED rows (which also
+    covers foreign-omission edges). It re-traverses name edges by
+    necessity—a mixed cycle needs its whole path—but purely
+    name-resolvable cycles were already dropped at CAN, so
+    `recursive_default_value` fires only for cycles involving a
+    check-only edge. This judgment still runs before `CheckedModule` is
+    built, so postcheck lowering only receives acyclic defaults.
+- A numeral or string LITERAL directly inside the default expression must
+  have a CONCRETE solved type at the declaration
+  (`checkDefaultLiteralDispatchConcrete`, judged in `checkPendingDefaults`
+  immediately after the field unification, BEFORE the defaulting rounds
+  would commit a still-flex copy): literal lowering is dispatch-directed by
+  the materialization site's monotype (`from_numeral`/`from_quote`), and a
+  parametric field can hand it an instantiation with no implementation—
+  `Cfg(a) := { x : a ?? 0 }` at `Cfg(Str)` has nothing to dispatch to.
+  Rejected as `default_literal_not_concrete` ("Default Literal Needs A
+  Concrete Type"). The default EXPRESSION itself may still be
+  parametric—`Pair(x) := { items : List(x) ?? [] }` is legal and
+  materializes per specialization. The judgment walks only the default's
+  DIRECT subtree, not through references: a POLYMORPHIC REFERENCE that
+  carries a literal-dispatch constraint into a non-implementing
+  instantiation (e.g. `zero = 0` used as `?? zero` on a parametric field)
+  is a KNOWN GAP—closing it needs the default's deferred constraints
+  re-judged per specialization, the same machinery an inferred where-clause
+  would need.
 
 The CheckedModule preserves the kind: a defaulted field serializes as a
 required field CARRYING its default identity (`CheckedFieldDefault`), with
@@ -5016,10 +5035,11 @@ default identity's declaring-module content hash resolves the declaring
 view (`moduleForIdentityHash`), and the foreign checked expression lowers
 under a scoped view swap (fresh instantiation context and binder state,
 mirroring cross-module local-procedure lowering; boxy swaps its
-module-context the same way). Checking keeps the `does_fx` →
-`effectful_default_value` rejection as a backstop invariant only:
-canonicalization's literal restriction already makes an effectful default
-unreachable from source.
+module-context the same way). An imported default's expression may
+reference the declaring module's own defs; the swapped context resolves
+them (pinned by run-test-eval). Checking's `does_fx` →
+`effectful_default_value` rejection is the LIVE purity judgment (see
+Restrictions above): only pure defaults reach materialization.
 
 Monotype default identity (`Type.FieldDefault`): the Monotype record
 field itself carries the `??` default identity—the declaring module's

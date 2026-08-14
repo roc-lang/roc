@@ -3838,6 +3838,60 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "10" },
     },
     .{
+        .name = "defaulted record field: imported default referencing a private def of its module",
+        .source_kind = .module,
+        .source =
+        \\import Cfg
+        \\
+        \\main = Cfg.get_count(Cfg.{ name: "Roc" })
+        ,
+        .imports = &.{.{
+            .name = "Cfg",
+            .source =
+            \\Cfg := { count : U8 ?? base_count + 2, name : Str }.{
+            \\  get_count : Cfg -> U8
+            \\  get_count = |cfg| cfg.count
+            \\}
+            \\
+            \\base_count : U8
+            \\base_count = 40
+            ,
+        }},
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "defaulted record field: pure call default computed at an omitting construction",
+        .source_kind = .module,
+        .source =
+        \\compute : U8 -> U8
+        \\compute = |n| n * 3 + 1
+        \\
+        \\Cfg := { count : U8 ?? compute(4), name : Str }
+        \\
+        \\make : Str -> Cfg
+        \\make = |name| Cfg.{ name: name }
+        \\
+        \\main = make("a").count
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
+        .name = "defaulted record field: parametric default specializes per instantiation",
+        .source_kind = .module,
+        .source =
+        \\Pair(x) := { items : List(x) ?? [], label : Str }
+        \\
+        \\bytes : Pair(U8)
+        \\bytes = Pair.{ label: "b" }
+        \\
+        \\words : Pair(Str)
+        \\words = Pair.{ label: "w" }
+        \\
+        \\main = List.len(bytes.items) + List.len(words.items) + Str.count_utf8_bytes(bytes.label) + Str.count_utf8_bytes(words.label)
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
         .name = "inspect: lambda list param calling List.append",
         .source =
         \\{
