@@ -3739,10 +3739,11 @@ body.
 The recursive callback interface must name `Iter(item)` before the callback
 body can be lowered. Checking therefore records three flat relations: the outer
 result constructs from the callback's explicit item selection; each generated
-iterator produced by the callback reserves that same declaration-plus-item
-construction; and every recursive `rest` consumer in the callback points
-directly to the outer result slot. Lowering creates the producer reservations
-first, then applies those direct consumer edges before lowering the callback.
+iterator produced by the callback selects that same declaration-plus-item
+construction, reserving it only while the item edge is a request; and every
+recursive `rest` consumer in the callback points directly to the outer result
+slot. Lowering establishes those exact producer selections first, then applies
+the direct consumer edges before lowering the callback.
 It does not inspect the callback's result graph, descend through a compound
 result to find `rest`, or propagate a generated classification through any
 parent node.
