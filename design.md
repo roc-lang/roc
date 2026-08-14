@@ -3711,35 +3711,44 @@ source is tried and no checked or produced graph is inspected to discover one.
 The slot separately records who constructs the generated identity. A completed
 value edge supplies an already-atomic identity. A generated interface slot may
 construct one only after its exact public-argument producer has completed; this
-is used by `Field` and by recursive callable interfaces whose `Iter(item)` item
-is already exact. An iterator operation constructs its own result at its
-explicit `IteratorProcedureId` boundary from completed operands rather than
-from a destination request. `iter_from_step` takes its item identity from the
-completed step callback. Its recursive callback interface must nevertheless
-name `Iter(item)` before that callback body can be lowered. Checking therefore
-emits the result occurrence and each recursive `rest` occurrence as separate
-generated-construction slots over the same explicit item selection. Lowering
-asks the dense declaration-plus-item reservation index for each such slot.
-Equal inputs reuse the same unstamped nominal immediately, before any duplicate
-private backing or hash work can begin. Lowering then runs the callback against
-that reservation's recursive interface and requires the completed callback to
-return the same item cell. Only then does the operation compute and stamp the
-SHA-256 identity. An unstamped reservation is construction state, not a type
-identity: it cannot be sealed, serialized, compared for generated equality, or
-used by a later stage. Reaching relation freeze with an unstamped reservation
-is a compiler invariant violation; freeze never completes one.
+is used by `Field` and by the recursive callable interface of `iter_from_step`.
+`iter_from_step` is the sole iterator identity producer. It constructs its
+result at that explicit `IteratorProcedureId` boundary from the item identity
+in the completed step callback, never from a destination request. Public
+iterator helpers—including `List.iter`, adapters, ranges, and `range_done`—do
+not construct another identity at their call boundary. Their ordinary body
+value carries the identity produced by the `iter_from_step` call within that
+body.
 
-A recursive `rest` occurrence asks for the same declaration-plus-item
-construction and therefore reaches that early reservation or the completed
-content address directly. It does not copy the outer result's generated root or
-private backing, and it does not construct or hash equivalent inputs twice. The
-direct item selection may already have been produced by the enclosing iterator
-operation—for example, `List.iter` selects it from the exact list operand—so
-the reservation does not turn the enclosing result destination into production
-evidence. `range_done` is the sole explicitly request-directed iterator
-constructor because it has no value edge that can produce an item identity. No
-other iterator producer may treat a result request, even a currently closed or
-defaulted one, as production evidence.
+The recursive callback interface must name `Iter(item)` before the callback
+body can be lowered. Checking therefore publishes three flat facts: the outer
+result constructs from the callback's explicit item selection; each generated
+iterator produced by the callback reserves that same declaration-plus-item
+construction; and every recursive `rest` consumer in the callback points
+directly to the outer result slot. Lowering creates the producer reservations
+first, then applies those direct consumer edges before lowering the callback.
+It does not inspect the callback's result graph, descend through a compound
+result to find `rest`, or propagate a generated classification through any
+parent node.
+
+Each producer reservation asks the dense declaration-plus-item index for the
+same construction. Equal inputs therefore reuse one unstamped nominal
+immediately, before any duplicate private backing or hash work can begin.
+Lowering runs the callback against that reservation's recursive interface,
+requires the callback producer to complete the same item cell, and then
+immediately computes and stamps the SHA-256 identity. An unstamped reservation
+is construction state, not a type identity: it cannot be sealed, serialized,
+compared for generated equality, or used by a later stage. Reaching relation
+freeze with an unstamped reservation is a compiler invariant violation; freeze
+never completes one.
+
+A recursive `rest` consumer follows its checker-published direct edge to that
+early reservation or completed content address. It does not independently ask
+a containment question, copy the outer result's private backing, or construct
+or hash equivalent inputs twice. The reservation does not turn the enclosing
+result destination into production evidence. No iterator producer may treat a
+result request, even a currently closed or defaulted one, as production
+evidence.
 
 Operations that preserve an already-generated identity record that source
 directly on every generated output slot. In particular, `Iter.next` records its
@@ -3756,9 +3765,7 @@ explicit operand producer, or an independently checker-proven concrete source,
 may complete such a child before the generated identity is interned. A generic
 generated constructor cannot intern from that request merely because it is
 currently resolved: a closed request can still contain a language default that
-a later value producer replaces. The only exception is a result request named
-directly by an explicitly request-directed producer operation as described
-above.
+a later value producer replaces.
 
 Operand scheduling direction says only whether an operand needs an exact
 request before lowering can begin. Once lowering finishes, every operand is an
@@ -4296,15 +4303,15 @@ The sole content-identity choke point is `lookupGeneratedIterator` plus
 `generatedIteratorNode` adapts an already-instantiated public source and
 `generatedIteratorNominalNode` adapts a checker-authored generated call slot;
 both pass exactly the same public declaration and item node into that choke
-point. The item comes from the operation's explicitly recorded operand or
-request source. A dense item-node index answers repeated in-graph requests
-without hashing. On a dense miss, one structural digest lookup finds a
-cross-graph exact type or carries the computed digest into one backing
-construction and registration; the inputs are never hashed twice for one miss.
-`iter_from_step` additionally uses `reserveGeneratedIteratorNominalNode` for its
-unavoidable recursive construction state, then invokes the same completion
-machinery immediately after its callback returns. No freeze-time or later-stage
-pass finishes generated identity.
+point. The item comes from `iter_from_step`'s explicitly recorded callback
+selection. A dense item-node index answers repeated in-graph requests without
+hashing. On a dense miss, one structural digest lookup finds a cross-graph exact
+type or carries the computed digest into one backing construction and
+registration; the inputs are never hashed twice for one miss. `iter_from_step`
+uses `reserveGeneratedIteratorNominalNode` for its unavoidable recursive
+construction state, then invokes the same completion machinery immediately
+after its callback returns. No freeze-time or later-stage pass finishes
+generated identity.
 
 A public `Iter` expected type has already constrained the expression during
 checking. It is only a destination request. The concrete producer constructs

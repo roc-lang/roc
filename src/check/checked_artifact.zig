@@ -16767,12 +16767,9 @@ pub const SpecializationGeneratedSlotSource = enum(u8) {
     /// One `iter_from_step` callback-interface occurrence shares the explicit
     /// forward item cell owned by that operation's recursive reservation.
     recursive_iterator_interface,
-    /// An iterator operation constructs the identity from its completed runtime
-    /// operands at the operation boundary.
+    /// The concrete `iter_from_step` operation constructs the identity from
+    /// its exact step callable at the operation boundary.
     iterator_operands,
-    /// A request-directed iterator constructor constructs its empty identity
-    /// from the exact result request at the operation boundary.
-    iterator_result_request,
 };
 
 /// Explicit source operation for a generated nominal's public argument.
@@ -19933,10 +19930,11 @@ fn sameGeneratedNominalDeclarationAndArguments(
     return true;
 }
 
-/// Publish identity-preserving edges intrinsic to one compiler-owned
-/// operation. These are part of the shared callable shape, so direct,
-/// evidence-selected, and iterator-loop calls consume the same explicit
-/// source-to-destination operation without inspecting a runtime type.
+/// Publish the direct identity edges owned by iterator runtime operations.
+/// `iter_from_step` constructs the one shared generated identity and its
+/// recursive callback interface; `Iter.next` returns the identity of its exact
+/// iterator input. Public wrappers carry their body's produced identity through
+/// ordinary positional value cells.
 fn publishIteratorOperationSources(
     checked_types: *const CheckedTypePublication,
     procedure: ?IteratorProcedureId,
@@ -19946,52 +19944,54 @@ fn publishIteratorOperationSources(
     selection_edges: []const SpecializationSelectionEdge,
 ) void {
     const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
-    if (procedure) |iterator_procedure| {
-        if (iterator_procedure.generatedIdentitySource()) |identity_source| {
-            var found_result = false;
-            for (shape_slots) |*slot| {
-                if (slot.kind != .generated_nominal or
-                    !specializationSlotHasRoot(slot.*, .result, 0, occurrences, selection_edges)) continue;
-                slot.generated_source = switch (identity_source) {
-                    .completed_operands => .iterator_operands,
-                    .result_request => .iterator_result_request,
-                };
-                found_result = true;
-            }
-            if (!found_result) {
-                checkedArtifactInvariant("iterator producer had no generated result identity", .{});
-            }
+    const iterator_procedure = procedure orelse return;
+    if (iterator_procedure.constructsGeneratedIdentity()) {
+        var found_result = false;
+        for (shape_slots) |*slot| {
+            if (slot.kind != .generated_nominal or
+                !specializationSlotHasRoot(slot.*, .result, 0, occurrences, selection_edges)) continue;
+            slot.generated_source = .iterator_operands;
+            found_result = true;
         }
-        if (iterator_procedure == .iter_from_step) {
-            const result: CheckedTypeId = for (shape_slots) |slot| {
-                if (slot.kind == .generated_nominal and
-                    specializationSlotHasRoot(slot, .result, 0, occurrences, selection_edges)) break slot.checked;
-            } else checkedArtifactInvariant("iter_from_step had no generated result identity", .{});
-            for (shape_slots) |*slot| {
-                if (slot.kind != .generated_nominal or slot.checked == result) continue;
-                var has_producer = false;
-                var has_argument_consumer = false;
-                for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
-                    if (occurrence.production == .producer) has_producer = true;
-                    if (occurrence.production == .consumer and
-                        selection_edges[occurrence.root_selection_edge].step == .argument)
-                    {
-                        has_argument_consumer = true;
-                    }
-                }
-                if (has_producer or !has_argument_consumer) continue;
-                if (!sameGeneratedNominalDeclarationAndArguments(checked_types, result, slot.checked)) {
-                    checkedArtifactInvariant("iter_from_step recursive iterator used a different public identity", .{});
-                }
-                // The recursive `rest` type is closure-interface input, not an
-                // identity copied from the outer result. Reserve it from the
-                // same explicit item selection; the callback producer must
-                // complete that cell before Monotype stamps the identity.
-                slot.generated_source = .recursive_iterator_interface;
-            }
+        if (!found_result) {
+            checkedArtifactInvariant("iterator producer had no generated result identity", .{});
         }
     }
-    if (procedure != .iter_next) return;
+    if (iterator_procedure == .iter_from_step) {
+        const result: CheckedTypeId = for (shape_slots) |slot| {
+            if (slot.kind == .generated_nominal and
+                specializationSlotHasRoot(slot, .result, 0, occurrences, selection_edges)) break slot.checked;
+        } else checkedArtifactInvariant("iter_from_step had no generated result identity", .{});
+        for (shape_slots) |*slot| {
+            if (slot.kind != .generated_nominal or slot.checked == result) continue;
+            var has_argument_producer = false;
+            var has_argument_consumer = false;
+            for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+                if (selection_edges[occurrence.root_selection_edge].step != .argument) continue;
+                switch (occurrence.production) {
+                    .producer => has_argument_producer = true,
+                    .consumer => has_argument_consumer = true,
+                }
+            }
+            if (!has_argument_producer and !has_argument_consumer) continue;
+            if (!sameGeneratedNominalDeclarationAndArguments(checked_types, result, slot.checked)) {
+                checkedArtifactInvariant("iter_from_step recursive iterator used a different public identity", .{});
+            }
+            // A generated iterator produced by the callback reserves the same
+            // declaration-plus-item construction as the outer result. The
+            // callback must complete that item cell before Monotype stamps the
+            // shared identity.
+            if (has_argument_producer) {
+                slot.generated_source = .recursive_iterator_interface;
+            }
+            // Every consumer occurrence inside that callback interface
+            // consumes the outer result's reserved identity. Publish that flat
+            // edge explicitly so Monotype installs the reservation in the
+            // callback request without inspecting either type graph.
+            if (has_argument_consumer) slot.operation_source = result;
+        }
+    }
+    if (iterator_procedure != .iter_next) return;
     const source: CheckedTypeId = for (shape_slots) |slot| {
         if (slot.kind == .generated_nominal and specializationSlotHasRoot(
             slot,
@@ -39231,6 +39231,71 @@ test "Iter.next publishes input identity for every returned rest iterator" {
     try std.testing.expectEqual(iter_roots[0], slots[2].operation_source);
 }
 
+test "iter_from_step reserves the iterator produced by its callback result" {
+    const allocator = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var publication = CheckedTypePublication{ .store = .{} };
+    defer publication.deinit(allocator);
+
+    const item = try publication.store.reserveSyntheticTypeRoot(
+        allocator,
+        testCanonicalTypeKey(95),
+        true,
+    );
+    try publication.store.fillSyntheticTypeRoot(allocator, item, .{ .flex = .{} });
+    const module_identity = try names.internModuleIdentity(&([_]u8{0x96} ** 32));
+    const type_name = try names.internTypeName("Iter");
+    var iter_roots: [3]CheckedTypeId = undefined;
+    for (&iter_roots) |*root| {
+        const args = try allocator.alloc(CheckedTypeId, 1);
+        args[0] = item;
+        root.* = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .{ .nominal = .{
+            .name = type_name,
+            .origin_module = module_identity,
+            .owner_module = testCheckedModuleKey(96),
+            .source_decl = 7,
+            .builtin = .iter,
+            .is_opaque = true,
+            .representation = .{ .builtin = .iter },
+            .args = args,
+        } });
+    }
+
+    const occurrences = [_]SpecializationOccurrence{
+        .{ .checked = iter_roots[0], .selection_edge = 0, .root_selection_edge = 0, .production = .producer },
+        .{ .checked = iter_roots[1], .selection_edge = 1, .root_selection_edge = 1, .production = .producer },
+        .{ .checked = iter_roots[2], .selection_edge = 2, .root_selection_edge = 2, .production = .consumer },
+    };
+    const selection_edges = [_]SpecializationSelectionEdge{
+        .{ .checked = iter_roots[0], .parent = no_specialization_selection_edge_parent, .index = 0, .payload_index = 0, .step = .result },
+        .{ .checked = iter_roots[1], .parent = no_specialization_selection_edge_parent, .index = 1, .payload_index = 0, .step = .argument },
+        .{ .checked = iter_roots[2], .parent = no_specialization_selection_edge_parent, .index = 1, .payload_index = 0, .step = .argument },
+    };
+    var slots = [_]SpecializationCallSlot{
+        .{ .checked = iter_roots[0], .kind = .generated_nominal, .exact_identity = false, .generated_source = .exact_arguments, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 0, .len = 1 } },
+        .{ .checked = iter_roots[1], .kind = .generated_nominal, .exact_identity = false, .generated_source = .exact_arguments, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 1, .len = 1 } },
+        .{ .checked = iter_roots[2], .kind = .generated_nominal, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 2, .len = 1 } },
+    };
+    const shape = SpecializationCallShape{
+        .slots = .{ .start = 0, .len = slots.len },
+        .selection_edges = .{ .start = 0, .len = selection_edges.len },
+    };
+
+    publishIteratorOperationSources(
+        &publication,
+        .iter_from_step,
+        shape,
+        &slots,
+        &occurrences,
+        &selection_edges,
+    );
+
+    try std.testing.expectEqual(SpecializationGeneratedSlotSource.iterator_operands, slots[0].generated_source);
+    try std.testing.expectEqual(SpecializationGeneratedSlotSource.recursive_iterator_interface, slots[1].generated_source);
+    try std.testing.expectEqual(iter_roots[0], slots[2].operation_source);
+}
+
 test "target source roots exclude explicit concrete checked sources" {
     const concrete = testIndexId(CheckedTypeId, 0);
     const runtime = testIndexId(CheckedTypeId, 1);
@@ -41117,8 +41182,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x4A, 0x98, 0x4B, 0x6A, 0xA9, 0xD8, 0x79, 0xBC, 0x41, 0x19, 0x79, 0xC1, 0x68, 0x48, 0x93, 0x46,
-        0x5A, 0x6A, 0x4F, 0x33, 0x19, 0xC6, 0xD0, 0xC3, 0x6F, 0x69, 0x0E, 0x8B, 0x9F, 0x13, 0x72, 0x72,
+        0x28, 0xE8, 0x0D, 0x0B, 0xF7, 0x72, 0xCB, 0xD8, 0x21, 0xC3, 0x79, 0xD2, 0xAB, 0x94, 0x22, 0xC1,
+        0x15, 0xF6, 0xDF, 0x6A, 0x25, 0x73, 0x35, 0x9B, 0xD0, 0x91, 0xD5, 0x31, 0x3B, 0x33, 0x60, 0x1A,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

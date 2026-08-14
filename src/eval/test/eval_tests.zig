@@ -5542,6 +5542,369 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(6, 6)" },
     },
     .{
+        .name = "for loop over a match joining two producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| match flag {
+        \\    True => xs.iter()
+        \\    False => (0..<n).iter()
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "for loop over an early return joining two producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| {
+        \\    if flag {
+        \\        return xs.iter()
+        \\    }
+        \\    (0..<n).iter()
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "for loop over a record branch joining nested producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> { it : Iter(U64) }
+        \\pick = |xs, n, flag| if flag {
+        \\    { it: xs.iter() }
+        \\} else {
+        \\    { it: (0..<n).iter() }
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag).it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "for loop over list storage joining nested producer representations",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64), U64 -> List({ it : Iter(U64) })
+        \\wrap = |xs, n| [{ it: xs.iter() }, { it: (0..<n).iter() }]
+        \\
+        \\main = {
+        \\    var $sum = 0
+        \\    for row in wrap([1, 2, 3], 4) {
+        \\        for x in row.it {
+        \\            $sum = $sum + x
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a branch joining list element producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> List(Iter(U64))
+        \\pick = |xs, n, flag| if flag {
+        \\    [xs.iter()]
+        \\} else {
+        \\    [(0..<n).iter()]
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for it in pick(xs, n, flag) {
+        \\        for x in it {
+        \\            $sum = $sum + x
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "for loop over a stateful branch joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> (Iter(U64), U64)
+        \\pick = |xs, n, flag| {
+        \\    var $selected = 0
+        \\    it : Iter(U64)
+        \\    it = if flag {
+        \\        $selected = 10
+        \\        xs.iter()
+        \\    } else {
+        \\        $selected = 20
+        \\        (0..<n).iter()
+        \\    }
+        \\    (it, $selected)
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    (it, selected) = pick(xs, n, flag)
+        \\    var $sum = selected
+        \\    for x in it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(16, 26)" },
+    },
+    .{
+        .name = "for loop over a stateful match joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> (Iter(U64), U64)
+        \\pick = |xs, n, flag| {
+        \\    var $selected = 0
+        \\    it : Iter(U64)
+        \\    it = match flag {
+        \\        True => {
+        \\            $selected = 10
+        \\            xs.iter()
+        \\        }
+        \\        False => {
+        \\            $selected = 20
+        \\            (0..<n).iter()
+        \\        }
+        \\    }
+        \\    (it, $selected)
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    (it, selected) = pick(xs, n, flag)
+        \\    var $sum = selected
+        \\    for x in it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(16, 26)" },
+    },
+    .{
+        .name = "for loop after state-only branch joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| {
+        \\    var $it = xs.iter()
+        \\    if flag {
+        \\        $it = xs.iter_rev()
+        \\    } else {
+        \\        $it = (0..<n).iter()
+        \\    }
+        \\    $it
+        \\}
+        \\
+        \\digits : List(U64), U64, Bool -> U64
+        \\digits = |xs, n, flag| {
+        \\    var $out = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = (digits([1, 2, 3], 4, Bool.True), digits([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(321, 123)" },
+    },
+    .{
+        .name = "for loop after state-only match joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| {
+        \\    var $it = xs.iter()
+        \\    match flag {
+        \\        True => {
+        \\            $it = xs.iter_rev()
+        \\            {}
+        \\        }
+        \\        False => {
+        \\            $it = (0..<n).iter()
+        \\            {}
+        \\        }
+        \\    }
+        \\    $it
+        \\}
+        \\
+        \\digits : List(U64), U64, Bool -> U64
+        \\digits = |xs, n, flag| {
+        \\    var $out = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = (digits([1, 2, 3], 4, Bool.True), digits([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(321, 123)" },
+    },
+    .{
+        .name = "for loop after nested stateful branch joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool, Bool -> (Iter(U64), Iter(U64))
+        \\pick = |xs, n, outer, inner| {
+        \\    var $saved = xs.iter()
+        \\    it = if outer {
+        \\        $saved = xs.iter_rev()
+        \\        if inner {
+        \\            $saved = (0..<n).iter()
+        \\            xs.iter()
+        \\        } else {
+        \\            $saved = xs.iter()
+        \\            xs.iter_rev()
+        \\        }
+        \\    } else {
+        \\        $saved = (0..<n).iter()
+        \\        xs.iter()
+        \\    }
+        \\    (it, $saved)
+        \\}
+        \\
+        \\digits : Iter(U64) -> U64
+        \\digits = |it| {
+        \\    var $out = 0
+        \\    for x in it {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\run : List(U64), U64, Bool, Bool -> (U64, U64)
+        \\run = |xs, n, outer, inner| {
+        \\    (it, saved) = pick(xs, n, outer, inner)
+        \\    (digits(it), digits(saved))
+        \\}
+        \\
+        \\main = (run([4, 5, 6], 3, Bool.True, Bool.True), run([4, 5, 6], 3, Bool.True, Bool.False), run([4, 5, 6], 3, Bool.False, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "((456, 12), (654, 456), (456, 12))" },
+    },
+    .{
+        .name = "for loop after nested stateful match joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool, Bool -> (Iter(U64), Iter(U64))
+        \\pick = |xs, n, outer, inner| {
+        \\    var $saved = xs.iter()
+        \\    it = match outer {
+        \\        True => {
+        \\            $saved = xs.iter_rev()
+        \\            match inner {
+        \\                True => {
+        \\                    $saved = (0..<n).iter()
+        \\                    xs.iter()
+        \\                }
+        \\                False => {
+        \\                    $saved = xs.iter()
+        \\                    xs.iter_rev()
+        \\                }
+        \\            }
+        \\        }
+        \\        False => {
+        \\            $saved = (0..<n).iter()
+        \\            xs.iter()
+        \\        }
+        \\    }
+        \\    (it, $saved)
+        \\}
+        \\
+        \\digits : Iter(U64) -> U64
+        \\digits = |it| {
+        \\    var $out = 0
+        \\    for x in it {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\run : List(U64), U64, Bool, Bool -> (U64, U64)
+        \\run = |xs, n, outer, inner| {
+        \\    (it, saved) = pick(xs, n, outer, inner)
+        \\    (digits(it), digits(saved))
+        \\}
+        \\
+        \\main = (run([4, 5, 6], 3, Bool.True, Bool.True), run([4, 5, 6], 3, Bool.True, Bool.False), run([4, 5, 6], 3, Bool.False, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "((456, 12), (654, 456), (456, 12))" },
+    },
+    .{
+        .name = "for loop after loop-carried iterator reassignment",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, replace| {
+        \\    var $it = xs.iter_rev()
+        \\    var $again = replace
+        \\    while $again {
+        \\        $it = (0..<n).iter()
+        \\        $again = Bool.False
+        \\    }
+        \\    $it
+        \\}
+        \\
+        \\digits : List(U64), U64, Bool -> U64
+        \\digits = |xs, n, replace| {
+        \\    var $out = 0
+        \\    for x in pick(xs, n, replace) {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = (digits([4, 5, 6], 3, Bool.True), digits([4, 5, 6], 3, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(12, 654)" },
+    },
+    .{
         .name = "inspect: wrapper iterator with distinct branch producers stays correct",
         .source_kind = .module,
         .source =

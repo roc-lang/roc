@@ -20539,7 +20539,7 @@ const BodyContext = struct {
 
     fn isGeneratedIteratorConstructionNode(self: *BodyContext, node: NodeId) bool {
         return switch (self.graph.content(node)) {
-            .named => |named| if (named.backing) |backing|
+            .named => |named| named.def.generated == null and if (named.backing) |backing|
                 backing.authority == .generated_private and if (named.builtin_owner) |owner|
                     static_dispatch.isIteratorOwner(owner)
                 else
@@ -20548,179 +20548,6 @@ const BodyContext = struct {
                 false,
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
         };
-    }
-
-    /// Produce the exact result node of an iterator procedure from its
-    /// completed immediate operand edges. Call planning does not need to wrap
-    /// those edges in a temporary function node merely to reach this result.
-    fn generatedIteratorResultNode(
-        self: *BodyContext,
-        procedure: checked.IteratorProcedureId,
-        public_fn_node: NodeId,
-        request_args: []const NodeId,
-    ) Allocator.Error!NodeId {
-        const public_fn = try self.graph.functionNodes(public_fn_node);
-        if (public_fn.args.len != request_args.len) {
-            Common.invariant("iterator public/request function arity differed");
-        }
-        switch (procedure) {
-            .iter_from_step => {
-                if (request_args.len != 2) {
-                    Common.invariant("iter_from_step reached Monotype with an unexpected arity");
-                }
-                return try self.generatedIteratorNode(
-                    public_fn.ret,
-                    try self.iteratorStepItemNode((try self.graph.functionNodes(request_args[1])).ret),
-                );
-            },
-            .range_done => {
-                const item = try self.generatedIteratorItemNode(public_fn.ret);
-                return try self.generatedIteratorNode(public_fn.ret, item);
-            },
-            .iter_iter => {
-                if (request_args.len != 1) {
-                    Common.invariant("Iter.iter reached Monotype with an unexpected arity");
-                }
-                if (self.isGeneratedIteratorEvidenceNode(request_args[0])) {
-                    return request_args[0];
-                }
-                Common.invariant("Iter.iter received a non-generated exact iterator operand");
-            },
-            .iter_next => {
-                if (request_args.len != 1) {
-                    Common.invariant("Iter.next reached Monotype with an unexpected arity");
-                }
-                if (self.isGeneratedIteratorEvidenceNode(request_args[0])) {
-                    return try self.generatedIteratorStepReturnNode(request_args[0]);
-                }
-                Common.invariant("Iter.next received a non-generated exact iterator operand");
-            },
-            .iter_custom => {
-                if (request_args.len != 3) {
-                    Common.invariant("Iter.custom reached Monotype with an unexpected arity");
-                }
-                const advance = try self.graph.functionNodes(request_args[2]);
-                const advance_result = try self.graphTryPayloads(advance.ret);
-                const ok_items = try self.graph.tupleItemNodes(advance_result.ok);
-                if (ok_items.len != 2) {
-                    Common.invariant("Iter.custom advance Ok payload was not an item/state pair");
-                }
-                return try self.generatedIteratorNode(
-                    public_fn.ret,
-                    ok_items[0],
-                );
-            },
-            .list_iter, .list_iter_rev => {
-                if (request_args.len != 1) {
-                    Common.invariant("list-backed iterator conversion reached Monotype with an unexpected arity");
-                }
-                return try self.generatedIteratorNode(
-                    public_fn.ret,
-                    try self.graph.listElementNode(request_args[0]),
-                );
-            },
-            .str_iter_utf8 => {
-                if (request_args.len != 1) {
-                    Common.invariant("Str.iter_utf8 reached Monotype with an unexpected arity");
-                }
-                return try self.generatedIteratorNode(
-                    public_fn.ret,
-                    try self.generatedIteratorItemNode(public_fn.ret),
-                );
-            },
-            .iter_single => {
-                if (request_args.len != 1) {
-                    Common.invariant("Iter.single reached Monotype with an unexpected arity");
-                }
-                return try self.generatedIteratorNode(
-                    public_fn.ret,
-                    request_args[0],
-                );
-            },
-            .range_iter => {
-                if (request_args.len != 1) {
-                    Common.invariant("Range.iter reached Monotype with an unexpected arity");
-                }
-                const range = switch (self.graph.content(request_args[0])) {
-                    .named => |named| named,
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("Range.iter received a non-nominal exact range operand"),
-                };
-                if (range.args.len != 1) {
-                    Common.invariant("Range.iter exact operand did not carry one item argument");
-                }
-                return try self.generatedIteratorNode(public_fn.ret, range.args[0]);
-            },
-            .numeric_range_delegate, .numeric_to, .numeric_until => {
-                if (request_args.len == 0) {
-                    Common.invariant("range-backed iterator producer reached Monotype without an item argument");
-                }
-                return try self.generatedIteratorNode(public_fn.ret, request_args[0]);
-            },
-            .iter_map => {
-                if (request_args.len != 2) Common.invariant("Iter.map reached Monotype with an unexpected arity");
-                const transform = try self.graph.functionNodes(request_args[1]);
-                return try self.generatedIteratorAdapterResultNode(public_fn.ret, transform.ret, request_args);
-            },
-            .iter_keep_if => return try self.generatedIteratorAdapterResultNode(
-                public_fn.ret,
-                try self.generatedIteratorItemNode(request_args[0]),
-                request_args,
-            ),
-            .iter_drop_if => return try self.generatedIteratorAdapterResultNode(
-                public_fn.ret,
-                try self.generatedIteratorItemNode(request_args[0]),
-                request_args,
-            ),
-            .iter_take_first => return try self.generatedIteratorAdapterResultNode(
-                public_fn.ret,
-                try self.generatedIteratorItemNode(request_args[0]),
-                request_args,
-            ),
-            .iter_drop_first => return try self.generatedIteratorAdapterResultNode(
-                public_fn.ret,
-                try self.generatedIteratorItemNode(request_args[0]),
-                request_args,
-            ),
-            .iter_concat => {
-                if (request_args.len != 2) {
-                    Common.invariant("Iter.concat reached Monotype with an unexpected arity");
-                }
-                if (self.isGeneratedIteratorEvidenceNode(request_args[0]) or
-                    self.isGeneratedIteratorEvidenceNode(request_args[1]))
-                {
-                    const source = if (self.isGeneratedIteratorEvidenceNode(request_args[0]))
-                        request_args[0]
-                    else
-                        request_args[1];
-                    return try self.generatedIteratorNode(
-                        public_fn.ret,
-                        try self.generatedIteratorItemNode(source),
-                    );
-                }
-                Common.invariant("Iter.concat received no generated exact iterator operand");
-            },
-            .iter_append => return try self.generatedIteratorAdapterResultNode(
-                public_fn.ret,
-                try self.generatedIteratorItemNode(request_args[0]),
-                request_args,
-            ),
-        }
-        unreachable;
-    }
-
-    fn generatedIteratorAdapterResultNode(
-        self: *BodyContext,
-        public_ret: NodeId,
-        item_node: NodeId,
-        args: []const NodeId,
-    ) Allocator.Error!NodeId {
-        if (args.len != 2) {
-            Common.invariant("iterator adapter reached Monotype with an unexpected arity");
-        }
-        if (!self.isGeneratedIteratorEvidenceNode(args[0])) {
-            Common.invariant("iterator adapter received a non-generated exact iterator operand");
-        }
-        return try self.generatedIteratorNode(public_ret, item_node);
     }
 
     fn generatedIteratorItemNode(self: *BodyContext, iterator_node: NodeId) Allocator.Error!NodeId {
@@ -20735,21 +20562,6 @@ const BodyContext = struct {
         const topology = try self.iteratorRepresentationNames();
         const one_payload = try self.graph.tagPayloadNode(step_node, topology.one_tag, 0);
         return try self.graph.recordFieldNode(one_payload, topology.item_field);
-    }
-
-    /// Complete a directly encountered public iterator occurrence as its
-    /// content-addressed runtime nominal. This is deliberately a root-only operation:
-    /// compound producers expose their children when lowering reaches them,
-    /// and no parent is scanned or marked merely because it may contain an
-    /// iterator somewhere below.
-    fn internIteratorOccurrence(self: *BodyContext, node: NodeId) Allocator.Error!NodeId {
-        const named = switch (self.graph.content(node)) {
-            .named => |named| named,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return node,
-        };
-        const owner = named.builtin_owner orelse return node;
-        if (!static_dispatch.isIteratorOwner(owner) or named.def.generated != null) return node;
-        return try self.generatedIteratorNode(node, named.args[0]);
     }
 
     const IteratorRepresentationNames = Type.IteratorTopology;
@@ -26922,6 +26734,29 @@ const BodyContext = struct {
         Common.invariant("one call identity received two exact runtime producers");
     }
 
+    /// Record the output of an explicit representation producer. A result
+    /// context is input used to lower that producer, not a value the producer
+    /// returned, so the newly constructed identity replaces that context in
+    /// the call's flat selection span without merging either runtime type.
+    fn recordExplicitCallProducerOutput(
+        self: *BodyContext,
+        selections: *std.ArrayList(solve.DirectRequestSelection),
+        selection_base: solve.CheckedBaseKey,
+        raw_produced: NodeId,
+    ) Allocator.Error!void {
+        const produced = try self.graph.internProducedIdentity(raw_produced);
+        const exact: solve.DirectRequestSelection = .{
+            .base = selection_base,
+            .produced = self.graph.rootNode(produced),
+            .authority = .produced,
+        };
+        if (directSelectionIndexForSlot(selections.items, selection_base)) |index| {
+            selections.items[index] = exact;
+        } else {
+            try selections.append(self.allocator, exact);
+        }
+    }
+
     /// Record the same request-or-producer selection into a lexical checked-ID
     /// column. These columns feed later call schedules, so they retain the
     /// authority of the direct edge instead of reducing it to a bare node.
@@ -27453,7 +27288,6 @@ const BodyContext = struct {
     const GeneratedNominalConstructionMode = enum {
         completed_arguments,
         recursive_reservation,
-        request_directed,
     };
 
     fn generatedNominalFromSelectedArguments(
@@ -27539,6 +27373,11 @@ const BodyContext = struct {
         const declared_order = try self.instDeclaredOrderForNominal(nominal);
         const node = switch (checked.builtinRuntimeEncoding(builtin)) {
             .iterator => blk: {
+                // Only the concrete producer may construct this identity.
+                // Ordinary public `Iter(item)` occurrences remain absent and
+                // receive their exact generated node through value edges.
+                if (slot.generated_source != .iterator_operands and
+                    slot.generated_source != .recursive_iterator_interface) return null;
                 const owner = builtinOwner(nominal.builtin) orelse
                     Common.invariant("generated iterator slot had no builtin owner");
                 if (!static_dispatch.isIteratorOwner(owner)) {
@@ -27552,7 +27391,7 @@ const BodyContext = struct {
                         def,
                         declared_order,
                     ),
-                    .completed_arguments, .request_directed => try self.generatedIteratorNominalNode(
+                    .completed_arguments => try self.generatedIteratorNominalNode(
                         checked_ty,
                         nominal,
                         public_argument.produced,
@@ -27563,7 +27402,6 @@ const BodyContext = struct {
             },
             .field => switch (construction_mode) {
                 .recursive_reservation => Common.invariant("field identity requested a recursive forward argument"),
-                .request_directed => Common.invariant("field identity requested result-request authority"),
                 .completed_arguments => try self.generatedFieldNominalNode(
                     checked_ty,
                     nominal,
@@ -28147,37 +27985,6 @@ const BodyContext = struct {
         return request;
     }
 
-    fn iteratorProducerOperandsReady(
-        procedure: checked.IteratorProcedureId,
-        available: []const bool,
-    ) bool {
-        const required: []const usize = switch (procedure) {
-            .range_done, .str_iter_utf8 => &.{},
-            .iter_from_step => &.{1},
-            .iter_iter,
-            .iter_next,
-            .list_iter,
-            .list_iter_rev,
-            .iter_single,
-            .range_iter,
-            .numeric_range_delegate,
-            .numeric_to,
-            .numeric_until,
-            .iter_keep_if,
-            .iter_drop_if,
-            .iter_take_first,
-            .iter_drop_first,
-            .iter_append,
-            => &.{0},
-            .iter_map, .iter_concat => &.{ 0, 1 },
-            .iter_custom => &.{2},
-        };
-        for (required) |index| {
-            if (index >= available.len or !available[index]) return false;
-        }
-        return true;
-    }
-
     /// `iter_from_step` is recursive through its callback interface. Reserve
     /// each generated `Iter(item)` occurrence around the same exact forward
     /// item cell before lowering that callback. No identity is hashed here;
@@ -28187,9 +27994,7 @@ const BodyContext = struct {
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
         current_selections: []const solve.DirectRequestSelection,
-        procedure: checked.IteratorProcedureId,
     ) Allocator.Error!?[]const solve.DirectRequestSelection {
-        if (procedure != .iter_from_step) return null;
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
         try selections.appendSlice(self.allocator, current_selections);
@@ -28213,70 +28018,18 @@ const BodyContext = struct {
                 .recursive_reservation,
             )) orelse return null;
             try self.recordCallSelection(&selections, production.public_argument);
-            try self.recordCallSelection(&selections, .{
-                .base = base_id,
-                .produced = production.node,
-                .authority = .produced,
-            });
+            try self.recordExplicitCallProducerOutput(
+                &selections,
+                base_id,
+                production.node,
+            );
             changed = true;
         }
         if (!changed) return null;
-        try self.applyCallConsumerBindingsToSelections(
-            plan.selection_bindings,
-            &selections,
-            false,
-            null,
-        );
-        return try self.graph.arena().dupe(solve.DirectRequestSelection, selections.items);
-    }
-
-    /// Construct the result identity of an explicitly request-directed iterator
-    /// producer. `range_done` has no value operand from which an item identity
-    /// could be read. The checker marks only its result slot with this operation;
-    /// ordinary iterator calls never consume a destination request as producer
-    /// evidence.
-    fn applyRequestDirectedIteratorProducerToSelectionSpan(
-        self: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
-        current_selections: []const solve.DirectRequestSelection,
-        procedure: checked.IteratorProcedureId,
-    ) Allocator.Error!?[]const solve.DirectRequestSelection {
-        if (procedure.generatedIdentitySource() != .result_request) return null;
-        var selections = std.ArrayList(solve.DirectRequestSelection).empty;
-        defer selections.deinit(self.allocator);
-        try selections.appendSlice(self.allocator, current_selections);
-
-        var matched = false;
-        for (plan.slots) |slot| {
-            if (slot.generated_source != .iterator_result_request) continue;
-            const base_id = solve.CheckedBaseKey{
-                .module_bytes = self.view.key.bytes,
-                .checked = slot.checked,
-            };
-            if (directSelectionForSlot(selections.items, base_id)) |existing| {
-                if (existing.authority == .produced) {
-                    if (!self.isGeneratedIteratorEvidenceNode(existing.produced)) {
-                        Common.invariant("request-directed iterator result had a non-generated produced identity");
-                    }
-                    return current_selections;
-                }
-            }
-            const production = (try self.generatedNominalFromSelectedArguments(
-                plan,
-                slot,
-                selections.items,
-                .request_directed,
-            )) orelse return null;
-            try self.recordCallSelection(&selections, production.public_argument);
-            try self.recordCallSelection(&selections, .{
-                .base = base_id,
-                .produced = production.node,
-                .authority = .produced,
-            });
-            matched = true;
-        }
-        if (!matched) return null;
-
+        // Reservations are producer outputs for every checker-published
+        // identity-preserving edge in the recursive callback interface. Apply
+        // those flat edges now, before the callback consumes its request.
+        try self.applyCallOperationSources(plan, &selections);
         try self.applyCallConsumerBindingsToSelections(
             plan.selection_bindings,
             &selections,
@@ -28302,144 +28055,57 @@ const BodyContext = struct {
         plan: checked.SpecializationCallPlanView,
         current_selections: []const solve.DirectRequestSelection,
         procedure: checked.IteratorProcedureId,
-        checked_fn_ty: checked.CheckedTypeId,
         produced_args: []const NodeId,
         available: []const bool,
     ) Allocator.Error!?[]const solve.DirectRequestSelection {
+        if (procedure != .iter_from_step) return null;
         const forward_reservations = try self.applyIterFromStepForwardReservations(
             plan,
             current_selections,
-            procedure,
         );
         const effective_selections = forward_reservations orelse current_selections;
-        if (try self.applyRequestDirectedIteratorProducerToSelectionSpan(
-            plan,
-            effective_selections,
-            procedure,
-        )) |updated| return updated;
-        if (!iteratorProducerOperandsReady(procedure, available)) return forward_reservations;
-        if (procedure == .iter_from_step) {
-            // The recursive interface must exist before its callback body can
-            // be lowered, but its digest belongs to the completed callback
-            // producer. The callback was lowered directly against the exact
-            // item cell stored in the reservation, so completion must return
-            // that same cell. Stamp it now at this producer boundary; any
-            // deliberately open leaf commits its checker-authored language
-            // default while its content address is written.
-            const produced_step_item = try self.iteratorStepItemNode(
-                (try self.graph.functionNodes(produced_args[1])).ret,
-            );
-            for (plan.slots) |slot| {
-                if (slot.kind != .generated_nominal or slot.generated_source != .iterator_operands) continue;
-                const selected = directSelectionForSlot(effective_selections, .{
-                    .module_bytes = self.view.key.bytes,
-                    .checked = slot.checked,
-                }) orelse Common.invariant("iter_from_step completed without its recursive iterator reservation");
-                if (selected.authority != .produced or !self.isGeneratedIteratorConstructionNode(selected.produced)) {
-                    Common.invariant("iter_from_step completed with a non-generated result reservation");
-                }
-                const reserved = switch (self.graph.content(selected.produced)) {
-                    .named => |named| named,
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
-                };
-                if (reserved.args.len != 1 or
-                    !self.graph.sameClass(reserved.args[0], produced_step_item))
-                {
-                    Common.invariant("iter_from_step callback produced a different item identity from its recursive reservation");
-                }
-                const completed = try self.graph.completeRecursiveGeneratedIterator(
-                    selected.produced,
-                    reserved.def,
-                    produced_step_item,
-                );
-                if (!self.graph.sameClass(completed, selected.produced) or
-                    !self.isGeneratedIteratorEvidenceNode(completed))
-                {
-                    Common.invariant("iter_from_step did not finish its reserved generated identity");
-                }
-                return effective_selections;
-            }
-            Common.invariant("iter_from_step completed without a generated result slot");
-        }
-        // If the exact-argument pass already constructed the result's atomic
-        // generated nominal, that node is the producer result. Reconstructing
-        // it from the generic declaration would discard the exact item edge
-        // (notably for zero-argument producers such as `range_done`) and repeat
-        // the backing construction that has already been completed.
+        if (available.len != 2 or !available[1]) return forward_reservations;
+        // The recursive interface must exist before its callback body can be
+        // lowered, but its digest belongs to the concrete step producer. The
+        // callback was lowered directly against the exact item cell stored in
+        // the reservation, so stamp that reservation immediately now.
+        const produced_step_item = try self.iteratorStepItemNode(
+            (try self.graph.functionNodes(produced_args[1])).ret,
+        );
         for (plan.slots) |slot| {
-            if (slot.kind != .generated_nominal) continue;
-            var produces_result = false;
-            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                if (self.callOccurrenceRootSelectionEdge(plan, occurrence).step == .result) {
-                    produces_result = true;
-                    break;
-                }
-            }
-            if (!produces_result) continue;
+            if (slot.kind != .generated_nominal or slot.generated_source != .iterator_operands) continue;
             const selected = directSelectionForSlot(effective_selections, .{
                 .module_bytes = self.view.key.bytes,
                 .checked = slot.checked,
-            }) orelse continue;
-            if (selected.authority == .produced and
-                self.isGeneratedIteratorEvidenceNode(selected.produced))
+            }) orelse Common.invariant("iter_from_step completed without its recursive iterator reservation");
+            if (selected.authority != .produced or
+                (!self.isGeneratedIteratorConstructionNode(selected.produced) and
+                    !self.isGeneratedIteratorEvidenceNode(selected.produced)))
             {
-                return effective_selections;
+                Common.invariant("iter_from_step completed with a non-generated result reservation");
             }
-        }
-        if (procedure == .range_done or procedure == .str_iter_utf8) {
-            Common.invariant("zero-argument iterator producer had no exact generated result selection");
-        }
-        const public_fn_node = try self.persistentCheckedBaseNode(checked_fn_ty);
-        const generated_ret = try self.generatedIteratorResultNode(
-            procedure,
-            public_fn_node,
-            produced_args,
-        );
-        if (!self.isGeneratedIteratorEvidenceNode(generated_ret)) {
-            Common.invariant("iterator producer did not construct its generated exact result");
-        }
-
-        var selections = std.ArrayList(solve.DirectRequestSelection).empty;
-        defer selections.deinit(self.allocator);
-        try selections.appendSlice(self.allocator, effective_selections);
-        var matched = false;
-        for (plan.slots) |slot| {
-            if (slot.kind != .generated_nominal) continue;
-            var produced_result = false;
-            for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
-                if (self.callOccurrenceRootSelectionEdge(plan, occurrence).step == .result) {
-                    produced_result = true;
-                    break;
-                }
-            }
-            if (!produced_result) continue;
-            const base_id = solve.CheckedBaseKey{
-                .module_bytes = self.view.key.bytes,
-                .checked = slot.checked,
+            const reserved = switch (self.graph.content(selected.produced)) {
+                .named => |named| named,
+                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
             };
-            // The result selection edge is the consumer's request seed. The
-            // iterator constructor is the value producer and therefore
-            // replaces that seed with its atomic generated node.
-            try self.recordCallSelection(&selections, .{
-                .base = base_id,
-                .produced = generated_ret,
-                .authority = .produced,
-            });
-            matched = true;
+            if (reserved.args.len != 1 or
+                !self.graph.sameClass(reserved.args[0], produced_step_item))
+            {
+                Common.invariant("iter_from_step callback produced a different item identity from its recursive reservation");
+            }
+            const completed = try self.graph.completeRecursiveGeneratedIterator(
+                selected.produced,
+                reserved.def,
+                produced_step_item,
+            );
+            if (!self.graph.sameClass(completed, selected.produced) or
+                !self.isGeneratedIteratorEvidenceNode(completed))
+            {
+                Common.invariant("iter_from_step did not finish its reserved generated identity");
+            }
+            return effective_selections;
         }
-        if (!matched) {
-            Common.invariant("iterator producer result had no checker-recorded generated-nominal slot");
-        }
-        // Constructor-specific generated-result edges are checker-authored in
-        // this binding span. Record the newly constructed atomic identity for
-        // recursive callback consumers before the callable is materialized.
-        try self.applyCallConsumerBindingsToSelections(
-            plan.selection_bindings,
-            &selections,
-            false,
-            null,
-        );
-        return try self.graph.arena().dupe(solve.DirectRequestSelection, selections.items);
+        Common.invariant("iter_from_step completed without a generated result slot");
     }
 
     fn lowerCallAtNode(
@@ -28710,18 +28376,21 @@ const BodyContext = struct {
         if (args.len != 1 or fn_nodes.args.len != 1) {
             Common.invariant("Iter.next reached Monotype with an unexpected arity");
         }
-        const iterator_node = fn_nodes.args[0];
-        if (!self.isGeneratedIteratorEvidenceNode(iterator_node)) {
-            Common.invariant("Iter.next callable request did not carry its generated exact iterator argument");
-        }
-
         const iterator = args[0];
         const produced_iterator_node = try self.exprTypeCell(iterator).toGraphNode(self.graph);
         if (!self.isGeneratedIteratorEvidenceNode(produced_iterator_node)) {
             Common.invariant("generated iterator next argument did not produce generated iterator evidence");
         }
+        const backing = self.graph.namedNodes(produced_iterator_node).backing orelse
+            Common.invariant("generated iterator next requested a type without backing");
+        const step_name = (try self.iteratorRepresentationNames()).step_field;
+        const step_node = try self.graph.opaqueDefinitionFieldNode(backing.node, step_name);
+        const step_fn = try self.graph.functionNodes(step_node);
         return .{
-            .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
+            // The concrete producer owns the iterator representation. Its
+            // step callable therefore owns the exact `next` result as well;
+            // every `rest` uses that iterator's one shared generated identity.
+            .ret_ty = DraftTypeCell.fromGraphNode(step_fn.ret),
             .data = try self.lowerGeneratedIteratorNextData(iterator, produced_iterator_node),
         };
     }
@@ -28733,7 +28402,7 @@ const BodyContext = struct {
     ) Allocator.Error!BodyExprData {
         const backing = self.graph.namedNodes(iterator_node).backing orelse
             Common.invariant("generated iterator next requested a type without backing");
-        const step_name = try self.builder.program.names.internRecordFieldLabel("step");
+        const step_name = (try self.iteratorRepresentationNames()).step_field;
         const step_node = try self.graph.opaqueDefinitionFieldNode(backing.node, step_name);
         const step = try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(step_node),
@@ -32355,7 +32024,6 @@ const BodyContext = struct {
                 plan,
                 selections.items,
                 procedure,
-                checked_fn_ty,
                 produced_args,
                 available,
             )) |updated| {
@@ -32431,7 +32099,6 @@ const BodyContext = struct {
                     plan,
                     selections.items,
                     procedure,
-                    checked_fn_ty,
                     produced_args,
                     available,
                 )) |updated| {
@@ -32528,7 +32195,6 @@ const BodyContext = struct {
                     plan,
                     selections.items,
                     procedure,
-                    checked_fn_ty,
                     produced_args,
                     available,
                 );
@@ -32640,7 +32306,6 @@ const BodyContext = struct {
                         plan,
                         selections.items,
                         procedure,
-                        checked_fn_ty,
                         produced_args,
                         available,
                     );
@@ -32825,12 +32490,8 @@ const BodyContext = struct {
             try self.generatedIteratorItemNode(request_node)
         else item: {
             const first = interpolation.parts[0];
-            const value_node = try self.internIteratorOccurrence(
-                try self.checkedExprOccurrenceNode(first.value),
-            );
-            const segment_node = try self.internIteratorOccurrence(
-                try self.checkedExprOccurrenceNode(first.following_segment),
-            );
+            const value_node = try self.checkedExprOccurrenceNode(first.value);
+            const segment_node = try self.checkedExprOccurrenceNode(first.following_segment);
             break :item try self.graph.newProducedTuple(&.{ value_node, segment_node });
         };
         return try self.generatedIteratorNode(request_node, item_node);
@@ -35173,27 +34834,14 @@ const BodyContext = struct {
             checked.builtinRuntimeEncoding(checked_nominal.builtin.?) == .iterator;
 
         if (generated_iterator) {
-            const checked_node = try self.lowerExprTypeNode(checked_expr);
-            const nominal_node = blk: {
-                const public_node = self.constructorRepresentationNode(checked_node);
-                const public_named = self.graph.namedNodes(public_node);
-                if (public_named.args.len != 1) {
-                    Common.invariant("checked Iter constructor had an unexpected item arity");
-                }
-                const def = try self.builder.typeDef(
-                    self.view,
-                    checked_nominal.origin_module,
-                    checked_nominal.name,
-                    checked_nominal.source_decl,
-                );
-                break :blk try self.generatedIteratorNominalNode(
-                    checked_ty,
-                    checked_nominal,
-                    public_named.args[0],
-                    def,
-                    try self.instDeclaredOrderForNominal(checked_nominal),
-                );
-            };
+            // `Iter`'s source constructor is the implementation boundary of an
+            // already-reserved generated iterator. Its exact destination is
+            // explicit producer input; constructing a second identity here
+            // would duplicate the call producer and lose the recursive ABI.
+            const nominal_node = self.constructorRepresentationNode(expected_node);
+            if (!self.isGeneratedIteratorConstructionNode(nominal_node)) {
+                Common.invariant("Iter constructor had no explicit generated producer destination");
+            }
             const named = self.graph.content(self.constructorRepresentationNode(nominal_node)).named;
             const backing_node = (named.backing orelse
                 Common.invariant("generated nominal constructor had no exact backing request")).node;
@@ -45106,40 +44754,6 @@ const BodyContext = struct {
         },
     };
 
-    fn matchOutputCell(_: *BodyContext, output: MatchOutput) DraftTypeCell {
-        return switch (output) {
-            .value => |value| value.cell,
-            .state_result => |state| state.state_cell,
-            .state_only => |state| state.state_cell,
-        };
-    }
-
-    fn lowerMatchBranchBody(
-        self: *BodyContext,
-        body: checked.CheckedExprId,
-        output: MatchOutput,
-    ) Allocator.Error!DraftExprId {
-        return switch (output) {
-            .value => |value| try self.lowerBranchValueAtTypeCell(
-                body,
-                value.cell,
-                value.destination_relation,
-            ),
-            .state_result => |state| try self.lowerBodyThenStateResultAtTypeCells(
-                body,
-                state.result_cell,
-                state.state_cell,
-                state.merge_binders,
-                state.destination_relation,
-            ),
-            .state_only => |state| try self.lowerBodyThenStateOnlyAtTypeCell(
-                body,
-                state.state_cell,
-                state.merge_binders,
-            ),
-        };
-    }
-
     fn lowerBranchValueAtTypeCell(
         self: *BodyContext,
         body: checked.CheckedExprId,
@@ -45321,24 +44935,29 @@ const BodyContext = struct {
         }
 
         const state_cell = try self.stateResultTypeCell(merge_binders, result_cell);
-        const state_expr = try self.lowerMatchExprWithOutput(match, .{ .state_result = .{
+        var state_selection = try self.initControlFlowResultSelection(
+            state_cell,
+            .exact_producer,
+        );
+        const output: MatchOutput = .{ .state_result = .{
             .result_cell = result_cell,
             .state_cell = state_cell,
             .merge_binders = merge_binders,
             .destination_relation = destination_relation,
-        } }, comptime_site);
-        return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
-    }
-
-    fn lowerMatchExprWithOutput(
-        self: *BodyContext,
-        match: anytype,
-        output: MatchOutput,
-        comptime_site: ?DraftComptimeSiteId,
-    ) Allocator.Error!DraftExprId {
-        return try self.addExprWithTypeCell(
-            self.matchOutputCell(output),
-            try self.lowerMatch(match, output, comptime_site, null),
+        } };
+        const data = try self.lowerMatch(
+            match,
+            output,
+            comptime_site,
+            &state_selection,
+        );
+        const produced_state_cell = try self.finishControlFlowResultSelection(state_selection);
+        const state_expr = try self.addExprWithTypeCell(produced_state_cell, data);
+        return try self.unwrapStateResultAtTypeCells(
+            state_expr,
+            produced_state_cell,
+            result_cell,
+            merge_binders,
         );
     }
 
@@ -46643,7 +46262,7 @@ const BodyContext = struct {
         match: anytype,
         output: MatchOutput,
         comptime_site: ?DraftComptimeSiteId,
-        value_selection: ?*ControlFlowResultSelection,
+        value_selection: *ControlFlowResultSelection,
     ) Allocator.Error!BodyExprData {
         const PendingBranch = struct {
             ctx: BodyContext,
@@ -46759,26 +46378,32 @@ const BodyContext = struct {
             );
             entry.user_guard = if (entry.checked_guard) |guard_expr| try entry.ctx.lowerExpr(guard_expr) else null;
         }
-        if (value_selection) |selection| {
-            // Lower all checker-designated producers before requested values.
-            // The first reachable producer completes the result slot; every
-            // remaining body then consumes that exact slot. The pending array
-            // and final branch emission stay in source order.
-            for ([_]bool{ true, false }) |produced_pass| {
-                for (pending.items) |*entry| {
-                    if (!entry.inhabited) continue;
-                    const produced = entry.ctx.view.templates.specializationValueFlowForExpr(entry.checked_body) == .produced;
-                    if (produced != produced_pass) continue;
-                    entry.body = try entry.ctx.lowerControlFlowResultValue(
-                        selection,
-                        entry.checked_body,
-                    );
-                }
-            }
-        } else {
+        // Lower all checker-designated producers before requested values. The
+        // first reachable producer completes the result slot; every remaining
+        // body then consumes that exact slot. The pending array and final
+        // branch emission stay in source order.
+        for ([_]bool{ true, false }) |produced_pass| {
             for (pending.items) |*entry| {
                 if (!entry.inhabited) continue;
-                entry.body = try entry.ctx.lowerMatchBranchBody(entry.checked_body, output);
+                const produced = entry.ctx.view.templates.specializationValueFlowForExpr(entry.checked_body) == .produced;
+                if (produced != produced_pass) continue;
+                entry.body = switch (output) {
+                    .value => try entry.ctx.lowerControlFlowResultValue(
+                        value_selection,
+                        entry.checked_body,
+                    ),
+                    .state_result => |state| try entry.ctx.lowerControlFlowStateResultValue(
+                        value_selection,
+                        entry.checked_body,
+                        state.merge_binders,
+                        state.destination_relation,
+                    ),
+                    .state_only => |state| try entry.ctx.lowerControlFlowStateOnlyValue(
+                        value_selection,
+                        entry.checked_body,
+                        state.merge_binders,
+                    ),
+                };
             }
         }
 
@@ -47212,8 +46837,6 @@ const BodyContext = struct {
             );
             const data = try self.lowerIfAtTypeCells(
                 if_,
-                result_cell,
-                result_cell,
                 &.{},
                 comptime_site,
                 destination_relation,
@@ -47226,19 +46849,28 @@ const BodyContext = struct {
         }
 
         const state_cell = try self.stateResultTypeCell(merge_binders, result_cell);
-        const state_expr = try self.addExprWithTypeCell(
+        var state_selection = try self.initControlFlowResultSelection(
             state_cell,
-            try self.lowerIfAtTypeCells(
-                if_,
-                result_cell,
-                state_cell,
-                merge_binders,
-                comptime_site,
-                destination_relation,
-                null,
-            ),
+            .exact_producer,
         );
-        return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
+        const data = try self.lowerIfAtTypeCells(
+            if_,
+            merge_binders,
+            comptime_site,
+            destination_relation,
+            &state_selection,
+        );
+        const produced_state_cell = try self.finishControlFlowResultSelection(state_selection);
+        const state_expr = try self.addExprWithTypeCell(
+            produced_state_cell,
+            data,
+        );
+        return try self.unwrapStateResultAtTypeCells(
+            state_expr,
+            produced_state_cell,
+            result_cell,
+            merge_binders,
+        );
     }
 
     /// A value-producing control-flow expression owns one exact result
@@ -47321,6 +46953,69 @@ const BodyContext = struct {
                 .exact_request,
             );
         };
+        try self.includeControlFlowResult(selection, value);
+        return value;
+    }
+
+    /// Stateful control flow returns a compiler-created tuple containing the
+    /// reassigned locals followed by the source expression's value. The tuple
+    /// participates in the same single exact selection as ordinary branch
+    /// results, while the source value consumes the tuple's final exact item.
+    fn lowerControlFlowStateResultValue(
+        self: *BodyContext,
+        selection: *ControlFlowResultSelection,
+        checked_expr: checked.CheckedExprId,
+        merge_binders: []const MergeBinder,
+        result_destination_relation: ControlFlowDestinationRelation,
+    ) Allocator.Error!DraftExprId {
+        var state_request = selection.declared;
+        var destination_relation: ControlFlowDestinationRelation = .exact_request;
+        if (selection.has_exact_result) {
+            const selected_node = try selection.selected.toGraphNode(self.graph);
+            if (self.graph.content(selected_node) != .unresolved) {
+                state_request = selection.selected;
+            }
+        } else if (result_destination_relation != .exact_request and
+            self.view.templates.specializationValueFlowForExpr(checked_expr) == .produced)
+        {
+            destination_relation = .exact_producer;
+        }
+
+        const state_node = try state_request.toGraphNode(self.graph);
+        const state_items = try self.graph.tupleItemNodes(state_node);
+        if (state_items.len != merge_binders.len + 1) {
+            Common.invariant("stateful control-flow request had the wrong tuple arity");
+        }
+        const result_request = DraftTypeCell.fromGraphNode(state_items[merge_binders.len]);
+        const value = try self.lowerIfBranchBodyAtTypeCells(
+            checked_expr,
+            result_request,
+            state_request,
+            merge_binders,
+            destination_relation,
+        );
+        try self.includeControlFlowResult(selection, value);
+        return value;
+    }
+
+    fn lowerControlFlowStateOnlyValue(
+        self: *BodyContext,
+        selection: *ControlFlowResultSelection,
+        checked_expr: checked.CheckedExprId,
+        merge_binders: []const MergeBinder,
+    ) Allocator.Error!DraftExprId {
+        var state_request = selection.declared;
+        if (selection.has_exact_result) {
+            const selected_node = try selection.selected.toGraphNode(self.graph);
+            if (self.graph.content(selected_node) != .unresolved) {
+                state_request = selection.selected;
+            }
+        }
+        const value = try self.lowerBodyThenStateOnlyAtTypeCell(
+            checked_expr,
+            state_request,
+            merge_binders,
+        );
         try self.includeControlFlowResult(selection, value);
         return value;
     }
@@ -47429,18 +47124,24 @@ const BodyContext = struct {
         self: *BodyContext,
         state_expr: DraftExprId,
         state_cell: DraftTypeCell,
-        result_cell: DraftTypeCell,
+        _: DraftTypeCell,
         merge_binders: []const MergeBinder,
     ) Allocator.Error!DraftExprId {
+        const state_items = try self.graph.tupleItemNodes(try state_cell.toGraphNode(self.graph));
+        if (state_items.len != merge_binders.len + 1) {
+            Common.invariant("produced state result tuple had the wrong arity");
+        }
         const pattern_items = try self.allocator.alloc(DraftPatId, merge_binders.len + 1);
         defer self.allocator.free(pattern_items);
         for (merge_binders, 0..) |merge, index| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            const item_cell = DraftTypeCell.fromGraphNode(state_items[index]);
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), item_cell, merge.binder);
             try self.bindLocalName(local, merge.binder);
             try self.binders.put(merge.binder, local);
-            pattern_items[index] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
+            pattern_items[index] = try self.addPatWithTypeCell(item_cell, .{ .bind = local });
         }
 
+        const result_cell = DraftTypeCell.fromGraphNode(state_items[merge_binders.len]);
         const result_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), result_cell, null);
         pattern_items[merge_binders.len] = try self.addPatWithTypeCell(result_cell, .{ .bind = result_local });
         const bind_pat = try self.addPatWithTypeCell(state_cell, .{ .tuple = try self.addPatSpan(pattern_items) });
@@ -47467,12 +47168,10 @@ const BodyContext = struct {
     fn lowerIfAtTypeCells(
         self: *BodyContext,
         if_: anytype,
-        result_cell: DraftTypeCell,
-        branch_cell: DraftTypeCell,
         merge_binders: []const MergeBinder,
         comptime_site: ?DraftComptimeSiteId,
-        destination_relation: ControlFlowDestinationRelation,
-        value_selection: ?*ControlFlowResultSelection,
+        result_destination_relation: ControlFlowDestinationRelation,
+        value_selection: *ControlFlowResultSelection,
     ) Allocator.Error!BodyExprData {
         const branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
         defer self.allocator.free(branches);
@@ -47480,28 +47179,24 @@ const BodyContext = struct {
             branches[index].cond = try self.lowerExpr(branch.cond);
         }
         var final_else: DraftExprId = undefined;
-        const pass_count: usize = if (value_selection != null) 2 else 1;
-        for (0..pass_count) |pass| {
+        for (0..2) |pass| {
             for (0..if_.branches.len + 1) |index| {
                 const checked_body = if (index < if_.branches.len)
                     if_.branches[index].body
                 else
                     if_.final_else;
-                if (value_selection != null) {
-                    const produced = self.view.templates.specializationValueFlowForExpr(checked_body) == .produced;
-                    if (produced != (pass == 0)) continue;
-                }
+                const produced = self.view.templates.specializationValueFlowForExpr(checked_body) == .produced;
+                if (produced != (pass == 0)) continue;
                 var branch_ctx = try self.childContext(self.current_fn_key);
                 defer branch_ctx.deinit();
-                const body = if (value_selection) |selection|
-                    try branch_ctx.lowerControlFlowResultValue(selection, checked_body)
+                const body = if (merge_binders.len == 0)
+                    try branch_ctx.lowerControlFlowResultValue(value_selection, checked_body)
                 else
-                    try branch_ctx.lowerIfBranchBodyAtTypeCells(
+                    try branch_ctx.lowerControlFlowStateResultValue(
+                        value_selection,
                         checked_body,
-                        result_cell,
-                        branch_cell,
                         merge_binders,
-                        destination_relation,
+                        result_destination_relation,
                     );
                 const wrapped = try branch_ctx.wrapComptimeBranch(
                     comptime_site,
@@ -47542,9 +47237,9 @@ const BodyContext = struct {
     fn lowerIfStateOnlyAtTypeCell(
         self: *BodyContext,
         if_: anytype,
-        state_cell: DraftTypeCell,
         merge_binders: []const MergeBinder,
         comptime_site: ?DraftComptimeSiteId,
+        selection: *ControlFlowResultSelection,
     ) Allocator.Error!BodyExprData {
         const branches = try self.allocator.alloc(DraftIfBranch, if_.branches.len);
         defer self.allocator.free(branches);
@@ -47557,7 +47252,7 @@ const BodyContext = struct {
                 .body = try branch_ctx.wrapComptimeBranch(
                     comptime_site,
                     index,
-                    try branch_ctx.lowerBodyThenStateOnlyAtTypeCell(branch.body, state_cell, merge_binders),
+                    try branch_ctx.lowerControlFlowStateOnlyValue(selection, branch.body, merge_binders),
                 ),
             };
         }
@@ -47568,7 +47263,7 @@ const BodyContext = struct {
             .final_else = try else_ctx.wrapComptimeBranch(
                 comptime_site,
                 if_.branches.len,
-                try else_ctx.lowerBodyThenStateOnlyAtTypeCell(if_.final_else, state_cell, merge_binders),
+                try else_ctx.lowerControlFlowStateOnlyValue(selection, if_.final_else, merge_binders),
             ),
         } };
     }
@@ -47612,15 +47307,16 @@ const BodyContext = struct {
                         .final_expr = try self.zeroBranchMatchAtTypeCell(scrutinee, state_cell),
                     } });
                 }
-                return try self.addExprWithTypeCell(state_cell, .{ .block = .{
+                const final_expr = try self.lowerValueThenStateResultAtTypeCells(
+                    block.final_expr,
+                    result_cell,
+                    state_cell,
+                    merge_binders,
+                    destination_relation,
+                );
+                return try self.addExprWithTypeCell(self.exprTypeCell(final_expr), .{ .block = .{
                     .statements = try self.addStmtSpan(statements.items[0..statements.len]),
-                    .final_expr = try self.lowerValueThenStateResultAtTypeCells(
-                        block.final_expr,
-                        result_cell,
-                        state_cell,
-                        merge_binders,
-                        destination_relation,
-                    ),
+                    .final_expr = final_expr,
                 } });
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {
@@ -47697,17 +47393,20 @@ const BodyContext = struct {
         const nested_merge_binders = try self.stateMergeBinders(expr_id);
         defer self.allocator.free(nested_merge_binders);
         if (nested_merge_binders.len == 0) {
-            const value = try self.addExprWithTypeCell(
+            var value_selection = try self.initControlFlowResultSelection(
                 result_cell,
-                try self.lowerIfAtTypeCells(
-                    if_,
-                    result_cell,
-                    result_cell,
-                    &.{},
-                    try self.ifComptimeSite(expr_id, if_),
-                    destination_relation,
-                    null,
-                ),
+                destination_relation,
+            );
+            const value_data = try self.lowerIfAtTypeCells(
+                if_,
+                &.{},
+                try self.ifComptimeSite(expr_id, if_),
+                destination_relation,
+                &value_selection,
+            );
+            const value = try self.addExprWithTypeCell(
+                try self.finishControlFlowResultSelection(value_selection),
+                value_data,
             );
             return try self.stateResultAfterValueAtTypeCells(
                 outer_state_cell,
@@ -47717,23 +47416,26 @@ const BodyContext = struct {
             );
         }
 
-        const nested_state_cell = try self.stateResultTypeCell(nested_merge_binders, result_cell);
+        const declared_nested_state_cell = try self.stateResultTypeCell(nested_merge_binders, result_cell);
+        var state_selection = try self.initControlFlowResultSelection(
+            declared_nested_state_cell,
+            .exact_producer,
+        );
+        const nested_state_data = try self.lowerIfAtTypeCells(
+            if_,
+            nested_merge_binders,
+            try self.ifComptimeSite(expr_id, if_),
+            destination_relation,
+            &state_selection,
+        );
+        const produced_nested_state_cell = try self.finishControlFlowResultSelection(state_selection);
         const nested_state = try self.addExprWithTypeCell(
-            nested_state_cell,
-            try self.lowerIfAtTypeCells(
-                if_,
-                result_cell,
-                nested_state_cell,
-                nested_merge_binders,
-                try self.ifComptimeSite(expr_id, if_),
-                destination_relation,
-                null,
-            ),
+            produced_nested_state_cell,
+            nested_state_data,
         );
         return try self.composeNestedStateResultAtTypeCells(
             nested_state,
-            nested_state_cell,
-            result_cell,
+            produced_nested_state_cell,
             nested_merge_binders,
             outer_state_cell,
             outer_merge_binders,
@@ -47753,10 +47455,24 @@ const BodyContext = struct {
         defer self.allocator.free(nested_merge_binders);
         const comptime_site = try self.matchComptimeSite(expr_id, match);
         if (nested_merge_binders.len == 0) {
-            const value = try self.lowerMatchExprWithOutput(match, .{ .value = .{
-                .cell = result_cell,
+            var value_selection = try self.initControlFlowResultSelection(
+                result_cell,
+                destination_relation,
+            );
+            const output: MatchOutput = .{ .value = .{
+                .cell = value_selection.declared,
                 .destination_relation = destination_relation,
-            } }, comptime_site);
+            } };
+            const value_data = try self.lowerMatch(
+                match,
+                output,
+                comptime_site,
+                &value_selection,
+            );
+            const value = try self.addExprWithTypeCell(
+                try self.finishControlFlowResultSelection(value_selection),
+                value_data,
+            );
             return try self.stateResultAfterValueAtTypeCells(
                 outer_state_cell,
                 result_cell,
@@ -47765,17 +47481,31 @@ const BodyContext = struct {
             );
         }
 
-        const nested_state_cell = try self.stateResultTypeCell(nested_merge_binders, result_cell);
-        const nested_state = try self.lowerMatchExprWithOutput(match, .{ .state_result = .{
+        const declared_nested_state_cell = try self.stateResultTypeCell(nested_merge_binders, result_cell);
+        var state_selection = try self.initControlFlowResultSelection(
+            declared_nested_state_cell,
+            .exact_producer,
+        );
+        const output: MatchOutput = .{ .state_result = .{
             .result_cell = result_cell,
-            .state_cell = nested_state_cell,
+            .state_cell = declared_nested_state_cell,
             .merge_binders = nested_merge_binders,
             .destination_relation = destination_relation,
-        } }, comptime_site);
+        } };
+        const nested_state_data = try self.lowerMatch(
+            match,
+            output,
+            comptime_site,
+            &state_selection,
+        );
+        const produced_nested_state_cell = try self.finishControlFlowResultSelection(state_selection);
+        const nested_state = try self.addExprWithTypeCell(
+            produced_nested_state_cell,
+            nested_state_data,
+        );
         return try self.composeNestedStateResultAtTypeCells(
             nested_state,
-            nested_state_cell,
-            result_cell,
+            produced_nested_state_cell,
             nested_merge_binders,
             outer_state_cell,
             outer_merge_binders,
@@ -47785,35 +47515,51 @@ const BodyContext = struct {
     fn composeNestedStateResultAtTypeCells(
         self: *BodyContext,
         nested_state: DraftExprId,
-        nested_state_cell: DraftTypeCell,
-        result_cell: DraftTypeCell,
+        produced_nested_state_cell: DraftTypeCell,
         nested_merge_binders: []const MergeBinder,
         outer_state_cell: DraftTypeCell,
         outer_merge_binders: []const MergeBinder,
     ) Allocator.Error!DraftExprId {
+        const produced_nested_state_items = try self.graph.tupleItemNodes(
+            try produced_nested_state_cell.toGraphNode(self.graph),
+        );
+        if (produced_nested_state_items.len != nested_merge_binders.len + 1) {
+            Common.invariant("nested state result produced the wrong tuple arity");
+        }
         const pattern_items = try self.allocator.alloc(DraftPatId, nested_merge_binders.len + 1);
         defer self.allocator.free(pattern_items);
         for (nested_merge_binders, 0..) |merge, index| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            const item_cell = DraftTypeCell.fromGraphNode(produced_nested_state_items[index]);
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), item_cell, merge.binder);
             try self.bindLocalName(local, merge.binder);
             try self.binders.put(merge.binder, local);
-            pattern_items[index] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
+            pattern_items[index] = try self.addPatWithTypeCell(item_cell, .{ .bind = local });
         }
 
-        const result_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), result_cell, null);
-        pattern_items[nested_merge_binders.len] = try self.addPatWithTypeCell(result_cell, .{ .bind = result_local });
+        const produced_result_cell = DraftTypeCell.fromGraphNode(
+            produced_nested_state_items[nested_merge_binders.len],
+        );
+        const result_local = try self.addLocalWithBinderCell(
+            self.builder.symbols.fresh(),
+            produced_result_cell,
+            null,
+        );
+        pattern_items[nested_merge_binders.len] = try self.addPatWithTypeCell(
+            produced_result_cell,
+            .{ .bind = result_local },
+        );
         const bind_pat = try self.addPatWithTypeCell(
-            nested_state_cell,
+            produced_nested_state_cell,
             .{ .tuple = try self.addPatSpan(pattern_items) },
         );
-        const result = try self.addExprWithTypeCell(result_cell, .{ .local = result_local });
+        const result = try self.addExprWithTypeCell(produced_result_cell, .{ .local = result_local });
         const rest = try self.stateResultTupleExprAtTypeCells(
             outer_state_cell,
             outer_merge_binders,
             result,
         );
 
-        return try self.addExprWithTypeCell(outer_state_cell, .{ .let_ = .{
+        return try self.addExprWithTypeCell(self.exprTypeCell(rest), .{ .let_ = .{
             .bind = bind_pat,
             .value = nested_state,
             .rest = rest,
@@ -47879,29 +47625,45 @@ const BodyContext = struct {
                 defer self.allocator.free(merge_binders);
                 if (merge_binders.len != 0) {
                     const state_cell = try self.stateOnlyTypeCell(merge_binders);
+                    var state_selection = try self.initControlFlowResultSelection(
+                        state_cell,
+                        .exact_producer,
+                    );
                     const state_value = switch (checked_expr.data) {
-                        .if_ => |if_| try self.addExprWithTypeCell(
-                            state_cell,
-                            try self.lowerIfStateOnlyAtTypeCell(
+                        .if_ => |if_| blk: {
+                            const data = try self.lowerIfStateOnlyAtTypeCell(
                                 if_,
-                                state_cell,
                                 merge_binders,
                                 try self.ifComptimeSite(expr_id, if_),
-                            ),
-                        ),
-                        .match_ => |match| try self.lowerMatchExprWithOutput(
-                            match,
-                            .{ .state_only = .{
+                                &state_selection,
+                            );
+                            break :blk try self.addExprWithTypeCell(
+                                try self.finishControlFlowResultSelection(state_selection),
+                                data,
+                            );
+                        },
+                        .match_ => |match| blk: {
+                            const output: MatchOutput = .{ .state_only = .{
                                 .state_cell = state_cell,
                                 .merge_binders = merge_binders,
-                            } },
-                            try self.matchComptimeSite(expr_id, match),
-                        ),
+                            } };
+                            const data = try self.lowerMatch(
+                                match,
+                                output,
+                                try self.matchComptimeSite(expr_id, match),
+                                &state_selection,
+                            );
+                            break :blk try self.addExprWithTypeCell(
+                                try self.finishControlFlowResultSelection(state_selection),
+                                data,
+                            );
+                        },
                         .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
                     };
+                    const produced_state_cell = self.exprTypeCell(state_value);
                     return .{
                         .stmt = try self.addStmt(.{ .let_ = .{
-                            .pat = try self.stateOnlyPatternAtTypeCell(state_cell, merge_binders),
+                            .pat = try self.stateOnlyPatternAtTypeCell(produced_state_cell, merge_binders),
                             .value = state_value,
                         } }),
                         .termination = .none,
@@ -47932,7 +47694,7 @@ const BodyContext = struct {
 
     fn stateResultTupleExprAtTypeCells(
         self: *BodyContext,
-        state_cell: DraftTypeCell,
+        _: DraftTypeCell,
         merge_binders: []const MergeBinder,
         result: DraftExprId,
     ) Allocator.Error!DraftExprId {
@@ -47940,25 +47702,38 @@ const BodyContext = struct {
         defer self.allocator.free(items);
         for (merge_binders, 0..) |merge, index| {
             const current = self.binders.get(merge.binder) orelse merge.before;
-            items[index] = try self.storedLocalValueAtTypeCell(current, merge.ty);
+            items[index] = try self.storedLocalValueAtTypeCell(current, self.localTypeCell(current));
         }
         items[merge_binders.len] = result;
-        return try self.addExprWithTypeCell(state_cell, .{ .tuple = try self.addExprSpan(items) });
+        const item_nodes = try self.graph.arena().alloc(NodeId, items.len);
+        for (items, item_nodes) |item, *node| {
+            node.* = try self.builder.completePendingProducedNode(
+                self,
+                try self.exprTypeCell(item).toGraphNode(self.graph),
+            );
+        }
+        const produced = try self.graph.newProducedTuple(item_nodes);
+        return try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(produced),
+            .{ .tuple = try self.addExprSpan(items) },
+        );
     }
 
     fn stateResultAfterValueAtTypeCells(
         self: *BodyContext,
         state_cell: DraftTypeCell,
-        result_cell: DraftTypeCell,
+        _: DraftTypeCell,
         merge_binders: []const MergeBinder,
         value: DraftExprId,
     ) Allocator.Error!DraftExprId {
+        const result_cell = self.exprTypeCell(value);
         const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), result_cell, null);
         const local_expr = try self.addExprWithTypeCell(result_cell, .{ .local = local });
-        return try self.addExprWithTypeCell(state_cell, .{ .let_ = .{
+        const rest = try self.stateResultTupleExprAtTypeCells(state_cell, merge_binders, local_expr);
+        return try self.addExprWithTypeCell(self.exprTypeCell(rest), .{ .let_ = .{
             .bind = try self.addPatWithTypeCell(result_cell, .{ .bind = local }),
             .value = value,
-            .rest = try self.stateResultTupleExprAtTypeCells(state_cell, merge_binders, local_expr),
+            .rest = rest,
         } });
     }
 
@@ -47971,15 +47746,25 @@ const BodyContext = struct {
         if (merge_binders.len == 1) {
             const merge = merge_binders[0];
             const current = self.binders.get(merge.binder) orelse merge.before;
-            return try self.storedLocalValueAtTypeCell(current, merge.ty);
+            return try self.storedLocalValueAtTypeCell(current, self.localTypeCell(current));
         }
         const items = try self.allocator.alloc(DraftExprId, merge_binders.len);
         defer self.allocator.free(items);
         for (merge_binders, 0..) |merge, index| {
             const current = self.binders.get(merge.binder) orelse merge.before;
-            items[index] = try self.storedLocalValueAtTypeCell(current, merge.ty);
+            items[index] = try self.storedLocalValueAtTypeCell(current, self.localTypeCell(current));
         }
-        return try self.addExprWithTypeCell(state_cell, .{ .tuple = try self.addExprSpan(items) });
+        const item_nodes = try self.graph.arena().alloc(NodeId, items.len);
+        for (items, item_nodes) |item, *node| {
+            node.* = try self.builder.completePendingProducedNode(
+                self,
+                try self.exprTypeCell(item).toGraphNode(self.graph),
+            );
+        }
+        return try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(try self.graph.newProducedTuple(item_nodes)),
+            .{ .tuple = try self.addExprSpan(items) },
+        );
     }
 
     fn stateOnlyPatternAtTypeCell(
@@ -47990,18 +47775,23 @@ const BodyContext = struct {
         if (merge_binders.len == 0) return try self.addPatWithTypeCell(state_cell, .wildcard);
         if (merge_binders.len == 1) {
             const merge = merge_binders[0];
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), state_cell, merge.binder);
             try self.bindLocalName(local, merge.binder);
             try self.binders.put(merge.binder, local);
             return try self.addPatWithTypeCell(state_cell, .{ .bind = local });
         }
+        const state_items = try self.graph.tupleItemNodes(try state_cell.toGraphNode(self.graph));
+        if (state_items.len != merge_binders.len) {
+            Common.invariant("state-only pattern had the wrong tuple arity");
+        }
         const pattern_items = try self.allocator.alloc(DraftPatId, merge_binders.len);
         defer self.allocator.free(pattern_items);
         for (merge_binders, 0..) |merge, index| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            const item_cell = DraftTypeCell.fromGraphNode(state_items[index]);
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), item_cell, merge.binder);
             try self.bindLocalName(local, merge.binder);
             try self.binders.put(merge.binder, local);
-            pattern_items[index] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
+            pattern_items[index] = try self.addPatWithTypeCell(item_cell, .{ .bind = local });
         }
         return try self.addPatWithTypeCell(state_cell, .{ .tuple = try self.addPatSpan(pattern_items) });
     }
@@ -48261,53 +48051,75 @@ const BodyContext = struct {
             try self.checkedPatternOccurrenceNode(pattern)
         else
             try self.checkedExprOccurrenceNode(expr_id));
-        try self.recordExactCheckedPatternAtCell(pattern, value_cell);
         const state_cell = try self.stateResultTypeCell(merge_binders, value_cell);
+        var state_selection = try self.initControlFlowResultSelection(
+            state_cell,
+            .exact_producer,
+        );
         const state_value = switch (checked_expr.data) {
-            .if_ => |if_| try self.addExprWithTypeCell(
-                state_cell,
-                try self.lowerIfAtTypeCells(
+            .if_ => |if_| blk: {
+                const data = try self.lowerIfAtTypeCells(
                     if_,
-                    value_cell,
-                    state_cell,
                     merge_binders,
                     try self.ifComptimeSite(expr_id, if_),
                     if (has_annotation) .exact_request else .exact_producer,
-                    null,
-                ),
-            ),
-            .match_ => |match| try self.lowerMatchExprWithOutput(
-                match,
-                .{ .state_result = .{
+                    &state_selection,
+                );
+                break :blk try self.addExprWithTypeCell(
+                    try self.finishControlFlowResultSelection(state_selection),
+                    data,
+                );
+            },
+            .match_ => |match| blk: {
+                const output: MatchOutput = .{ .state_result = .{
                     .result_cell = value_cell,
                     .state_cell = state_cell,
                     .merge_binders = merge_binders,
                     .destination_relation = if (has_annotation) .exact_request else .exact_producer,
-                } },
-                try self.matchComptimeSite(expr_id, match),
-            ),
+                } };
+                const data = try self.lowerMatch(
+                    match,
+                    output,
+                    try self.matchComptimeSite(expr_id, match),
+                    &state_selection,
+                );
+                break :blk try self.addExprWithTypeCell(
+                    try self.finishControlFlowResultSelection(state_selection),
+                    data,
+                );
+            },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => unreachable,
         };
 
+        const produced_state_cell = self.exprTypeCell(state_value);
+        const produced_state_items = try self.graph.tupleItemNodes(
+            try produced_state_cell.toGraphNode(self.graph),
+        );
+        if (produced_state_items.len != merge_binders.len + 1) {
+            Common.invariant("stateful pattern statement produced the wrong tuple arity");
+        }
         const state_pattern_items = try self.allocator.alloc(DraftPatId, merge_binders.len + 1);
         defer self.allocator.free(state_pattern_items);
         for (merge_binders, 0..) |merge, index| {
-            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            const item_cell = DraftTypeCell.fromGraphNode(produced_state_items[index]);
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), item_cell, merge.binder);
             try self.bindLocalName(local, merge.binder);
             try self.binders.put(merge.binder, local);
-            state_pattern_items[index] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
+            state_pattern_items[index] = try self.addPatWithTypeCell(item_cell, .{ .bind = local });
         }
-        const result_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
-        state_pattern_items[merge_binders.len] = try self.addPatWithTypeCell(value_cell, .{ .bind = result_local });
+        const produced_value_cell = DraftTypeCell.fromGraphNode(produced_state_items[merge_binders.len]);
+        try self.recordExactCheckedPatternAtCell(pattern, produced_value_cell);
+        const result_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), produced_value_cell, null);
+        state_pattern_items[merge_binders.len] = try self.addPatWithTypeCell(produced_value_cell, .{ .bind = result_local });
         try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
             .pat = try self.addPatWithTypeCell(
-                state_cell,
+                produced_state_cell,
                 .{ .tuple = try self.addPatSpan(state_pattern_items) },
             ),
             .value = state_value,
         } }));
 
-        const result = try self.addExprWithTypeCell(value_cell, .{ .local = result_local });
+        const result = try self.addExprWithTypeCell(produced_value_cell, .{ .local = result_local });
         const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and self.patternCanMiss(pattern))
             try self.addComptimeSite(
                 .destructure,
@@ -48319,9 +48131,9 @@ const BodyContext = struct {
             null;
         if (!try self.patternNeedsExplicitBinding(pattern)) {
             const result_pattern = if (self.patternIsShapeFree(pattern))
-                try self.lowerShapeFreePatternAtCell(pattern, value_cell)
+                try self.lowerShapeFreePatternAtCell(pattern, produced_value_cell)
             else
-                try self.lowerPatternAtNode(pattern, try value_cell.toGraphNode(self.graph));
+                try self.lowerPatternAtNode(pattern, try produced_value_cell.toGraphNode(self.graph));
             try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
                 .pat = result_pattern,
                 .value = result,
@@ -48340,7 +48152,7 @@ const BodyContext = struct {
         try lowered.append(self.allocator, try self.addStmt(.{ .expr = try self.lowerMaterializedPatternValueThen(
             pattern,
             result,
-            value_cell,
+            produced_value_cell,
             .{ .sealed = unit_ty },
             .{ .expr = unit },
             miss,
@@ -48987,7 +48799,6 @@ const BodyContext = struct {
                     call_plan,
                     selections.items,
                     procedure,
-                    source_callable,
                     produced_nodes,
                     available,
                 )) |updated| {

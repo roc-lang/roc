@@ -514,14 +514,6 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(solve_source, "applyCompoundStorageRepresentation");
     try expectNotContains(solve_source, "materializeReassignedStorageRequest");
 
-    const list_iterator_producer = sourceSliceBetween(
-        lower_source,
-        ".list_iter, .list_iter_rev => {",
-        ".str_iter_utf8 => {",
-    );
-    try expectContains(list_iterator_producer, "generatedIteratorNode(");
-    try expectContains(list_iterator_producer, "public_fn.ret,");
-    try expectContains(list_iterator_producer, "self.graph.listElementNode(request_args[0])");
     try expectNotContains(lower_source, "publicIteratorNodeWithItem(");
     const generated_iterator_producer = sourceSliceBetween(
         lower_source,
@@ -702,27 +694,20 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn applyIteratorProducerToSelectionSpan(",
         "fn lowerCallAtNode(",
     );
-    try expectContains(iterator_producer_selection, "selected.authority == .produced");
-    try expectContains(iterator_producer_selection, "applyRequestDirectedIteratorProducerToSelectionSpan(");
-    try expectContains(iterator_producer_selection, "if (!iteratorProducerOperandsReady(procedure, available)) return forward_reservations;");
+    try expectContains(iterator_producer_selection, "if (procedure != .iter_from_step) return null;");
+    try expectContains(iterator_producer_selection, "selected.authority != .produced");
+    try expectContains(iterator_producer_selection, "if (available.len != 2 or !available[1]) return forward_reservations;");
     try expectContains(iterator_producer_selection, "completeRecursiveGeneratedIterator(");
 
     const recursive_iterator_reservation = sourceSliceBetween(
         lower_source,
         "fn applyIterFromStepForwardReservations(",
-        "fn applyRequestDirectedIteratorProducerToSelectionSpan(",
+        "fn replaceMutableCallSelections(",
     );
     try expectContains(recursive_iterator_reservation, ".recursive_iterator_interface");
     try expectNotContains(recursive_iterator_reservation, ".exact_arguments");
-
-    const request_directed_iterator = sourceSliceBetween(
-        lower_source,
-        "fn applyRequestDirectedIteratorProducerToSelectionSpan(",
-        "fn replaceMutableCallSelections(",
-    );
-    try expectContains(request_directed_iterator, "slot.generated_source != .iterator_result_request");
-    try expectContains(request_directed_iterator, ".request_directed,");
-    try expectContains(request_directed_iterator, ".authority = .produced,");
+    try expectNotContains(lower_source, "iterator_result_request");
+    try expectNotContains(lower_source, "request_directed");
     try expectNotContains(solve_source, "pending_generated_iterator_nodes");
     try expectNotContains(solve_source, "finalizePendingGeneratedIterators");
 
@@ -1180,7 +1165,7 @@ test "Monotype dispatch result modes retain graph-backed result types" {
     const parametric_low_level = sourceSliceBetween(
         lower_source,
         "if (direct_parametric_low_level) |op| {",
-        "const call_data = if (direct_graph_call)",
+        "const lowered_call = if (direct_graph_call)",
     );
     try expectContains(parametric_low_level, "applyDispatchResultMode(plan.result_mode, call_expr)");
     try expectNotContains(parametric_low_level, "activeTypeFromNode(plan_ret_node)");
@@ -1447,7 +1432,7 @@ test "Monotype match lowering projects exact scrutinee cells without checked roo
     try expectContains(match_source, "entry.inhabited = try entry.ctx.preRegisterMatchPatternBindersAtNode");
     try expectContains(match_source, "if (!entry.inhabited) continue;");
     try expectContains(match_source, "entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame");
-    try expectContains(match_source, "try entry.ctx.lowerMatchBranchBody");
+    try expectContains(match_source, "try entry.ctx.lowerControlFlowResultValue");
     try expectContains(match_source, "try entry.ctx.lowerMatchPatternAtNode");
     try expectNotContains(match_source, "resolvedTypeViewForNode(scrutinee_node)");
     try expectNotContains(match_source, "lowerPatternAtType(entry.pattern.pattern");
@@ -1464,7 +1449,7 @@ test "Monotype match lowering projects exact scrutinee cells without checked roo
 
     const prepare_binders = std.mem.find(u8, match_source, "entry.inhabited = try entry.ctx.preRegisterMatchPatternBindersAtNode").?;
     const guards = std.mem.find(u8, match_source, "entry.ctx.runtime_demand_guard_frames =").?;
-    const lower_body = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchBranchBody").?;
+    const lower_body = std.mem.find(u8, match_source, "try entry.ctx.lowerControlFlowResultValue").?;
     const lower_pattern = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchPatternAtNode").?;
     try std.testing.expect(prepare_binders < guards);
     try std.testing.expect(guards < lower_body);
@@ -1515,7 +1500,7 @@ test "Monotype call requests retain defaults in explicit forward cells" {
     const completed_request = sourceSliceBetween(
         lower_source,
         "fn materializeCallSelectionSpan(",
-        "fn iteratorProducerOperandsReady(",
+        "fn applyIterFromStepForwardReservations(",
     );
     try expectContains(completed_request, "materializeExactCheckedCallNode(");
     try expectContains(completed_request, ".request,");
