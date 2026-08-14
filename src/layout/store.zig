@@ -606,9 +606,8 @@ pub const Store = struct {
         );
     }
 
-    /// Insert a tuple layout from concrete element layouts.
-    /// The shared layout commit performs one stable sort by descending alignment,
-    /// preserving original tuple index order among equal-alignment elements.
+    /// Insert a tuple layout from concrete element layouts. The shared layout
+    /// commit sorts by descending sort key, then original tuple index.
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
@@ -673,13 +672,17 @@ pub const Store = struct {
         );
     }
 
-    fn buildUninternedStructLayout(self: *Self, input_fields: []const StructField) std.mem.Allocator.Error!Layout {
+    fn buildUninternedStructLayout(
+        self: *Self,
+        input_fields: []const StructField,
+        order: graph_mod.FieldSpan.FieldOrder,
+    ) std.mem.Allocator.Error!Layout {
         std.debug.assert(input_fields.len >= 1);
 
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
         try temp_fields.appendSlice(self.allocator, input_fields);
-        self.sortStructFields(temp_fields.items);
+        if (order == .structural) self.sortStructFields(temp_fields.items);
 
         const sizes = self.structSizes(temp_fields.items);
         if (sizes.get(.u64) == 0) {
@@ -1569,7 +1572,7 @@ pub const Store = struct {
 
                             self_resolver.store.updateLayout(
                                 self_resolver.raw_layouts[index],
-                                try self_resolver.store.buildUninternedStructLayout(fields.items),
+                                try self_resolver.store.buildUninternedStructLayout(fields.items, span.order),
                             );
                         }
                     },
@@ -2784,7 +2787,7 @@ test "uninterned struct layouts use the same structural order as interned ones" 
 
     const interned_idx = try store.putStructFields(&semantic_fields);
     const interned_layout = store.getLayout(interned_idx);
-    const uninterned_layout = try store.buildUninternedStructLayout(&semantic_fields);
+    const uninterned_layout = try store.buildUninternedStructLayout(&semantic_fields, .structural);
 
     try testing.expectEqual(LayoutTag.struct_, interned_layout.tag);
     try testing.expectEqual(LayoutTag.struct_, uninterned_layout.tag);
@@ -2804,6 +2807,25 @@ test "uninterned struct layouts use the same structural order as interned ones" 
         try testing.expectEqual(left.index, right.index);
         try testing.expectEqual(left.layout, right.layout);
     }
+}
+
+test "uninterned struct layouts preserve explicit declared order" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const declared_fields = [_]StructField{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 2, .layout = .zst, .is_padding = true },
+        .{ .index = 1, .layout = .u64 },
+    };
+    const uninterned_layout = try store.buildUninternedStructLayout(&declared_fields, .declared);
+    const struct_idx = uninterned_layout.getStruct().idx;
+
+    try testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try testing.expectEqual(@as(u32, 8), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    try testing.expectEqual(@as(u32, 16), store.getStructSize(struct_idx));
 }
 
 test "layout store records explicit resolved list layout facts for boxed lists" {
