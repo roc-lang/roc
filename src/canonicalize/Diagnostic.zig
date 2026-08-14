@@ -178,6 +178,13 @@ pub const Diagnostic = union(enum) {
     unnamed_field_cannot_have_default: struct {
         region: Region,
     },
+    /// A `??` default declared outside a nominal type declaration's backing
+    /// record: defaults are only legal on the direct fields of a nominal
+    /// (`:=`) backing record, never in structural record types (type
+    /// aliases, inline annotations, or nested records).
+    default_not_allowed_in_structural_record: struct {
+        region: Region,
+    },
     record_default_not_literal: struct {
         field_name: Ident.Idx,
         region: Region,
@@ -470,6 +477,7 @@ pub const Diagnostic = union(enum) {
             .unnamed_field_not_allowed_in_structural_record => |d| d.region,
             .optional_field_cannot_have_default => |d| d.region,
             .unnamed_field_cannot_have_default => |d| d.region,
+            .default_not_allowed_in_structural_record => |d| d.region,
             .record_default_not_literal => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,

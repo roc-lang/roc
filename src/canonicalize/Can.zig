@@ -19058,6 +19058,19 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
                     } });
                     ast_default_value = null;
+                } else if (ast_default_value != null and !state.is_nominal_backing) {
+                    // A `??` default is only legal on a DIRECT field of a
+                    // nominal declaration's backing record: defaults ride
+                    // the nominal identity, and restricting them there keeps
+                    // two same-shape structural types from being silently
+                    // default-incompatible and makes every omission site an
+                    // explicit nominal construction (design.md "Defaulted
+                    // Fields"). The default is dropped and the field
+                    // degrades to plain required.
+                    try self.env.pushDiagnostic(Diagnostic{ .default_not_allowed_in_structural_record = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    } });
+                    ast_default_value = null;
                 }
                 try stacks.pushRecordAfterField(frame_allocator, .{
                     .record = state.record,

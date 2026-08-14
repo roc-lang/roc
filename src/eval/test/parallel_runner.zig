@@ -1763,6 +1763,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .unnamed_field_not_allowed_in_structural_record,
         .optional_field_cannot_have_default,
         .unnamed_field_cannot_have_default,
+        .default_not_allowed_in_structural_record,
         .record_default_not_literal,
         .var_across_function_boundary,
         .type_redeclared,

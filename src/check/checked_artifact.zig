@@ -32454,6 +32454,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_deprecated_number_suffix,
             .diag_range_op_chained,
             .diag_unnamed_field_cannot_have_default,
+            .diag_default_not_allowed_in_structural_record,
             => {},
         }
     }

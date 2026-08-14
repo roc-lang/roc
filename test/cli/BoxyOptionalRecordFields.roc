@@ -1,5 +1,7 @@
 BoxyOptionalRecordFields :: [].{}
 
+Config := { retries : U8 ?? 3, timeout : U8 ?? 10 }
+
 pick : { value ?: a } -> Try(a, [MissingField])
 pick = |record| record.?value
 
@@ -14,8 +16,8 @@ expect {
 }
 
 expect {
-	config : { retries : U8 ?? 3, timeout : U8 ?? 10 }
-	config = {}
+	config : Config
+	config = Config.{}
 
 	config.retries + config.timeout == 13
 }

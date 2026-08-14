@@ -572,10 +572,10 @@ test "check type - record - opt - unset of defaulted field rejected" {
     const source =
         \\main! = |_| {}
         \\
-        \\MyRecord : { hello : Str, world : U8 ?? 7 }
+        \\MyRecord := { hello : Str, world : U8 ?? 7 }
         \\
         \\my_record_a : MyRecord
-        \\my_record_a = { hello : "world", world : 15 }
+        \\my_record_a = MyRecord.{ hello : "world", world : 15 }
         \\
         \\my_record_b : MyRecord
         \\my_record_b = { ..my_record_a, world: _  }
@@ -768,10 +768,10 @@ test "check type - record - opt - construction unset rejected by defaulted annot
     const source =
         \\main! = |_| {}
         \\
-        \\MyRecord : { hello : Str, world : U8 ?? 7 }
+        \\MyRecord := { hello : Str, world : U8 ?? 7 }
         \\
         \\my_record : MyRecord
-        \\my_record = { hello : "world", world : _ }
+        \\my_record = MyRecord.{ hello : "world", world : _ }
     ;
     // Same judgment as above with the kind pinned `defaulted`: an unset
     // cannot select a missing state the inline slot does not have
@@ -780,9 +780,9 @@ test "check type - record - opt - construction unset rejected by defaulted annot
         \\**Unset Of Defaulted Field**
         \\The `world` field has a default value, but it is being unset as if it were optional.
         \\```roc
-        \\my_record = { hello : "world", world : _ }
+        \\my_record = MyRecord.{ hello : "world", world : _ }
         \\```
-        \\                               ^^^^^^^^^
+        \\                                        ^^^^^^^^^
         \\
         \\A defaulted field always has a value, so there is no missing state to select. If you want the field to take its default, construct a new record that omits the field instead.
         \\
@@ -1282,14 +1282,17 @@ test "check type - record - default - list literal absorbs omitted defaulted fie
     const source =
         \\main! = |_| {}
         \\
-        \\xs : List({ a : U8 ?? 7 })
-        \\xs = [{ a: 1 }, {}]
+        \\Cfg := { a : U8 ?? 7 }
+        \\
+        \\xs : List(Cfg)
+        \\xs = [Cfg.{ a: 1 }, Cfg.{}]
     ;
     // Same as the optional-kind list test above, for the `defaulted` kind:
-    // the annotation-seeded element accumulator lets `{}` absorb `a` as a
-    // defaulted slot (constructed missing; reads materialize 7).
+    // each nominal construction's backing literal absorbs `a` as a defaulted
+    // slot (constructed missing; reads materialize 7), and the elements mix
+    // because one declaration is one default identity.
     try checkTypesModule(source, .{ .pass = .{ .def = "xs" } },
-        \\List({ a: U8 ?? 7 })
+        \\List(Cfg)
     );
 }
 
@@ -1402,8 +1405,10 @@ test "check type - record - default - construction may omit, access is direct" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { hello: Str, count: U8 ?? 10 }
-        \\my_record = { hello: "hi" }
+        \\MyRecord := { hello : Str, count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ hello: "hi" }
         \\
         \\use_it : U8
         \\use_it = my_record.count
@@ -1421,15 +1426,18 @@ test "check type - record - default - rendered type shows the default" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { count: U8 ?? 10 }
-        \\my_record = {}
+        \\MyRecord := { count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{}
     ;
-    // A defaulted field renders its default's source snippet when the
-    // default was declared in this module (design.md "Defaulted Fields")—
-    // both for discoverability and so default-identity mismatches render
-    // distinguishable types.
+    // A nominal-backed value renders as its nominal name; the backing row's
+    // `?? <default>` rendering (discoverability + distinguishable identity
+    // mismatches) is pinned by the snapshot type sections
+    // (test/snapshots/record_default_literals.md), since structural rows can
+    // no longer carry defaults from source (design.md "Defaulted Fields").
     try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
-        \\{ count: U8 ?? 10 }
+        \\MyRecord
     );
 }
 
@@ -1437,8 +1445,10 @@ test "check type - record - default - supplied value wins over default" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { count: U8 ?? 10 }
-        \\my_record = { count: 5 }
+        \\MyRecord := { count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ count: 5 }
         \\
         \\use_it : U8
         \\use_it = my_record.count
@@ -1452,18 +1462,23 @@ test "check type - record - default - defaulted flows where required expected" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { count: U8 ?? 10 }
-        \\my_record = {}
+        \\MyRecord := { count : U8 ?? 10 }
         \\
-        \\needs_count : { count: U8 } -> U8
-        \\needs_count = |r| r.count
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{}
+        \\
+        \\updated : MyRecord
+        \\updated = { ..my_record, count: 5 }
         \\
         \\use_it : U8
-        \\use_it = needs_count(my_record)
+        \\use_it = updated.count
     ;
-    // required ~ defaulted merges to required: both use the same inline
-    // layout, and this already-constructed value has no omission site that
-    // needs to retain the default identity.
+    // required ~ defaulted merges to required: a supplied update field has
+    // creation semantics, so updating a defaulted slot checks the value at
+    // the inline type without adopting or conflicting with the default
+    // identity. (The structural-flow direction of this merge is pinned at
+    // the unify level—structural rows can no longer carry defaults from
+    // source.)
     try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
         \\U8
     );
@@ -1473,8 +1488,8 @@ test "check type - record - default - supplied literal does not adopt a default 
     const source =
         \\main! = |_| {}
         \\
-        \\A : { x : U64 ?? 3 }
-        \\B : { x : U64 ?? 4 }
+        \\A := { x : U64 ?? 3 }
+        \\B := { x : U64 ?? 4 }
         \\
         \\fa : A -> U64
         \\fa = |r| r.x
@@ -1482,13 +1497,14 @@ test "check type - record - default - supplied literal does not adopt a default 
         \\fb : B -> U64
         \\fb = |r| r.x
         \\
-        \\result = {
-        \\    lit = { x: 7 }
-        \\    annotated : { x : U64 }
-        \\    annotated = { x: 7 }
-        \\    fa(lit) + fb(lit) + fa(annotated) + fb(annotated)
-        \\}
+        \\result = fa(A.{ x: 7 }) + fb(B.{ x: 7 }) + fa(A.{}) + fb(B.{})
     ;
+    // Two nominal types defaulting the same-shaped field differently coexist
+    // freely: a supplied construction field checks at the inline type without
+    // adopting a default identity, and each omission materializes its own
+    // type's default. (The original structural form of this test—one literal
+    // flowing to both defaulted types—is not constructible post-restriction;
+    // that merge direction is pinned at the unify level.)
     try checkTypesModule(source, .{ .pass = .{ .def = "result" } },
         \\U64
     );
@@ -1498,8 +1514,10 @@ test "check type - record - default - default must match field type" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { count: U8 ?? "hi" }
-        \\my_record = {}
+        \\MyRecord := { count : U8 ?? "hi" }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{}
     ;
     // The default expression is typed against the field's annotated type
     // where the annotation is materialized. (`.fail_first`: the mismatch can
@@ -1512,8 +1530,10 @@ test "check type - record - default - optional access on defaulted field rejecte
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { count: U8 ?? 10 }
-        \\my_record = {}
+        \\MyRecord := { count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{}
         \\
         \\use_it = my_record.?count ?? 3
     ;
@@ -1633,7 +1653,7 @@ test "check type - record - default - type-decl default referencing a def is rej
     const source =
         \\main! = |_| {}
         \\
-        \\Cfg : { a: U8 ?? foo }
+        \\Cfg := { a: U8 ?? foo }
         \\
         \\foo = 10
         \\
@@ -1655,13 +1675,13 @@ test "check type - record - default - type-decl default referencing a def is the
     const source =
         \\main! = |_| {}
         \\
-        \\Cfg : { a: U8 ?? foo }
+        \\Cfg := { a: U8 ?? foo }
         \\
         \\foo : U8
         \\foo = 10
         \\
         \\c : Cfg
-        \\c = { a: 1 }
+        \\c = Cfg.{ a: 1 }
         \\
         \\use_it = c.a
     ;
@@ -1686,10 +1706,10 @@ test "check type - record - default - effectful default via type decl rejected a
         \\eff! : {} => U8
         \\eff! = |_| 5
         \\
-        \\Cfg : { a: U8 ?? eff!({}) }
+        \\Cfg := { a: U8 ?? eff!({}) }
         \\
         \\c : Cfg
-        \\c = { a: 1 }
+        \\c = Cfg.{ a: 1 }
     ;
     // A call is not a literal, so an effectful default can no longer reach
     // the checker: it is rejected at canonicalization and the default
@@ -1706,10 +1726,10 @@ test "check type - record - default - parametric default rejected (review H6)" {
     const source =
         \\main! = |_| {}
         \\
-        \\Pair(x) : { items: List(x) ?? [] }
+        \\Pair(x) := { items: List(x) ?? [] }
         \\
         \\p : Pair(U8)
-        \\p = {}
+        \\p = Pair.{}
     ;
     // A default is evaluated once at compile time: a non-concrete default
     // type has no single runtime representation, so it is rejected instead
@@ -1724,10 +1744,10 @@ test "check type - record - default - concrete literal cannot default a parametr
     const source =
         \\main! = |_| {}
         \\
-        \\Config(a) : { value: a ?? 0 }
+        \\Config(a) := { value: a ?? 0 }
         \\
         \\config : Config(Str)
-        \\config = {}
+        \\config = Config.{}
     ;
     try checkTypesModule(source, .fail_first, "Default Value Not Concrete");
 }
@@ -1736,8 +1756,10 @@ test "check type - record - default - indirect self-reference cycle rejected at 
     const source =
         \\main! = |_| {}
         \\
-        \\x : { a: U8 ?? helper }
-        \\x = { a: 1 }
+        \\X := { a: U8 ?? helper }
+        \\
+        \\x : X
+        \\x = X.{ a: 1 }
         \\
         \\helper = x.a
     ;
@@ -1793,8 +1815,10 @@ test "check type - record - default - module-constant default rejected at Can as
         \\ten : U8
         \\ten = 10
         \\
-        \\x : { a: U8 ?? ten }
-        \\x = { a: 1 }
+        \\X := { a: U8 ?? ten }
+        \\
+        \\x : X
+        \\x = X.{ a: 1 }
         \\
         \\use_it = x.a
     ;
@@ -1816,8 +1840,10 @@ test "check type - record - default - effectful default rejected at Can as non-l
         \\get_default! : {} => U8
         \\get_default! = |_| 5
         \\
-        \\my_record : { count: U8 ?? get_default!({}) }
-        \\my_record = { count: 1 }
+        \\MyRecord := { count: U8 ?? get_default!({}) }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ count: 1 }
     ;
     // A call is not a literal—effectful or not—so the rejection happens
     // at canonicalization, before purity is even a question. The
@@ -1830,121 +1856,79 @@ test "check type - record - default - effectful default rejected at Can as non-l
     try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - separately written defaults do not merge" {
+test "check type - record - default - structural default rejected at Can (was: separately written defaults)" {
     const source =
         \\main! = |_| {}
         \\
         \\a : { x: U8 ?? 1 }
-        \\a = {}
+        \\a = { x: 1 }
         \\
         \\b : { x: U8 ?? 2 }
-        \\b = {}
+        \\b = { x: 2 }
         \\
         \\lst = [a, b]
     ;
-    // Two separately written defaults are two default identities even when
-    // the rest of the shape matches; merging them would leave no coherent
-    // default for construction sites (design.md "Defaulted Fields"). The
-    // dedicated Incompatible Defaults report renders both types and points
-    // at both declarations.
-    try checkTypesModule(source, .fail_with,
-        \\**Incompatible Defaults**
-        \\The `x` field has a `??` default in both of these types, but they are two different defaults—two separately written defaults never merge, even when their values look the same.
-        \\```roc
-        \\lst = [a, b]
-        \\```
-        \\          ^
-        \\
-        \\One type is:
-        \\
-        \\    { x: U8 ?? 2 }
-        \\
-        \\The other is:
-        \\
-        \\    { x: U8 ?? 1 }
-        \\
-        \\One default is declared here:
-        \\```roc
-        \\b : { x: U8 ?? 2 }
-        \\```
-        \\               ^
-        \\
-        \\And the other is declared here:
-        \\```roc
-        \\a : { x: U8 ?? 1 }
-        \\```
-        \\               ^
-        \\
-        \\To share one default, declare it once on a nominal type and use that type in both places.
-        \\
-        \\
-    );
+    // Post-restriction, a structural row cannot carry a `??` default, so the
+    // separately-written-defaults conflict this test used to pin is no
+    // longer constructible from source: both annotations reject at
+    // canonicalization and the defaults drop (the fields degrade to plain
+    // required and are supplied, so `lst` then checks—`a` and `b` are the
+    // same shape). The
+    // Incompatible Defaults report and the `defaulted(d1) ~ defaulted(d2)`
+    // unify rule remain as identity-skew invariants, pinned at the unify
+    // level (unify_test "different default identities still mismatch") and
+    // rendered by report.zig's snapshot divert. Full report text for this
+    // rejection is pinned in test/snapshots/record_default_structural_rejected.md.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{
+        "Default Not Allowed In Structural Record",
+        "Default Not Allowed In Structural Record",
+    });
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - incompatible defaults reported through an annotation" {
+test "check type - record - default - inline annotation default rejected at Can (was: incompatible defaults via annotation)" {
     const source =
         \\main! = |_| {}
         \\
         \\a : { x: U8 ?? 1 }
-        \\a = {}
+        \\a = { x: 1 }
         \\
         \\b : { x: U8 ?? 2 }
         \\b = a
     ;
-    // The same identity conflict arising through a different unify context
-    // (annotation, not list entry): the divert to the dedicated report is
-    // context-independent because it inspects the mismatch snapshots.
-    try checkTypesModule(source, .fail_with,
-        \\**Incompatible Defaults**
-        \\The `x` field has a `??` default in both of these types, but they are two different defaults—two separately written defaults never merge, even when their values look the same.
-        \\```roc
-        \\b = a
-        \\```
-        \\    ^
-        \\
-        \\One type is:
-        \\
-        \\    { x: U8 ?? 1 }
-        \\
-        \\The other is:
-        \\
-        \\    { x: U8 ?? 2 }
-        \\
-        \\One default is declared here:
-        \\```roc
-        \\a : { x: U8 ?? 1 }
-        \\```
-        \\               ^
-        \\
-        \\And the other is declared here:
-        \\```roc
-        \\b : { x: U8 ?? 2 }
-        \\```
-        \\               ^
-        \\
-        \\To share one default, declare it once on a nominal type and use that type in both places.
-        \\
-        \\
-    );
+    // Same as above through the annotation context: both inline defaults
+    // reject at canonicalization, the defaults drop, and `b = a` then
+    // checks (same required shape).
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{
+        "Default Not Allowed In Structural Record",
+        "Default Not Allowed In Structural Record",
+    });
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - alias-shared default is one identity" {
+test "check type - record - default - nominal-shared default is one identity" {
     const source =
         \\main! = |_| {}
         \\
-        \\Cfg : { x: U8 ?? 1 }
+        \\Cfg := { x: U8 ?? 1 }
         \\
         \\a : Cfg
-        \\a = {}
+        \\a = Cfg.{}
         \\
         \\b : Cfg
-        \\b = {}
+        \\b = Cfg.{}
         \\
         \\lst = [a, b]
     ;
-    // One written default is one identity: both annotations instantiate the
-    // same declaration, so the defaulted kinds carry equal identities and
-    // the values mix freely.
+    // One written default is one identity: both constructions instantiate
+    // the same declaration, so the defaulted kinds carry equal identities
+    // and the values mix freely.
     try checkTypesModule(source, .{ .pass = .{ .def = "lst" } },
         \\List(Cfg)
     );

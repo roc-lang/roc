@@ -24,8 +24,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: omitted at construction materializes the default",
         .source_kind = .module,
         .source =
-        \\my_record : { hello : Str, count : U8 ?? 10 }
-        \\my_record = { hello: "hi" }
+        \\MyRecord := { hello : Str, count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ hello: "hi" }
         \\
         \\main = my_record.count
         ,
@@ -35,8 +37,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: supplied value wins over the default",
         .source_kind = .module,
         .source =
-        \\my_record : { count : U8 ?? 10 }
-        \\my_record = { count: 5 }
+        \\MyRecord := { count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ count: 5 }
         \\
         \\main = my_record.count
         ,
@@ -46,8 +50,8 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: supplied literal does not adopt a default identity",
         .source_kind = .module,
         .source =
-        \\A : { x : U64 ?? 3 }
-        \\B : { x : U64 ?? 4 }
+        \\A := { x : U64 ?? 3 }
+        \\B := { x : U64 ?? 4 }
         \\
         \\fa : A -> U64
         \\fa = |r| r.x
@@ -55,23 +59,18 @@ const core_tests = [_]TestCase{
         \\fb : B -> U64
         \\fb = |r| r.x
         \\
-        \\main = {
-        \\    lit = { x: 7 }
-        \\    annotated : { x : U64 }
-        \\    annotated = { x: 7 }
-        \\    fa(lit) + fb(lit) + fa(annotated) + fb(annotated)
-        \\}
+        \\main = fa(A.{ x: 7 }) + fb(B.{ x: 7 }) + fa(A.{}) + fb(B.{})
         ,
-        .expected = .{ .inspect_str = "28" },
+        .expected = .{ .inspect_str = "21" },
     },
     .{
-        .name = "defaulted record field: alias-carried default materializes",
+        .name = "defaulted record field: nominal-carried default materializes",
         .source_kind = .module,
         .source =
-        \\Cfg : { retries : U8 ?? 3, verbose : U8 ?? 0 }
+        \\Cfg := { retries : U8 ?? 3, verbose : U8 ?? 0 }
         \\
         \\cfg : Cfg
-        \\cfg = { verbose: 1 }
+        \\cfg = Cfg.{ verbose: 1 }
         \\
         \\main = cfg.retries + cfg.verbose
         ,
@@ -81,21 +80,23 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: empty literal materializes the default",
         .source_kind = .module,
         .source =
-        \\x : { a : U8 ?? 10 }
-        \\x = {}
+        \\X := { a : U8 ?? 10 }
+        \\
+        \\x : X
+        \\x = X.{}
         \\
         \\main = x.a
         ,
         .expected = .{ .inspect_str = "10" },
     },
     .{
-        .name = "defaulted record field: empty literal materializes every alias-carried default",
+        .name = "defaulted record field: empty literal materializes every nominal-carried default",
         .source_kind = .module,
         .source =
-        \\Cfg : { retries : U8 ?? 3, verbose : U8 ?? 40 }
+        \\Cfg := { retries : U8 ?? 3, verbose : U8 ?? 40 }
         \\
         \\cfg : Cfg
-        \\cfg = {}
+        \\cfg = Cfg.{}
         \\
         \\main = cfg.retries + cfg.verbose
         ,
@@ -105,8 +106,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: empty literal in a function body materializes the default",
         .source_kind = .module,
         .source =
-        \\make : U8 -> { a : U8 ?? 10 }
-        \\make = |_n| {}
+        \\R := { a : U8 ?? 10 }
+        \\
+        \\make : U8 -> R
+        \\make = |_n| R.{}
         \\
         \\main = make(1).a + make(2).a
         ,
@@ -116,8 +119,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: partial literal in a function body keeps supplied and defaults omitted",
         .source_kind = .module,
         .source =
-        \\make : U8 -> { supplied : U8 ?? 1, defaulted : U8 ?? 7 }
-        \\make = |n| { supplied: n }
+        \\R := { supplied : U8 ?? 1, defaulted : U8 ?? 7 }
+        \\
+        \\make : U8 -> R
+        \\make = |n| R.{ supplied: n }
         \\
         \\main = make(30).supplied + make(30).defaulted
         ,
@@ -129,9 +134,11 @@ const core_tests = [_]TestCase{
         .source =
         \\T1 := [].{}
         \\
+        \\C := { x : U8 ?? 3, y : U8 ?? 4 }
+        \\
         \\expect {
-        \\    c : { x : U8 ?? 3, y : U8 ?? 4 }
-        \\    c = {}
+        \\    c : C
+        \\    c = C.{}
         \\    c.x == 3
         \\}
         \\
@@ -235,8 +242,10 @@ const core_tests = [_]TestCase{
         .name = "optional record field: required, defaulted, and optional slots in one record (omitting sides)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
-        \\r = { req: 1 }
+        \\R := { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\
+        \\r : R
+        \\r = R.{ req: 1 }
         \\
         \\main = r.req + r.def + (r.?opt ?? 100)
         ,
@@ -246,8 +255,10 @@ const core_tests = [_]TestCase{
         .name = "optional record field: required, defaulted, and optional slots in one record (all supplied)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
-        \\r = { req: 1, def: 2, opt: 3 }
+        \\R := { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\
+        \\r : R
+        \\r = R.{ req: 1, def: 2, opt: 3 }
         \\
         \\main = r.req + r.def + (r.?opt ?? 100)
         ,
@@ -520,13 +531,13 @@ const core_tests = [_]TestCase{
         .name = "optional record field: record update copies unmentioned optional and defaulted slots verbatim",
         .source_kind = .module,
         .source =
-        \\Rec : { req : U8, def : U8 ?? 10, name ?: Str }
+        \\Rec := { req : U8, def : U8 ?? 10, name ?: Str }
         \\
         \\base1 : Rec
-        \\base1 = { req: 1, name: Str.repeat("amy", 9) }
+        \\base1 = Rec.{ req: 1, name: Str.repeat("amy", 9) }
         \\
         \\base2 : Rec
-        \\base2 = { req: 1 }
+        \\base2 = Rec.{ req: 1 }
         \\
         \\main = {
         \\    u1 = { ..base1, req: 2 }
@@ -778,8 +789,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: annotated list literal materializes the default for omitting elements",
         .source_kind = .module,
         .source =
-        \\xs : List({ a : U8 ?? 7 })
-        \\xs = [{ a: 1 }, {}]
+        \\Cfg := { a : U8 ?? 7 }
+        \\
+        \\xs : List(Cfg)
+        \\xs = [Cfg.{ a: 1 }, Cfg.{}]
         \\
         \\main = List.map(xs, |r| r.a)
         ,
@@ -822,8 +835,10 @@ const core_tests = [_]TestCase{
         .name = "optional record field: inspect of required+defaulted+optional record (omitting sides)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
-        \\r = { req: 1 }
+        \\R := { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\
+        \\r : R
+        \\r = R.{ req: 1 }
         \\
         \\main = r
         ,
@@ -833,8 +848,10 @@ const core_tests = [_]TestCase{
         .name = "optional record field: inspect of required+defaulted+optional record (all supplied)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
-        \\r = { req: 1, def: 2, opt: 3 }
+        \\R := { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\
+        \\r : R
+        \\r = R.{ req: 1, def: 2, opt: 3 }
         \\
         \\main = r
         ,
@@ -905,8 +922,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: heap Str default materializes from the empty literal",
         .source_kind = .module,
         .source =
-        \\x : { greeting : Str ?? "this default greeting string is long" }
-        \\x = {}
+        \\X := { greeting : Str ?? "this default greeting string is long" }
+        \\
+        \\x : X
+        \\x = X.{}
         \\
         \\main = Str.concat(x.greeting, "!")
         ,
@@ -916,29 +935,29 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: record-literal default materializes",
         .source_kind = .module,
         .source =
-        \\Cfg : { pos : { x : U8, y : U8 } ?? { x: 3, y: 4 } }
+        \\Cfg := { pos : { x : U8, y : U8 } ?? { x: 3, y: 4 } }
         \\
         \\c : Cfg
-        \\c = {}
+        \\c = Cfg.{}
         \\
         \\main = c.pos.x + c.pos.y
         ,
         .expected = .{ .inspect_str = "7" },
     },
     .{
-        .name = "defaulted record field: alias-carried list default materializes at two sites",
+        .name = "defaulted record field: nominal-carried list default materializes at two sites",
         .source_kind = .module,
         .source =
-        \\Cfg : { xs : List(U8) ?? [1, 2, 3] }
+        \\Cfg := { xs : List(U8) ?? [1, 2, 3] }
         \\
         \\a : Cfg
-        \\a = {}
+        \\a = Cfg.{}
         \\
         \\b : Cfg
-        \\b = { xs: [5] }
+        \\b = Cfg.{ xs: [5] }
         \\
         \\d : Cfg
-        \\d = {}
+        \\d = Cfg.{}
         \\
         \\main = List.len(a.xs) + List.len(b.xs) + List.len(d.xs)
         ,
@@ -952,8 +971,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: tag-literal default materializes",
         .source_kind = .module,
         .source =
-        \\x : { a : [None, Some(U8)] ?? Some(9) }
-        \\x = {}
+        \\X := { a : [None, Some(U8)] ?? Some(9) }
+        \\
+        \\x : X
+        \\x = X.{}
         \\
         \\main = x.a
         ,
@@ -963,8 +984,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: negated-numeral default materializes",
         .source_kind = .module,
         .source =
-        \\x : { a : I8 ?? -10 }
-        \\x = {}
+        \\X := { a : I8 ?? -10 }
+        \\
+        \\x : X
+        \\x = X.{}
         \\
         \\main = x.a + 1
         ,
@@ -979,8 +1002,10 @@ const core_tests = [_]TestCase{
         \\    from_numeral = |numeral| Ok(Value(numeral.digits_before_pt().len()))
         \\}
         \\
-        \\config : { size : MyNum ?? 5 }
-        \\config = {}
+        \\Config := { size : MyNum ?? 5 }
+        \\
+        \\config : Config
+        \\config = Config.{}
         \\
         \\main = match config.size {
         \\    Value(size) => size
@@ -997,8 +1022,10 @@ const core_tests = [_]TestCase{
         \\    from_quote = |str| Ok(Tag(str))
         \\}
         \\
-        \\config : { label : Tag ?? "hello" }
-        \\config = {}
+        \\Config := { label : Tag ?? "hello" }
+        \\
+        \\config : Config
+        \\config = Config.{}
         \\
         \\main = match config.label {
         \\    Tag(label) => label
@@ -1015,8 +1042,10 @@ const core_tests = [_]TestCase{
         \\    from_numeral = |_numeral| Err(InvalidNumeral("Picky rejects this default"))
         \\}
         \\
-        \\config : { value : Picky ?? 5 }
-        \\config = {}
+        \\Config := { value : Picky ?? 5 }
+        \\
+        \\config : Config
+        \\config = Config.{}
         \\
         \\main = config.value
         ,
@@ -3790,20 +3819,20 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "3" },
     },
     .{
-        .name = "defaulted record field: imported alias default survives required access",
+        .name = "defaulted record field: imported nominal default survives required access",
         .source_kind = .module,
         .source =
-        \\import ConfigMod
+        \\import Cfg
         \\
-        \\main = ConfigMod.get_count!({ name: "Roc" })
+        \\main = Cfg.get_count!(Cfg.{ name: "Roc" })
         ,
         .imports = &.{.{
-            .name = "ConfigMod",
+            .name = "Cfg",
             .source =
-            \\Cfg : { count : U8 ?? 10, name : Str }
-            \\
-            \\get_count! : Cfg -> U8
-            \\get_count! = |cfg| cfg.count
+            \\Cfg := { count : U8 ?? 10, name : Str }.{
+            \\  get_count! : Cfg -> U8
+            \\  get_count! = |cfg| cfg.count
+            \\}
             ,
         }},
         .expected = .{ .inspect_str = "10" },
