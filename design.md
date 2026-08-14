@@ -1708,13 +1708,16 @@ rank is therefore not a valid proxy for whether a binding is a scheme.
 Every source alias for the binding (expression, pattern, definition, or closure
 wrapper) receives the same classification explicitly. Checked module output
 stores the classified source nodes in a sorted table, and imported binding
-copies carry that recorded classification into the importing checker. A value
-lookup, stored-value construction edge, or immediate-callee edge instantiates
-exactly when its source binding is classified as a scheme. Scheme
-instantiation force-copies the structural root so the rank-aware copy can reach
-and freshen quantified descendants while sharing escaped monomorphic
-variables. Monotype lookups share their existing graph and allocate nothing.
-No consumer scans solved types or source syntax to rediscover this decision.
+copies carry that recorded classification into the importing checker. A
+same-module value lookup, stored-value construction edge, or immediate-callee
+edge instantiates exactly when its source binding is classified as a scheme.
+Scheme instantiation force-copies the structural root so the rank-aware copy
+can reach and freshen quantified descendants while sharing escaped monomorphic
+variables. Same-module monotype lookups share their existing graph and allocate
+nothing. Imported checked types remain generalized cache templates and receive
+an independent copy per use as before; the recorded source classification is
+preserved on that copy. No consumer scans solved types or source syntax to
+rediscover this decision.
 
 The recursion rule is the ML binding-group rule. A recursive group gets one
 shared rank frame: members' patterns are ranked in it first, an in-group

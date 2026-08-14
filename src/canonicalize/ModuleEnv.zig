@@ -4183,8 +4183,8 @@ pub fn recordBindingScheme(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Er
 }
 
 /// Whether checking classified `node_idx` as a rank-1 polymorphic value
-/// scheme. Imported value lookup uses this exact producer-authored bit to
-/// choose scheme instantiation versus monotype sharing.
+/// scheme. Imported value resolution uses this exact producer-authored bit to
+/// preserve the classification on its local type-graph copy.
 pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
     return findSortedByNode(
         BindingScheme,
