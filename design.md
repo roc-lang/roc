@@ -10433,13 +10433,18 @@ reports that the user must restart `roc --watch` and leaves the previous
 `RunImage` active.
 
 Successful rebuild workers write a fresh shared-memory image descriptor plus a
-new dev `RunImage` into either a compiler-selected free image region or the
-append position of the same mapping. Descriptor slots are managed separately
-from image bytes and are reused only as descriptors, never as code or data. The
-descriptor records the generation, `RunImage` header offset, image bound, image
-allocation start/end, lifecycle state, and atomic reference count. The worker
-commits the descriptor offset through the hot-load control block with
-release/acquire atomics. The host shim checks that control
+new dev `RunImage` candidate into either a compiler-selected free image region
+or the append position of the same mapping. Descriptor slots are managed
+separately from image bytes and are reused only as descriptors, never as code or
+data. The descriptor records the generation, `RunImage` header offset, image
+bound, image allocation start/end, lifecycle state, and atomic reference count.
+The worker leaves that descriptor in the writing state and exits after recording
+the exact source-input states it consumed. The parent installs the refreshed
+watch set, compares those recorded states with the current source-input states,
+and commits the descriptor offset through the hot-load control block only when
+they still match. A stale candidate is reclaimed without becoming visible to the
+host, and the parent starts a rebuild from the newer input states. The host shim
+checks that control
 block at Roc entrypoint boundaries. If a newer generation is available, the shim
 retains the latest descriptor, validates and relocates the replacement
 `RunImage` in place, marks its code pages read/execute in the shared mapping,
@@ -10457,7 +10462,7 @@ only retains and releases descriptor references. Calls that entered old code
 before the swap keep executing old code safely while new entrypoint calls use
 the new image.
 
-The compiler parent process is the sole owner of shared-memory image-byte
+The compiler parent process is the sole owner of publication and shared-memory image-byte
 reclamation. It keeps unbounded process-local lists of descriptor offsets,
 reclaimed descriptor slots, and reclaimed image regions. After a rebuild commits
 a descriptor, after the host acknowledges, and before choosing storage for
