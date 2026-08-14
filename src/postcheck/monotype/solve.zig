@@ -1952,8 +1952,18 @@ pub const InstGraph = struct {
                 const row = try self.flattenRecordRow(node);
                 break :blk try self.newProducedRecordInner(row.fields, row.ext, false);
             },
+            .named => |named| blk: {
+                // A nominal may have been reserved before one of its exact
+                // argument cells was selected. Its original interner bucket
+                // is then keyed by the old argument roots. Re-register the
+                // finished identity under its current immediate arguments so
+                // later compound producers consume one canonical child.
+                if (self.existingNamedIdentity(named)) |existing| break :blk existing;
+                try self.registerNamedIdentity(node, named);
+                break :blk node;
+            },
             .redirect => unreachable,
-            .unresolved, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst => node,
+            .unresolved, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .erased, .zst => node,
         };
     }
 
@@ -1964,12 +1974,16 @@ pub const InstGraph = struct {
     /// interner. It never traverses through a generated nominal.
     pub fn internProducedIdentity(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
         const node = try self.internImmediateChild(raw_node);
-        if (self.nodes.items[@intFromEnum(node)] == .named) {
-            if (try self.internNamedArguments(self.nodes.items[@intFromEnum(node)].named)) |interned| {
-                return try self.newNode(.{ .named = interned });
-            }
-        }
-        return node;
+        return switch (self.nodes.items[@intFromEnum(node)]) {
+            .list => |element| try self.newProducedList(element),
+            .box => |element| try self.newProducedBox(element),
+            .tuple => |items| try self.newProducedTuple(items),
+            .named => |named| if (try self.internNamedArguments(named)) |interned|
+                try self.newNode(.{ .named = interned })
+            else
+                node,
+            .redirect, .unresolved, .primitive, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => node,
+        };
     }
 
     fn internNamedArguments(self: *InstGraph, named: InstNamed) Allocator.Error!?InstNamed {
@@ -5499,6 +5513,52 @@ test "equivalent nominal wrapper unification preserves the structural backing" {
     const retained_backing = graph.content(outer).named.backing orelse return error.TestExpectedEqual;
     try std.testing.expect(!graph.sameClass(outer, retained_backing.node));
     try std.testing.expectEqual(structural, graph.find(retained_backing.node));
+}
+
+test "producer root interning rekeys an immediate nominal child after argument selection" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const left_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const right_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAF} ** 32));
+    const type_name = try name_store.internTypeName("Recursive");
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+
+    const left = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(5) },
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{left_arg}),
+        .backing = null,
+    } });
+    const right = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(6) },
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{right_arg}),
+        .backing = null,
+    } });
+    const left_box = try graph.newProducedBox(left);
+    const right_box = try graph.newProducedBox(right);
+    try std.testing.expect(!graph.sameClass(left_box, right_box));
+
+    try graph.unify(left_arg, right_arg);
+    try std.testing.expect(graph.sameNominalIdentity(left, right));
+    try std.testing.expectEqual(
+        try graph.internProducedIdentity(left_box),
+        try graph.internProducedIdentity(right_box),
+    );
 }
 
 test "final sealed graph node materializes directly" {
