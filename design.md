@@ -4050,14 +4050,55 @@ by the polarity of the position the alias is used in, negating through
 functions embedded in the alias body (`Instantiator.PolarityVarBehavior`).
 Nominal declaration bodies close markers as written.
 
-An annotation whose generated type gains a variable this way (directly or
-through an alias) denotes a scheme, so its value binding generalizes exactly
-as if the variable had been spelled out (`Check.annotation_scheme_has_vars`).
-Two positions opt out, both genuine non-producers: host-boundary annotations
-(hosted lambdas and `provides` defs) keep their rows as written, because the
-host side is a fixed ABI rather than a Roc producer; and derived structural
-parsers/encoders determine each tag row exactly, so implicit openness
-collapses (the flex ext unifies with `[]`) before derivation
+Openness and GENERALIZATION are two orthogonal axes. Polarity decides
+whether a row is open; it never decides whether a binding is a scheme.
+Generalization follows the ML VALUE RESTRICTION: a binding generalizes
+exactly when its RHS is non-expansive — a syntactic function, an
+annotation-only def (a pure signature; Builtin intrinsics), a value alias
+(a bare reference to an existing scheme), an always-crashing stub (an
+unimplemented signature produces no value whose work could be duplicated;
+the annotation is honored as the scheme it declares), or a SYNTACTIC VALUE
+(lambdas, literals, and constructors of values: tag applications, records,
+tuples, lists, and interpolation-free strings whose components are
+themselves values — `Check.exprIsSyntacticValue`). The syntactic-value
+path additionally requires an ANNOTATED simple `.assign` binding — an
+unannotated or destructured value binding declares no scheme and stays
+weak — and excludes a BARE numeric literal RHS, which is owned by the
+literal-defaulting path (one shared literal, defaulted once at its owning
+boundary; a numeral nested in a constructor is an ordinary value
+component). An EXPANSIVE binding — a call, a conditional, a match, a
+block: anything that computes — never generalizes. One exception serves
+recursion rather than polymorphism: an annotated member of a RECURSIVE
+binding group predeclares its annotation as a scheme regardless of
+expansiveness, because the scheme DECOUPLES the cycle (in-group references
+instantiate the annotation instead of sharing an in-flight variable), which
+compile-time evaluation of mutually recursive values depends on.
+Its type variables, implicit (polarity-minted row extensions) or explicitly
+written, are WEAK shared variables: every use in the module shares them,
+uses constrain or widen them through ordinary unification, and whatever is
+still unconstrained after solving is grounded by the post-solve sweep.
+Use-site polymorphism for expansive bindings exists only across module
+boundaries, where `copy_import` copies the published type per importing
+module. An explicitly WRITTEN type variable in an expansive binding's
+annotation warns (`Weak Type Variable`): the author wrote polymorphism
+syntax on a binding that cannot generalize, and every use will share one
+variable — the polymorphic forms are a function or a constructed value.
+Compiler-internal idents (the `#`-prefixed rigids minted by anonymous `..`
+and by polarity deferral) are exempt: a weak open row is exactly their
+meaning, not a misuse. Rationale: an expansive binding is one computation
+with one result — generalizing it would duplicate its work per
+instantiation downstream and break identity between its recorded
+dispatch/codec evidence and the fresh constraint vars each instantiation
+mints; a syntactic value duplicates nothing, and its widened instantiations
+share one stored representation through the produced-value witness
+(below).
+
+Two positions opt out of implicit opening itself, both genuine
+non-producers: host-boundary annotations (hosted lambdas and `provides`
+defs) keep their rows as written, because the host side is a fixed ABI
+rather than a Roc producer; and derived structural parsers/encoders
+determine each tag row exactly, so implicit openness collapses (the flex
+ext unifies with `[]`) before derivation
 (`Check.closeTagRowsForDerivation`). Display follows the same polarity: an
 anonymous, unshared, unconstrained flex ext in an output position is not
 rendered as `..`.
@@ -4100,7 +4141,10 @@ Stored codec restores (parser/encoder runtime functions) emit bodies
 from a resolved view before their graph freezes; their requests may still
 carry live checked row defaults at that point, so
 `InstGraph.groundUnresolvedDefaults` commits those defaults early, matching
-what final sealing would materialize. And an unsealed record constructor
+what final sealing would materialize — the stored parser/encoder runtime
+RESTORE paths apply the same commit before demanding resolved views, since
+a weak (value-restricted) stored codec's rows are grounded by sealing, not
+by instantiation. And an unsealed record constructor
 that omits a DEFAULTED field materializes the archived default at the
 field's live graph cell (`defaultedFieldValueAtNode`), exactly as a supplied
 field's value lowers at its cell — never through an early resolved-view
