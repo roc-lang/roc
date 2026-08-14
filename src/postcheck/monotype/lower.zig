@@ -34818,6 +34818,16 @@ const BodyContext = struct {
                 ),
             };
         }
+        // Tag syntax produces only the selected tag's payload. The exact
+        // destination supplies the representation of every unconstructed
+        // alternative and the row remainder, so a requested constructor
+        // returns that destination after lowering its immediate payloads.
+        if (destination_relation == .exact_request) {
+            return try self.addConstructorExprAtNode(tag_node, .{ .tag = .{
+                .name = name,
+                .payloads = try self.addExprSpan(lowered),
+            } });
+        }
         const produced_tags = try self.graph.arena().dupe(InstTag, request_row.tags);
         var found = false;
         for (produced_tags) |*produced_tag| {

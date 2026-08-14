@@ -870,8 +870,8 @@ test "Monotype producers return and compose exact graph nodes directly" {
     try expectContains(tag, "const request_row = try self.graph.tagConstructionRow(tag_node)");
     try expectContains(tag, "const produced_tags = try self.graph.arena().dupe(InstTag, request_row.tags)");
     try expectContains(tag, "produced_tag.payloads = produced_payloads");
-    try expectNotContains(tag, "if (destination_relation == .exact_request)");
-    try expectNotContains(tag, "self.addConstructorExprAtNode(tag_node");
+    try expectContains(tag, "if (destination_relation == .exact_request)");
+    try expectContains(tag, "self.addConstructorExprAtNode(tag_node");
     try expectNotContains(tag, "checkedDefaultNode(");
     try expectContains(tag, "self.graph.newProducedTagUnion(");
 
