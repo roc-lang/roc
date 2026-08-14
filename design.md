@@ -7801,6 +7801,12 @@ the k-th evidence entry a call edge supplies. The definition's module and any
 importing module enumerate identical lists from their structural copies of the
 scheme. A dispatcher's requirements are a set keyed by method identity: repeated
 source constraints share one callable type and contribute one evidence param.
+At a specialization boundary, a nonempty evidence-param path always selects
+the dispatcher from the callee's exact callable request. The evidence vector's
+position already binds a caller-module checked source to that callee param;
+lowering never looks for the caller's module-local checked id in the callee
+request. Only a pathless ordinary requirement consumes its separately recorded
+checked source edge.
 
 **Edges supply evidence.** Checking persists every constrained-scheme edge.
 An ordinary instantiation records the (pristine var, fresh var) pairs of its

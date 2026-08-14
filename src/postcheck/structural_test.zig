@@ -2359,6 +2359,11 @@ test "Monotype encoding intrinsics consume producer-owned identity and result to
 
 test "Monotype evidence chains retain checker-recorded lexical scope topology" {
     const lower_source = @embedFile("monotype/lower.zig");
+    const dispatcher_selection = sourceSliceBetween(
+        lower_source,
+        "fn evidenceDispatcherSelection(",
+        "fn recordEvidenceDispatcherSelection(",
+    );
     try expectNotContains(lower_source, "recursiveNestedEvidenceChainEql");
     try expectNotContains(lower_source, "evidence_frame_root_counts");
     try expectNotContains(lower_source, "parent.* = source_ctx.evidence");
@@ -2367,6 +2372,14 @@ test "Monotype evidence chains retain checker-recorded lexical scope topology" {
     try expectContains(lower_source, "const scope_record = view.templates.dispatch_scopes[raw_scope]");
     try expectContains(lower_source, "context.evidence");
     try expectContains(lower_source, "const_evidence_frames");
+    try expectContains(dispatcher_selection, "const path = callee_view.templates.evidenceParamPath(param);");
+    try expectContains(dispatcher_selection, "if (path.len != 0)");
+    try expectContains(dispatcher_selection, "self.walkEvidencePathNode(callee_view, request_fn_node, path)");
+    const path_selection = std.mem.find(u8, dispatcher_selection, "if (path.len != 0)") orelse
+        return error.TestUnexpectedResult;
+    const pathless_source_selection = std.mem.find(u8, dispatcher_selection, "moduleBytesEqual(source.view.key.bytes, callee_view.key.bytes)") orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(path_selection < pathless_source_selection);
 
     try std.testing.expect(@hasField(check.ConstStore.ConstFn, "evidence_frames"));
     try std.testing.expect(@hasField(check.ConstStore.ConstFn, "evidence_frame_head"));

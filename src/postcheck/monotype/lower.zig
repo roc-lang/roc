@@ -37517,19 +37517,24 @@ const BodyContext = struct {
                 .authority = .produced,
             }),
             .checked => |source| blk: {
-                // A parameter's own checked dispatcher is named by its
-                // checker-authored callable path. Compound occurrences are
-                // intentionally absent from the flat identity-selection span.
+                // A nonempty checker-authored path names the dispatcher in
+                // the callee's exact callable request. This remains true when
+                // the checked evidence originated in another module: the
+                // vector position binds that source to this callee param, and
+                // checked type ids are intentionally module-local.
+                const path = callee_view.templates.evidenceParamPath(param);
+                if (path.len != 0) {
+                    const node = try self.walkEvidencePathNode(callee_view, request_fn_node, path) orelse
+                        Common.invariant("checked evidence dispatcher path did not match its procedure request");
+                    break :blk try self.callArgumentSelection(node);
+                }
                 if (moduleBytesEqual(source.view.key.bytes, callee_view.key.bytes) and
                     source.ty == param.dispatcher_ty)
                 {
-                    const path = callee_view.templates.evidenceParamPath(param);
-                    const node = if (path.len == 0)
-                        try self.defaultedEvidenceParamNode(param)
-                    else
-                        try self.walkEvidencePathNode(callee_view, request_fn_node, path) orelse
-                            Common.invariant("checked evidence dispatcher path did not match its procedure request");
-                    break :blk try self.callArgumentSelection(node);
+                    break :blk .{
+                        .node = try self.defaultedEvidenceParamNode(param),
+                        .authority = .produced,
+                    };
                 }
                 const key = solve.CheckedBaseKey{
                     .module_bytes = source.view.key.bytes,
