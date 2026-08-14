@@ -844,6 +844,79 @@ pub fn roc_boxy_register_erased_proc(
     }) catch abiCrash(g, "erased proc registration");
 }
 
+/// Return the exact result descriptor stored on a compiler-created erased
+/// callable. The metadata offset is deliberately not part of the public
+/// callable payload ABI, so it is recovered from the registered Roc worker.
+/// Host-created callables are unregistered and cannot satisfy this operation.
+pub fn roc_boxy_erased_callable_result_desc(
+    data_ptr: ?[*]u8,
+) callconv(.c) *const BoxyTypeDesc {
+    const g = requireGlobal();
+    const ptr = data_ptr orelse abiCrash(g, "erased callable result descriptor from null callable");
+    const payload = builtins.erased_callable.payloadPtr(ptr);
+    const registered = g.erased_procs.get(@intFromPtr(payload.callable_fn_ptr)) orelse
+        abiCrash(g, "erased callable result descriptor from unregistered host callable");
+    const metadata = builtins.erased_callable.compilerMetadataPtr(
+        builtins.erased_callable.capturePtr(ptr),
+        registered.metadata_offset,
+    );
+    const raw = metadata.result_desc orelse
+        abiCrash(g, "erased callable result descriptor metadata was null");
+    return @ptrCast(@alignCast(raw));
+}
+
+/// Return one exact direct argument descriptor captured on a compiler-created
+/// erased callable. Argument descriptor offsets are compiler-private and may
+/// follow a dev-backend capture prefix, so both the registered base and the
+/// keyed offset must participate in the address calculation.
+pub fn roc_boxy_erased_callable_arg_desc(
+    data_ptr: ?[*]u8,
+    raw_arg_index: u64,
+    raw_descriptor_index: u64,
+) callconv(.c) *const BoxyTypeDesc {
+    const g = requireGlobal();
+    const ptr = data_ptr orelse abiCrash(g, "erased callable argument descriptor from null callable");
+    const payload = builtins.erased_callable.payloadPtr(ptr);
+    const registered = g.erased_procs.get(@intFromPtr(payload.callable_fn_ptr)) orelse
+        abiCrash(g, "erased callable argument descriptor from unregistered host callable");
+    if (raw_arg_index > std.math.maxInt(u16) or raw_descriptor_index > std.math.maxInt(u16)) {
+        abiCrash(g, "erased callable argument descriptor key overflow");
+    }
+    const key = LIR.ErasedArgDescKey{
+        .arg_index = @intCast(raw_arg_index),
+        .descriptor_index = @intCast(raw_descriptor_index),
+    };
+    const offsets_start: usize = registered.arg_desc_offsets.start;
+    const offsets_end = offsets_start + registered.arg_desc_offsets.len;
+    if (offsets_end > g.runtime.boxy_tables.erased_arg_desc_offsets.len) {
+        abiCrash(g, "erased callable argument descriptor offsets");
+    }
+
+    var matched_offset: ?u32 = null;
+    for (g.runtime.boxy_tables.erased_arg_desc_offsets[offsets_start..offsets_end]) |entry| {
+        if (!std.meta.eql(entry.key, key)) continue;
+        if (matched_offset != null) {
+            abiCrash(g, "duplicate erased callable argument descriptor offset");
+        }
+        matched_offset = entry.offset;
+    }
+    const offset = matched_offset orelse
+        abiCrash(g, "missing erased callable argument descriptor offset");
+    const destination_u64 = @as(u64, registered.capture_offset_base) + offset;
+    const destination_end = destination_u64 + @sizeOf(?*const BoxyTypeDesc);
+    if (destination_end > registered.metadata_offset) {
+        abiCrash(g, "erased callable argument descriptor capture offset");
+    }
+    const destination: usize = @intCast(destination_u64);
+    const capture = builtins.erased_callable.capturePtr(ptr);
+    var raw: ?*const BoxyTypeDesc = null;
+    @memcpy(
+        std.mem.asBytes(&raw),
+        capture[destination..][0..@sizeOf(?*const BoxyTypeDesc)],
+    );
+    return raw orelse abiCrash(g, "erased callable argument descriptor capture was null");
+}
+
 fn erasedInvocationCapture(
     g: *GlobalBoxyRuntime,
     registered: RegisteredErasedProc,

@@ -220,6 +220,8 @@ comptime {
         "roc_boxy_materialize_call_result",
         "roc_boxy_register_proc",
         "roc_boxy_register_erased_proc",
+        "roc_boxy_erased_callable_result_desc",
+        "roc_boxy_erased_callable_arg_desc",
         "roc_boxy_call_erased",
         "roc_boxy_list_concat",
         "roc_boxy_list_prepend",

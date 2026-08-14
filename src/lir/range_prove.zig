@@ -3045,6 +3045,8 @@ const Pass = struct {
             .box_unbox,
             .box_prepare_update,
             .erased_capture_load,
+            .erased_callable_result_desc,
+            .erased_callable_arg_desc,
             .ptr_alloca,
             .box_alloc_zeroed,
             .ptr_store,

@@ -553,6 +553,12 @@ pub const LowLevel = enum(u16) {
     /// retains nested payload children, and releases the consumed input.
     box_prepare_update,
     erased_capture_load,
+    /// Read the exact result descriptor stored in compiler-private metadata on
+    /// a Roc-created erased callable. Introduced only by Boxy lowering.
+    erased_callable_result_desc,
+    /// Read one exact direct argument descriptor from a Roc-created erased
+    /// callable's registered capture slot. Introduced only by Boxy lowering.
+    erased_callable_arg_desc,
 
     // Compiler-internal pointer operations, introduced by the TRMC pass
     // (src/lir/trmc.zig). Never produced by user code or canonicalization.
@@ -970,6 +976,13 @@ pub const LowLevel = enum(u16) {
             // closure, not through an explicit refcounted argument, so the
             // result cannot name a lender to borrow from.
             .erased_capture_load => RcEffect.retainsResult(),
+
+            // The callable is borrowed for the metadata read and the returned
+            // descriptor pointer is immutable runtime metadata, not an owned
+            // Roc value.
+            .erased_callable_result_desc,
+            .erased_callable_arg_desc,
+            => RcEffect.none(),
 
             .box_alloc_zeroed => RcEffect.allocates(),
 

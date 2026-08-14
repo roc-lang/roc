@@ -182,6 +182,8 @@ pub const Evaluator = struct {
     }
 
     pub fn deinit(self: *Evaluator) void {
+        for (self.dbg_events.items) |bytes| self.gpa.free(bytes);
+        for (self.expect_failures.items) |bytes| self.gpa.free(bytes);
         self.dbg_events.deinit(self.gpa);
         self.expect_failures.deinit(self.gpa);
         self.ops_alloc_sizes.deinit();
@@ -291,6 +293,104 @@ pub const Evaluator = struct {
         const cell = self.alloc().create(Value) catch return error.OutOfMemory;
         cell.* = value;
         return cell;
+    }
+
+    const ValueSliceKey = struct {
+        ptr: [*]const Value,
+        len: usize,
+    };
+
+    const ValueCloneContext = struct {
+        allocator: std.mem.Allocator,
+        cells: std.AutoHashMap(*const Value, *Value),
+        slices: std.AutoHashMap(ValueSliceKey, []Value),
+
+        fn init(allocator: std.mem.Allocator) ValueCloneContext {
+            return .{
+                .allocator = allocator,
+                .cells = std.AutoHashMap(*const Value, *Value).init(allocator),
+                .slices = std.AutoHashMap(ValueSliceKey, []Value).init(allocator),
+            };
+        }
+
+        fn deinit(self: *ValueCloneContext) void {
+            self.cells.deinit();
+            self.slices.deinit();
+        }
+    };
+
+    fn cloneValueSlice(
+        self: *Evaluator,
+        values: []const Value,
+        context: *ValueCloneContext,
+    ) EvalError![]const Value {
+        if (values.len == 0) return &.{};
+        const key = ValueSliceKey{ .ptr = values.ptr, .len = values.len };
+        if (context.slices.get(key)) |existing| return existing;
+
+        const cloned = context.allocator.alloc(Value, values.len) catch return error.OutOfMemory;
+        context.slices.put(key, cloned) catch return error.OutOfMemory;
+        for (values, cloned) |value, *target| target.* = try self.cloneValue(value, context);
+        return cloned;
+    }
+
+    fn cloneValueCell(
+        self: *Evaluator,
+        value: *const Value,
+        context: *ValueCloneContext,
+    ) EvalError!*const Value {
+        if (context.cells.get(value)) |existing| return existing;
+        const cloned = context.allocator.create(Value) catch return error.OutOfMemory;
+        context.cells.put(value, cloned) catch return error.OutOfMemory;
+        cloned.* = try self.cloneValue(value.*, context);
+        return cloned;
+    }
+
+    fn cloneValue(
+        self: *Evaluator,
+        value: Value,
+        context: *ValueCloneContext,
+    ) EvalError!Value {
+        return switch (value) {
+            .unit, .int, .float32, .float64, .dec, .bool_, .uninitialized => value,
+            .str => |bytes| .{ .str = context.allocator.dupe(u8, bytes) catch return error.OutOfMemory },
+            .list => |values| .{ .list = try self.cloneValueSlice(values, context) },
+            .tuple => |values| .{ .tuple = try self.cloneValueSlice(values, context) },
+            .record => |values| .{ .record = try self.cloneValueSlice(values, context) },
+            .capture_record => |values| .{ .capture_record = try self.cloneValueSlice(values, context) },
+            .tag => |tag| .{ .tag = .{
+                .discriminant = tag.discriminant,
+                .payloads = try self.cloneValueSlice(tag.payloads, context),
+            } },
+            .callable => |callable| .{ .callable = .{
+                .variant = callable.variant,
+                .payload = if (callable.payload) |payload| try self.cloneValueCell(payload, context) else null,
+            } },
+            .erased_fn => |erased| .{ .erased_fn = .{
+                .target = erased.target,
+                .capture = if (erased.capture) |capture| try self.cloneValueCell(capture, context) else null,
+            } },
+            .box => |boxed| .{ .box = try self.cloneValueCell(boxed, context) },
+        };
+    }
+
+    /// Discard values made obsolete by a loop back-edge while retaining every
+    /// value still reachable through the current lexical frame. Function calls
+    /// own nested arenas, so compacting this arena cannot invalidate a suspended
+    /// caller's frame.
+    fn compactLoopArena(self: *Evaluator, frame: *Frame) EvalError!void {
+        var old_arena = self.arena;
+        self.arena = std.heap.ArenaAllocator.init(self.gpa);
+        errdefer {
+            self.arena.deinit();
+            self.arena = old_arena;
+        }
+
+        var context = ValueCloneContext.init(self.alloc());
+        defer context.deinit();
+        var values = frame.valueIterator();
+        while (values.next()) |value| value.* = try self.cloneValue(value.*, &context);
+        old_arena.deinit();
     }
 
     // expression evaluation
@@ -404,7 +504,7 @@ pub const Evaluator = struct {
             .expect => |child| {
                 const value = try self.evalExpr(frame, child);
                 if (!truthy(value)) {
-                    const bytes = self.alloc().dupe(u8, "expect failed") catch return error.OutOfMemory;
+                    const bytes = self.gpa.dupe(u8, "expect failed") catch return error.OutOfMemory;
                     self.expect_failures.append(self.gpa, bytes) catch return error.OutOfMemory;
                 }
                 return .unit;
@@ -631,6 +731,13 @@ pub const Evaluator = struct {
         self.depth += 1;
         defer self.depth -= 1;
 
+        var caller_arena = self.arena;
+        self.arena = std.heap.ArenaAllocator.init(self.gpa);
+        defer {
+            self.arena.deinit();
+            self.arena = caller_arena;
+        }
+
         const fn_ = self.program.getFn(fn_id);
         const body = switch (fn_.body) {
             .roc => |expr_id| expr_id,
@@ -646,16 +753,32 @@ pub const Evaluator = struct {
             frame.put(GuardedList.at(arg_locals, i).local, args[i]) catch return error.OutOfMemory;
         }
 
-        return self.evalExpr(&frame, body) catch |err| switch (err) {
+        const result = self.evalExpr(&frame, body) catch |err| switch (err) {
             error.Returned => self.return_value,
-            error.OutOfMemory,
-            error.Unsupported,
-            error.Aborted,
-            error.Broke,
-            error.Continued,
-            error.Jumped,
-            => |unhandled| unhandled,
+            error.Aborted => {
+                const aborted = self.abort_record.?;
+                self.abort_record = .{
+                    .kind = aborted.kind,
+                    .message = caller_arena.allocator().dupe(u8, aborted.message) catch return error.OutOfMemory,
+                };
+                return error.Aborted;
+            },
+            error.Broke, error.Continued, error.Jumped => |transfer| {
+                var transfer_context = ValueCloneContext.init(caller_arena.allocator());
+                defer transfer_context.deinit();
+                switch (transfer) {
+                    error.Broke => self.break_value = try self.cloneValue(self.break_value, &transfer_context),
+                    error.Continued => self.continue_values = try self.cloneValueSlice(self.continue_values, &transfer_context),
+                    error.Jumped => self.jump_values = try self.cloneValueSlice(self.jump_values, &transfer_context),
+                    else => unreachable,
+                }
+                return transfer;
+            },
+            error.OutOfMemory, error.Unsupported => |unhandled| return unhandled,
         };
+        var context = ValueCloneContext.init(caller_arena.allocator());
+        defer context.deinit();
+        return try self.cloneValue(result, &context);
     }
 
     // control flow
@@ -727,7 +850,7 @@ pub const Evaluator = struct {
             },
             .dbg => |expr_id| {
                 const value = try self.evalExpr(frame, expr_id);
-                const bytes = self.alloc().dupe(u8, value.str) catch return error.OutOfMemory;
+                const bytes = self.gpa.dupe(u8, value.str) catch return error.OutOfMemory;
                 self.dbg_events.append(self.gpa, bytes) catch return error.OutOfMemory;
             },
             .return_ => |expr_id| {
@@ -762,6 +885,7 @@ pub const Evaluator = struct {
                     for (0..param_slice.len) |i| {
                         frame.put(GuardedList.at(param_slice, i).local, next[i]) catch return error.OutOfMemory;
                     }
+                    try self.compactLoopArena(frame);
                     continue;
                 },
                 error.OutOfMemory,
@@ -786,6 +910,7 @@ pub const Evaluator = struct {
                     for (0..params.len) |index| {
                         frame.put(GuardedList.at(params, index).local, self.jump_values[index]) catch return error.OutOfMemory;
                     }
+                    try self.compactLoopArena(frame);
                     next_expr = join_point.body;
                     continue;
                 },
@@ -1372,6 +1497,8 @@ pub const Evaluator = struct {
             .box_unbox => if (args[0] == .box) args[0].box.* else self.unsupported_("box_unbox on non-box value"),
             .box_prepare_update => if (args[0] == .box) self.boxValue(args[0].box.*) else self.unsupported_("box_prepare_update on non-box value"),
             .erased_capture_load => if (args[0] == .box) args[0].box.* else args[0],
+            .erased_callable_result_desc => self.unsupported_("compiler-internal erased callable result descriptor read"),
+            .erased_callable_arg_desc => self.unsupported_("compiler-internal erased callable argument descriptor read"),
 
             .u8_from_str,
             .i8_from_str,

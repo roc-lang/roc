@@ -305,6 +305,8 @@ pub const BoxyBuiltinFn = enum {
     materialize_call_result,
     register_proc,
     register_erased_proc,
+    erased_callable_result_desc,
+    erased_callable_arg_desc,
     call_erased,
     list_concat,
     list_prepend,
@@ -347,6 +349,8 @@ pub const BoxyBuiltinFn = enum {
             .materialize_call_result => "roc_boxy_materialize_call_result",
             .register_proc => "roc_boxy_register_proc",
             .register_erased_proc => "roc_boxy_register_erased_proc",
+            .erased_callable_result_desc => "roc_boxy_erased_callable_result_desc",
+            .erased_callable_arg_desc => "roc_boxy_erased_callable_arg_desc",
             .call_erased => "roc_boxy_call_erased",
             .list_concat => "roc_boxy_list_concat",
             .list_prepend => "roc_boxy_list_prepend",
@@ -410,6 +414,8 @@ pub const BoxyBuiltinFn = enum {
             .dynamic_frac_literal_ref,
             .materialize_call_result,
             .register_proc,
+            .erased_callable_result_desc,
+            .erased_callable_arg_desc,
             => null,
         };
     }
@@ -5279,6 +5285,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return .{ .stack = .{ .offset = result_offset, .size = ValueSize.fromByteCount(elem_size) } };
                     }
                 },
+                .erased_callable_result_desc => {
+                    const callable_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const callable_reg = try self.ensureInGeneralReg(callable_loc);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addRegArg(callable_reg);
+                    try self.callBoxyBuiltin(&builder, .erased_callable_result_desc);
+                    self.codegen.freeGeneral(callable_reg);
+
+                    const result_offset = self.codegen.allocStackSlot(8);
+                    try self.emitStore(.w64, frame_ptr, result_offset, ret_reg_0);
+                    return self.stackLocationForLayout(ll.ret_layout, result_offset);
+                },
+                .erased_callable_arg_desc => {
+                    const callable_loc = try self.emitValueLocal(GuardedList.at(args, 0));
+                    const arg_index_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    const descriptor_index_loc = try self.emitValueLocal(GuardedList.at(args, 2));
+                    const callable_reg = try self.ensureInGeneralReg(callable_loc);
+                    const arg_index_reg = try self.ensureInGeneralReg(arg_index_loc);
+                    const descriptor_index_reg = try self.ensureInGeneralReg(descriptor_index_loc);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addRegArg(callable_reg);
+                    try builder.addRegArg(arg_index_reg);
+                    try builder.addRegArg(descriptor_index_reg);
+                    try self.callBoxyBuiltin(&builder, .erased_callable_arg_desc);
+                    self.codegen.freeGeneral(descriptor_index_reg);
+                    self.codegen.freeGeneral(arg_index_reg);
+                    self.codegen.freeGeneral(callable_reg);
+
+                    const result_offset = self.codegen.allocStackSlot(8);
+                    try self.emitStore(.w64, frame_ptr, result_offset, ret_reg_0);
+                    return self.stackLocationForLayout(ll.ret_layout, result_offset);
+                },
                 .ptr_alloca => {
                     // ptr_alloca: () -> Ptr(T). Reserve a zeroed stack slot for T and
                     // yield its address. Target local layout is ptr(T).
@@ -6838,6 +6876,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dec_to_u8_try_unsafe,
                 .dict_pseudo_seed,
                 .erased_capture_load,
+                .erased_callable_result_desc,
+                .erased_callable_arg_desc,
                 .f32_from_bits,
                 .f32_from_str,
                 .f32_to_bits,

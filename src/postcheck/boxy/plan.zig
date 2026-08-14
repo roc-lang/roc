@@ -102,7 +102,7 @@ pub const RepresentationKind = union(enum) {
     dynamic: DynamicKind,
     primitive: checked.CheckedPrimitive,
     bool_tag_union,
-    erased_callable: checked.CheckedFunctionKind,
+    erased_callable,
     alias,
     record,
     record_unbound,
@@ -117,6 +117,52 @@ pub const RepresentationKind = union(enum) {
     tag_union,
     empty_tag_union,
 };
+
+/// The optimized representation used directly for a builtin whose stored
+/// type still retains its nominal wrapper.
+pub fn collapsedStoredBuiltinRepresentationKind(
+    owner: static_dispatch.BuiltinOwner,
+) ?RepresentationKind {
+    return switch (owner) {
+        .bool => .bool_tag_union,
+        .str => .{ .primitive = .str },
+        .u8 => .{ .primitive = .u8 },
+        .i8 => .{ .primitive = .i8 },
+        .u16 => .{ .primitive = .u16 },
+        .i16 => .{ .primitive = .i16 },
+        .u32 => .{ .primitive = .u32 },
+        .i32 => .{ .primitive = .i32 },
+        .u64 => .{ .primitive = .u64 },
+        .i64 => .{ .primitive = .i64 },
+        .u128 => .{ .primitive = .u128 },
+        .i128 => .{ .primitive = .i128 },
+        .f32 => .{ .primitive = .f32 },
+        .f64 => .{ .primitive = .f64 },
+        .dec => .{ .primitive = .dec },
+        .u8x16 => .{ .primitive = .u8x16 },
+        .i8x16 => .{ .primitive = .i8x16 },
+        .u16x8 => .{ .primitive = .u16x8 },
+        .i16x8 => .{ .primitive = .i16x8 },
+        .u32x4 => .{ .primitive = .u32x4 },
+        .i32x4 => .{ .primitive = .i32x4 },
+        .u64x2 => .{ .primitive = .u64x2 },
+        .i64x2 => .{ .primitive = .i64x2 },
+        .list => .list,
+        .box => .box,
+        .dict,
+        .set,
+        .fields,
+        .field,
+        .parse_tag_union_spec,
+        .crypto_sha256_digest,
+        .crypto_sha256_hasher,
+        .crypto_blake3_digest,
+        .crypto_blake3_hasher,
+        .iter,
+        .stream,
+        => null,
+    };
+}
 
 /// Structural relationship between a representation and one child.
 pub const ChildRole = union(enum) {
@@ -210,6 +256,67 @@ pub const NominalBackingArgSubstitution = struct {
     actual_rep: TypeRepId,
 };
 
+/// A nominal backing's declaration formal is shared by every use of that
+/// nominal. Descriptor traversal must therefore resolve it through the
+/// currently visited nominal-use path, not treat it as one global value.
+const NominalBackingRepSubstitutionMap = struct {
+    const Entry = struct {
+        formal_rep: TypeRepId,
+        actual_rep: TypeRepId,
+    };
+
+    entries: std.ArrayList(Entry) = .empty,
+
+    fn deinit(self: *NominalBackingRepSubstitutionMap, allocator: Allocator) void {
+        self.entries.deinit(allocator);
+    }
+
+    fn resolve(self: *const NominalBackingRepSubstitutionMap, rep_id: TypeRepId) TypeRepId {
+        var current = rep_id;
+        var hops: usize = 0;
+        while (self.direct(current)) |next| {
+            if (hops == self.entries.items.len) {
+                boxyPlanInvariant("nominal backing descriptor substitutions formed a cycle");
+            }
+            current = next;
+            hops += 1;
+        }
+        return current;
+    }
+
+    fn put(
+        self: *NominalBackingRepSubstitutionMap,
+        allocator: Allocator,
+        formal_rep: TypeRepId,
+        actual_rep: TypeRepId,
+    ) Allocator.Error!void {
+        if (formal_rep == actual_rep) return;
+        const resolved_actual = self.resolve(actual_rep);
+        // An enclosing entry can resolve an attempted actual back to the
+        // formal. That would only create a lexical self-cycle.
+        if (resolved_actual == formal_rep) return;
+        try self.entries.append(allocator, .{
+            .formal_rep = formal_rep,
+            .actual_rep = resolved_actual,
+        });
+    }
+
+    fn direct(self: *const NominalBackingRepSubstitutionMap, rep_id: TypeRepId) ?TypeRepId {
+        var index = self.entries.items.len;
+        while (index > 0) {
+            index -= 1;
+            const entry = self.entries.items[index];
+            if (entry.formal_rep == rep_id) return entry.actual_rep;
+        }
+        return null;
+    }
+};
+
+const DescriptorTraversalPair = struct {
+    worker_rep: TypeRepId,
+    call_rep: TypeRepId,
+};
+
 /// Planner output describing one checked type's complete representation.
 pub const TypeRepresentation = struct {
     source_type: CheckedTypeIdentity,
@@ -262,6 +369,13 @@ pub const HiddenDictionaryParam = struct {
     dictionaries: Span,
 };
 
+/// One exact representation substitution captured on a direct-call worker
+/// descriptor's lexical nominal path.
+pub const DirectCallDescriptorRepSubstitution = struct {
+    from_rep: TypeRepId,
+    to_rep: TypeRepId,
+};
+
 /// Descriptor argument mapping for one direct worker call.
 pub const DirectCallHiddenDescriptorArg = struct {
     worker_desc: DescriptorRequirementId,
@@ -270,6 +384,10 @@ pub const DirectCallHiddenDescriptorArg = struct {
     rep: TypeRepId,
     source_arg_index: ?u32 = null,
     source_value_rep: ?TypeRepId = null,
+    /// Path-local nominal substitutions that instantiate the worker-shaped
+    /// descriptor. These are producer-owned because declaration formals can
+    /// be shared by sibling nominal occurrences.
+    worker_exact_reps: Span = .{},
 };
 
 /// Exact runtime source for one dictionary method worker descriptor.
@@ -359,7 +477,7 @@ pub const ErasedCapture = struct {
     capture_id: ?checked.CaptureId = null,
 };
 
-/// Exact checked source and worker selected for a stored function value.
+/// Exact stored representation and worker selected for a stored function value.
 pub const StaticFnPlan = struct {
     store_module: checked.ModuleId,
     fn_id: checked.ConstFnId,
@@ -581,6 +699,10 @@ pub const WorkerPlan = struct {
     source: WorkerSource,
     checked_type: CheckedTypeIdentity,
     rep: TypeRepId,
+    /// Exact body-level checked representations selected by this worker's
+    /// root procedure specialization. These substitutions are worker-local;
+    /// generalized nested procedures own separate specialization scopes.
+    body_exact_reps: Span = .{},
     stored_fn: ?StoredFnSource = null,
     hidden_descs: Span = .{},
     body_hidden_descs: Span = .{},
@@ -766,6 +888,7 @@ pub const ProgramPlan = struct {
     worker_evidence_descriptor_params: std.ArrayList(WorkerEvidenceDescriptorParam),
     hidden_dictionary_params: std.ArrayList(HiddenDictionaryParam),
     direct_call_hidden_desc_args: std.ArrayList(DirectCallHiddenDescriptorArg),
+    direct_call_descriptor_rep_substitutions: std.ArrayList(DirectCallDescriptorRepSubstitution),
     direct_call_hidden_dict_args: std.ArrayList(DirectCallHiddenDictionaryArg),
     dictionary_method_evidence: std.ArrayList(DictionaryMethodEvidence),
     dictionary_method_desc_sources: std.ArrayList(DictionaryMethodDescriptorSource),
@@ -817,6 +940,7 @@ pub const ProgramPlan = struct {
             .worker_evidence_descriptor_params = .empty,
             .hidden_dictionary_params = .empty,
             .direct_call_hidden_desc_args = .empty,
+            .direct_call_descriptor_rep_substitutions = .empty,
             .direct_call_hidden_dict_args = .empty,
             .dictionary_method_evidence = .empty,
             .dictionary_method_desc_sources = .empty,
@@ -839,6 +963,7 @@ pub const ProgramPlan = struct {
         self.dictionary_method_desc_sources.deinit(self.allocator);
         self.dictionary_method_evidence.deinit(self.allocator);
         self.direct_call_hidden_dict_args.deinit(self.allocator);
+        self.direct_call_descriptor_rep_substitutions.deinit(self.allocator);
         self.direct_call_hidden_desc_args.deinit(self.allocator);
         self.hidden_dictionary_params.deinit(self.allocator);
         self.worker_evidence_descriptor_params.deinit(self.allocator);
@@ -944,6 +1069,53 @@ pub const ProgramPlan = struct {
         return self.nominal_backing_arg_substitutions.items[span.start .. span.start + span.len];
     }
 
+    /// Return one nominal occurrence's exact argument. Checked
+    /// representations record an authoritative backing substitution, while
+    /// stored ConstStore representations carry the same occurrence argument
+    /// only as a `.nominal_arg` child.
+    pub fn nominalBackingArgActualRep(
+        self: *const ProgramPlan,
+        nominal_rep_id: TypeRepId,
+        arg_index: u32,
+    ) ?TypeRepId {
+        const nominal_rep = self.representations.items[@intFromEnum(nominal_rep_id)];
+        var explicit: ?TypeRepId = null;
+        for (self.nominalBackingArgSubstitutionSlice(nominal_rep.nominal_backing_arg_substitutions)) |substitution| {
+            if (substitution.arg_index != arg_index) continue;
+            if (explicit != null) {
+                boxyPlanInvariant("boxy nominal representation had duplicate backing argument substitutions");
+            }
+            explicit = substitution.actual_rep;
+        }
+        if (explicit) |actual| return actual;
+
+        var child_actual: ?TypeRepId = null;
+        for (self.childSlice(nominal_rep.children)) |child| {
+            if (child.role != .nominal_arg or child.role.nominal_arg != arg_index) continue;
+            if (child_actual != null) {
+                boxyPlanInvariant("boxy nominal representation had duplicate argument children");
+            }
+            child_actual = child.rep;
+        }
+        return child_actual;
+    }
+
+    /// Whether this representation carries the identity of a nominal type
+    /// argument occurrence. Checked representations store those arguments in
+    /// the explicit backing-substitution span, while stored ConstStore
+    /// representations carry them only as `.nominal_arg` children.
+    pub fn hasNominalArgumentIdentity(
+        self: *const ProgramPlan,
+        rep_id: TypeRepId,
+    ) bool {
+        const rep = self.representations.items[@intFromEnum(rep_id)];
+        if (rep.nominal_backing_arg_substitutions.len != 0) return true;
+        for (self.childSlice(rep.children)) |child| {
+            if (child.role == .nominal_arg) return true;
+        }
+        return false;
+    }
+
     pub fn dictionarySlice(self: *const ProgramPlan, span: Span) []const DictionaryRequirement {
         return self.dictionaries.items[span.start .. span.start + span.len];
     }
@@ -962,6 +1134,62 @@ pub const ProgramPlan = struct {
 
     pub fn directCallHiddenDescriptorArgSlice(self: *const ProgramPlan, span: Span) []const DirectCallHiddenDescriptorArg {
         return self.direct_call_hidden_desc_args.items[span.start .. span.start + span.len];
+    }
+
+    pub fn directCallDescriptorRepSubstitutionSlice(
+        self: *const ProgramPlan,
+        span: Span,
+    ) []const DirectCallDescriptorRepSubstitution {
+        return self.direct_call_descriptor_rep_substitutions.items[span.start .. span.start + span.len];
+    }
+
+    pub fn resolveDescriptorRepSubstitution(
+        self: *const ProgramPlan,
+        span: Span,
+        rep: TypeRepId,
+    ) TypeRepId {
+        const substitutions = self.directCallDescriptorRepSubstitutionSlice(span);
+        var current = rep;
+        var hops: usize = 0;
+        while (true) {
+            var next: ?TypeRepId = null;
+            for (substitutions) |substitution| {
+                if (substitution.from_rep != current) continue;
+                if (next != null and next.? != substitution.to_rep) {
+                    boxyPlanInvariant("descriptor representation substitution span had conflicting terminals");
+                }
+                next = substitution.to_rep;
+            }
+            current = next orelse return current;
+            if (hops == substitutions.len) {
+                boxyPlanInvariant("descriptor representation substitution span formed a cycle");
+            }
+            hops += 1;
+        }
+    }
+
+    pub fn directCallHiddenDescriptorArgsEql(
+        self: *const ProgramPlan,
+        left: []const DirectCallHiddenDescriptorArg,
+        right: []const DirectCallHiddenDescriptorArg,
+    ) bool {
+        if (left.len != right.len) return false;
+        for (left, right) |left_arg, right_arg| {
+            if (left_arg.worker_desc != right_arg.worker_desc or
+                left_arg.worker_rep != right_arg.worker_rep or
+                !std.meta.eql(left_arg.source_type, right_arg.source_type) or
+                left_arg.rep != right_arg.rep or
+                left_arg.source_arg_index != right_arg.source_arg_index or
+                left_arg.source_value_rep != right_arg.source_value_rep or
+                !std.meta.eql(
+                    self.directCallDescriptorRepSubstitutionSlice(left_arg.worker_exact_reps),
+                    self.directCallDescriptorRepSubstitutionSlice(right_arg.worker_exact_reps),
+                ))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     pub fn directCallHiddenDictionaryArgSlice(self: *const ProgramPlan, span: Span) []const DirectCallHiddenDictionaryArg {
@@ -1288,6 +1516,7 @@ pub fn analyzeProgram(
     builder.propagateDynamicRequirements();
     try builder.materializeDictionaryCallPlans();
     try builder.materializeGeneratedParserTagUnionPlans();
+    try builder.materializeWorkerBodyExactRepContexts();
     // The dictionary phases above analyze new types (static dictionary
     // workers), so representations created there need the dynamic-content
     // propagation re-run before descriptor requirements are derived from it.
@@ -4194,10 +4423,7 @@ const Builder = struct {
         });
         return .{
             .source_type = checked_source,
-            .kind = .{ .erased_callable = checked.finalizedFunctionKind(checkedFunctionPayload(
-                self.moduleForId(checked_source.module),
-                checked_source.ty,
-            ).kind) },
+            .kind = .erased_callable,
             .children = try self.commitPendingChildren(children.items),
         };
     }
@@ -4260,55 +4486,39 @@ const Builder = struct {
         checked_source: CheckedTypeIdentity,
         named: anytype,
     ) Allocator.Error!TypeRepresentation {
-        if (named.builtin_owner) |owner| switch (owner) {
-            .bool => return .{ .source_type = checked_source, .kind = .bool_tag_union },
-            .str => return .{ .source_type = checked_source, .kind = .{ .primitive = .str } },
-            .u8 => return .{ .source_type = checked_source, .kind = .{ .primitive = .u8 } },
-            .i8 => return .{ .source_type = checked_source, .kind = .{ .primitive = .i8 } },
-            .u16 => return .{ .source_type = checked_source, .kind = .{ .primitive = .u16 } },
-            .i16 => return .{ .source_type = checked_source, .kind = .{ .primitive = .i16 } },
-            .u32 => return .{ .source_type = checked_source, .kind = .{ .primitive = .u32 } },
-            .i32 => return .{ .source_type = checked_source, .kind = .{ .primitive = .i32 } },
-            .u64 => return .{ .source_type = checked_source, .kind = .{ .primitive = .u64 } },
-            .i64 => return .{ .source_type = checked_source, .kind = .{ .primitive = .i64 } },
-            .u128 => return .{ .source_type = checked_source, .kind = .{ .primitive = .u128 } },
-            .i128 => return .{ .source_type = checked_source, .kind = .{ .primitive = .i128 } },
-            .f32 => return .{ .source_type = checked_source, .kind = .{ .primitive = .f32 } },
-            .f64 => return .{ .source_type = checked_source, .kind = .{ .primitive = .f64 } },
-            .dec => return .{ .source_type = checked_source, .kind = .{ .primitive = .dec } },
-            .u8x16 => return .{ .source_type = checked_source, .kind = .{ .primitive = .u8x16 } },
-            .i8x16 => return .{ .source_type = checked_source, .kind = .{ .primitive = .i8x16 } },
-            .u16x8 => return .{ .source_type = checked_source, .kind = .{ .primitive = .u16x8 } },
-            .i16x8 => return .{ .source_type = checked_source, .kind = .{ .primitive = .i16x8 } },
-            .u32x4 => return .{ .source_type = checked_source, .kind = .{ .primitive = .u32x4 } },
-            .i32x4 => return .{ .source_type = checked_source, .kind = .{ .primitive = .i32x4 } },
-            .u64x2 => return .{ .source_type = checked_source, .kind = .{ .primitive = .u64x2 } },
-            .i64x2 => return .{ .source_type = checked_source, .kind = .{ .primitive = .i64x2 } },
-            .list, .box => {
-                const store = store_view.const_store orelse
-                    boxyPlanInvariant("stored builtin representation had no ConstStore");
-                const args = store.type_store.typeSpan(named.args);
-                if (args.len != 1) boxyPlanInvariant("stored unary builtin had an unexpected argument count");
-                return try self.storedUnaryRepresentation(
-                    store_view,
-                    checked_source,
-                    if (owner == .list) .list else .box,
-                    if (owner == .list) .list_elem else .box_payload,
-                    args[0],
-                );
-            },
-            .dict,
-            .set,
-            .fields,
-            .field,
-            .parse_tag_union_spec,
-            .crypto_sha256_digest,
-            .crypto_sha256_hasher,
-            .crypto_blake3_digest,
-            .crypto_blake3_hasher,
-            .iter,
-            .stream,
-            => {},
+        if (named.builtin_owner) |owner| if (collapsedStoredBuiltinRepresentationKind(owner)) |collapsed_kind| {
+            switch (collapsed_kind) {
+                .list, .box => {
+                    const store = store_view.const_store orelse
+                        boxyPlanInvariant("stored builtin representation had no ConstStore");
+                    const args = store.type_store.typeSpan(named.args);
+                    if (args.len != 1) boxyPlanInvariant("stored unary builtin had an unexpected argument count");
+                    return try self.storedUnaryRepresentation(
+                        store_view,
+                        checked_source,
+                        collapsed_kind,
+                        if (collapsed_kind == .list) .list_elem else .box_payload,
+                        args[0],
+                    );
+                },
+                .in_progress,
+                .dynamic,
+                .primitive,
+                .bool_tag_union,
+                .erased_callable,
+                .alias,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal,
+                .generated_field,
+                .generated_field_names,
+                .generated_tag_union_spec,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return .{ .source_type = checked_source, .kind = collapsed_kind },
+            }
         };
 
         var children = std.ArrayList(RepChild).empty;
@@ -5136,7 +5346,7 @@ const Builder = struct {
         try self.appendPendingChild(&children, view, .function_ret, function.ret);
         return .{
             .source_type = source_type,
-            .kind = .{ .erased_callable = checked.finalizedFunctionKind(function.kind) },
+            .kind = .erased_callable,
             .children = try self.commitPendingChildren(children.items),
         };
     }
@@ -5584,6 +5794,168 @@ const Builder = struct {
         return false;
     }
 
+    const WorkerCheckedTemplate = struct {
+        view: ModuleView,
+        template: checked.CheckedProcedureTemplate,
+    };
+
+    fn checkedWorkerTemplateForBodyContext(
+        self: *Builder,
+        worker: WorkerPlan,
+    ) ?WorkerCheckedTemplate {
+        return switch (worker.source) {
+            .procedure_template => |template_ref| blk: {
+                break :blk self.checkedWorkerTemplateForRef(template_ref);
+            },
+            .procedure_binding => |binding_ref| blk: {
+                const view = self.moduleForId(binding_ref.artifact);
+                break :blk self.checkedWorkerTemplateForBindingBody(
+                    view.top_level_procedure_bindings.get(binding_ref.binding).body,
+                );
+            },
+            .procedure_use => |use| switch (use.binding) {
+                .top_level => |binding_ref| blk: {
+                    const view = self.moduleForId(binding_ref.artifact);
+                    break :blk self.checkedWorkerTemplateForBindingBody(
+                        view.top_level_procedure_bindings.get(binding_ref.binding).body,
+                    );
+                },
+                .platform_required => |required| blk: {
+                    const view = self.moduleForId(required.app_value.artifact);
+                    break :blk self.checkedWorkerTemplateForBindingBody(
+                        view.top_level_procedure_bindings.get(required.procedure_binding).body,
+                    );
+                },
+                .imported => |binding_ref| blk: {
+                    const view = self.moduleForId(binding_ref.artifact);
+                    break :blk self.checkedWorkerTemplateForBindingBody(
+                        self.importedProcedureBinding(view, binding_ref).body,
+                    );
+                },
+                .hosted => null,
+            },
+            // Nested expressions have their own generalized specialization
+            // scopes, and generated workers do not own checked procedure
+            // interface relations.
+            .nested_expr,
+            .generated_codec,
+            .generated_field_iterator,
+            .generated_interpolation_step,
+            => null,
+        };
+    }
+
+    fn checkedWorkerTemplateForBindingBody(
+        self: *Builder,
+        body: anytype,
+    ) ?WorkerCheckedTemplate {
+        return switch (body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template_ref| self.checkedWorkerTemplateForRef(template_ref),
+                .lifted, .synthetic => null,
+            },
+            // Callable-eval bindings are selected as their finalized nested
+            // worker by `ensureWorker`; their owning scope is not this binding.
+            .callable_eval_template => null,
+        };
+    }
+
+    fn checkedWorkerTemplateForRef(
+        self: *Builder,
+        template_ref: checked_names.ProcedureTemplateRef,
+    ) ?WorkerCheckedTemplate {
+        // A binding body can promote an imported template ref. The template
+        // index is only meaningful in the checked module data named by the
+        // ref, not necessarily in the binding's module view.
+        const view = self.moduleForCheckedModuleId(template_ref.artifact);
+        const template = view.checked_procedure_templates.get(template_ref.template);
+        if (template.target == .hosted) return null;
+        return switch (template.body) {
+            .checked_body, .entry_wrapper => .{ .view = view, .template = template },
+            .intrinsic_wrapper => null,
+        };
+    }
+
+    fn materializeWorkerBodyExactRepContexts(self: *Builder) Allocator.Error!void {
+        for (self.plan.workers.items, 0..) |worker, worker_index| {
+            const checked_template = self.checkedWorkerTemplateForBodyContext(worker) orelse continue;
+            var owning_procedure: ?checked.SpecializationInterfaceRelation.Data = null;
+            for (checked_template.view.checked_procedure_templates.specializationRelations(&checked_template.template)) |relation| {
+                if (relation.scope != .root or relation.data != .procedure) continue;
+                if (!relation.data.procedure.owns_scope) continue;
+                if (owning_procedure != null) {
+                    boxyPlanInvariant("checked worker template had multiple owning root procedure relations");
+                }
+                owning_procedure = relation.data;
+            }
+            const procedure = if (owning_procedure) |relation|
+                relation.procedure
+            else
+                continue;
+
+            const worker_function = (try self.functionChildren(worker.rep)) orelse
+                boxyPlanInvariant("checked worker specialization context was not callable");
+            const interface_rep = try self.analyzeType(checked_template.view, procedure.fn_ty);
+            const interface_function = (try self.functionChildren(interface_rep)) orelse
+                boxyPlanInvariant("owning procedure specialization interface was not callable");
+            if (interface_function.arg_count != worker_function.arg_count) {
+                boxyPlanInvariant("owning procedure specialization interface changed arity");
+            }
+
+            var exact_reps = CallDescriptorRepSubstitutionMap{};
+            defer exact_reps.deinit(self.allocator);
+            var seen = std.AutoHashMap(DescriptorTraversalPair, void).init(self.allocator);
+            defer seen.deinit();
+            var body_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+            defer body_nominal_substitutions.deinit(self.allocator);
+            var worker_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+            defer worker_nominal_substitutions.deinit(self.allocator);
+
+            const interface_children = self.plan.childSlice(
+                self.plan.representations.items[@intFromEnum(interface_function.rep)].children,
+            );
+            const worker_children = self.plan.childSlice(
+                self.plan.representations.items[@intFromEnum(worker_function.rep)].children,
+            );
+            for (
+                interface_children[interface_function.args_start..][0..interface_function.arg_count],
+                worker_children[worker_function.args_start..][0..worker_function.arg_count],
+            ) |interface_arg, worker_arg| {
+                try self.collectWorkerBodyExactRepSubstitutions(
+                    interface_arg.rep,
+                    worker_arg.rep,
+                    &exact_reps,
+                    &seen,
+                    &body_nominal_substitutions,
+                    &worker_nominal_substitutions,
+                );
+            }
+            try self.collectWorkerBodyExactRepSubstitutions(
+                interface_function.ret,
+                worker_function.ret,
+                &exact_reps,
+                &seen,
+                &body_nominal_substitutions,
+                &worker_nominal_substitutions,
+            );
+
+            // The checker separately relates the procedure expression's body
+            // result to its callable result. This checked relation maps
+            // body-local generic uses to the exact worker specialization.
+            const body_ret_rep = try self.analyzeType(checked_template.view, procedure.body_ret_ty);
+            try self.collectWorkerBodyExactRepSubstitutions(
+                body_ret_rep,
+                worker_function.ret,
+                &exact_reps,
+                &seen,
+                &body_nominal_substitutions,
+                &worker_nominal_substitutions,
+            );
+            self.plan.workers.items[worker_index].body_exact_reps =
+                try self.appendBodyExactRepSubstitutionSnapshot(&exact_reps);
+        }
+    }
+
     fn materializeDescriptorRequirements(self: *Builder) Allocator.Error!void {
         for (self.plan.representations.items, 0..) |*rep, index| {
             if (!rep.contains_dynamic) continue;
@@ -5621,16 +5993,52 @@ const Builder = struct {
             if (try self.functionChildren(worker.rep)) |function| {
                 const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
                 for (children[function.args_start..][0..function.arg_count]) |child| {
-                    try self.collectHiddenDescriptorsForRep(child.rep, &pending, &seen_reps, &seen_descs);
+                    try self.collectRuntimeHiddenDescriptorsForRep(child.rep, &pending, &seen_reps, &seen_descs);
                 }
-                try self.collectHiddenDescriptorsForRep(function.ret, &pending, &seen_reps, &seen_descs);
+                try self.collectRuntimeHiddenDescriptorsForRep(function.ret, &pending, &seen_reps, &seen_descs);
             } else {
                 try self.collectHiddenDescriptorsForRep(worker.rep, &pending, &seen_reps, &seen_descs);
             }
             const body_start: u32 = @intCast(pending.items.len);
             switch (worker.source) {
                 .generated_codec => |codec| switch (codec.kind) {
-                    .parser_constructor, .encoder_constructor => {},
+                    .parser_constructor, .encoder_constructor => {
+                        const constructor_function = (try self.functionChildren(worker.rep)) orelse
+                            boxyPlanInvariant("generated codec constructor was not callable");
+                        const constructor_result = (try self.functionChildren(constructor_function.ret)) orelse
+                            boxyPlanInvariant("generated codec constructor result was not callable");
+                        const constructor_result_children = self.plan.childSlice(
+                            self.plan.representations.items[@intFromEnum(constructor_result.rep)].children,
+                        );
+                        for (constructor_result_children[constructor_result.args_start..][0..constructor_result.arg_count]) |child| {
+                            try self.collectRuntimeHiddenDescriptorsForRep(child.rep, &pending, &seen_reps, &seen_descs);
+                        }
+                        try self.collectRuntimeHiddenDescriptorsForRep(constructor_result.ret, &pending, &seen_reps, &seen_descs);
+
+                        const runtime_worker_id = self.plan.generatedCodecRuntimeWorker(worker.id) orelse
+                            boxyPlanInvariant("generated codec constructor had no runtime worker link");
+                        const runtime_worker = self.plan.workers.items[@intFromEnum(runtime_worker_id)];
+                        const runtime_function = (try self.functionChildren(runtime_worker.rep)) orelse
+                            boxyPlanInvariant("generated codec runtime worker was not callable");
+                        const runtime_children = self.plan.childSlice(
+                            self.plan.representations.items[@intFromEnum(runtime_function.rep)].children,
+                        );
+                        for (runtime_children[runtime_function.args_start..][0..runtime_function.arg_count]) |child| {
+                            try self.collectRuntimeHiddenDescriptorsForRep(child.rep, &pending, &seen_reps, &seen_descs);
+                        }
+                        try self.collectRuntimeHiddenDescriptorsForRep(runtime_function.ret, &pending, &seen_reps, &seen_descs);
+                        for (self.plan.generated_codec_calls.items) |call| {
+                            if (call.caller != runtime_worker_id) continue;
+                            for (self.plan.generatedCodecCallTypeSlice(call.arg_types)) |arg_type| {
+                                const arg_rep = self.plan.repForSourceType(arg_type) orelse
+                                    boxyPlanInvariant("generated codec runtime call argument type was not analyzed");
+                                try self.collectHiddenDescriptorsForRep(arg_rep, &pending, &seen_reps, &seen_descs);
+                            }
+                            const ret_rep = self.plan.repForSourceType(call.ret_type) orelse
+                                boxyPlanInvariant("generated codec runtime call result type was not analyzed");
+                            try self.collectHiddenDescriptorsForRep(ret_rep, &pending, &seen_reps, &seen_descs);
+                        }
+                    },
                     .parser_runtime, .encoder_runtime => {
                         const capture_type = codec.capture_type orelse
                             boxyPlanInvariant("generated codec runtime had no capture type");
@@ -5689,6 +6097,20 @@ const Builder = struct {
                 .nested_expr,
                 .generated_field_iterator,
                 => {},
+            }
+
+            if (worker.source == .generated_codec) {
+                for (self.plan.generated_codec_calls.items) |call| {
+                    if (call.caller != worker.id) continue;
+                    for (self.plan.generatedCodecCallTypeSlice(call.arg_types)) |arg_type| {
+                        const arg_rep = self.plan.repForSourceType(arg_type) orelse
+                            boxyPlanInvariant("generated codec call argument type was not analyzed");
+                        try self.collectHiddenDescriptorsForRep(arg_rep, &pending, &seen_reps, &seen_descs);
+                    }
+                    const ret_rep = self.plan.repForSourceType(call.ret_type) orelse
+                        boxyPlanInvariant("generated codec call result type was not analyzed");
+                    try self.collectHiddenDescriptorsForRep(ret_rep, &pending, &seen_reps, &seen_descs);
+                }
             }
 
             const evidence_only_start: u32 = @intCast(pending.items.len);
@@ -6506,6 +6928,7 @@ const Builder = struct {
             const evidence = self.checkedEvidenceForDirectCall(direct);
             const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgsWithEvidence(
                 direct.worker,
+                direct.caller,
                 call_types,
                 operand_types,
                 direct.ret_substitution.?.call_type,
@@ -6572,6 +6995,7 @@ const Builder = struct {
         const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
         return try self.materializeWorkerCallHiddenDescriptorArgsWithEvidence(
             worker,
+            null,
             arg_types,
             arg_types,
             ret_type,
@@ -6632,7 +7056,7 @@ const Builder = struct {
     ) void {
         if (ambiguous.*) return;
         if (source.*) |existing| {
-            if (!std.meta.eql(
+            if (!self.plan.directCallHiddenDescriptorArgsEql(
                 self.plan.directCallHiddenDescriptorArgSlice(existing),
                 self.plan.directCallHiddenDescriptorArgSlice(candidate),
             )) {
@@ -6837,6 +7261,7 @@ const Builder = struct {
     ) Allocator.Error!Span {
         return try self.materializeWorkerCallHiddenDescriptorArgsWithEvidence(
             worker_id,
+            null,
             call_arg_types,
             operand_arg_types,
             ret_type,
@@ -6848,6 +7273,7 @@ const Builder = struct {
     fn materializeWorkerCallHiddenDescriptorArgsWithEvidence(
         self: *Builder,
         worker_id: WorkerPlanId,
+        caller_id: ?WorkerPlanId,
         call_arg_types: []const CheckedTypeIdentity,
         operand_arg_types: []const CheckedTypeIdentity,
         ret_type: CheckedTypeIdentity,
@@ -6872,6 +7298,7 @@ const Builder = struct {
             boxyPlanInvariant("boxy worker call result type was not analyzed");
         return try self.materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(
             worker_id,
+            caller_id,
             call_arg_reps,
             operand_arg_reps,
             ret_rep,
@@ -6885,6 +7312,7 @@ const Builder = struct {
     fn materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(
         self: *Builder,
         worker_id: WorkerPlanId,
+        caller_id: ?WorkerPlanId,
         call_arg_reps: []const TypeRepId,
         operand_arg_reps: []const TypeRepId,
         ret_rep: TypeRepId,
@@ -6908,12 +7336,20 @@ const Builder = struct {
 
         var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
         defer pending.deinit(self.allocator);
-        var seen_reps = collections.DenseMap(TypeRepId, void).init(self.allocator);
-        defer seen_reps.deinit();
+        var seen_rep_pairs = std.AutoHashMap(DescriptorTraversalPair, void).init(self.allocator);
+        defer seen_rep_pairs.deinit();
         var seen_descriptor_reps = collections.DenseMap(TypeRepId, void).init(self.allocator);
         defer seen_descriptor_reps.deinit();
-        var substitutions = CallDescriptorRepSubstitutionMap{};
+        var substitutions = CallDescriptorRepSubstitutionMap{
+            .caller = caller_id,
+            .caller_body_exact_reps = if (caller_id) |caller|
+                self.plan.workers.items[@intFromEnum(caller)].body_exact_reps
+            else
+                .{},
+        };
         defer substitutions.deinit(self.allocator);
+        var worker_substitutions = NominalBackingRepSubstitutionMap{};
+        defer worker_substitutions.deinit(self.allocator);
         const evidence_only_start: usize = if (worker.evidence_only_descs.len == 0)
             params.len
         else
@@ -6942,13 +7378,49 @@ const Builder = struct {
                 ordinary_params,
                 &next_param,
                 &pending,
-                &seen_reps,
+                &seen_rep_pairs,
                 &seen_descriptor_reps,
                 &substitutions,
-                false,
+                &worker_substitutions,
+                true,
             );
         }
-        try self.collectCallHiddenDescriptorArgs(worker_function.ret, ret_rep, ret_rep, ret_rep, null, ordinary_params, &next_param, &pending, &seen_reps, &seen_descriptor_reps, &substitutions, false);
+        try self.collectCallHiddenDescriptorArgs(worker_function.ret, ret_rep, ret_rep, ret_rep, null, ordinary_params, &next_param, &pending, &seen_rep_pairs, &seen_descriptor_reps, &substitutions, &worker_substitutions, true);
+
+        if (next_param != ordinary_params.len) {
+            switch (worker.source) {
+                .generated_codec => |codec| switch (codec.kind) {
+                    .parser_constructor, .encoder_constructor => try self.collectGeneratedCodecRuntimeCallHiddenDescriptorArgs(
+                        worker.id,
+                        ret_rep,
+                        ordinary_params,
+                        &next_param,
+                        &pending,
+                        &seen_rep_pairs,
+                        &seen_descriptor_reps,
+                        &substitutions,
+                        &worker_substitutions,
+                    ),
+                    .parser_runtime,
+                    .encoder_runtime,
+                    .encoder_record_fields,
+                    .encoder_dict_fields,
+                    .encoder_sequence_elements,
+                    .encoder_tag_field,
+                    .encoder_tag_payload_thunk,
+                    .encoder_tag_payload_elements,
+                    .encoder_value_thunk,
+                    => {},
+                },
+                .procedure_template,
+                .procedure_binding,
+                .procedure_use,
+                .nested_expr,
+                .generated_field_iterator,
+                .generated_interpolation_step,
+                => {},
+            }
+        }
 
         if (next_param != ordinary_params.len or pending.items.len != ordinary_params.len) {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping did not cover every ordinary worker descriptor param");
@@ -6974,6 +7446,118 @@ const Builder = struct {
             .start = start,
             .len = @intCast(pending.items.len),
         };
+    }
+
+    fn collectGeneratedCodecRuntimeCallHiddenDescriptorArgs(
+        self: *Builder,
+        constructor: WorkerPlanId,
+        call_runtime_rep: TypeRepId,
+        params: []const HiddenDescriptorParam,
+        next_param: *usize,
+        pending: *std.ArrayList(DirectCallHiddenDescriptorArg),
+        seen_rep_pairs: *std.AutoHashMap(DescriptorTraversalPair, void),
+        seen_descriptor_reps: *collections.DenseMap(TypeRepId, void),
+        substitutions: *CallDescriptorRepSubstitutionMap,
+        worker_substitutions: *NominalBackingRepSubstitutionMap,
+    ) Allocator.Error!void {
+        const constructor_worker = self.plan.workers.items[@intFromEnum(constructor)];
+        const constructor_function = (try self.functionChildren(constructor_worker.rep)) orelse
+            boxyPlanInvariant("generated codec constructor was not callable");
+        const constructor_result = (try self.functionChildren(constructor_function.ret)) orelse
+            boxyPlanInvariant("generated codec constructor result was not callable");
+        const call_runtime_function = (try self.functionChildren(call_runtime_rep)) orelse
+            boxyPlanInvariant("generated codec constructor call result was not callable");
+        if (constructor_result.arg_count != call_runtime_function.arg_count) {
+            boxyPlanInvariant("generated codec constructor result arity disagreed with its call");
+        }
+        const constructor_result_children = self.plan.childSlice(
+            self.plan.representations.items[@intFromEnum(constructor_result.rep)].children,
+        );
+        const call_children = self.plan.childSlice(
+            self.plan.representations.items[@intFromEnum(call_runtime_function.rep)].children,
+        );
+        for (
+            constructor_result_children[constructor_result.args_start..][0..constructor_result.arg_count],
+            call_children[call_runtime_function.args_start..][0..call_runtime_function.arg_count],
+        ) |constructor_child, call_child| {
+            try self.collectCallHiddenDescriptorArgs(
+                constructor_child.rep,
+                call_child.rep,
+                call_child.rep,
+                call_child.rep,
+                null,
+                params,
+                next_param,
+                pending,
+                seen_rep_pairs,
+                seen_descriptor_reps,
+                substitutions,
+                worker_substitutions,
+                true,
+            );
+        }
+        try self.collectCallHiddenDescriptorArgs(
+            constructor_result.ret,
+            call_runtime_function.ret,
+            call_runtime_function.ret,
+            call_runtime_function.ret,
+            null,
+            params,
+            next_param,
+            pending,
+            seen_rep_pairs,
+            seen_descriptor_reps,
+            substitutions,
+            worker_substitutions,
+            true,
+        );
+
+        const runtime_worker_id = self.plan.generatedCodecRuntimeWorker(constructor) orelse
+            boxyPlanInvariant("generated codec constructor had no runtime worker link");
+        const runtime_worker = self.plan.workers.items[@intFromEnum(runtime_worker_id)];
+        const runtime_function = (try self.functionChildren(runtime_worker.rep)) orelse
+            boxyPlanInvariant("generated codec runtime worker was not callable");
+        if (runtime_function.arg_count != call_runtime_function.arg_count) {
+            boxyPlanInvariant("generated codec runtime call result arity disagreed with its worker");
+        }
+        const runtime_children = self.plan.childSlice(
+            self.plan.representations.items[@intFromEnum(runtime_function.rep)].children,
+        );
+        for (
+            runtime_children[runtime_function.args_start..][0..runtime_function.arg_count],
+            call_children[call_runtime_function.args_start..][0..call_runtime_function.arg_count],
+        ) |runtime_child, call_child| {
+            try self.collectCallHiddenDescriptorArgs(
+                runtime_child.rep,
+                call_child.rep,
+                call_child.rep,
+                call_child.rep,
+                null,
+                params,
+                next_param,
+                pending,
+                seen_rep_pairs,
+                seen_descriptor_reps,
+                substitutions,
+                worker_substitutions,
+                true,
+            );
+        }
+        try self.collectCallHiddenDescriptorArgs(
+            runtime_function.ret,
+            call_runtime_function.ret,
+            call_runtime_function.ret,
+            call_runtime_function.ret,
+            null,
+            params,
+            next_param,
+            pending,
+            seen_rep_pairs,
+            seen_descriptor_reps,
+            substitutions,
+            worker_substitutions,
+            true,
+        );
     }
 
     fn appendEvidenceOnlyCallHiddenDescriptorArgs(
@@ -7182,7 +7766,7 @@ const Builder = struct {
                 .alias_backing => for (children) |child| {
                     if (child.role == .alias_backing) break child.rep;
                 } else boxyPlanInvariant("worker evidence representation path expected an alias backing"),
-                .nominal_arg => self.nominalBackingArgActualRep(current, path_step.data) orelse switch (current_rep.kind) {
+                .nominal_arg => self.plan.nominalBackingArgActualRep(current, path_step.data) orelse switch (current_rep.kind) {
                     .list => if (path_step.data == 0)
                         requiredSingleChild(&self.plan, current, .list_elem).rep
                     else
@@ -7466,8 +8050,12 @@ const Builder = struct {
 
         var substitutions = CallDictionaryRepSubstitutionMap{};
         defer substitutions.deinit(self.allocator);
-        var seen_substitutions = std.AutoHashMap(u64, void).init(self.allocator);
+        var seen_substitutions = std.AutoHashMap(DescriptorTraversalPair, void).init(self.allocator);
         defer seen_substitutions.deinit();
+        var worker_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+        defer worker_nominal_substitutions.deinit(self.allocator);
+        var call_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+        defer call_nominal_substitutions.deinit(self.allocator);
 
         const definition_type = self.workerCheckedTypeForSource(worker.source, worker.checked_type);
         if (!typeRefEql(definition_type, worker.checked_type)) {
@@ -7493,6 +8081,8 @@ const Builder = struct {
                     worker_arg.rep,
                     &substitutions,
                     &seen_substitutions,
+                    &worker_nominal_substitutions,
+                    &call_nominal_substitutions,
                 );
             }
             try self.collectCallDictionaryRepSubstitutions(
@@ -7500,6 +8090,8 @@ const Builder = struct {
                 worker_function.ret,
                 &substitutions,
                 &seen_substitutions,
+                &worker_nominal_substitutions,
+                &call_nominal_substitutions,
             );
         }
 
@@ -7509,11 +8101,11 @@ const Builder = struct {
             const worker_child = self.plan.children.items[fn_children_span.start + worker_function.args_start + arg_index];
             const arg_rep = self.plan.repForSourceType(arg_types[arg_index]) orelse
                 boxyPlanInvariant("boxy worker call argument type was not analyzed");
-            try self.collectCallDictionaryRepSubstitutions(worker_child.rep, arg_rep, &substitutions, &seen_substitutions);
+            try self.collectCallDictionaryRepSubstitutions(worker_child.rep, arg_rep, &substitutions, &seen_substitutions, &worker_nominal_substitutions, &call_nominal_substitutions);
         }
         const ret_rep = self.plan.repForSourceType(ret_type) orelse
             boxyPlanInvariant("boxy worker call result type was not analyzed");
-        try self.collectCallDictionaryRepSubstitutions(worker_function.ret, ret_rep, &substitutions, &seen_substitutions);
+        try self.collectCallDictionaryRepSubstitutions(worker_function.ret, ret_rep, &substitutions, &seen_substitutions, &worker_nominal_substitutions, &call_nominal_substitutions);
 
         const body_param_start: usize = @intCast(worker.body_hidden_dicts.start - worker.hidden_dicts.start);
         if (body_param_start > params.len) {
@@ -7588,28 +8180,68 @@ const Builder = struct {
         self: *Builder,
         rep_id: TypeRepId,
         pending: *std.ArrayList(HiddenDescriptorParam),
-        seen_reps: *collections.DenseMap(TypeRepId, void),
+        _: *collections.DenseMap(TypeRepId, void),
         seen_descs: *collections.DenseMap(DescriptorRequirementId, void),
     ) Allocator.Error!void {
-        const rep_entry = try seen_reps.getOrPut(rep_id);
-        if (rep_entry.found_existing) return;
+        var substitutions = NominalBackingRepSubstitutionMap{};
+        defer substitutions.deinit(self.allocator);
+        var seen_rep_pairs = std.AutoHashMap(u64, void).init(self.allocator);
+        defer seen_rep_pairs.deinit();
+        try self.collectHiddenDescriptorsForRepInner(
+            rep_id,
+            pending,
+            seen_descs,
+            &substitutions,
+            &seen_rep_pairs,
+        );
+    }
 
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+    fn collectHiddenDescriptorsForRepInner(
+        self: *Builder,
+        raw_rep_id: TypeRepId,
+        pending: *std.ArrayList(HiddenDescriptorParam),
+        seen_descs: *collections.DenseMap(DescriptorRequirementId, void),
+        substitutions: *NominalBackingRepSubstitutionMap,
+        seen_rep_pairs: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        const substitution_scope = substitutions.entries.items.len;
+        defer substitutions.entries.shrinkRetainingCapacity(substitution_scope);
+
+        try self.recordNominalBackingDescriptorSubstitutions(raw_rep_id, substitutions);
+
+        const effective_rep_id = substitutions.resolve(raw_rep_id);
+        if (effective_rep_id != raw_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(effective_rep_id, substitutions);
+        }
+        const resolved_rep_id = substitutions.resolve(raw_rep_id);
+        const pair_key = (@as(u64, @intFromEnum(raw_rep_id)) << 32) |
+            @as(u64, @intFromEnum(resolved_rep_id));
+        const pair_entry = try seen_rep_pairs.getOrPut(pair_key);
+        if (pair_entry.found_existing) return;
+        defer _ = seen_rep_pairs.remove(pair_key);
+
+        const rep = self.plan.representations.items[@intFromEnum(resolved_rep_id)];
         if (rep.descriptor) |desc| {
-            const identity_rep = self.descriptorArgumentIdentityRep(rep_id);
+            const identity_rep = self.descriptorArgumentIdentityRep(resolved_rep_id);
             const identity_desc = self.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
             const desc_entry = try seen_descs.getOrPut(identity_desc);
             if (!desc_entry.found_existing) {
                 try pending.append(self.allocator, .{
                     .source_type = rep.source_type,
-                    .rep = rep_id,
+                    .rep = resolved_rep_id,
                     .desc = desc,
                 });
             }
         }
 
         for (self.plan.childSlice(rep.children)) |child| {
-            try self.collectHiddenDescriptorsForRep(child.rep, pending, seen_reps, seen_descs);
+            try self.collectHiddenDescriptorsForRepInner(
+                child.rep,
+                pending,
+                seen_descs,
+                substitutions,
+                seen_rep_pairs,
+            );
         }
     }
 
@@ -7617,21 +8249,55 @@ const Builder = struct {
         self: *Builder,
         rep_id: TypeRepId,
         pending: *std.ArrayList(HiddenDescriptorParam),
-        seen_reps: *collections.DenseMap(TypeRepId, void),
+        _: *collections.DenseMap(TypeRepId, void),
         seen_descs: *collections.DenseMap(DescriptorRequirementId, void),
     ) Allocator.Error!void {
-        const rep_entry = try seen_reps.getOrPut(rep_id);
-        if (rep_entry.found_existing) return;
+        var substitutions = NominalBackingRepSubstitutionMap{};
+        defer substitutions.deinit(self.allocator);
+        var seen_rep_pairs = std.AutoHashMap(u64, void).init(self.allocator);
+        defer seen_rep_pairs.deinit();
+        try self.collectRuntimeHiddenDescriptorsForRepInner(
+            rep_id,
+            pending,
+            seen_descs,
+            &substitutions,
+            &seen_rep_pairs,
+        );
+    }
 
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+    fn collectRuntimeHiddenDescriptorsForRepInner(
+        self: *Builder,
+        raw_rep_id: TypeRepId,
+        pending: *std.ArrayList(HiddenDescriptorParam),
+        seen_descs: *collections.DenseMap(DescriptorRequirementId, void),
+        substitutions: *NominalBackingRepSubstitutionMap,
+        seen_rep_pairs: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        const substitution_scope = substitutions.entries.items.len;
+        defer substitutions.entries.shrinkRetainingCapacity(substitution_scope);
+
+        try self.recordNominalBackingDescriptorSubstitutions(raw_rep_id, substitutions);
+
+        const effective_rep_id = substitutions.resolve(raw_rep_id);
+        if (effective_rep_id != raw_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(effective_rep_id, substitutions);
+        }
+        const resolved_rep_id = substitutions.resolve(raw_rep_id);
+        const pair_key = (@as(u64, @intFromEnum(raw_rep_id)) << 32) |
+            @as(u64, @intFromEnum(resolved_rep_id));
+        const pair_entry = try seen_rep_pairs.getOrPut(pair_key);
+        if (pair_entry.found_existing) return;
+        defer _ = seen_rep_pairs.remove(pair_key);
+
+        const rep = self.plan.representations.items[@intFromEnum(resolved_rep_id)];
         if (rep.descriptor) |desc| {
-            const identity_rep = self.descriptorArgumentIdentityRep(rep_id);
+            const identity_rep = self.descriptorArgumentIdentityRep(resolved_rep_id);
             const identity_desc = self.plan.representations.items[@intFromEnum(identity_rep)].descriptor orelse desc;
             const desc_entry = try seen_descs.getOrPut(identity_desc);
             if (!desc_entry.found_existing) {
                 try pending.append(self.allocator, .{
                     .source_type = rep.source_type,
-                    .rep = rep_id,
+                    .rep = resolved_rep_id,
                     .desc = desc,
                 });
             }
@@ -7640,7 +8306,13 @@ const Builder = struct {
         if (rep.kind == .erased_callable) return;
         for (self.plan.childSlice(rep.children)) |child| {
             if (!childCarriesRuntimeDescriptor(child.role)) continue;
-            try self.collectRuntimeHiddenDescriptorsForRep(child.rep, pending, seen_reps, seen_descs);
+            try self.collectRuntimeHiddenDescriptorsForRepInner(
+                child.rep,
+                pending,
+                seen_descs,
+                substitutions,
+                seen_rep_pairs,
+            );
         }
     }
 
@@ -7650,21 +8322,621 @@ const Builder = struct {
         pending: *std.ArrayList(HiddenDictionaryParam),
         seen_reps: *collections.DenseMap(TypeRepId, void),
     ) Allocator.Error!void {
-        const rep_entry = try seen_reps.getOrPut(rep_id);
-        if (rep_entry.found_existing) return;
+        var substitutions = NominalBackingRepSubstitutionMap{};
+        defer substitutions.deinit(self.allocator);
+        var seen_rep_pairs = std.AutoHashMap(u64, void).init(self.allocator);
+        defer seen_rep_pairs.deinit();
+        try self.collectHiddenDictionariesForRepInner(
+            rep_id,
+            pending,
+            seen_reps,
+            &substitutions,
+            &seen_rep_pairs,
+        );
+    }
 
-        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+    fn collectHiddenDictionariesForRepInner(
+        self: *Builder,
+        raw_rep_id: TypeRepId,
+        pending: *std.ArrayList(HiddenDictionaryParam),
+        seen_reps: *collections.DenseMap(TypeRepId, void),
+        substitutions: *NominalBackingRepSubstitutionMap,
+        seen_rep_pairs: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!void {
+        const substitution_scope = substitutions.entries.items.len;
+        defer substitutions.entries.shrinkRetainingCapacity(substitution_scope);
+
+        try self.recordNominalBackingDescriptorSubstitutions(raw_rep_id, substitutions);
+
+        const effective_rep_id = substitutions.resolve(raw_rep_id);
+        if (effective_rep_id != raw_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(effective_rep_id, substitutions);
+        }
+        const resolved_rep_id = substitutions.resolve(raw_rep_id);
+        const pair_key = (@as(u64, @intFromEnum(raw_rep_id)) << 32) |
+            @as(u64, @intFromEnum(resolved_rep_id));
+        const pair_entry = try seen_rep_pairs.getOrPut(pair_key);
+        if (pair_entry.found_existing) return;
+        defer _ = seen_rep_pairs.remove(pair_key);
+
+        const rep = self.plan.representations.items[@intFromEnum(resolved_rep_id)];
         if (rep.dictionaries.len != 0) {
-            try pending.append(self.allocator, .{
-                .source_type = rep.source_type,
-                .rep = rep_id,
-                .dictionaries = rep.dictionaries,
-            });
+            const output_entry = try seen_reps.getOrPut(resolved_rep_id);
+            if (!output_entry.found_existing) {
+                try pending.append(self.allocator, .{
+                    .source_type = rep.source_type,
+                    .rep = resolved_rep_id,
+                    .dictionaries = rep.dictionaries,
+                });
+            }
         }
 
         var child_index: usize = 0;
-        while (self.plan.dictionaryChildAt(rep_id, child_index)) |child| : (child_index += 1) {
-            try self.collectHiddenDictionariesForRep(child.rep, pending, seen_reps);
+        while (self.plan.dictionaryChildAt(resolved_rep_id, child_index)) |child| : (child_index += 1) {
+            try self.collectHiddenDictionariesForRepInner(
+                child.rep,
+                pending,
+                seen_reps,
+                substitutions,
+                seen_rep_pairs,
+            );
+        }
+    }
+
+    fn recordNominalBackingDescriptorSubstitutions(
+        self: *Builder,
+        rep_id: TypeRepId,
+        substitutions: *NominalBackingRepSubstitutionMap,
+    ) Allocator.Error!void {
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind != .nominal) return;
+        for (self.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+            try substitutions.put(self.allocator, substitution.formal_rep, substitution.actual_rep);
+        }
+    }
+
+    fn sortDirectCallDescriptorRepSubstitutions(
+        substitutions: []DirectCallDescriptorRepSubstitution,
+    ) void {
+        std.mem.sort(DirectCallDescriptorRepSubstitution, substitutions, {}, struct {
+            fn lessThan(
+                _: void,
+                left: DirectCallDescriptorRepSubstitution,
+                right: DirectCallDescriptorRepSubstitution,
+            ) bool {
+                return @intFromEnum(left.from_rep) < @intFromEnum(right.from_rep);
+            }
+        }.lessThan);
+    }
+
+    fn appendWorkerDescriptorRepSubstitutionSnapshot(
+        self: *Builder,
+        substitutions: *const NominalBackingRepSubstitutionMap,
+    ) Allocator.Error!Span {
+        const start: u32 = @intCast(self.plan.direct_call_descriptor_rep_substitutions.items.len);
+        for (substitutions.entries.items, 0..) |substitution, index| {
+            var shadowed = false;
+            for (substitutions.entries.items[index + 1 ..]) |later| {
+                if (later.formal_rep == substitution.formal_rep) {
+                    shadowed = true;
+                    break;
+                }
+            }
+            if (shadowed) continue;
+            const actual_rep = substitutions.resolve(substitution.formal_rep);
+            if (substitution.formal_rep == actual_rep) continue;
+            try self.plan.direct_call_descriptor_rep_substitutions.append(self.allocator, .{
+                .from_rep = substitution.formal_rep,
+                .to_rep = actual_rep,
+            });
+        }
+        const end = self.plan.direct_call_descriptor_rep_substitutions.items.len;
+        const snapshot = self.plan.direct_call_descriptor_rep_substitutions.items[start..end];
+        sortDirectCallDescriptorRepSubstitutions(snapshot);
+        return .{ .start = start, .len = @intCast(snapshot.len) };
+    }
+
+    fn appendBodyExactRepSubstitutionSnapshot(
+        self: *Builder,
+        substitutions: *const CallDescriptorRepSubstitutionMap,
+    ) Allocator.Error!Span {
+        const start: u32 = @intCast(self.plan.direct_call_descriptor_rep_substitutions.items.len);
+        for (substitutions.entries.items) |substitution| {
+            const exact_rep = substitutions.resolve(substitution.call_rep);
+            if (substitution.worker_rep == exact_rep) continue;
+            try self.plan.direct_call_descriptor_rep_substitutions.append(self.allocator, .{
+                .from_rep = substitution.worker_rep,
+                .to_rep = exact_rep,
+            });
+        }
+        const end = self.plan.direct_call_descriptor_rep_substitutions.items.len;
+        const snapshot = self.plan.direct_call_descriptor_rep_substitutions.items[start..end];
+        sortDirectCallDescriptorRepSubstitutions(snapshot);
+        return .{ .start = start, .len = @intCast(snapshot.len) };
+    }
+
+    fn putWorkerBodyExactRepSubstitution(
+        self: *Builder,
+        substitutions: *CallDescriptorRepSubstitutionMap,
+        body_rep: TypeRepId,
+        exact_rep: TypeRepId,
+    ) Allocator.Error!void {
+        const exact_terminal = substitutions.resolve(exact_rep);
+        if (substitutions.get(body_rep)) |existing| {
+            if (substitutions.resolve(existing) != exact_terminal) {
+                boxyPlanInvariant("one worker body representation had conflicting specialization terminals");
+            }
+            return;
+        }
+        try substitutions.put(self.allocator, body_rep, exact_terminal);
+    }
+
+    fn nominalBackingRepSubstitutionContextsAgree(
+        body: *const NominalBackingRepSubstitutionMap,
+        worker: *const NominalBackingRepSubstitutionMap,
+    ) bool {
+        for (body.entries.items) |entry| {
+            if (body.resolve(entry.formal_rep) != worker.resolve(entry.formal_rep)) return false;
+        }
+        for (worker.entries.items) |entry| {
+            if (body.resolve(entry.formal_rep) != worker.resolve(entry.formal_rep)) return false;
+        }
+        return true;
+    }
+
+    fn workerBodyRepContainsDynamicAnywhere(
+        self: *Builder,
+        raw_rep_id: TypeRepId,
+        substitutions: *NominalBackingRepSubstitutionMap,
+        active: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!bool {
+        const substitution_scope = substitutions.entries.items.len;
+        defer substitutions.entries.shrinkRetainingCapacity(substitution_scope);
+
+        try self.recordNominalBackingDescriptorSubstitutions(raw_rep_id, substitutions);
+        const effective_rep_id = substitutions.resolve(raw_rep_id);
+        if (effective_rep_id != raw_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(effective_rep_id, substitutions);
+        }
+        const rep_id = substitutions.resolve(raw_rep_id);
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind == .dynamic) return true;
+
+        const pair_key = (@as(u64, @intFromEnum(raw_rep_id)) << 32) |
+            @as(u64, @intFromEnum(rep_id));
+        const active_entry = try active.getOrPut(pair_key);
+        // The same declaration pair can recur under a different lexical
+        // nominal environment. Treat a cycle as potentially dynamic: this
+        // predicate authorizes pruning, so a false negative is not safe.
+        if (active_entry.found_existing) return true;
+        defer _ = active.remove(pair_key);
+
+        // Body descriptor uses can originate under type-only wrapper arguments
+        // and erased callable signatures, so this intentionally traverses every
+        // child role rather than the runtime-only `contains_dynamic` graph.
+        for (self.plan.childSlice(rep.children)) |child| {
+            if (try self.workerBodyRepContainsDynamicAnywhere(
+                child.rep,
+                substitutions,
+                active,
+            )) return true;
+        }
+        return false;
+    }
+
+    fn workerBodyDynamicDemandsAlreadyMapped(
+        self: *Builder,
+        raw_rep_id: TypeRepId,
+        exact_reps: *const CallDescriptorRepSubstitutionMap,
+        nominal_substitutions: *NominalBackingRepSubstitutionMap,
+    ) Allocator.Error!bool {
+        var active = std.AutoHashMap(u64, void).init(self.allocator);
+        defer active.deinit();
+        return try self.workerBodyDynamicDemandsAlreadyMappedInner(
+            raw_rep_id,
+            exact_reps,
+            nominal_substitutions,
+            &active,
+        );
+    }
+
+    fn workerBodyDynamicDemandsAlreadyMappedInner(
+        self: *Builder,
+        raw_rep_id: TypeRepId,
+        exact_reps: *const CallDescriptorRepSubstitutionMap,
+        nominal_substitutions: *NominalBackingRepSubstitutionMap,
+        active: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!bool {
+        const substitution_scope = nominal_substitutions.entries.items.len;
+        defer nominal_substitutions.entries.shrinkRetainingCapacity(substitution_scope);
+
+        try self.recordNominalBackingDescriptorSubstitutions(raw_rep_id, nominal_substitutions);
+        const effective_rep_id = nominal_substitutions.resolve(raw_rep_id);
+        if (effective_rep_id != raw_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(effective_rep_id, nominal_substitutions);
+        }
+        const rep_id = nominal_substitutions.resolve(raw_rep_id);
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind == .dynamic) return exact_reps.get(rep_id) != null;
+
+        const pair_key = (@as(u64, @intFromEnum(raw_rep_id)) << 32) |
+            @as(u64, @intFromEnum(rep_id));
+        const active_entry = try active.getOrPut(pair_key);
+        // This helper permits an otherwise-unmatched branch to be skipped.
+        // A recurrence can revisit the same representation under a different
+        // lexical nominal environment, so a cycle is not proof that every
+        // dynamic demand was already mapped.
+        if (active_entry.found_existing) return false;
+        defer _ = active.remove(pair_key);
+
+        for (self.plan.childSlice(rep.children)) |child| {
+            if (!try self.workerBodyDynamicDemandsAlreadyMappedInner(
+                child.rep,
+                exact_reps,
+                nominal_substitutions,
+                active,
+            )) return false;
+        }
+        return true;
+    }
+
+    fn workerBodyAliasDeclarationsMatch(
+        self: *Builder,
+        body_rep_id: TypeRepId,
+        worker_rep_id: TypeRepId,
+    ) bool {
+        const body_rep = self.plan.representations.items[@intFromEnum(body_rep_id)];
+        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        if (body_rep.kind != .alias or worker_rep.kind != .alias) return false;
+
+        const body_view = self.moduleForId(body_rep.source_type.module);
+        const worker_view = self.moduleForId(worker_rep.source_type.module);
+        if (@intFromEnum(body_rep.source_type.ty) >= body_view.checked_types.payloadCount() or
+            @intFromEnum(worker_rep.source_type.ty) >= worker_view.checked_types.payloadCount()) return false;
+        const body_payload = body_view.checked_types.payload(body_rep.source_type.ty);
+        const worker_payload = worker_view.checked_types.payload(worker_rep.source_type.ty);
+        if (body_payload != .alias or worker_payload != .alias) return false;
+        const body_alias = body_payload.alias;
+        const worker_alias = worker_payload.alias;
+        if (body_alias.source_decl != worker_alias.source_decl or
+            body_alias.builtin_origin != worker_alias.builtin_origin or
+            !moduleKeyEqual(body_alias.owner_module, worker_alias.owner_module)) return false;
+
+        if (moduleKeyEqual(body_rep.source_type.module, worker_rep.source_type.module)) {
+            return body_alias.origin_module == worker_alias.origin_module and
+                body_alias.name == worker_alias.name;
+        }
+        const body_names = body_view.canonical_names orelse return false;
+        const worker_names = worker_view.canonical_names orelse return false;
+        return std.mem.eql(
+            u8,
+            body_names.moduleIdentityBytes(body_alias.origin_module),
+            worker_names.moduleIdentityBytes(worker_alias.origin_module),
+        ) and std.mem.eql(
+            u8,
+            body_names.typeNameText(body_alias.name),
+            worker_names.typeNameText(worker_alias.name),
+        );
+    }
+
+    fn collectWorkerBodyExactRepSubstitutions(
+        self: *Builder,
+        raw_body_rep_id: TypeRepId,
+        raw_worker_rep_id: TypeRepId,
+        substitutions: *CallDescriptorRepSubstitutionMap,
+        seen: *std.AutoHashMap(DescriptorTraversalPair, void),
+        body_nominal_substitutions: *NominalBackingRepSubstitutionMap,
+        worker_nominal_substitutions: *NominalBackingRepSubstitutionMap,
+    ) Allocator.Error!void {
+        var body_dynamic_active = std.AutoHashMap(u64, void).init(self.allocator);
+        defer body_dynamic_active.deinit();
+        try self.collectWorkerBodyExactRepSubstitutionsInner(
+            raw_body_rep_id,
+            raw_worker_rep_id,
+            substitutions,
+            seen,
+            &body_dynamic_active,
+            body_nominal_substitutions,
+            worker_nominal_substitutions,
+        );
+    }
+
+    fn collectWorkerBodyExactRepSubstitutionsInner(
+        self: *Builder,
+        raw_body_rep_id: TypeRepId,
+        raw_worker_rep_id: TypeRepId,
+        substitutions: *CallDescriptorRepSubstitutionMap,
+        seen: *std.AutoHashMap(DescriptorTraversalPair, void),
+        body_dynamic_active: *std.AutoHashMap(u64, void),
+        body_nominal_substitutions: *NominalBackingRepSubstitutionMap,
+        worker_nominal_substitutions: *NominalBackingRepSubstitutionMap,
+    ) Allocator.Error!void {
+        const body_scope = body_nominal_substitutions.entries.items.len;
+        defer body_nominal_substitutions.entries.shrinkRetainingCapacity(body_scope);
+        const worker_scope = worker_nominal_substitutions.entries.items.len;
+        defer worker_nominal_substitutions.entries.shrinkRetainingCapacity(worker_scope);
+
+        try self.recordNominalBackingDescriptorSubstitutions(raw_body_rep_id, body_nominal_substitutions);
+        const body_effective = body_nominal_substitutions.resolve(raw_body_rep_id);
+        if (body_effective != raw_body_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(body_effective, body_nominal_substitutions);
+        }
+        const body_rep_id = body_nominal_substitutions.resolve(raw_body_rep_id);
+
+        try self.recordNominalBackingDescriptorSubstitutions(raw_worker_rep_id, worker_nominal_substitutions);
+        const worker_effective = worker_nominal_substitutions.resolve(raw_worker_rep_id);
+        if (worker_effective != raw_worker_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(worker_effective, worker_nominal_substitutions);
+        }
+        const worker_rep_id = worker_nominal_substitutions.resolve(raw_worker_rep_id);
+
+        const pair = DescriptorTraversalPair{ .worker_rep = body_rep_id, .call_rep = worker_rep_id };
+        const seen_entry = try seen.getOrPut(pair);
+        if (seen_entry.found_existing) return;
+        // This is an active-path cycle guard, not a global dedup. The same
+        // declaration backing can be revisited under two sibling nominal
+        // occurrence substitutions and must be aligned in both contexts.
+        defer _ = seen.remove(pair);
+
+        try self.putWorkerBodyExactRepSubstitution(substitutions, body_rep_id, worker_rep_id);
+        if (!try self.workerBodyRepContainsDynamicAnywhere(
+            raw_body_rep_id,
+            body_nominal_substitutions,
+            body_dynamic_active,
+        )) return;
+
+        const body_rep = self.plan.representations.items[@intFromEnum(body_rep_id)];
+        if (body_rep_id == worker_rep_id) {
+            // An identical representation contributes no substitution. Skip
+            // it entirely when both lexical nominal environments agree. When
+            // they differ, retain the shared wrapper shape and visit matching
+            // children pairwise; unwrapping only the worker side would compare
+            // alias type arguments with its backing's structural children.
+            if (nominalBackingRepSubstitutionContextsAgree(
+                body_nominal_substitutions,
+                worker_nominal_substitutions,
+            )) return;
+            for (self.plan.childSlice(body_rep.children)) |child| {
+                try self.collectWorkerBodyExactRepSubstitutionsInner(
+                    child.rep,
+                    child.rep,
+                    substitutions,
+                    seen,
+                    body_dynamic_active,
+                    body_nominal_substitutions,
+                    worker_nominal_substitutions,
+                );
+            }
+            return;
+        }
+
+        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        if (body_rep.kind == .dynamic or worker_rep.kind == .dynamic) return;
+
+        // The specialization relation preserves an alias declaration while
+        // replacing its type arguments. Align those arguments before treating
+        // the alias as a transparent structural wrapper. Advancing both
+        // backings together consumes one wrapper layer, so nested aliases do
+        // not repeatedly match against the outer alias's arguments.
+        if (self.workerBodyAliasDeclarationsMatch(body_rep_id, worker_rep_id)) {
+            const worker_alias_children = self.plan.childSlice(worker_rep.children);
+            for (self.plan.childSlice(body_rep.children)) |body_child| {
+                if (self.findMatchingChildByRole(worker_alias_children, body_child)) |worker_child| {
+                    try self.collectWorkerBodyExactRepSubstitutionsInner(
+                        body_child.rep,
+                        worker_child.rep,
+                        substitutions,
+                        seen,
+                        body_dynamic_active,
+                        body_nominal_substitutions,
+                        worker_nominal_substitutions,
+                    );
+                    continue;
+                }
+                if (try self.workerBodyDynamicDemandsAlreadyMapped(
+                    body_child.rep,
+                    substitutions,
+                    body_nominal_substitutions,
+                )) continue;
+                boxyPlanInvariant("owning procedure aliases disagreed during specialized worker alignment");
+            }
+            return;
+        }
+
+        // The exact worker side may retain multiple transparent aliases or
+        // zero-field nominal wrappers around the shape spelled by the body.
+        // Keep the outer representation as this occurrence's exact terminal,
+        // but match children against the fully unwrapped structural shape.
+        const worker_shape = try self.workerBodyExactStructuralShape(
+            worker_rep_id,
+            worker_nominal_substitutions,
+        );
+        const worker_shape_rep_id = worker_shape.rep;
+        const worker_shape_rep = self.plan.representations.items[@intFromEnum(worker_shape_rep_id)];
+
+        const body_has_nominal_arg_identity = body_rep.kind == .nominal and
+            self.plan.hasNominalArgumentIdentity(body_rep_id);
+        const worker_nominal_arg_source = worker_shape.nominal_arg_source orelse worker_rep_id;
+        const worker_nominal_arg_rep = self.plan.representations.items[@intFromEnum(worker_nominal_arg_source)];
+        if (body_has_nominal_arg_identity and worker_nominal_arg_rep.kind == .nominal) {
+            for (self.plan.nominalBackingArgSubstitutionSlice(body_rep.nominal_backing_arg_substitutions)) |body_substitution| {
+                const exact_worker_arg = self.plan.nominalBackingArgActualRep(
+                    worker_nominal_arg_source,
+                    body_substitution.arg_index,
+                ) orelse boxyPlanInvariant("specialized worker nominal was missing an interface argument");
+                try self.collectWorkerBodyExactRepSubstitutionsInner(
+                    body_substitution.actual_rep,
+                    exact_worker_arg,
+                    substitutions,
+                    seen,
+                    body_dynamic_active,
+                    body_nominal_substitutions,
+                    worker_nominal_substitutions,
+                );
+            }
+        }
+        if (body_rep.children.len == 0) return;
+
+        // An open body row can specialize to the closed empty row. As at a
+        // direct call boundary, every residual body child then resolves to
+        // the exact empty representation.
+        if (worker_shape_rep.kind == .empty_tag_union) {
+            for (self.plan.childSlice(body_rep.children)) |body_child| {
+                try self.collectWorkerBodyExactRepSubstitutionsInner(
+                    body_child.rep,
+                    worker_shape_rep_id,
+                    substitutions,
+                    seen,
+                    body_dynamic_active,
+                    body_nominal_substitutions,
+                    worker_nominal_substitutions,
+                );
+            }
+            return;
+        }
+
+        const body_children = self.plan.childSlice(body_rep.children);
+        for (body_children) |body_child| {
+            const worker_children = self.plan.childSlice(worker_shape_rep.children);
+            if (self.rowInstantiationTarget(body_rep_id, worker_shape_rep_id, body_child)) |row_target| {
+                try self.collectWorkerBodyExactRepSubstitutionsInner(
+                    body_child.rep,
+                    row_target,
+                    substitutions,
+                    seen,
+                    body_dynamic_active,
+                    body_nominal_substitutions,
+                    worker_nominal_substitutions,
+                );
+                continue;
+            }
+            if (body_child.role == .nominal_arg) {
+                const exact_arg = self.plan.nominalBackingArgActualRep(
+                    worker_nominal_arg_source,
+                    body_child.role.nominal_arg,
+                ) orelse self.plan.nominalBackingArgActualRep(
+                    worker_shape_rep_id,
+                    body_child.role.nominal_arg,
+                );
+                if (exact_arg) |arg| {
+                    try self.collectWorkerBodyExactRepSubstitutionsInner(
+                        body_child.rep,
+                        arg,
+                        substitutions,
+                        seen,
+                        body_dynamic_active,
+                        body_nominal_substitutions,
+                        worker_nominal_substitutions,
+                    );
+                    continue;
+                }
+            }
+            if (self.findMatchingChildByRole(worker_children, body_child)) |worker_child| {
+                try self.collectWorkerBodyExactRepSubstitutionsInner(
+                    body_child.rep,
+                    worker_child.rep,
+                    substitutions,
+                    seen,
+                    body_dynamic_active,
+                    body_nominal_substitutions,
+                    worker_nominal_substitutions,
+                );
+                continue;
+            }
+            if (try self.findMatchingTagPayloadInRowExtension(worker_children, body_child)) |worker_child| {
+                try self.collectWorkerBodyExactRepSubstitutionsInner(
+                    body_child.rep,
+                    worker_child.rep,
+                    substitutions,
+                    seen,
+                    body_dynamic_active,
+                    body_nominal_substitutions,
+                    worker_nominal_substitutions,
+                );
+                continue;
+            }
+            if (self.findMatchingBodyContextChildBySourceType(worker_children, body_child)) |worker_child| {
+                try self.collectWorkerBodyExactRepSubstitutionsInner(
+                    body_child.rep,
+                    worker_child.rep,
+                    substitutions,
+                    seen,
+                    body_dynamic_active,
+                    body_nominal_substitutions,
+                    worker_nominal_substitutions,
+                );
+                continue;
+            }
+            if (self.structuralWrapperBackingRep(body_rep_id)) |body_backing| {
+                if (body_child.rep == body_backing) {
+                    const aligned_worker_backing = if (body_has_nominal_arg_identity and
+                        worker_shape.nominal_arg_source != null)
+                        worker_shape.nominal_backing orelse
+                            boxyPlanInvariant("aligned worker nominal had no transparent backing")
+                    else
+                        worker_rep_id;
+                    try self.collectWorkerBodyExactRepSubstitutionsInner(
+                        body_child.rep,
+                        aligned_worker_backing,
+                        substitutions,
+                        seen,
+                        body_dynamic_active,
+                        body_nominal_substitutions,
+                        worker_nominal_substitutions,
+                    );
+                    continue;
+                }
+            }
+            // A generic demand can occur twice in one checked shape: once in
+            // a transparent wrapper argument and again in its layout or
+            // erased-signature backing. An unmatched metadata-only branch is
+            // redundant only when every effective dynamic leaf already has a
+            // direct exact mapping established by an aligned branch. This is
+            // deliberately fail-closed for cycles and unresolved demands.
+            if (try self.workerBodyDynamicDemandsAlreadyMapped(
+                body_child.rep,
+                substitutions,
+                body_nominal_substitutions,
+            )) continue;
+            boxyPlanInvariant("owning procedure body result disagreed with its specialized worker interface");
+        }
+    }
+
+    const WorkerBodyExactStructuralShape = struct {
+        rep: TypeRepId,
+        nominal_arg_source: ?TypeRepId,
+        nominal_backing: ?TypeRepId,
+    };
+
+    fn workerBodyExactStructuralShape(
+        self: *Builder,
+        rep_id: TypeRepId,
+        nominal_substitutions: *NominalBackingRepSubstitutionMap,
+    ) Allocator.Error!WorkerBodyExactStructuralShape {
+        var current = rep_id;
+        var nominal_arg_source: ?TypeRepId = null;
+        var nominal_backing: ?TypeRepId = null;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) {
+                boxyPlanInvariant("worker body specialization wrapper chain exceeded boxy planner limit");
+            }
+            depth += 1;
+            try self.recordNominalBackingDescriptorSubstitutions(current, nominal_substitutions);
+            if (nominal_arg_source == null and self.plan.hasNominalArgumentIdentity(current)) {
+                nominal_arg_source = current;
+            }
+            const raw_backing = self.structuralWrapperBackingRep(current) orelse return .{
+                .rep = current,
+                .nominal_arg_source = nominal_arg_source,
+                .nominal_backing = nominal_backing,
+            };
+            const backing = nominal_substitutions.resolve(raw_backing);
+            if (nominal_arg_source == current) nominal_backing = backing;
+            if (backing == current) {
+                boxyPlanInvariant("worker body specialization wrapper chain formed a cycle");
+            }
+            current = backing;
         }
     }
 
@@ -7678,25 +8950,41 @@ const Builder = struct {
         params: []const HiddenDescriptorParam,
         next_param: *usize,
         pending: *std.ArrayList(DirectCallHiddenDescriptorArg),
-        seen_reps: *collections.DenseMap(TypeRepId, void),
+        seen_rep_pairs: *std.AutoHashMap(DescriptorTraversalPair, void),
         seen_descriptor_reps: *collections.DenseMap(TypeRepId, void),
         substitutions: *CallDescriptorRepSubstitutionMap,
+        worker_substitutions: *NominalBackingRepSubstitutionMap,
         runtime_value_only: bool,
     ) Allocator.Error!void {
-        const rep_entry = try seen_reps.getOrPut(worker_rep_id);
-        if (rep_entry.found_existing) return;
-
         const substitution_scope = substitutions.entries.items.len;
         defer substitutions.entries.shrinkRetainingCapacity(substitution_scope);
-        const inherited_call_rep_id = substitutions.get(worker_rep_id) orelse call_rep_id;
-        try self.recordCallDescriptorWrapperSubstitutions(worker_rep_id, inherited_call_rep_id, substitutions);
-        const aligned_call_rep_id = substitutions.get(worker_rep_id) orelse inherited_call_rep_id;
+        const worker_substitution_scope = worker_substitutions.entries.items.len;
+        defer worker_substitutions.entries.shrinkRetainingCapacity(worker_substitution_scope);
 
-        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        try self.recordNominalBackingDescriptorSubstitutions(worker_rep_id, worker_substitutions);
+        const effective_worker_rep_id = worker_substitutions.resolve(worker_rep_id);
+        if (effective_worker_rep_id != worker_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(effective_worker_rep_id, worker_substitutions);
+        }
+        const resolved_worker_rep_id = worker_substitutions.resolve(worker_rep_id);
+
+        const inherited_call_rep_id = substitutions.getResolved(worker_rep_id) orelse call_rep_id;
+        try self.recordCallDescriptorWrapperSubstitutions(resolved_worker_rep_id, inherited_call_rep_id, substitutions);
+        const aligned_call_rep_id = substitutions.getResolved(worker_rep_id) orelse inherited_call_rep_id;
+
+        const pair = DescriptorTraversalPair{
+            .worker_rep = resolved_worker_rep_id,
+            .call_rep = aligned_call_rep_id,
+        };
+        const pair_entry = try seen_rep_pairs.getOrPut(pair);
+        if (pair_entry.found_existing) return;
+        defer _ = seen_rep_pairs.remove(pair);
+
+        const worker_rep = self.plan.representations.items[@intFromEnum(resolved_worker_rep_id)];
         const call_rep = self.plan.representations.items[@intFromEnum(aligned_call_rep_id)];
 
         if (worker_rep.descriptor) |worker_desc| {
-            const worker_identity = self.descriptorArgumentIdentityRep(worker_rep_id);
+            const worker_identity = self.descriptorArgumentIdentityRep(resolved_worker_rep_id);
             const identity_entry = try seen_descriptor_reps.getOrPut(worker_identity);
             if (!identity_entry.found_existing) {
                 if (next_param.* >= params.len or params[next_param.*].desc != worker_desc) {
@@ -7708,17 +8996,41 @@ const Builder = struct {
                     source_value_rep,
                     aligned_call_rep_id,
                 )) orelse try self.nominalBackingActualForFormal(source_value_rep, worker_rep_id);
-                const desc_arg_rep_id = self.descriptorArgumentIdentityRep(
+                var desc_arg_rep_id = self.descriptorArgumentIdentityRep(
                     operand_nominal_actual orelse aligned_call_rep_id,
                 );
+                const unresolved_desc_arg = self.plan.representations.items[@intFromEnum(desc_arg_rep_id)];
+                if (source_arg_index == null and
+                    unresolved_desc_arg.kind == .dynamic and
+                    unresolved_desc_arg.children.len == 0 and
+                    substitutions.caller != null)
+                {
+                    const contextual_rep = self.plan.resolveDescriptorRepSubstitution(
+                        substitutions.caller_body_exact_reps,
+                        desc_arg_rep_id,
+                    );
+                    if (contextual_rep != desc_arg_rep_id) {
+                        desc_arg_rep_id = self.descriptorArgumentIdentityRep(contextual_rep);
+                        if (!try self.workerBodyDescriptorTerminalIsAvailable(
+                            substitutions.caller.?,
+                            desc_arg_rep_id,
+                        )) {
+                            boxyPlanInvariant("worker body descriptor specialization remained dynamic without a caller ABI binding");
+                        }
+                    }
+                }
                 const desc_arg_rep = self.plan.representations.items[@intFromEnum(desc_arg_rep_id)];
+                const worker_exact_reps = try self.appendWorkerDescriptorRepSubstitutionSnapshot(
+                    worker_substitutions,
+                );
                 try pending.append(self.allocator, .{
                     .worker_desc = worker_desc,
-                    .worker_rep = worker_rep_id,
+                    .worker_rep = resolved_worker_rep_id,
                     .source_type = desc_arg_rep.source_type,
                     .rep = desc_arg_rep_id,
                     .source_arg_index = source_arg_index,
                     .source_value_rep = source_value_rep,
+                    .worker_exact_reps = worker_exact_reps,
                 });
             }
         }
@@ -7736,7 +9048,7 @@ const Builder = struct {
                 const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
                 if (runtime_value_only and !childCarriesRuntimeDescriptor(worker_child.role)) continue;
                 if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_rep_pairs, seen_descriptor_reps, substitutions, worker_substitutions, runtime_value_only);
             }
             return;
         }
@@ -7747,44 +9059,39 @@ const Builder = struct {
             const call_children = self.plan.childSlice(call_rep.children);
             if (runtime_value_only and !childCarriesRuntimeDescriptor(worker_child.role)) continue;
             if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
-            // A generic argument reachable through an unwrapped sibling (e.g. an
-            // alias's arg that also appears inside its backing) contributes its
-            // descriptor once, via that sibling; skip the duplicate here to
-            // mirror the worker param collection's per-rep dedup.
-            if (seen_reps.contains(worker_child.rep)) continue;
-            if (self.rowInstantiationTarget(worker_rep_id, aligned_call_rep_id, worker_child)) |row_target| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, row_target, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+            if (self.rowInstantiationTarget(resolved_worker_rep_id, aligned_call_rep_id, worker_child)) |row_target| {
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, row_target, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_rep_pairs, seen_descriptor_reps, substitutions, worker_substitutions, runtime_value_only);
                 continue;
             }
             if (self.findMatchingChildByRole(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_rep_pairs, seen_descriptor_reps, substitutions, worker_substitutions, runtime_value_only);
                 continue;
             }
             if (self.structuralWrapperBackingRep(aligned_call_rep_id)) |call_backing| {
                 const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(call_backing)].children);
                 if (self.findMatchingChildByRole(backing_children, worker_child)) |call_child| {
-                    try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                    try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_rep_pairs, seen_descriptor_reps, substitutions, worker_substitutions, runtime_value_only);
                     continue;
                 }
             }
             if (try self.findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_rep_pairs, seen_descriptor_reps, substitutions, worker_substitutions, runtime_value_only);
                 continue;
             }
             if (try self.findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_rep_pairs, seen_descriptor_reps, substitutions, worker_substitutions, runtime_value_only);
                 continue;
             }
-            if (try self.workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+            if (try self.workerChildCanMatchUnwrappedCallRep(resolved_worker_rep_id, worker_child)) {
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_rep_pairs, seen_descriptor_reps, substitutions, worker_substitutions, runtime_value_only);
                 continue;
             }
             if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.descriptor != null) {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_rep_pairs, seen_descriptor_reps, substitutions, worker_substitutions, runtime_value_only);
                 continue;
             }
             if (call_rep.kind == .dynamic and call_rep.children.len == 0 and call_rep.descriptor != null) {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_rep_pairs, seen_descriptor_reps, substitutions, worker_substitutions, runtime_value_only);
                 continue;
             }
             boxyPlanInvariant("boxy direct call hidden descriptor mapping saw mismatched child roles");
@@ -7798,16 +9105,44 @@ const Builder = struct {
 
     const CallDescriptorRepSubstitutionMap = struct {
         entries: std.ArrayList(CallDescriptorRepSubstitution) = .empty,
+        caller: ?WorkerPlanId = null,
+        caller_body_exact_reps: Span = .{},
 
         fn deinit(self: *CallDescriptorRepSubstitutionMap, allocator: Allocator) void {
             self.entries.deinit(allocator);
         }
 
         fn get(self: *const CallDescriptorRepSubstitutionMap, worker_rep: TypeRepId) ?TypeRepId {
-            for (self.entries.items) |entry| {
+            var index = self.entries.items.len;
+            while (index > 0) {
+                index -= 1;
+                const entry = self.entries.items[index];
                 if (entry.worker_rep == worker_rep) return entry.call_rep;
             }
             return null;
+        }
+
+        /// Resolve the exact call representation selected through one or more
+        /// enclosing transparent wrapper substitutions. A nested nominal
+        /// backing can still spell its type argument with the enclosing
+        /// wrapper's formal representation; the caller's outer substitution
+        /// is the producer of that argument's exact runtime descriptor.
+        fn resolve(self: *const CallDescriptorRepSubstitutionMap, rep: TypeRepId) TypeRepId {
+            var current = rep;
+            var hops: usize = 0;
+            while (self.get(current)) |next| {
+                if (hops == self.entries.items.len) {
+                    boxyPlanInvariant("call descriptor representation substitutions formed a cycle");
+                }
+                current = next;
+                hops += 1;
+            }
+            return current;
+        }
+
+        fn getResolved(self: *const CallDescriptorRepSubstitutionMap, worker_rep: TypeRepId) ?TypeRepId {
+            const call_rep = self.get(worker_rep) orelse return null;
+            return self.resolve(call_rep);
         }
 
         fn put(
@@ -7816,33 +9151,12 @@ const Builder = struct {
             worker_rep: TypeRepId,
             call_rep: TypeRepId,
         ) Allocator.Error!void {
-            for (self.entries.items) |entry| {
-                if (entry.worker_rep != worker_rep) continue;
-                if (entry.call_rep != call_rep) {
-                    boxyPlanInvariant("one worker descriptor representation mapped to two call representations");
-                }
-                return;
-            }
-            try self.entries.append(allocator, .{ .worker_rep = worker_rep, .call_rep = call_rep });
+            if (worker_rep == call_rep) return;
+            const resolved_call_rep = self.resolve(call_rep);
+            if (resolved_call_rep == worker_rep) return;
+            try self.entries.append(allocator, .{ .worker_rep = worker_rep, .call_rep = resolved_call_rep });
         }
     };
-
-    fn nominalBackingArgActualRep(
-        self: *const Builder,
-        nominal_rep_id: TypeRepId,
-        arg_index: u32,
-    ) ?TypeRepId {
-        const nominal_rep = self.plan.representations.items[@intFromEnum(nominal_rep_id)];
-        var found: ?TypeRepId = null;
-        for (self.plan.nominalBackingArgSubstitutionSlice(nominal_rep.nominal_backing_arg_substitutions)) |substitution| {
-            if (substitution.arg_index != arg_index) continue;
-            if (found != null) {
-                boxyPlanInvariant("checked nominal representation had duplicate backing argument substitutions");
-            }
-            found = substitution.actual_rep;
-        }
-        return found;
-    }
 
     fn nominalBackingActualForCallRep(
         self: *Builder,
@@ -7891,7 +9205,7 @@ const Builder = struct {
         const operand_rep = self.plan.representations.items[@intFromEnum(operand_rep_id)];
         if (call_rep.kind == .nominal and operand_rep.kind == .nominal) {
             for (self.plan.nominalBackingArgSubstitutionSlice(call_rep.nominal_backing_arg_substitutions)) |call_substitution| {
-                const operand_actual = self.nominalBackingArgActualRep(operand_rep_id, call_substitution.arg_index) orelse
+                const operand_actual = self.plan.nominalBackingArgActualRep(operand_rep_id, call_substitution.arg_index) orelse
                     boxyPlanInvariant("call operand nominal was missing a checked backing argument substitution");
                 try self.collectNominalBackingActualForCallRep(
                     call_substitution.actual_rep,
@@ -7969,13 +9283,26 @@ const Builder = struct {
     ) Allocator.Error!void {
         const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
         const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
+
+        // The checked call representation owns the relationship between its
+        // generalized nominal backing parameters and the exact arguments at
+        // this call site. Record it before comparing the worker and call
+        // wrappers, so a nested wrapper can resolve an argument which still
+        // uses the call-side formal representation.
+        if (call_rep.kind == .nominal) {
+            for (self.plan.nominalBackingArgSubstitutionSlice(call_rep.nominal_backing_arg_substitutions)) |backing_substitution| {
+                if (backing_substitution.formal_rep == backing_substitution.actual_rep) continue;
+                try substitutions.put(self.allocator, backing_substitution.formal_rep, backing_substitution.actual_rep);
+            }
+        }
+
         const roles_match = (worker_rep.kind == .alias and call_rep.kind == .alias) or
             (worker_rep.kind == .nominal and call_rep.kind == .nominal);
         if (!roles_match) return;
 
         if (worker_rep.kind == .nominal) {
             for (self.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions)) |backing_substitution| {
-                const exact_call_arg_rep = self.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
+                const exact_call_arg_rep = self.plan.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
                     boxyPlanInvariant("checked nominal call was missing a backing argument substitution");
                 if (backing_substitution.formal_rep != exact_call_arg_rep) {
                     try substitutions.put(self.allocator, backing_substitution.formal_rep, exact_call_arg_rep);
@@ -7986,11 +9313,8 @@ const Builder = struct {
         for (self.plan.childSlice(worker_rep.children)) |worker_child| {
             if (worker_child.role != .alias_arg and worker_child.role != .nominal_arg) continue;
             const exact_call_arg_rep = if (worker_child.role == .nominal_arg)
-                self.nominalBackingArgActualRep(call_rep_id, worker_child.role.nominal_arg) orelse blk: {
-                    const call_child = self.findMatchingChildByRole(call_children, worker_child) orelse
-                        boxyPlanInvariant("checked wrapper call was missing a type argument substitution");
-                    break :blk call_child.rep;
-                }
+                self.plan.nominalBackingArgActualRep(call_rep_id, worker_child.role.nominal_arg) orelse
+                    boxyPlanInvariant("checked wrapper call was missing a type argument substitution")
             else blk: {
                 const call_child = self.findMatchingChildByRole(call_children, worker_child) orelse
                     boxyPlanInvariant("checked wrapper call was missing a type argument substitution");
@@ -8156,14 +9480,36 @@ const Builder = struct {
 
     fn collectCallDictionaryRepSubstitutions(
         self: *Builder,
-        worker_rep_id: TypeRepId,
-        call_rep_id: TypeRepId,
+        raw_worker_rep_id: TypeRepId,
+        raw_call_rep_id: TypeRepId,
         substitutions: *CallDictionaryRepSubstitutionMap,
-        seen: *std.AutoHashMap(u64, void),
+        seen: *std.AutoHashMap(DescriptorTraversalPair, void),
+        worker_nominal_substitutions: *NominalBackingRepSubstitutionMap,
+        call_nominal_substitutions: *NominalBackingRepSubstitutionMap,
     ) Allocator.Error!void {
-        const seen_key = (@as(u64, @intFromEnum(worker_rep_id)) << 32) | @as(u64, @intFromEnum(call_rep_id));
-        const seen_entry = try seen.getOrPut(seen_key);
+        const worker_scope = worker_nominal_substitutions.entries.items.len;
+        defer worker_nominal_substitutions.entries.shrinkRetainingCapacity(worker_scope);
+        const call_scope = call_nominal_substitutions.entries.items.len;
+        defer call_nominal_substitutions.entries.shrinkRetainingCapacity(call_scope);
+
+        try self.recordNominalBackingDescriptorSubstitutions(raw_worker_rep_id, worker_nominal_substitutions);
+        const worker_effective = worker_nominal_substitutions.resolve(raw_worker_rep_id);
+        if (worker_effective != raw_worker_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(worker_effective, worker_nominal_substitutions);
+        }
+        const worker_rep_id = worker_nominal_substitutions.resolve(raw_worker_rep_id);
+
+        try self.recordNominalBackingDescriptorSubstitutions(raw_call_rep_id, call_nominal_substitutions);
+        const call_effective = call_nominal_substitutions.resolve(raw_call_rep_id);
+        if (call_effective != raw_call_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(call_effective, call_nominal_substitutions);
+        }
+        const call_rep_id = call_nominal_substitutions.resolve(raw_call_rep_id);
+
+        const pair = DescriptorTraversalPair{ .worker_rep = worker_rep_id, .call_rep = call_rep_id };
+        const seen_entry = try seen.getOrPut(pair);
         if (seen_entry.found_existing) return;
+        defer _ = seen.remove(pair);
 
         const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
         const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
@@ -8172,13 +9518,15 @@ const Builder = struct {
         }
         if (worker_rep.kind == .nominal and call_rep.kind == .nominal) {
             for (self.plan.nominalBackingArgSubstitutionSlice(worker_rep.nominal_backing_arg_substitutions)) |backing_substitution| {
-                const exact_call_arg_rep = self.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
+                const exact_call_arg_rep = self.plan.nominalBackingArgActualRep(call_rep_id, backing_substitution.arg_index) orelse
                     boxyPlanInvariant("checked nominal call was missing a backing dictionary argument substitution");
                 try self.collectCallDictionaryRepSubstitutions(
-                    backing_substitution.formal_rep,
+                    backing_substitution.actual_rep,
                     exact_call_arg_rep,
                     substitutions,
                     seen,
+                    worker_nominal_substitutions,
+                    call_nominal_substitutions,
                 );
             }
         }
@@ -8187,7 +9535,7 @@ const Builder = struct {
         if (call_rep.kind == .empty_tag_union) {
             for (self.plan.childSlice(worker_rep.children)) |worker_child| {
                 if (!try self.repSubtreeHasDictionary(worker_child.rep)) continue;
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen, worker_nominal_substitutions, call_nominal_substitutions);
             }
             return;
         }
@@ -8196,47 +9544,46 @@ const Builder = struct {
         const call_children = self.plan.childSlice(call_rep.children);
         for (worker_children) |worker_child| {
             if (!try self.repSubtreeHasDictionary(worker_child.rep)) continue;
-            if (substitutions.get(worker_child.rep) != null) continue;
             if (self.rowInstantiationTarget(worker_rep_id, call_rep_id, worker_child)) |row_target| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, row_target, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, row_target, substitutions, seen, worker_nominal_substitutions, call_nominal_substitutions);
                 continue;
             }
             if (worker_child.role == .nominal_arg) {
                 const arg_index = worker_child.role.nominal_arg;
-                if (self.nominalBackingArgActualRep(call_rep_id, arg_index)) |exact_call_arg_rep| {
-                    try self.collectCallDictionaryRepSubstitutions(worker_child.rep, exact_call_arg_rep, substitutions, seen);
+                if (self.plan.nominalBackingArgActualRep(call_rep_id, arg_index)) |exact_call_arg_rep| {
+                    try self.collectCallDictionaryRepSubstitutions(worker_child.rep, exact_call_arg_rep, substitutions, seen, worker_nominal_substitutions, call_nominal_substitutions);
                     continue;
                 }
             }
             if (self.findMatchingChildByRole(call_children, worker_child)) |call_child| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen, worker_nominal_substitutions, call_nominal_substitutions);
                 continue;
             }
             if (self.structuralWrapperBackingRep(call_rep_id)) |call_backing| {
                 const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(call_backing)].children);
                 if (self.findMatchingChildByRole(backing_children, worker_child)) |call_child| {
-                    try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
+                    try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen, worker_nominal_substitutions, call_nominal_substitutions);
                     continue;
                 }
             }
             if (try self.findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen, worker_nominal_substitutions, call_nominal_substitutions);
                 continue;
             }
             if (try self.findMatchingDictionaryChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen, worker_nominal_substitutions, call_nominal_substitutions);
                 continue;
             }
             if (try self.workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen, worker_nominal_substitutions, call_nominal_substitutions);
                 continue;
             }
             if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.dictionaries.len != 0) {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen, worker_nominal_substitutions, call_nominal_substitutions);
                 continue;
             }
             if (call_rep.kind == .dynamic and call_rep.children.len == 0 and call_rep.dictionaries.len != 0) {
-                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen);
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen, worker_nominal_substitutions, call_nominal_substitutions);
             }
         }
     }
@@ -8434,6 +9781,7 @@ const Builder = struct {
 
     fn dictionaryMethodRequirementDescriptorSources(
         self: *Builder,
+        worker_id: WorkerPlanId,
         requirement_type: CheckedTypeIdentity,
         callable_type: CheckedTypeIdentity,
     ) Allocator.Error!DictionaryMethodRequirementDescriptorPlan {
@@ -8467,16 +9815,56 @@ const Builder = struct {
             &param_seen_reps,
             &param_seen_descs,
         );
+        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
+        switch (worker.source) {
+            .generated_codec => |codec| switch (codec.kind) {
+                .parser_constructor, .encoder_constructor => {
+                    const requirement_runtime = (try self.functionChildren(requirement_function.ret)) orelse
+                        boxyPlanInvariant("generated codec dictionary requirement result was not callable");
+                    const requirement_runtime_children = self.plan.childSlice(
+                        self.plan.representations.items[@intFromEnum(requirement_runtime.rep)].children,
+                    );
+                    for (requirement_runtime_children[requirement_runtime.args_start..][0..requirement_runtime.arg_count]) |arg| {
+                        try self.collectRuntimeHiddenDescriptorsForRep(arg.rep, &params, &param_seen_reps, &param_seen_descs);
+                    }
+                    try self.collectRuntimeHiddenDescriptorsForRep(
+                        requirement_runtime.ret,
+                        &params,
+                        &param_seen_reps,
+                        &param_seen_descs,
+                    );
+                },
+                .parser_runtime,
+                .encoder_runtime,
+                .encoder_record_fields,
+                .encoder_dict_fields,
+                .encoder_sequence_elements,
+                .encoder_tag_field,
+                .encoder_tag_payload_thunk,
+                .encoder_tag_payload_elements,
+                .encoder_value_thunk,
+                => {},
+            },
+            .procedure_template,
+            .procedure_binding,
+            .procedure_use,
+            .nested_expr,
+            .generated_field_iterator,
+            .generated_interpolation_step,
+            => {},
+        }
         if (params.items.len == 0) return .{};
 
         var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
         defer pending.deinit(self.allocator);
-        var seen_reps = collections.DenseMap(TypeRepId, void).init(self.allocator);
-        defer seen_reps.deinit();
+        var seen_rep_pairs = std.AutoHashMap(DescriptorTraversalPair, void).init(self.allocator);
+        defer seen_rep_pairs.deinit();
         var seen_descriptor_reps = collections.DenseMap(TypeRepId, void).init(self.allocator);
         defer seen_descriptor_reps.deinit();
         var substitutions = CallDescriptorRepSubstitutionMap{};
         defer substitutions.deinit(self.allocator);
+        var worker_substitutions = NominalBackingRepSubstitutionMap{};
+        defer worker_substitutions.deinit(self.allocator);
         var next_param: usize = 0;
         const callable_children = self.plan.childSlice(
             self.plan.representations.items[@intFromEnum(callable_function.rep)].children,
@@ -8493,9 +9881,10 @@ const Builder = struct {
                 params.items,
                 &next_param,
                 &pending,
-                &seen_reps,
+                &seen_rep_pairs,
                 &seen_descriptor_reps,
                 &substitutions,
+                &worker_substitutions,
                 true,
             );
         }
@@ -8508,11 +9897,85 @@ const Builder = struct {
             params.items,
             &next_param,
             &pending,
-            &seen_reps,
+            &seen_rep_pairs,
             &seen_descriptor_reps,
             &substitutions,
+            &worker_substitutions,
             true,
         );
+        if (next_param != params.items.len) {
+            switch (worker.source) {
+                .generated_codec => |codec| switch (codec.kind) {
+                    .parser_constructor, .encoder_constructor => {
+                        const requirement_runtime = (try self.functionChildren(requirement_function.ret)) orelse
+                            boxyPlanInvariant("generated codec dictionary requirement result was not callable");
+                        const callable_runtime = (try self.functionChildren(callable_function.ret)) orelse
+                            boxyPlanInvariant("generated codec dictionary callable result was not callable");
+                        if (requirement_runtime.arg_count != callable_runtime.arg_count) {
+                            boxyPlanInvariant("generated codec dictionary runtime callable arity differed");
+                        }
+                        const requirement_runtime_children = self.plan.childSlice(
+                            self.plan.representations.items[@intFromEnum(requirement_runtime.rep)].children,
+                        );
+                        const callable_runtime_children = self.plan.childSlice(
+                            self.plan.representations.items[@intFromEnum(callable_runtime.rep)].children,
+                        );
+                        for (
+                            requirement_runtime_children[requirement_runtime.args_start..][0..requirement_runtime.arg_count],
+                            callable_runtime_children[callable_runtime.args_start..][0..callable_runtime.arg_count],
+                        ) |requirement_arg, callable_arg| {
+                            try self.collectCallHiddenDescriptorArgs(
+                                requirement_arg.rep,
+                                callable_arg.rep,
+                                callable_arg.rep,
+                                callable_arg.rep,
+                                null,
+                                params.items,
+                                &next_param,
+                                &pending,
+                                &seen_rep_pairs,
+                                &seen_descriptor_reps,
+                                &substitutions,
+                                &worker_substitutions,
+                                true,
+                            );
+                        }
+                        try self.collectCallHiddenDescriptorArgs(
+                            requirement_runtime.ret,
+                            callable_runtime.ret,
+                            callable_runtime.ret,
+                            callable_runtime.ret,
+                            null,
+                            params.items,
+                            &next_param,
+                            &pending,
+                            &seen_rep_pairs,
+                            &seen_descriptor_reps,
+                            &substitutions,
+                            &worker_substitutions,
+                            true,
+                        );
+                    },
+                    .parser_runtime,
+                    .encoder_runtime,
+                    .encoder_record_fields,
+                    .encoder_dict_fields,
+                    .encoder_sequence_elements,
+                    .encoder_tag_field,
+                    .encoder_tag_payload_thunk,
+                    .encoder_tag_payload_elements,
+                    .encoder_value_thunk,
+                    => {},
+                },
+                .procedure_template,
+                .procedure_binding,
+                .procedure_use,
+                .nested_expr,
+                .generated_field_iterator,
+                .generated_interpolation_step,
+                => {},
+            }
+        }
         if (next_param != params.items.len or pending.items.len != params.items.len) {
             boxyPlanInvariant("dictionary method descriptor source mapping did not cover every requirement");
         }
@@ -8580,6 +10043,9 @@ const Builder = struct {
 
         const start: u32 = @intCast(self.plan.dictionary_method_hidden_desc_sources.items.len);
         var next_slot: u32 = 0;
+        var used_requirement_calls = try self.allocator.alloc(bool, requirement_args.len);
+        defer self.allocator.free(used_requirement_calls);
+        @memset(used_requirement_calls, false);
         for (params, worker_args) |param, worker_arg| {
             if (param.desc != worker_arg.worker_desc or param.rep != worker_arg.worker_rep) {
                 boxyPlanInvariant("dictionary method worker descriptor source order disagreed with worker parameters");
@@ -8621,16 +10087,27 @@ const Builder = struct {
             }
             const source: DictionaryMethodHiddenDescriptorSource = if (argument_source) |arg_index|
                 .{ .argument = arg_index }
-            else if (call_source) |call_index|
-                .{ .call = call_index }
-            else blk: {
+            else if (call_source) |call_index| blk: {
+                used_requirement_calls[call_index] = true;
+                break :blk .{ .call = call_index };
+            } else blk: {
                 const slot = next_slot;
                 next_slot += 1;
                 break :blk .{ .slot = slot };
             };
             try self.plan.dictionary_method_hidden_desc_sources.append(self.allocator, source);
         }
-        return .{ .start = start, .len = @intCast(params.len) };
+        for (used_requirement_calls, 0..) |used, call_index| {
+            if (used) continue;
+            try self.plan.dictionary_method_hidden_desc_sources.append(
+                self.allocator,
+                .{ .call = @intCast(call_index) },
+            );
+        }
+        return .{
+            .start = start,
+            .len = @intCast(self.plan.dictionary_method_hidden_desc_sources.items.len - start),
+        };
     }
 
     fn materializeDictionaryMethodDescriptorSources(self: *Builder) Allocator.Error!void {
@@ -8639,6 +10116,7 @@ const Builder = struct {
                 .worker => |worker| {
                     method.worker_desc_args = try self.dictionaryMethodWorkerDescriptorArgs(worker, method.callable_type);
                     const requirement_plan = try self.dictionaryMethodRequirementDescriptorSources(
+                        worker,
                         method.requirement_type,
                         method.callable_type,
                     );
@@ -9149,6 +10627,22 @@ const Builder = struct {
         return found;
     }
 
+    fn findMatchingBodyContextChildBySourceType(
+        _: *Builder,
+        children: []const RepChild,
+        target: RepChild,
+    ) ?RepChild {
+        var found: ?RepChild = null;
+        for (children) |child| {
+            if (!typeRefEql(child.source_type, target.source_type)) continue;
+            if (found != null) {
+                boxyPlanInvariant("worker body specialization found ambiguous checked-type children");
+            }
+            found = child;
+        }
+        return found;
+    }
+
     fn findMatchingDictionaryChildBySourceType(
         self: *Builder,
         children: []const RepChild,
@@ -9260,11 +10754,81 @@ const Builder = struct {
             depth += 1;
             if (self.plan.inspectMethodForRep(current) != null) return current;
 
-            const rep = self.plan.representations.items[@intFromEnum(current)];
-            if (rep.nominal_backing_arg_substitutions.len != 0) return current;
+            if (self.plan.hasNominalArgumentIdentity(current)) return current;
 
             current = self.structuralWrapperBackingRep(current) orelse return current;
         }
+    }
+
+    fn workerBindsDescriptorRep(
+        self: *Builder,
+        worker_id: WorkerPlanId,
+        rep_id: TypeRepId,
+    ) bool {
+        const desc = self.plan.representations.items[@intFromEnum(rep_id)].descriptor orelse return false;
+        const identity_rep = self.descriptorArgumentIdentityRep(rep_id);
+        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
+        for (self.plan.hiddenDescriptorParamSlice(worker.hidden_descs)) |param| {
+            if (param.desc == desc and self.descriptorArgumentIdentityRep(param.rep) == identity_rep) return true;
+        }
+        return false;
+    }
+
+    fn workerBodyDescriptorTerminalIsAvailable(
+        self: *Builder,
+        worker_id: WorkerPlanId,
+        rep_id: TypeRepId,
+    ) Allocator.Error!bool {
+        var substitutions = NominalBackingRepSubstitutionMap{};
+        defer substitutions.deinit(self.allocator);
+        var active = std.AutoHashMap(u64, void).init(self.allocator);
+        defer active.deinit();
+        return try self.workerBodyDescriptorRepIsMaterializable(
+            worker_id,
+            rep_id,
+            &substitutions,
+            &active,
+        );
+    }
+
+    fn workerBodyDescriptorRepIsMaterializable(
+        self: *Builder,
+        worker_id: WorkerPlanId,
+        raw_rep_id: TypeRepId,
+        substitutions: *NominalBackingRepSubstitutionMap,
+        active: *std.AutoHashMap(u64, void),
+    ) Allocator.Error!bool {
+        const substitution_scope = substitutions.entries.items.len;
+        defer substitutions.entries.shrinkRetainingCapacity(substitution_scope);
+
+        try self.recordNominalBackingDescriptorSubstitutions(raw_rep_id, substitutions);
+        const effective_rep_id = substitutions.resolve(raw_rep_id);
+        if (effective_rep_id != raw_rep_id) {
+            try self.recordNominalBackingDescriptorSubstitutions(effective_rep_id, substitutions);
+        }
+        const rep_id = substitutions.resolve(raw_rep_id);
+        if (self.workerBindsDescriptorRep(worker_id, rep_id)) return true;
+
+        const pair_key = (@as(u64, @intFromEnum(raw_rep_id)) << 32) |
+            @as(u64, @intFromEnum(rep_id));
+        const active_entry = try active.getOrPut(pair_key);
+        if (active_entry.found_existing) return true;
+        defer _ = active.remove(pair_key);
+
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.kind == .dynamic) return false;
+        if (!rep.contains_dynamic or rep.kind == .erased_callable) return true;
+
+        for (self.plan.childSlice(rep.children)) |child| {
+            if (!childCarriesRuntimeDescriptor(child.role)) continue;
+            if (!try self.workerBodyDescriptorRepIsMaterializable(
+                worker_id,
+                child.rep,
+                substitutions,
+                active,
+            )) return false;
+        }
+        return true;
     }
 
     fn dictionaryArgumentIdentityRep(self: *Builder, rep_id: TypeRepId) TypeRepId {
@@ -10042,7 +11606,13 @@ const Builder = struct {
             .dbg,
             .expect,
             => |child| try self.analyzeExprTypes(view, child),
-            .field_access => |access| try self.analyzeExprTypes(view, access.receiver),
+            .field_access => |access| {
+                try self.analyzeExprTypes(view, access.receiver);
+                // Segment success types are interned per access at check time;
+                // intermediate segments' types appear nowhere else in the body,
+                // and lowering needs a representation for each prefix value.
+                for (access.segments) |segment| _ = try self.analyzeType(view, segment.success_ty);
+            },
             .interpolation => |interpolation| {
                 try self.analyzeExprTypes(view, interpolation.first);
                 for (interpolation.parts) |part| {
@@ -12949,6 +14519,1365 @@ test "boxy dictionary traversal follows checked evidence order through aliases a
     try std.testing.expect(plan.dictionaryChildAt(@enumFromInt(1), 4) == null);
 }
 
+test "direct call descriptor substitutions resolve enclosing wrapper arguments" {
+    const gpa = std.testing.allocator;
+    const formal: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const nested_formal: TypeRepId = @enumFromInt(1);
+    const exact_call_arg: TypeRepId = @enumFromInt(2);
+
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+
+    // The outer wrapper instantiates `nested_formal`, while the inner wrapper
+    // still spells its argument with that formal representation.
+    try substitutions.put(gpa, nested_formal, exact_call_arg);
+    try substitutions.put(gpa, formal, exact_call_arg);
+    try substitutions.put(gpa, formal, nested_formal);
+
+    try std.testing.expectEqual(exact_call_arg, substitutions.getResolved(formal).?);
+    try std.testing.expectEqual(exact_call_arg, substitutions.getResolved(nested_formal).?);
+}
+
+test "direct call descriptor worker snapshots keep innermost path substitutions" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const first_formal: TypeRepId = @enumFromInt(1);
+    const second_formal: TypeRepId = @enumFromInt(2);
+    const outer_actual: TypeRepId = @enumFromInt(3);
+    const inner_actual: TypeRepId = @enumFromInt(4);
+    var substitutions = NominalBackingRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+
+    try substitutions.put(gpa, second_formal, outer_actual);
+    try substitutions.put(gpa, first_formal, outer_actual);
+    try substitutions.put(gpa, first_formal, inner_actual);
+    const first = try builder.appendWorkerDescriptorRepSubstitutionSnapshot(&substitutions);
+    try std.testing.expectEqualSlices(
+        DirectCallDescriptorRepSubstitution,
+        &.{
+            .{ .from_rep = first_formal, .to_rep = inner_actual },
+            .{ .from_rep = second_formal, .to_rep = outer_actual },
+        },
+        builder.plan.directCallDescriptorRepSubstitutionSlice(first),
+    );
+
+    const sibling_scope = substitutions.entries.items.len;
+    try substitutions.put(gpa, first_formal, outer_actual);
+    const sibling = try builder.appendWorkerDescriptorRepSubstitutionSnapshot(&substitutions);
+    try std.testing.expectEqualSlices(
+        DirectCallDescriptorRepSubstitution,
+        &.{
+            .{ .from_rep = first_formal, .to_rep = outer_actual },
+            .{ .from_rep = second_formal, .to_rep = outer_actual },
+        },
+        builder.plan.directCallDescriptorRepSubstitutionSlice(sibling),
+    );
+    substitutions.entries.shrinkRetainingCapacity(sibling_scope);
+
+    // The snapshot is sorted by declaration rep, so equivalent contexts have
+    // stable content even when their producer insertion order differs.
+    var reordered = NominalBackingRepSubstitutionMap{};
+    defer reordered.deinit(gpa);
+    try reordered.put(gpa, first_formal, inner_actual);
+    try reordered.put(gpa, second_formal, outer_actual);
+    const equivalent = try builder.appendWorkerDescriptorRepSubstitutionSnapshot(&reordered);
+    try std.testing.expectEqualSlices(
+        DirectCallDescriptorRepSubstitution,
+        builder.plan.directCallDescriptorRepSubstitutionSlice(first),
+        builder.plan.directCallDescriptorRepSubstitutionSlice(equivalent),
+    );
+}
+
+test "nominal arguments prefer explicit substitutions and fall back to stored children" {
+    const gpa = std.testing.allocator;
+    var plan = ProgramPlan.init(gpa);
+    defer plan.deinit();
+
+    const checked_nominal: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const stored_nominal: TypeRepId = @enumFromInt(1);
+    const generalized_child: TypeRepId = @enumFromInt(2);
+    const stored_actual: TypeRepId = @enumFromInt(3);
+    const explicit_actual: TypeRepId = @enumFromInt(4);
+    const generated_evidence: TypeRepId = @enumFromInt(5);
+    const zero_arg_nominal: TypeRepId = @enumFromInt(6);
+    try plan.children.appendSlice(gpa, &.{
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = generalized_child },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = stored_actual },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = stored_actual },
+    });
+    try plan.nominal_backing_arg_substitutions.append(gpa, .{
+        .arg_index = 0,
+        .formal_rep = generalized_child,
+        .actual_rep = explicit_actual,
+    });
+    try plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 1 }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 1, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .empty_record },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .primitive = .str } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .generated_field, .children = .{ .start = 2, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .{ .nominal = .transparent } },
+    });
+
+    // Checked representations can retain a generalized nominal child while
+    // their explicit backing substitution records the exact occurrence.
+    try std.testing.expectEqual(
+        explicit_actual,
+        plan.nominalBackingArgActualRep(checked_nominal, 0).?,
+    );
+    // ConstStore and generated-evidence representations carry occurrence
+    // arguments only as children.
+    try std.testing.expectEqual(
+        stored_actual,
+        plan.nominalBackingArgActualRep(stored_nominal, 0).?,
+    );
+    try std.testing.expectEqual(
+        stored_actual,
+        plan.nominalBackingArgActualRep(generated_evidence, 0).?,
+    );
+    try std.testing.expect(plan.nominalBackingArgActualRep(stored_nominal, 1) == null);
+    try std.testing.expect(plan.hasNominalArgumentIdentity(checked_nominal));
+    try std.testing.expect(plan.hasNominalArgumentIdentity(stored_nominal));
+    try std.testing.expect(plan.hasNominalArgumentIdentity(generated_evidence));
+    try std.testing.expect(!plan.hasNominalArgumentIdentity(zero_arg_nominal));
+}
+
+test "direct call aggregate descriptors retain their enclosing worker context" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const worker_nominal: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const worker_list: TypeRepId = @enumFromInt(1);
+    const worker_formal: TypeRepId = @enumFromInt(2);
+    const worker_actual: TypeRepId = @enumFromInt(3);
+    const call_nominal: TypeRepId = @enumFromInt(4);
+    const call_list: TypeRepId = @enumFromInt(5);
+    const call_formal: TypeRepId = @enumFromInt(6);
+    const call_actual: TypeRepId = @enumFromInt(7);
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(1)), .rep = worker_list },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = worker_actual },
+        .{ .role = .list_elem, .source_type = rootTypeRef(@enumFromInt(2)), .rep = worker_formal },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(5)), .rep = call_list },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(7)), .rep = call_actual },
+        .{ .role = .list_elem, .source_type = rootTypeRef(@enumFromInt(6)), .rep = call_formal },
+    });
+    try builder.plan.nominal_backing_arg_substitutions.appendSlice(gpa, &.{
+        .{ .arg_index = 0, .formal_rep = worker_formal, .actual_rep = worker_actual },
+        .{ .arg_index = 0, .formal_rep = call_formal, .actual_rep = call_actual },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .list, .children = .{ .start = 2, .len = 1 }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(2), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 3, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 1, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .list, .children = .{ .start = 5, .len = 1 }, .descriptor = @enumFromInt(3) },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(4), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .{ .primitive = .str } },
+    });
+
+    const params = [_]HiddenDescriptorParam{
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .rep = worker_list, .desc = @enumFromInt(fixtureTableIndex(0)) },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .rep = worker_actual, .desc = @enumFromInt(2) },
+    };
+    var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
+    defer pending.deinit(gpa);
+    var seen_rep_pairs = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer seen_rep_pairs.deinit();
+    var seen_descriptor_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer seen_descriptor_reps.deinit();
+    var call_substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer call_substitutions.deinit(gpa);
+    var worker_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_substitutions.deinit(gpa);
+    var next_param: usize = 0;
+
+    try builder.collectCallHiddenDescriptorArgs(
+        worker_nominal,
+        call_nominal,
+        call_nominal,
+        call_nominal,
+        null,
+        &params,
+        &next_param,
+        &pending,
+        &seen_rep_pairs,
+        &seen_descriptor_reps,
+        &call_substitutions,
+        &worker_substitutions,
+        false,
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), pending.items.len);
+    try std.testing.expectEqual(worker_list, pending.items[0].worker_rep);
+    try std.testing.expectEqual(call_list, pending.items[0].rep);
+    try std.testing.expectEqualSlices(
+        DirectCallDescriptorRepSubstitution,
+        &.{.{ .from_rep = worker_formal, .to_rep = worker_actual }},
+        builder.plan.directCallDescriptorRepSubstitutionSlice(pending.items[0].worker_exact_reps),
+    );
+    try std.testing.expectEqual(worker_actual, pending.items[1].worker_rep);
+    try std.testing.expectEqual(call_actual, pending.items[1].rep);
+}
+
+test "hidden descriptors resolve nominal backing formals per sibling occurrence" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const root: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const left_nominal: TypeRepId = @enumFromInt(1);
+    const right_nominal: TypeRepId = @enumFromInt(2);
+    const backing: TypeRepId = @enumFromInt(3);
+    const raw_formal: TypeRepId = @enumFromInt(4);
+    const concrete_actual: TypeRepId = @enumFromInt(5);
+    const dynamic_actual: TypeRepId = @enumFromInt(6);
+
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(1)), .rep = left_nominal },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = right_nominal },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(3)), .rep = backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(5)), .rep = concrete_actual },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(3)), .rep = backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(6)), .rep = dynamic_actual },
+        .{ .role = .{ .record_field = @enumFromInt(fixtureTableIndex(0)) }, .source_type = rootTypeRef(@enumFromInt(4)), .rep = raw_formal },
+    });
+    try builder.plan.nominal_backing_arg_substitutions.appendSlice(gpa, &.{
+        .{ .arg_index = 0, .formal_rep = raw_formal, .actual_rep = concrete_actual },
+        .{ .arg_index = 0, .formal_rep = raw_formal, .actual_rep = dynamic_actual },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .tuple, .children = .{ .start = 0, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 2, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 4, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 1, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .record, .children = .{ .start = 6, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .primitive = .str } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
+    });
+
+    var pending = std.ArrayList(HiddenDescriptorParam).empty;
+    defer pending.deinit(gpa);
+    var seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer seen_reps.deinit();
+    var seen_descs = collections.DenseMap(DescriptorRequirementId, void).init(gpa);
+    defer seen_descs.deinit();
+    try builder.collectHiddenDescriptorsForRep(root, &pending, &seen_reps, &seen_descs);
+
+    try std.testing.expectEqual(@as(usize, 1), pending.items.len);
+    try std.testing.expectEqual(dynamic_actual, pending.items[0].rep);
+    try std.testing.expectEqual(@as(DescriptorRequirementId, @enumFromInt(1)), pending.items[0].desc);
+}
+
+test "worker body dynamic reachability includes erased signature roles" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const alias: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const callable: TypeRepId = @enumFromInt(1);
+    const dynamic_result: TypeRepId = @enumFromInt(2);
+    const static_arg: TypeRepId = @enumFromInt(3);
+    const static_nominal: TypeRepId = @enumFromInt(4);
+    const static_backing: TypeRepId = @enumFromInt(5);
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(1)), .rep = callable },
+        .{ .role = .{ .alias_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = static_arg },
+        .{ .role = .function_ret, .source_type = rootTypeRef(@enumFromInt(2)), .rep = dynamic_result },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(5)), .rep = static_backing },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .alias, .children = .{ .start = 0, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .erased_callable, .children = .{ .start = 2, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .empty_record },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .nominal = .opaque_nominal }, .children = .{ .start = 3, .len = 1 }, .inspect_opaque = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .empty_record },
+    });
+
+    // Runtime dynamic propagation intentionally stops at erased callables, but
+    // body specialization context must retain their type-only result demand.
+    try std.testing.expect(!builder.plan.representations.items[@intFromEnum(alias)].contains_dynamic);
+    try std.testing.expect(!builder.plan.representations.items[@intFromEnum(callable)].contains_dynamic);
+    var substitutions = NominalBackingRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var active = std.AutoHashMap(u64, void).init(gpa);
+    defer active.deinit();
+    try std.testing.expect(try builder.workerBodyRepContainsDynamicAnywhere(
+        alias,
+        &substitutions,
+        &active,
+    ));
+    try std.testing.expectEqual(@as(usize, 0), active.count());
+    try std.testing.expectEqual(@as(usize, 0), substitutions.entries.items.len);
+    try std.testing.expect(!try builder.workerBodyRepContainsDynamicAnywhere(
+        static_nominal,
+        &substitutions,
+        &active,
+    ));
+    try std.testing.expectEqual(@as(usize, 0), active.count());
+    try std.testing.expectEqual(@as(usize, 0), substitutions.entries.items.len);
+}
+
+test "worker body exact reps stop below a static nominal specialization" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const body_root: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const body_callable: TypeRepId = @enumFromInt(1);
+    const body_dynamic: TypeRepId = @enumFromInt(2);
+    const worker_callable: TypeRepId = @enumFromInt(3);
+    const worker_exact: TypeRepId = @enumFromInt(4);
+    const worker_root: TypeRepId = @enumFromInt(5);
+    const body_nominal: TypeRepId = @enumFromInt(6);
+    const body_backing: TypeRepId = @enumFromInt(7);
+    const worker_record: TypeRepId = @enumFromInt(8);
+    const worker_field: TypeRepId = @enumFromInt(9);
+    const prior_dynamic: TypeRepId = @enumFromInt(10);
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(1)), .rep = body_callable },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(6)), .rep = body_nominal },
+        .{ .role = .function_ret, .source_type = rootTypeRef(@enumFromInt(2)), .rep = body_dynamic },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = worker_callable },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(8)), .rep = worker_record },
+        .{ .role = .function_ret, .source_type = rootTypeRef(@enumFromInt(4)), .rep = worker_exact },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(7)), .rep = body_backing },
+        .{ .role = .{ .record_field = @enumFromInt(fixtureTableIndex(0)) }, .source_type = rootTypeRef(@enumFromInt(9)), .rep = worker_field },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .tuple, .children = .{ .start = 0, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .erased_callable, .children = .{ .start = 2, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .erased_callable, .children = .{ .start = 5, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .primitive = .str } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .tuple, .children = .{ .start = 3, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .{ .nominal = .opaque_nominal }, .children = .{ .start = 6, .len = 1 }, .inspect_opaque = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .empty_record },
+        .{ .source_type = rootTypeRef(@enumFromInt(8)), .kind = .record, .children = .{ .start = 7, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(9)), .kind = .{ .primitive = .u64 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(10)), .kind = .{ .dynamic = .flex }, .contains_dynamic = true },
+    });
+
+    var exact_reps = Builder.CallDescriptorRepSubstitutionMap{};
+    defer exact_reps.deinit(gpa);
+    // Retain the static root refinement because a previously mapped dynamic
+    // key can resolve through it transitively in the final snapshot.
+    try exact_reps.put(gpa, prior_dynamic, body_nominal);
+    var active = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer active.deinit();
+    var body_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer body_nominal_substitutions.deinit(gpa);
+    var worker_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_nominal_substitutions.deinit(gpa);
+    try builder.collectWorkerBodyExactRepSubstitutions(
+        body_root,
+        worker_root,
+        &exact_reps,
+        &active,
+        &body_nominal_substitutions,
+        &worker_nominal_substitutions,
+    );
+
+    try std.testing.expectEqual(worker_exact, exact_reps.getResolved(body_dynamic).?);
+    try std.testing.expectEqual(worker_record, exact_reps.getResolved(prior_dynamic).?);
+    try std.testing.expectEqual(worker_record, exact_reps.getResolved(body_nominal).?);
+    try std.testing.expectEqual(@as(usize, 0), active.count());
+}
+
+test "worker body exact reps preserve contexts inside identical aliases" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const shared_alias: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const callable_backing: TypeRepId = @enumFromInt(1);
+    const contextual_formal: TypeRepId = @enumFromInt(2);
+    const body_actual: TypeRepId = @enumFromInt(3);
+    const worker_actual: TypeRepId = @enumFromInt(4);
+    const callable_field: TypeRepId = @enumFromInt(5);
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(1)), .rep = callable_backing },
+        .{ .role = .{ .alias_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = contextual_formal },
+        .{ .role = .{ .function_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(5)), .rep = callable_field },
+        .{ .role = .function_ret, .source_type = rootTypeRef(@enumFromInt(5)), .rep = callable_field },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .alias, .children = .{ .start = 0, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .erased_callable, .children = .{ .start = 2, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .empty_tag_union },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .empty_record },
+    });
+
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var active = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer active.deinit();
+    var body_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer body_nominal_substitutions.deinit(gpa);
+    var worker_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_nominal_substitutions.deinit(gpa);
+
+    try builder.collectWorkerBodyExactRepSubstitutions(
+        shared_alias,
+        shared_alias,
+        &substitutions,
+        &active,
+        &body_nominal_substitutions,
+        &worker_nominal_substitutions,
+    );
+    try std.testing.expectEqual(@as(usize, 0), substitutions.entries.items.len);
+    try std.testing.expectEqual(@as(usize, 0), active.count());
+
+    // The raw alias is still identical under two outer nominal occurrences,
+    // but its type-only argument resolves differently. Pairwise traversal of
+    // the shared alias children must expose that contextual specialization.
+    try body_nominal_substitutions.put(gpa, contextual_formal, body_actual);
+    try worker_nominal_substitutions.put(gpa, contextual_formal, worker_actual);
+    try builder.collectWorkerBodyExactRepSubstitutions(
+        shared_alias,
+        shared_alias,
+        &substitutions,
+        &active,
+        &body_nominal_substitutions,
+        &worker_nominal_substitutions,
+    );
+    try std.testing.expectEqual(worker_actual, substitutions.getResolved(body_actual).?);
+    try std.testing.expectEqual(@as(usize, 0), active.count());
+}
+
+test "worker body exact reps align shared nominal backings per sibling context" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const body_root: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const body_left: TypeRepId = @enumFromInt(1);
+    const body_right: TypeRepId = @enumFromInt(2);
+    const worker_root: TypeRepId = @enumFromInt(3);
+    const worker_left: TypeRepId = @enumFromInt(4);
+    const worker_right: TypeRepId = @enumFromInt(5);
+    const body_backing: TypeRepId = @enumFromInt(6);
+    const body_formal: TypeRepId = @enumFromInt(7);
+    const worker_backing: TypeRepId = @enumFromInt(8);
+    const worker_formal: TypeRepId = @enumFromInt(9);
+    const body_left_actual: TypeRepId = @enumFromInt(10);
+    const body_right_actual: TypeRepId = @enumFromInt(11);
+    const worker_left_actual: TypeRepId = @enumFromInt(12);
+    const worker_right_actual: TypeRepId = @enumFromInt(13);
+    const worker_inner_alias: TypeRepId = @enumFromInt(14);
+    const worker_outer_alias: TypeRepId = @enumFromInt(15);
+
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(1)), .rep = body_left },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = body_right },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(4)), .rep = worker_left },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(5)), .rep = worker_right },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(6)), .rep = body_backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(10)), .rep = body_left_actual },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(6)), .rep = body_backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(11)), .rep = body_right_actual },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(8)), .rep = worker_backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(12)), .rep = worker_left_actual },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(8)), .rep = worker_backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(13)), .rep = worker_right_actual },
+        .{ .role = .{ .record_field = @enumFromInt(fixtureTableIndex(0)) }, .source_type = rootTypeRef(@enumFromInt(7)), .rep = body_formal },
+        .{ .role = .{ .record_field = @enumFromInt(fixtureTableIndex(0)) }, .source_type = rootTypeRef(@enumFromInt(9)), .rep = worker_formal },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(3)), .rep = worker_root },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(14)), .rep = worker_inner_alias },
+    });
+    try builder.plan.nominal_backing_arg_substitutions.appendSlice(gpa, &.{
+        .{ .arg_index = 0, .formal_rep = body_formal, .actual_rep = body_left_actual },
+        .{ .arg_index = 0, .formal_rep = body_formal, .actual_rep = body_right_actual },
+        .{ .arg_index = 0, .formal_rep = worker_formal, .actual_rep = worker_left_actual },
+        .{ .arg_index = 0, .formal_rep = worker_formal, .actual_rep = worker_right_actual },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .tuple, .children = .{ .start = 0, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 4, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 6, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 1, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .tuple, .children = .{ .start = 2, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 8, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 2, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 10, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 3, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .record, .children = .{ .start = 12, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(8)), .kind = .record, .children = .{ .start = 13, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(9)), .kind = .{ .dynamic = .rigid } },
+        .{ .source_type = rootTypeRef(@enumFromInt(10)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(11)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(12)), .kind = .{ .primitive = .str } },
+        .{ .source_type = rootTypeRef(@enumFromInt(13)), .kind = .empty_tag_union },
+        .{ .source_type = rootTypeRef(@enumFromInt(14)), .kind = .alias, .children = .{ .start = 14, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(15)), .kind = .alias, .children = .{ .start = 15, .len = 1 } },
+    });
+
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var active = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer active.deinit();
+    var body_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer body_nominal_substitutions.deinit(gpa);
+    var worker_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_nominal_substitutions.deinit(gpa);
+    try builder.collectWorkerBodyExactRepSubstitutions(
+        body_root,
+        worker_outer_alias,
+        &substitutions,
+        &active,
+        &body_nominal_substitutions,
+        &worker_nominal_substitutions,
+    );
+
+    try std.testing.expectEqual(worker_left_actual, substitutions.getResolved(body_left_actual).?);
+    try std.testing.expectEqual(worker_right_actual, substitutions.getResolved(body_right_actual).?);
+    try std.testing.expectEqual(worker_outer_alias, substitutions.getResolved(body_root).?);
+    try std.testing.expectEqual(@as(usize, 0), active.count());
+    // The declaration formal has no global meaning outside either nominal
+    // occurrence, so only the two scoped actuals are persisted.
+    try std.testing.expect(substitutions.get(body_formal) == null);
+}
+
+test "worker body exact reps retain alias-wrapped nominal arguments" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const body_nominal: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const body_backing: TypeRepId = @enumFromInt(1);
+    const body_formal: TypeRepId = @enumFromInt(2);
+    const body_actual: TypeRepId = @enumFromInt(3);
+    const worker_alias: TypeRepId = @enumFromInt(4);
+    const worker_nominal: TypeRepId = @enumFromInt(5);
+    const worker_backing: TypeRepId = @enumFromInt(6);
+    const worker_formal: TypeRepId = @enumFromInt(7);
+    const worker_actual: TypeRepId = @enumFromInt(8);
+    const body_inner_nominal: TypeRepId = @enumFromInt(9);
+    const body_inner_formal: TypeRepId = @enumFromInt(10);
+    const body_inner_actual: TypeRepId = @enumFromInt(11);
+    const worker_inner_nominal: TypeRepId = @enumFromInt(12);
+    const worker_inner_formal: TypeRepId = @enumFromInt(13);
+    const worker_inner_actual: TypeRepId = @enumFromInt(14);
+
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(9)), .rep = body_inner_nominal },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = body_actual },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(5)), .rep = worker_nominal },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(12)), .rep = worker_inner_nominal },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(8)), .rep = worker_actual },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(1)), .rep = body_backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(11)), .rep = body_inner_actual },
+        .{ .role = .nominal_backing, .source_type = rootTypeRef(@enumFromInt(6)), .rep = worker_backing },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(14)), .rep = worker_inner_actual },
+    });
+    try builder.plan.nominal_backing_arg_substitutions.appendSlice(gpa, &.{
+        .{ .arg_index = 0, .formal_rep = body_formal, .actual_rep = body_actual },
+        .{ .arg_index = 0, .formal_rep = worker_formal, .actual_rep = worker_actual },
+        .{ .arg_index = 0, .formal_rep = body_inner_formal, .actual_rep = body_inner_actual },
+        .{ .arg_index = 0, .formal_rep = worker_inner_formal, .actual_rep = worker_inner_actual },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .empty_record },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .alias, .children = .{ .start = 2, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 3, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 1, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .empty_record },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .{ .dynamic = .rigid } },
+        .{ .source_type = rootTypeRef(@enumFromInt(8)), .kind = .{ .primitive = .str } },
+        .{ .source_type = rootTypeRef(@enumFromInt(9)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 5, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 2, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(10)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(11)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(12)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 7, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 3, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(13)), .kind = .{ .dynamic = .rigid } },
+        .{ .source_type = rootTypeRef(@enumFromInt(14)), .kind = .empty_tag_union },
+    });
+
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var active = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer active.deinit();
+    var body_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer body_nominal_substitutions.deinit(gpa);
+    var worker_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_nominal_substitutions.deinit(gpa);
+    try builder.collectWorkerBodyExactRepSubstitutions(
+        body_nominal,
+        worker_alias,
+        &substitutions,
+        &active,
+        &body_nominal_substitutions,
+        &worker_nominal_substitutions,
+    );
+
+    // The backing is empty, so only preserving the nominal hidden beneath the
+    // alias can align these otherwise-phantom arguments. Advancing through
+    // the outer nominal is what selects the distinct inner actual.
+    try std.testing.expectEqual(worker_actual, substitutions.getResolved(body_actual).?);
+    try std.testing.expectEqual(worker_inner_actual, substitutions.getResolved(body_inner_actual).?);
+}
+
+test "worker body exact reps align duplicate alias arguments" {
+    const gpa = std.testing.allocator;
+    const root_key = moduleKey(0);
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .alias = .{ .name = @enumFromInt(fixtureTableIndex(0)), .origin_module = @enumFromInt(fixtureTableIndex(0)), .owner_module = root_key, .source_decl = 1, .backing = @enumFromInt(1) } },
+        .{ .empty_record = {} },
+        .{ .rigid = .{} },
+        .{ .alias = .{ .name = @enumFromInt(fixtureTableIndex(0)), .origin_module = @enumFromInt(fixtureTableIndex(0)), .owner_module = root_key, .source_decl = 1, .backing = @enumFromInt(4) } },
+        .{ .empty_record = {} },
+        .{ .empty_tag_union = {} },
+    };
+    var builder = Builder.init(gpa, .{ .root_view = .{
+        .key = root_key,
+        .checked_types = .{ .stored_payloads = &payloads },
+    } });
+    defer builder.deinit();
+
+    const body_alias: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const body_backing: TypeRepId = @enumFromInt(1);
+    const body_dynamic: TypeRepId = @enumFromInt(2);
+    const worker_alias: TypeRepId = @enumFromInt(3);
+    const worker_backing: TypeRepId = @enumFromInt(4);
+    const worker_exact: TypeRepId = @enumFromInt(5);
+
+    // The same generic demand occurs in the alias argument and in the erased
+    // callable result under its backing, matching the real specialization
+    // relation which exposed this mapper gap.
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(1)), .rep = body_backing },
+        .{ .role = .{ .alias_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = body_dynamic },
+        .{ .role = .function_ret, .source_type = rootTypeRef(@enumFromInt(2)), .rep = body_dynamic },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(4)), .rep = worker_backing },
+        .{ .role = .{ .alias_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(5)), .rep = worker_exact },
+        .{ .role = .function_ret, .source_type = rootTypeRef(@enumFromInt(5)), .rep = worker_exact },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .alias, .children = .{ .start = 0, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .erased_callable, .children = .{ .start = 2, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .alias, .children = .{ .start = 3, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .erased_callable, .children = .{ .start = 5, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .empty_tag_union },
+    });
+
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var active = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer active.deinit();
+    var body_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer body_nominal_substitutions.deinit(gpa);
+    var worker_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_nominal_substitutions.deinit(gpa);
+    try builder.collectWorkerBodyExactRepSubstitutions(
+        body_alias,
+        worker_alias,
+        &substitutions,
+        &active,
+        &body_nominal_substitutions,
+        &worker_nominal_substitutions,
+    );
+
+    try std.testing.expectEqual(worker_exact, substitutions.getResolved(body_dynamic).?);
+    try std.testing.expectEqual(@as(usize, 0), active.count());
+}
+
+test "worker body exact reps advance nested alias argument contexts" {
+    const gpa = std.testing.allocator;
+    const root_key = moduleKey(0);
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .alias = .{ .name = @enumFromInt(fixtureTableIndex(0)), .origin_module = @enumFromInt(fixtureTableIndex(0)), .owner_module = root_key, .source_decl = 1, .backing = @enumFromInt(1) } },
+        .{ .alias = .{ .name = @enumFromInt(1), .origin_module = @enumFromInt(fixtureTableIndex(0)), .owner_module = root_key, .source_decl = 2, .backing = @enumFromInt(3) } },
+        .{ .rigid = .{} },
+        .{ .empty_record = {} },
+        .{ .rigid = .{} },
+        .{ .alias = .{ .name = @enumFromInt(fixtureTableIndex(0)), .origin_module = @enumFromInt(fixtureTableIndex(0)), .owner_module = root_key, .source_decl = 1, .backing = @enumFromInt(6) } },
+        .{ .alias = .{ .name = @enumFromInt(1), .origin_module = @enumFromInt(fixtureTableIndex(0)), .owner_module = root_key, .source_decl = 2, .backing = @enumFromInt(8) } },
+        .{ .empty_record = {} },
+        .{ .empty_record = {} },
+        .{ .empty_tag_union = {} },
+    };
+    var builder = Builder.init(gpa, .{ .root_view = .{
+        .key = root_key,
+        .checked_types = .{ .stored_payloads = &payloads },
+    } });
+    defer builder.deinit();
+
+    const body_outer: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const body_inner: TypeRepId = @enumFromInt(1);
+    const body_outer_arg: TypeRepId = @enumFromInt(2);
+    const body_backing: TypeRepId = @enumFromInt(3);
+    const body_inner_arg: TypeRepId = @enumFromInt(4);
+    const worker_outer: TypeRepId = @enumFromInt(5);
+    const worker_inner: TypeRepId = @enumFromInt(6);
+    const worker_outer_arg: TypeRepId = @enumFromInt(7);
+    const worker_backing: TypeRepId = @enumFromInt(8);
+    const worker_inner_arg: TypeRepId = @enumFromInt(9);
+
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(1)), .rep = body_inner },
+        .{ .role = .{ .alias_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = body_outer_arg },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(3)), .rep = body_backing },
+        .{ .role = .{ .alias_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(4)), .rep = body_inner_arg },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(6)), .rep = worker_inner },
+        .{ .role = .{ .alias_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(7)), .rep = worker_outer_arg },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(8)), .rep = worker_backing },
+        .{ .role = .{ .alias_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(9)), .rep = worker_inner_arg },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .alias, .children = .{ .start = 0, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .alias, .children = .{ .start = 2, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .empty_record },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .dynamic = .rigid } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .alias, .children = .{ .start = 4, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .alias, .children = .{ .start = 6, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .{ .primitive = .str } },
+        .{ .source_type = rootTypeRef(@enumFromInt(8)), .kind = .empty_record },
+        .{ .source_type = rootTypeRef(@enumFromInt(9)), .kind = .empty_tag_union },
+    });
+
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var active = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer active.deinit();
+    var body_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer body_nominal_substitutions.deinit(gpa);
+    var worker_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_nominal_substitutions.deinit(gpa);
+    try builder.collectWorkerBodyExactRepSubstitutions(
+        body_outer,
+        worker_outer,
+        &substitutions,
+        &active,
+        &body_nominal_substitutions,
+        &worker_nominal_substitutions,
+    );
+
+    try std.testing.expectEqual(worker_outer_arg, substitutions.getResolved(body_outer_arg).?);
+    try std.testing.expectEqual(worker_inner_arg, substitutions.getResolved(body_inner_arg).?);
+    try std.testing.expectEqual(@as(usize, 0), active.count());
+}
+
+test "worker body exact reps do not pair distinct alias arguments by index" {
+    const gpa = std.testing.allocator;
+    const root_key = moduleKey(0);
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .alias = .{ .name = @enumFromInt(fixtureTableIndex(0)), .origin_module = @enumFromInt(fixtureTableIndex(0)), .owner_module = root_key, .source_decl = 1, .backing = @enumFromInt(1) } },
+        .{ .empty_record = {} },
+        .{ .rigid = .{} },
+        .{ .rigid = .{} },
+        .{ .alias = .{ .name = @enumFromInt(1), .origin_module = @enumFromInt(fixtureTableIndex(0)), .owner_module = root_key, .source_decl = 2, .backing = @enumFromInt(5) } },
+        .{ .empty_record = {} },
+        .{ .empty_record = {} },
+        .{ .empty_tag_union = {} },
+    };
+    var builder = Builder.init(gpa, .{ .root_view = .{
+        .key = root_key,
+        .checked_types = .{ .stored_payloads = &payloads },
+    } });
+    defer builder.deinit();
+
+    const body_alias: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const body_backing: TypeRepId = @enumFromInt(1);
+    const body_first: TypeRepId = @enumFromInt(2);
+    const body_second: TypeRepId = @enumFromInt(3);
+    const worker_alias: TypeRepId = @enumFromInt(4);
+    const worker_backing: TypeRepId = @enumFromInt(5);
+    const worker_first_arg: TypeRepId = @enumFromInt(6);
+    const worker_second_arg: TypeRepId = @enumFromInt(7);
+
+    // These are distinct transparent aliases. Their argument indices have
+    // opposite meaning in the equivalent structural backing, so pairing the
+    // wrapper arguments by index would conflict with the checker-authorized
+    // tuple alignment.
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(1)), .rep = body_backing },
+        .{ .role = .{ .alias_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = body_first },
+        .{ .role = .{ .alias_arg = 1 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = body_second },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(2)), .rep = body_first },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = body_second },
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(5)), .rep = worker_backing },
+        .{ .role = .{ .alias_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(6)), .rep = worker_first_arg },
+        .{ .role = .{ .alias_arg = 1 }, .source_type = rootTypeRef(@enumFromInt(7)), .rep = worker_second_arg },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(7)), .rep = worker_second_arg },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(6)), .rep = worker_first_arg },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .alias, .children = .{ .start = 0, .len = 3 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .tuple, .children = .{ .start = 3, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .rigid } },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .alias, .children = .{ .start = 5, .len = 3 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .tuple, .children = .{ .start = 8, .len = 2 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .empty_record },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .empty_tag_union },
+    });
+
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var active = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer active.deinit();
+    var body_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer body_nominal_substitutions.deinit(gpa);
+    var worker_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_nominal_substitutions.deinit(gpa);
+    try builder.collectWorkerBodyExactRepSubstitutions(
+        body_alias,
+        worker_alias,
+        &substitutions,
+        &active,
+        &body_nominal_substitutions,
+        &worker_nominal_substitutions,
+    );
+
+    try std.testing.expectEqual(worker_second_arg, substitutions.getResolved(body_first).?);
+    try std.testing.expectEqual(worker_first_arg, substitutions.getResolved(body_second).?);
+}
+
+test "worker body unmatched branches require every dynamic demand to be mapped" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const dynamic: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const exact: TypeRepId = @enumFromInt(1);
+    const static_rep: TypeRepId = @enumFromInt(2);
+    const cycle: TypeRepId = @enumFromInt(3);
+    const second_dynamic: TypeRepId = @enumFromInt(4);
+    const aggregate: TypeRepId = @enumFromInt(5);
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .alias_backing, .source_type = rootTypeRef(@enumFromInt(3)), .rep = cycle },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = dynamic },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(4)), .rep = second_dynamic },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .empty_tag_union },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .empty_record },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .alias, .children = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .dynamic = .rigid } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .tuple, .children = .{ .start = 1, .len = 2 } },
+    });
+
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer nominal_substitutions.deinit(gpa);
+
+    try std.testing.expect(!try builder.workerBodyDynamicDemandsAlreadyMapped(
+        dynamic,
+        &substitutions,
+        &nominal_substitutions,
+    ));
+    try std.testing.expect(try builder.workerBodyDynamicDemandsAlreadyMapped(
+        static_rep,
+        &substitutions,
+        &nominal_substitutions,
+    ));
+    try std.testing.expect(!try builder.workerBodyDynamicDemandsAlreadyMapped(
+        cycle,
+        &substitutions,
+        &nominal_substitutions,
+    ));
+
+    try substitutions.put(gpa, dynamic, exact);
+    try std.testing.expect(try builder.workerBodyDynamicDemandsAlreadyMapped(
+        dynamic,
+        &substitutions,
+        &nominal_substitutions,
+    ));
+    try std.testing.expect(!try builder.workerBodyDynamicDemandsAlreadyMapped(
+        aggregate,
+        &substitutions,
+        &nominal_substitutions,
+    ));
+    try substitutions.put(gpa, second_dynamic, static_rep);
+    try std.testing.expect(try builder.workerBodyDynamicDemandsAlreadyMapped(
+        aggregate,
+        &substitutions,
+        &nominal_substitutions,
+    ));
+}
+
+test "worker body exact reps collapse an open tag row to empty" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const body_row: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const body_extension: TypeRepId = @enumFromInt(1);
+    const exact_empty: TypeRepId = @enumFromInt(2);
+    try builder.plan.children.append(gpa, .{
+        .role = .tag_ext,
+        .source_type = rootTypeRef(@enumFromInt(1)),
+        .rep = body_extension,
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .tag_union, .children = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .empty_tag_union },
+    });
+
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+    var active = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer active.deinit();
+    var body_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer body_nominal_substitutions.deinit(gpa);
+    var worker_nominal_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_nominal_substitutions.deinit(gpa);
+    try builder.collectWorkerBodyExactRepSubstitutions(
+        body_row,
+        exact_empty,
+        &substitutions,
+        &active,
+        &body_nominal_substitutions,
+        &worker_nominal_substitutions,
+    );
+
+    try std.testing.expectEqual(exact_empty, substitutions.getResolved(body_extension).?);
+}
+
+test "worker descriptor ABI stops at erased callables but keeps runtime siblings" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const worker_formal: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const worker_callback: TypeRepId = @enumFromInt(1);
+    const worker_callback_only: TypeRepId = @enumFromInt(2);
+    const worker_arg: TypeRepId = @enumFromInt(3);
+    const call_actual: TypeRepId = @enumFromInt(4);
+    const call_callback: TypeRepId = @enumFromInt(5);
+    const call_arg: TypeRepId = @enumFromInt(7);
+
+    // Put the callback before the runtime sibling so an unfiltered traversal
+    // would encounter this formal first through the callback's type-only
+    // result edge.
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .function_ret, .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker_formal },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(1)), .rep = worker_callback },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(1)), .rep = worker_callback },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .rep = worker_formal },
+        .{ .role = .function_ret, .source_type = rootTypeRef(@enumFromInt(4)), .rep = call_actual },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(5)), .rep = call_callback },
+        .{ .role = .{ .tuple_elem = 0 }, .source_type = rootTypeRef(@enumFromInt(5)), .rep = call_callback },
+        .{ .role = .{ .tuple_elem = 1 }, .source_type = rootTypeRef(@enumFromInt(4)), .rep = call_actual },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .erased_callable, .children = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .tuple, .children = .{ .start = 1, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .tuple, .children = .{ .start = 2, .len = 2 }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .dynamic = .rigid }, .descriptor = @enumFromInt(2), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .erased_callable, .children = .{ .start = 4, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .tuple, .children = .{ .start = 5, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(7)), .kind = .tuple, .children = .{ .start = 6, .len = 2 }, .descriptor = @enumFromInt(3), .contains_dynamic = true },
+    });
+
+    var all_callback_params = std.ArrayList(HiddenDescriptorParam).empty;
+    defer all_callback_params.deinit(gpa);
+    var all_callback_seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer all_callback_seen_reps.deinit();
+    var all_callback_seen_descs = collections.DenseMap(DescriptorRequirementId, void).init(gpa);
+    defer all_callback_seen_descs.deinit();
+    try builder.collectHiddenDescriptorsForRep(
+        worker_callback_only,
+        &all_callback_params,
+        &all_callback_seen_reps,
+        &all_callback_seen_descs,
+    );
+    try std.testing.expectEqual(@as(usize, 1), all_callback_params.items.len);
+    try std.testing.expectEqual(worker_formal, all_callback_params.items[0].rep);
+
+    var runtime_callback_params = std.ArrayList(HiddenDescriptorParam).empty;
+    defer runtime_callback_params.deinit(gpa);
+    var runtime_callback_seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer runtime_callback_seen_reps.deinit();
+    var runtime_callback_seen_descs = collections.DenseMap(DescriptorRequirementId, void).init(gpa);
+    defer runtime_callback_seen_descs.deinit();
+    try builder.collectRuntimeHiddenDescriptorsForRep(
+        worker_callback_only,
+        &runtime_callback_params,
+        &runtime_callback_seen_reps,
+        &runtime_callback_seen_descs,
+    );
+    try std.testing.expectEqual(@as(usize, 0), runtime_callback_params.items.len);
+
+    var runtime_params = std.ArrayList(HiddenDescriptorParam).empty;
+    defer runtime_params.deinit(gpa);
+    var runtime_seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer runtime_seen_reps.deinit();
+    var runtime_seen_descs = collections.DenseMap(DescriptorRequirementId, void).init(gpa);
+    defer runtime_seen_descs.deinit();
+    try builder.collectRuntimeHiddenDescriptorsForRep(
+        worker_arg,
+        &runtime_params,
+        &runtime_seen_reps,
+        &runtime_seen_descs,
+    );
+    try std.testing.expectEqual(@as(usize, 2), runtime_params.items.len);
+    try std.testing.expectEqual(worker_arg, runtime_params.items[0].rep);
+    try std.testing.expectEqual(worker_formal, runtime_params.items[1].rep);
+
+    var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
+    defer pending.deinit(gpa);
+    var seen_rep_pairs = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer seen_rep_pairs.deinit();
+    var seen_descriptor_reps = collections.DenseMap(TypeRepId, void).init(gpa);
+    defer seen_descriptor_reps.deinit();
+    var call_substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer call_substitutions.deinit(gpa);
+    var worker_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_substitutions.deinit(gpa);
+    var next_param: usize = 0;
+    try builder.collectCallHiddenDescriptorArgs(
+        worker_arg,
+        call_arg,
+        call_arg,
+        call_arg,
+        0,
+        runtime_params.items,
+        &next_param,
+        &pending,
+        &seen_rep_pairs,
+        &seen_descriptor_reps,
+        &call_substitutions,
+        &worker_substitutions,
+        true,
+    );
+
+    try std.testing.expectEqual(runtime_params.items.len, next_param);
+    try std.testing.expectEqual(runtime_params.items.len, pending.items.len);
+    try std.testing.expectEqual(worker_arg, pending.items[0].worker_rep);
+    try std.testing.expectEqual(call_arg, pending.items[0].rep);
+    try std.testing.expectEqual(worker_formal, pending.items[1].worker_rep);
+    try std.testing.expectEqual(call_actual, pending.items[1].rep);
+}
+
+test "direct call descriptor substitutions retain call nominal backing provenance" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const worker_outer: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const worker_formal: TypeRepId = @enumFromInt(1);
+    const call_outer: TypeRepId = @enumFromInt(2);
+    const call_actual: TypeRepId = @enumFromInt(3);
+    const call_formal: TypeRepId = @enumFromInt(4);
+    const worker_inner: TypeRepId = @enumFromInt(5);
+    const call_inner: TypeRepId = @enumFromInt(6);
+
+    try builder.plan.children.appendSlice(gpa, &.{
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(1)), .rep = worker_formal },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(3)), .rep = call_actual },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(1)), .rep = worker_formal },
+        .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@enumFromInt(4)), .rep = call_formal },
+    });
+    try builder.plan.nominal_backing_arg_substitutions.appendSlice(gpa, &.{
+        .{ .arg_index = 0, .formal_rep = call_formal, .actual_rep = call_actual },
+        .{ .arg_index = 0, .formal_rep = call_formal, .actual_rep = call_formal },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 1, .len = 1 }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .primitive = .str } },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 2, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(6)), .kind = .{ .nominal = .transparent }, .children = .{ .start = 3, .len = 1 }, .nominal_backing_arg_substitutions = .{ .start = 1, .len = 1 } },
+    });
+
+    var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer substitutions.deinit(gpa);
+
+    try builder.recordCallDescriptorWrapperSubstitutions(worker_outer, call_outer, &substitutions);
+    try builder.recordCallDescriptorWrapperSubstitutions(worker_inner, call_inner, &substitutions);
+
+    try std.testing.expectEqual(call_actual, substitutions.getResolved(worker_formal).?);
+    try std.testing.expectEqual(call_actual, substitutions.getResolved(call_formal).?);
+}
+
+test "owning procedure body context preserves an identical alias subtree" {
+    const gpa = std.testing.allocator;
+    const root_key = moduleKey(42);
+    const identity_template_ref = procedureTemplateRef(root_key, 0);
+    const specialized_template_ref = procedureTemplateRef(root_key, 1);
+
+    // The two tuple roots are distinct representations which share the exact
+    // same alias child. That alias carries type-only arguments around an erased
+    // callable backing, so unwrapping only the worker side would compare the
+    // alias arguments against callable argument/result children.
+    const type_pool = [_]checked.CheckedTypeId{
+        @enumFromInt(fixtureTableIndex(0)), // function arg
+        @enumFromInt(fixtureTableIndex(0)),
+        @enumFromInt(1), // alias args
+        @enumFromInt(3), // source tuple element
+        @enumFromInt(3), // specialized tuple element
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .empty_tag_union = {} }, // 0: alias type arg / callable arg
+        .{ .empty_record = {} }, // 1: alias type arg / callable result
+        .{ .function = .{ .kind = .pure, .args = .{ .start = 0, .len = 1 }, .ret = @enumFromInt(1) } }, // 2: alias backing
+        .{ .alias = .{
+            .name = @enumFromInt(fixtureTableIndex(0)),
+            .origin_module = @enumFromInt(fixtureTableIndex(0)),
+            .owner_module = root_key,
+            .backing = @enumFromInt(2),
+            .args = .{ .start = 1, .len = 2 },
+        } }, // 3
+        .{ .tuple = .{ .start = 3, .len = 1 } }, // 4: source/body result
+        .{ .tuple = .{ .start = 4, .len = 1 } }, // 5: distinct worker result
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(4) } }, // 6: identity/source interface
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(5) } }, // 7: specialized worker
+    };
+    var relations = [_]checked.SpecializationInterfaceRelation{
+        .{
+            .scope = .root,
+            .data = .{ .procedure = .{
+                .fn_ty = @enumFromInt(6),
+                .body_ret_ty = @enumFromInt(4),
+                .owns_scope = true,
+            } },
+        },
+        .{
+            .scope = .root,
+            .data = .{ .procedure = .{
+                .fn_ty = @enumFromInt(6),
+                .body_ret_ty = @enumFromInt(4),
+                .owns_scope = true,
+            } },
+        },
+    };
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(identity_template_ref, @enumFromInt(6), @enumFromInt(fixtureTableIndex(0)), .roc),
+        checkedTemplate(specialized_template_ref, @enumFromInt(7), @enumFromInt(fixtureTableIndex(0)), .roc),
+    };
+    templates[0].specialization_interface_relations = .{ .start = 0, .len = 1 };
+    templates[1].specialization_interface_relations = .{ .start = 1, .len = 1 };
+    var template_table = checked.CheckedProcedureTemplateTable{
+        .templates = &templates,
+        .specialization_interface_relations = &relations,
+    };
+    const root_view = ModuleView{
+        .key = root_key,
+        .checked_types = .{
+            .stored_payloads = &payloads,
+            .type_id_pool = &type_pool,
+        },
+        .checked_procedure_templates = &template_table,
+    };
+
+    var builder = Builder.init(gpa, .{ .root_view = root_view });
+    defer builder.deinit();
+    const identity_fn_rep = try builder.analyzeType(root_view, @enumFromInt(6));
+    const specialized_fn_rep = try builder.analyzeType(root_view, @enumFromInt(7));
+    const body_rep = builder.plan.repForSourceType(typeRef(root_view, @enumFromInt(4))) orelse
+        return error.TestUnexpectedResult;
+    const specialized_rep = builder.plan.repForSourceType(typeRef(root_view, @enumFromInt(5))) orelse
+        return error.TestUnexpectedResult;
+    const alias_rep = builder.plan.repForSourceType(typeRef(root_view, @enumFromInt(3))) orelse
+        return error.TestUnexpectedResult;
+    const alias = builder.plan.representations.items[@intFromEnum(alias_rep)];
+    const alias_children = builder.plan.childSlice(alias.children);
+    try std.testing.expectEqual(RepresentationKind.alias, alias.kind);
+    try std.testing.expectEqual(@as(usize, 3), alias_children.len);
+    try std.testing.expectEqual(RepresentationKind.erased_callable, builder.plan.representations.items[@intFromEnum(alias_children[0].rep)].kind);
+
+    const identity_worker: WorkerPlanId = @enumFromInt(fixtureTableIndex(0));
+    const specialized_worker: WorkerPlanId = @enumFromInt(1);
+    try builder.plan.workers.append(gpa, .{
+        .id = identity_worker,
+        .source = .{ .procedure_template = identity_template_ref },
+        .checked_type = typeRef(root_view, @enumFromInt(6)),
+        .rep = identity_fn_rep,
+    });
+    try builder.plan.workers.append(gpa, .{
+        .id = specialized_worker,
+        .source = .{ .procedure_template = specialized_template_ref },
+        .checked_type = typeRef(root_view, @enumFromInt(7)),
+        .rep = specialized_fn_rep,
+    });
+
+    try builder.materializeWorkerBodyExactRepContexts();
+
+    const identity_context = builder.plan.workers.items[@intFromEnum(identity_worker)].body_exact_reps;
+    const specialized_context = builder.plan.workers.items[@intFromEnum(specialized_worker)].body_exact_reps;
+    try std.testing.expectEqual(@as(u32, 0), identity_context.len);
+    try std.testing.expectEqual(
+        specialized_rep,
+        builder.plan.resolveDescriptorRepSubstitution(specialized_context, body_rep),
+    );
+    try std.testing.expectEqual(
+        alias_rep,
+        builder.plan.resolveDescriptorRepSubstitution(specialized_context, alias_rep),
+    );
+}
+
+test "owning procedure body context specializes an unsourced direct result descriptor" {
+    const gpa = std.testing.allocator;
+    const root_key = moduleKey(41);
+    const template_ref = procedureTemplateRef(root_key, 0);
+
+    // The generic body result mentions `msg` only through an erased callable
+    // signature. Runtime worker ABI traversal must not capture it, while the
+    // owning procedure relation still maps the body-local `msg` to this
+    // worker's concrete specialization.
+    const type_pool = [_]checked.CheckedTypeId{
+        @enumFromInt(2),
+        @enumFromInt(3),
+        @enumFromInt(9),
+        @enumFromInt(fixtureTableIndex(0)),
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .rigid = .{} }, // 0: generic body-local msg
+        .{ .empty_tag_union = {} }, // 1: exact specialized msg
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(fixtureTableIndex(0)) } }, // 2
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(1) } }, // 3
+        .{ .tuple = .{ .start = 0, .len = 1 } }, // 4: generic body result
+        .{ .tuple = .{ .start = 1, .len = 1 } }, // 5: exact worker result
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(4) } }, // 6: source interface
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(5) } }, // 7: worker specialization
+        .{ .function = .{ .kind = .pure, .args = .{}, .ret = @enumFromInt(fixtureTableIndex(0)) } }, // 8: direct callee
+        .{ .rigid = .{} }, // 9: unrelated unbound dynamic terminal
+        .{ .tuple = .{ .start = 2, .len = 1 } }, // 10: aggregate with unbound dynamic
+        .{ .tuple = .{ .start = 3, .len = 1 } }, // 11: aggregate with callee-bound dynamic
+    };
+    var relations = [_]checked.SpecializationInterfaceRelation{.{
+        .scope = .root,
+        .data = .{ .procedure = .{
+            .fn_ty = @enumFromInt(6),
+            .body_ret_ty = @enumFromInt(4),
+            .owns_scope = true,
+        } },
+    }};
+    var templates = [_]checked.CheckedProcedureTemplate{
+        checkedTemplate(template_ref, @enumFromInt(7), @enumFromInt(fixtureTableIndex(0)), .roc),
+    };
+    templates[0].specialization_interface_relations = .{ .start = 0, .len = 1 };
+    var template_table = checked.CheckedProcedureTemplateTable{
+        .templates = &templates,
+        .specialization_interface_relations = &relations,
+    };
+    const root_view = ModuleView{
+        .key = root_key,
+        .checked_types = .{
+            .stored_payloads = &payloads,
+            .type_id_pool = &type_pool,
+        },
+        .checked_procedure_templates = &template_table,
+    };
+
+    var builder = Builder.init(gpa, .{ .root_view = root_view });
+    defer builder.deinit();
+    const caller_rep = try builder.analyzeType(root_view, @enumFromInt(7));
+    const callee_rep = try builder.analyzeType(root_view, @enumFromInt(8));
+    const generic_rep = builder.plan.repForSourceType(typeRef(root_view, @enumFromInt(fixtureTableIndex(0)))) orelse
+        return error.TestUnexpectedResult;
+    const exact_rep = builder.plan.repForSourceType(typeRef(root_view, @enumFromInt(1))) orelse
+        return error.TestUnexpectedResult;
+    const unbound_dynamic_rep = try builder.analyzeType(root_view, @enumFromInt(9));
+    const unbound_aggregate_rep = try builder.analyzeType(root_view, @enumFromInt(10));
+    const bound_aggregate_rep = try builder.analyzeType(root_view, @enumFromInt(11));
+    const caller: WorkerPlanId = @enumFromInt(fixtureTableIndex(0));
+    const callee: WorkerPlanId = @enumFromInt(1);
+    try builder.plan.workers.append(gpa, .{
+        .id = caller,
+        .source = .{ .procedure_template = template_ref },
+        .checked_type = typeRef(root_view, @enumFromInt(7)),
+        .rep = caller_rep,
+    });
+    try builder.plan.workers.append(gpa, .{
+        .id = callee,
+        .source = .{ .nested_expr = .{ .module = root_key, .expr = @enumFromInt(fixtureTableIndex(0)) } },
+        .checked_type = typeRef(root_view, @enumFromInt(8)),
+        .rep = callee_rep,
+    });
+
+    try builder.materializeWorkerBodyExactRepContexts();
+    builder.propagateDynamicRequirements();
+    try builder.materializeDescriptorRequirements();
+    try builder.materializeWorkerHiddenDescriptorParams();
+
+    const caller_worker = builder.plan.workers.items[@intFromEnum(caller)];
+    const callee_worker = builder.plan.workers.items[@intFromEnum(callee)];
+    try std.testing.expectEqual(@as(u32, 0), caller_worker.hidden_descs.len);
+    try std.testing.expectEqual(@as(u32, 1), callee_worker.hidden_descs.len);
+    try std.testing.expectEqual(
+        exact_rep,
+        builder.plan.resolveDescriptorRepSubstitution(caller_worker.body_exact_reps, generic_rep),
+    );
+    // The same raw generic representation belongs to no other worker context.
+    try std.testing.expectEqual(
+        generic_rep,
+        builder.plan.resolveDescriptorRepSubstitution(callee_worker.body_exact_reps, generic_rep),
+    );
+    try std.testing.expect(try builder.workerBodyDescriptorTerminalIsAvailable(caller, exact_rep));
+    try std.testing.expect(try builder.workerBodyDescriptorTerminalIsAvailable(callee, generic_rep));
+    try std.testing.expect(!try builder.workerBodyDescriptorTerminalIsAvailable(caller, unbound_dynamic_rep));
+    try std.testing.expect(!try builder.workerBodyDescriptorTerminalIsAvailable(caller, unbound_aggregate_rep));
+    try std.testing.expect(try builder.workerBodyDescriptorTerminalIsAvailable(callee, bound_aggregate_rep));
+
+    const hidden_args = try builder.materializeWorkerCallHiddenDescriptorArgsForRepsWithEvidence(
+        callee,
+        caller,
+        &.{},
+        &.{},
+        generic_rep,
+        &.{},
+        typeRef(root_view, @enumFromInt(fixtureTableIndex(0))),
+        null,
+        null,
+    );
+    const args = builder.plan.directCallHiddenDescriptorArgSlice(hidden_args);
+    try std.testing.expectEqual(@as(usize, 1), args.len);
+    try std.testing.expectEqual(exact_rep, args[0].rep);
+    try std.testing.expect(args[0].source_arg_index == null);
+}
+
+test "direct call descriptor substitutions record resolved nominal backing provenance" {
+    const gpa = std.testing.allocator;
+    var builder = Builder.init(gpa, .{});
+    defer builder.deinit();
+
+    const raw_formal: TypeRepId = @enumFromInt(fixtureTableIndex(0));
+    const effective_worker_nominal: TypeRepId = @enumFromInt(1);
+    const nested_formal: TypeRepId = @enumFromInt(2);
+    const call_nominal: TypeRepId = @enumFromInt(3);
+    const exact_call_actual: TypeRepId = @enumFromInt(4);
+
+    try builder.plan.nominal_backing_arg_substitutions.appendSlice(gpa, &.{
+        .{ .arg_index = 0, .formal_rep = nested_formal, .actual_rep = raw_formal },
+        .{ .arg_index = 0, .formal_rep = nested_formal, .actual_rep = exact_call_actual },
+    });
+    try builder.plan.representations.appendSlice(gpa, &.{
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .dynamic = .flex } },
+        .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .transparent }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid } },
+        .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .nominal = .transparent }, .nominal_backing_arg_substitutions = .{ .start = 1, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .primitive = .str } },
+    });
+
+    var worker_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_substitutions.deinit(gpa);
+    try worker_substitutions.put(gpa, raw_formal, effective_worker_nominal);
+
+    var call_substitutions = Builder.CallDescriptorRepSubstitutionMap{};
+    defer call_substitutions.deinit(gpa);
+    const resolved_worker = worker_substitutions.resolve(raw_formal);
+    try builder.recordCallDescriptorWrapperSubstitutions(resolved_worker, call_nominal, &call_substitutions);
+
+    try std.testing.expectEqual(exact_call_actual, call_substitutions.getResolved(nested_formal).?);
+}
+
 test "direct call metadata uses instantiated nominal arguments inside generalized backings" {
     const gpa = std.testing.allocator;
     var builder = Builder.init(gpa, .{});
@@ -12998,12 +15927,14 @@ test "direct call metadata uses instantiated nominal arguments inside generalize
     }};
     var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
     defer pending.deinit(gpa);
-    var seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
-    defer seen_reps.deinit();
+    var seen_rep_pairs = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer seen_rep_pairs.deinit();
     var seen_descriptor_reps = collections.DenseMap(TypeRepId, void).init(gpa);
     defer seen_descriptor_reps.deinit();
     var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
     defer substitutions.deinit(gpa);
+    var worker_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_substitutions.deinit(gpa);
     var next_param: usize = 0;
 
     try builder.collectCallHiddenDescriptorArgs(
@@ -13015,9 +15946,10 @@ test "direct call metadata uses instantiated nominal arguments inside generalize
         &params,
         &next_param,
         &pending,
-        &seen_reps,
+        &seen_rep_pairs,
         &seen_descriptor_reps,
         &substitutions,
+        &worker_substitutions,
         false,
     );
 
@@ -13027,13 +15959,19 @@ test "direct call metadata uses instantiated nominal arguments inside generalize
 
     var dictionary_substitutions = Builder.CallDictionaryRepSubstitutionMap{};
     defer dictionary_substitutions.deinit(gpa);
-    var seen_dictionary_pairs = std.AutoHashMap(u64, void).init(gpa);
+    var seen_dictionary_pairs = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
     defer seen_dictionary_pairs.deinit();
+    var worker_dictionary_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_dictionary_substitutions.deinit(gpa);
+    var call_dictionary_substitutions = NominalBackingRepSubstitutionMap{};
+    defer call_dictionary_substitutions.deinit(gpa);
     try builder.collectCallDictionaryRepSubstitutions(
         worker_nominal,
         call_nominal,
         &dictionary_substitutions,
         &seen_dictionary_pairs,
+        &worker_dictionary_substitutions,
+        &call_dictionary_substitutions,
     );
     try std.testing.expectEqual(exact_arg, dictionary_substitutions.get(worker_arg).?);
 }
@@ -13086,12 +16024,14 @@ test "direct call descriptors use operand nominal substitutions over generic cal
     }};
     var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
     defer pending.deinit(gpa);
-    var seen_reps = collections.DenseMap(TypeRepId, void).init(gpa);
-    defer seen_reps.deinit();
+    var seen_rep_pairs = std.AutoHashMap(DescriptorTraversalPair, void).init(gpa);
+    defer seen_rep_pairs.deinit();
     var seen_descriptor_reps = collections.DenseMap(TypeRepId, void).init(gpa);
     defer seen_descriptor_reps.deinit();
     var substitutions = Builder.CallDescriptorRepSubstitutionMap{};
     defer substitutions.deinit(gpa);
+    var worker_substitutions = NominalBackingRepSubstitutionMap{};
+    defer worker_substitutions.deinit(gpa);
     var next_param: usize = 0;
 
     try builder.collectCallHiddenDescriptorArgs(
@@ -13103,15 +16043,17 @@ test "direct call descriptors use operand nominal substitutions over generic cal
         &params,
         &next_param,
         &pending,
-        &seen_reps,
+        &seen_rep_pairs,
         &seen_descriptor_reps,
         &substitutions,
+        &worker_substitutions,
         false,
     );
 
     try std.testing.expectEqual(@as(usize, 1), pending.items.len);
     try std.testing.expectEqual(exact_operand_arg, pending.items[0].rep);
     try std.testing.expectEqual(operand_nominal, pending.items[0].source_value_rep.?);
+    try std.testing.expectEqual(@as(u32, 0), pending.items[0].worker_exact_reps.len);
 }
 
 test "evidence representation paths use exact nominal backing substitutions" {
@@ -13135,7 +16077,7 @@ test "evidence representation paths use exact nominal backing substitutions" {
         .actual_rep = exact_arg,
     });
     try builder.plan.representations.appendSlice(gpa, &.{
-        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .{ .erased_callable = .pure }, .children = .{ .start = 0, .len = 1 } },
+        .{ .source_type = rootTypeRef(@enumFromInt(fixtureTableIndex(0))), .kind = .erased_callable, .children = .{ .start = 0, .len = 1 } },
         .{ .source_type = rootTypeRef(@enumFromInt(1)), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 1, .len = 2 }, .nominal_backing_arg_substitutions = .{ .start = 0, .len = 1 } },
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .empty_record },
@@ -13189,7 +16131,7 @@ test "dictionary method hidden descriptors preserve exact implementation substit
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(fixtureTableIndex(0)), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(3)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(1), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@enumFromInt(4)), .kind = .{ .dynamic = .flex }, .descriptor = @enumFromInt(2), .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .{ .erased_callable = .pure } },
+        .{ .source_type = rootTypeRef(@enumFromInt(5)), .kind = .erased_callable },
     });
     try builder.plan.hidden_descriptor_params.appendSlice(gpa, &.{
         .{ .source_type = rootTypeRef(@enumFromInt(2)), .rep = worker_left_rep, .desc = @enumFromInt(fixtureTableIndex(0)) },
