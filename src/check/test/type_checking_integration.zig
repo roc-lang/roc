@@ -2479,6 +2479,13 @@ test "issue 10763 - imported partial schemes retain rank-1 binding metadata" {
     var env_a = try TestEnv.init("A", source_a);
     defer env_a.deinit();
     try testing.expectEqual(0, try env_a.typeProblemCount());
+    const defs_a = env_a.module_env.store.sliceDefs(env_a.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 1), defs_a.len);
+    const mk_def_idx = defs_a[0];
+    const mk_def = env_a.module_env.store.getDef(mk_def_idx);
+    try testing.expect(env_a.module_env.nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(mk_def.expr)));
+    try testing.expect(env_a.module_env.nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(mk_def.pattern)));
+    try testing.expect(env_a.module_env.nodeIsBindingScheme(ModuleEnv.nodeIdxFrom(mk_def_idx)));
 
     const source_b =
         \\import A
