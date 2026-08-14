@@ -141,7 +141,7 @@ pub const Constants = struct {
     ///     numeric to/until ranges, and the F32/F64 range helpers, with
     ///     to/until carrying producer-specific representations distinct from
     ///     the range helpers they do not delegate to.
-    pub const CACHE_VERSION = 58;
+    pub const CACHE_VERSION = 59;
 };
 
 /// Configuration for the Roc cache system.

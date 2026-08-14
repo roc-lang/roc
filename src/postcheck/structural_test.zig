@@ -467,6 +467,30 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     try expectNotContains(lower_source, "selectExprRepresentationAtNode");
 
+    const call_selection = sourceSliceBetween(
+        lower_source,
+        "fn refineDirectSelectionsForCall(",
+        "fn applyCallOperationSources(",
+    );
+    try expectContains(call_selection, "This occurrence is the exact edge that checking named.");
+    try expectContains(call_selection, "try self.recordCallSelection(selections, .{");
+    try expectNotContains(call_selection, "construct_exact_ordinary");
+
+    const pending_producer_completion = sourceSliceBetween(
+        lower_source,
+        "fn completePendingProducedNode(",
+        "fn pendingProducedRepresentationRequest(",
+    );
+    try expectContains(pending_producer_completion, "body_ctx.draft.nested_result_producers.get(result_node)");
+    try expectContains(pending_producer_completion, ".lowering => return result_node");
+    const pending_producer_request = sourceSliceBetween(
+        lower_source,
+        "fn pendingProducedRepresentationRequest(",
+        "fn completePendingProducedRepresentationNode(",
+    );
+    try expectContains(pending_producer_request, "body_ctx.draft.nested_result_producers.get(result_node)");
+    try expectContains(pending_producer_request, "body_ctx.graph.functionNodes(spec.body_request_fn_node)).ret");
+
     try expectNotContains(lower_source, "InterfaceReplay");
     try expectNotContains(lower_source, "applyCheckedTemplateInterfaceRelations");
     try expectNotContains(lower_source, "applyCheckedTemplateInterfaceScopeRelations");
@@ -627,7 +651,8 @@ test "Monotype lowering carries exact produced types without containment scans" 
         "fn lookupExprTypeNode(",
     );
     try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
-    try expectContains(dispatch_instantiation, "directCallSelectionsFromRecordedPlan(");
+    try expectContains(dispatch_instantiation, "directSelectionsForCall(");
+    try expectContains(dispatch_instantiation, ".scheduled_operands");
     try expectContains(dispatch_instantiation, "materializeCallSelectionSpan(");
     try expectContains(dispatch_instantiation, "@memset(available, false)");
     try expectNotContains(dispatch_instantiation, "lowerExprTypeNode");

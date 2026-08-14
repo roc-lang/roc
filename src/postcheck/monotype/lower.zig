@@ -1385,6 +1385,15 @@ const StaticDataUse = struct {
     node: checked.ConstNodeId,
     checked_type: checked.CheckedTypeId,
     type_cell: DraftTypeCell,
+    /// Graph-local node ordinals are comparable only inside their owning
+    /// producer graph. Sealed types use zero and are compared structurally.
+    graph_identity: usize,
+};
+
+const StaticDataUseEntry = struct {
+    key: StaticDataUse,
+    request: Common.StaticDataRequest,
+    final_id: ?Common.StaticDataId = null,
 };
 
 const ConstNodeAddress = struct {
@@ -1538,7 +1547,7 @@ const Builder = struct {
     /// are only a fast exact-key path; exact structural equality below is the
     /// authority for reusing one representation across equivalent
     /// instantiations.
-    static_data_uses: std.ArrayList(StaticDataUse),
+    static_data_uses: std.ArrayList(StaticDataUseEntry),
     static_data_eligibility: std.AutoHashMap(ConstNodeAddress, bool),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
@@ -4431,49 +4440,119 @@ const Builder = struct {
         node: ?checked.ConstNodeId,
         checked_type: checked.CheckedTypeId,
         type_cell: DraftTypeCell,
+        graph: ?*InstGraph,
     ) Allocator.Error!Common.StaticDataId {
         const const_node = self.constNode(const_locator, node);
+        const graph_identity: usize = switch (type_cell) {
+            .sealed => 0,
+            .graph_node => @intFromPtr(graph orelse
+                Common.invariant("graph-backed static-data request omitted its producer graph")),
+        };
         const use = StaticDataUse{
             .module = const_node.module.key,
             .node = const_node.id,
             .checked_type = checked_type,
             .type_cell = type_cell,
+            .graph_identity = graph_identity,
         };
         if (self.static_data_ids.get(use)) |existing| return existing;
 
-        // Structural dedup can only compare committed types; graph cells keep
-        // identity comparison until final sealing commits them.
-        if (use.type_cell == .sealed) {
-            for (self.static_data_uses.items, 0..) |existing, index| {
-                if (!moduleBytesEqual(existing.module.bytes, use.module.bytes) or
-                    existing.node != use.node or
-                    existing.checked_type != use.checked_type)
-                {
-                    continue;
-                }
-                const existing_ty = switch (existing.type_cell) {
-                    .sealed => |ty| ty,
-                    .graph_node => continue,
-                };
-                if (!try self.program.types.typeEql(&self.program.names, existing_ty, use.type_cell.sealed)) continue;
-
-                const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
-                try self.static_data_ids.put(use, id);
-                return id;
-            }
-        }
-
-        const id = try self.program.addStaticDataValue(.{
-            .const_locator = const_locator,
-            .node = node,
-            .checked_type = checked_type,
+        // Draft expressions carry this pending dense id until their producer
+        // graph freezes. At that point the exact type is sealed once, global
+        // structural dedup happens before any initializer is emitted, and the
+        // draft id is rewritten to the final program id.
+        const pending: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(self.static_data_uses.items.len)));
+        try self.static_data_uses.append(self.allocator, .{
+            .key = use,
+            .request = .{
+                .const_locator = const_locator,
+                .node = node,
+                .checked_type = checked_type,
+            },
         });
-        if (@intFromEnum(id) != self.static_data_uses.items.len) {
-            Common.invariant("Monotype static-data use index diverged from program id");
+        try self.static_data_ids.put(use, pending);
+        return pending;
+    }
+
+    fn finalizeStaticDataUse(
+        self: *Builder,
+        pending: Common.StaticDataId,
+        graph: *InstGraph,
+        sealer: *GraphTypeFinals,
+    ) Allocator.Error!Common.StaticDataId {
+        const index = @intFromEnum(pending);
+        if (index >= self.static_data_uses.items.len) {
+            Common.invariant("draft static-data candidate referenced an unknown pending use");
         }
-        try self.static_data_uses.append(self.allocator, use);
-        try self.static_data_ids.put(use, id);
-        return id;
+        if (self.static_data_uses.items[index].final_id) |final_id| return final_id;
+
+        const original = self.static_data_uses.items[index];
+        const exact_ty = switch (original.key.type_cell) {
+            .sealed => |ty| blk: {
+                if (original.key.graph_identity != 0) {
+                    Common.invariant("sealed static-data use retained a producer graph identity");
+                }
+                break :blk ty;
+            },
+            .graph_node => |node| blk: {
+                if (original.key.graph_identity != @intFromPtr(graph)) {
+                    Common.invariant("static-data use was finalized by a different producer graph");
+                }
+                break :blk try sealer.sealNode(node);
+            },
+        };
+
+        var canonical_pending: ?Common.StaticDataId = null;
+        var final_id: ?Common.StaticDataId = null;
+        for (self.static_data_uses.items[0..index], 0..) |prior, prior_index| {
+            const prior_final = prior.final_id orelse continue;
+            if (!moduleBytesEqual(prior.key.module.bytes, original.key.module.bytes) or
+                prior.key.node != original.key.node or
+                prior.key.checked_type != original.key.checked_type)
+            {
+                continue;
+            }
+            const prior_ty = switch (prior.key.type_cell) {
+                .sealed => |ty| ty,
+                .graph_node => Common.invariant("finalized static-data use retained a graph-local type"),
+            };
+            if (!try self.program.types.typeEql(&self.program.names, prior_ty, exact_ty)) continue;
+            canonical_pending = @enumFromInt(@as(u32, @intCast(prior_index)));
+            final_id = prior_final;
+            break;
+        }
+
+        const resolved = final_id orelse try self.program.addStaticDataValue(original.request);
+        _ = self.static_data_ids.remove(original.key);
+        const sealed_key = StaticDataUse{
+            .module = original.key.module,
+            .node = original.key.node,
+            .checked_type = original.key.checked_type,
+            .type_cell = .{ .sealed = exact_ty },
+            .graph_identity = 0,
+        };
+        self.static_data_uses.items[index].key = sealed_key;
+        self.static_data_uses.items[index].final_id = resolved;
+        try self.static_data_ids.put(sealed_key, canonical_pending orelse pending);
+        return resolved;
+    }
+
+    fn finalizeDraftStaticDataUses(
+        self: *Builder,
+        body_draft: *BodyDraftStore,
+        graph: *InstGraph,
+        sealer: *GraphTypeFinals,
+    ) Allocator.Error!void {
+        for (body_draft.exprs.items) |*expr| switch (expr.data) {
+            .static_data_candidate => |*candidate| {
+                candidate.static_data = try self.finalizeStaticDataUse(
+                    candidate.static_data,
+                    graph,
+                    sealer,
+                );
+            },
+            else => {},
+        };
     }
 
     const BareFnCandidate = enum {
@@ -5042,6 +5121,8 @@ const Builder = struct {
             .fn_id = fn_id,
             .request_key = request_key,
         });
+        const nested_result = (try source_ctx.graph.functionNodes(result_fn_node)).ret;
+        try source_ctx.draft.nested_result_producers.put(nested_result, @intCast(spec_index));
         try registerNestedSpecLookup(source_ctx.draft, self.allocator, lookup_address, @intCast(spec_index));
 
         const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
@@ -5335,6 +5416,14 @@ const Builder = struct {
             }
             return body_ctx.graph.rootNode(raw_node);
         }
+        if (body_ctx.draft.nested_result_producers.get(result_node)) |spec_index| {
+            switch (body_ctx.draft.nested_specs.items[spec_index].state) {
+                .lowering => return result_node,
+                .lowered => {},
+                .queued, .deferred, .resolved => Common.invariant("a non-active nested specialization owned a live result node"),
+            }
+            return body_ctx.graph.rootNode(raw_node);
+        }
         if (body_ctx.draft.deferred_const_result_producers.get(result_node)) |boundary_index| {
             switch (body_ctx.draft.deferred_const_uses.items[boundary_index].preparation_state) {
                 .queued => {
@@ -5379,6 +5468,11 @@ const Builder = struct {
         const result_node = body_ctx.graph.rootNode(raw_node);
         if (body_ctx.draft.template_result_producers.get(result_node)) |spec_index| {
             const spec = body_ctx.draft.template_specs.items[spec_index];
+            if (spec.state != .lowering) return null;
+            return (try body_ctx.graph.functionNodes(spec.body_request_fn_node)).ret;
+        }
+        if (body_ctx.draft.nested_result_producers.get(result_node)) |spec_index| {
+            const spec = body_ctx.draft.nested_specs.items[spec_index];
             if (spec.state != .lowering) return null;
             return (try body_ctx.graph.functionNodes(spec.body_request_fn_node)).ret;
         }
@@ -6918,6 +7012,7 @@ const Builder = struct {
         }
         try body_draft.finishOwnerRuns();
         try self.resolveDeferredTemplateSpecs(body_draft, &sealer);
+        try self.finalizeDraftStaticDataUses(body_draft, graph, &sealer);
         var commit_map = try self.buildDraftCommitMap(
             body_draft,
             graph,
@@ -10516,6 +10611,10 @@ const BodyDraftStore = struct {
     /// Node IDs are dense within one live graph, so shape-demand scheduling is
     /// a direct column lookup rather than a hash lookup or graph search.
     template_result_producers: collections.DenseMap(NodeId, u32),
+    /// Exact forward result node to the actively lowering nested body that
+    /// produces it. Recursive nested calls consume the body's explicit request
+    /// recipe without replacing this output cell.
+    nested_result_producers: collections.DenseMap(NodeId, u32),
     /// Exact forward result node to the deferred constant that produces it.
     /// Only evaluation templates own entries; stored constants are already
     /// complete and therefore require no scheduling edge.
@@ -10622,6 +10721,7 @@ const BodyDraftStore = struct {
             .template_specs = .empty,
             .template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(allocator),
             .template_result_producers = collections.DenseMap(NodeId, u32).init(allocator),
+            .nested_result_producers = collections.DenseMap(NodeId, u32).init(allocator),
             .deferred_const_result_producers = collections.DenseMap(NodeId, u32).init(allocator),
             .structural_serialization_result_producers = collections.DenseMap(NodeId, u32).init(allocator),
             .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
@@ -10738,6 +10838,7 @@ const BodyDraftStore = struct {
         self.template_spec_lookup.deinit();
         self.structural_serialization_result_producers.deinit();
         self.deferred_const_result_producers.deinit();
+        self.nested_result_producers.deinit();
         self.template_result_producers.deinit();
         self.template_spec_by_fn.deinit();
         var nested_lookup_lists = self.nested_spec_lookup.valueIterator();
@@ -17476,11 +17577,11 @@ const BodyContext = struct {
         self.active_checked_selections = argument_selections;
         defer self.active_checked_selections = previous_selections;
         const procedure_relation = self.view.templates.specializationProcedureRelationForExpr(lambda_id);
-        // A contextual lambda consumes its checker-published interface before
+        // A contextual lambda consumes its stored checked interface before
         // lowering its body. In particular, identities nested in the return
         // type (rows as well as generated-capable nominals) must reach the
         // body's checked occurrences before any producer is lowered. Reapply
-        // the same flat relation after lowering to publish identities first
+        // the same flat relation after lowering to record identities first
         // produced by an argument or body occurrence.
         try self.applyRecordedCheckedSelections(
             argument_selections,
@@ -19125,7 +19226,16 @@ const BodyContext = struct {
         );
 
         var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
-        body_ctx.evidence = rootEvidence(wrapper.template, self.restore_evidence.vector);
+        const checked_wrapper = view.templates.get(wrapper.template.template);
+        const wrapper_params = view.templates.evidenceParams(&checked_wrapper);
+        if (self.restore_evidence.vector.len < wrapper_params.len) {
+            Common.invariant("callable-evaluation wrapper did not receive its checked evidence prefix");
+        }
+        body_ctx.evidence = rootEvidence(
+            wrapper.template,
+            self.restore_evidence.vector[0..wrapper_params.len],
+        );
+        body_ctx.restore_evidence = self.restore_evidence;
         body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
         body_ctx.frozen_type_finals = self.frozen_type_finals;
         body_ctx.frozen_codec_calls = self.frozen_codec_calls;
@@ -19181,7 +19291,16 @@ const BodyContext = struct {
             Common.invariant("callable eval template root had no checked entry wrapper");
 
         var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
-        body_ctx.evidence = rootEvidence(wrapper.template, self.restore_evidence.vector);
+        const checked_wrapper = view.templates.get(wrapper.template.template);
+        const wrapper_params = view.templates.evidenceParams(&checked_wrapper);
+        if (self.restore_evidence.vector.len < wrapper_params.len) {
+            Common.invariant("callable-evaluation wrapper did not receive its checked evidence prefix");
+        }
+        body_ctx.evidence = rootEvidence(
+            wrapper.template,
+            self.restore_evidence.vector[0..wrapper_params.len],
+        );
+        body_ctx.restore_evidence = self.restore_evidence;
         body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
         body_ctx.frozen_type_finals = self.frozen_type_finals;
         body_ctx.frozen_codec_calls = self.frozen_codec_calls;
@@ -19189,10 +19308,14 @@ const BodyContext = struct {
         const root_fn_key = view.types.rootKey(wrapper.checked_fn_root);
         body_ctx.owner_context_fn_key = root_fn_key;
         body_ctx.current_fn_key = root_fn_key;
-
+        const wrapper_request = try body_ctx.graphFunctionNode(&.{}, request_fn_node);
+        // This checked wrapper has no runtime arguments and returns the one
+        // callable-evaluation destination supplied by its consumer. It does
+        // not own a second result cell: its body is explicitly request-directed.
+        body_ctx.graph.registerFunctionResultRelation(wrapper_request, .exact_destination);
         const wrapper_fn_node = try body_ctx.exactFunctionRequestFromCheckedSource(
             wrapper.checked_fn_root,
-            try body_ctx.graphFunctionNode(&.{}, request_fn_node),
+            wrapper_request,
         );
         body_ctx.active_checked_selections = try body_ctx.procedureBodyCheckedSelections(
             view.templates.get(wrapper.template.template),
@@ -20766,7 +20889,7 @@ const BodyContext = struct {
         const available = try self.graph.arena().alloc(bool, recipe_fn.args.len);
         @memset(available, true);
         const plan = self.view.templates.specializationCallPlanForCallable(checked_fn_ty);
-        const selections = try self.directCallSelectionsFromRecordedPlan(
+        const selections = try self.directSelectionsForCall(
             plan,
             checked_fn_ty,
             self.graph.directRequestSelections(recipe_node),
@@ -20775,6 +20898,7 @@ const BodyContext = struct {
             null,
             recipe_fn.ret,
             null,
+            .exact_callable_interface,
         );
         return try self.materializeCallSelectionSpan(
             plan,
@@ -25944,6 +26068,18 @@ const BodyContext = struct {
         return root;
     }
 
+    const CallSelectionSourceOperation = enum {
+        /// A syntax call is being lowered in its checker-authored operand
+        /// schedule. Consumer operands do not become sources merely because
+        /// their request cells have been allocated.
+        scheduled_operands,
+        /// A complete callable interface already exists as explicit input to
+        /// specialization rebasing. Every positional input cell is therefore
+        /// an available request-or-produced source, independent of how the
+        /// original syntax call scheduled that operand.
+        exact_callable_interface,
+    };
+
     /// Process an occurrence only when its exact checker-recorded source edge
     /// arrived in this refinement. A producer occurrence owns that edge. A
     /// consumer occurrence may record only when the whole source is explicit
@@ -25957,6 +26093,7 @@ const BodyContext = struct {
         newly_available: []const bool,
         include_result: bool,
         has_dispatcher: bool,
+        source_operation: CallSelectionSourceOperation,
     ) bool {
         const root = self.callOccurrenceRootSelectionEdge(plan, occurrence);
         const source_available = switch (root.step) {
@@ -25989,6 +26126,7 @@ const BodyContext = struct {
         // supplies that edge.
         if (root.root_source == .concrete_checked or root.root_source == .fixed_concrete_checked) return true;
         if (occurrence.production == .producer) return true;
+        if (root.step == .argument and source_operation == .exact_callable_interface) return true;
         // A checker-designated seed is the explicit request producer for its
         // whole dependency component. Its declared descendant selections are
         // therefore outputs of that operation, unlike consumers beneath an
@@ -26129,7 +26267,7 @@ const BodyContext = struct {
         if (runtime_node) |node| {
             // A completed positional edge is the exact type already chosen
             // by its producer or enclosing destination. An unresolved edge,
-            // however, is only a request. When checking published a concrete
+            // however, is only a request. When checked data marks a concrete
             // source for this root, that source produces the request instead
             // of letting the open cell mask a fixed declaration type.
             if (self.graph.content(node) != .unresolved or root.root_source != .fixed_concrete_checked) {
@@ -26763,6 +26901,7 @@ const BodyContext = struct {
         dispatcher: ?ActiveCheckedSelection,
         request_ret: ?NodeId,
         result_authority: ?solve.DirectRequestSelectionAuthority,
+        source_operation: CallSelectionSourceOperation,
     ) Allocator.Error![]const solve.DirectRequestSelection {
         var selections = std.ArrayList(solve.DirectRequestSelection).empty;
         defer selections.deinit(self.allocator);
@@ -26776,6 +26915,7 @@ const BodyContext = struct {
             dispatcher,
             request_ret,
             result_authority,
+            source_operation,
         );
         return try self.graph.arena().dupe(solve.DirectRequestSelection, selections.items);
     }
@@ -26794,6 +26934,7 @@ const BodyContext = struct {
         dispatcher: ?ActiveCheckedSelection,
         request_ret: ?NodeId,
         result_authority: ?solve.DirectRequestSelectionAuthority,
+        source_operation: CallSelectionSourceOperation,
     ) Allocator.Error!void {
         const include_result = result_authority != null;
         self.builder.countBodyDiagnosticBy("call_selection_slot_visits", plan.slots.len * 2);
@@ -26831,20 +26972,17 @@ const BodyContext = struct {
                     }
                 }
             }
-            const construct_exact_ordinary = slot.exact_identity and
-                slot.kind != .generated_nominal and switch (checkedPayload(self.view, slot.checked)) {
-                .flex, .rigid => false,
-                .pending, .err, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .nominal, .function, .tag_union => true,
-            };
             for (self.view.templates.specializationSlotOccurrences(slot)) |occurrence| {
                 const occurrence_root = self.callOccurrenceRootSelectionEdge(plan, occurrence);
-                if (!self.callOccurrenceHasNewExactSource(
+                const has_new_source = self.callOccurrenceHasNewExactSource(
                     plan,
                     occurrence,
                     newly_available,
                     include_result,
                     dispatcher != null,
-                )) continue;
+                    source_operation,
+                );
+                if (!has_new_source) continue;
                 const occurrence_node = (try self.evaluateCallOccurrence(
                     plan,
                     occurrence,
@@ -26909,15 +27047,11 @@ const BodyContext = struct {
                     .node = occurrence_node,
                     .authority = root_authority,
                 });
-                // An exact ordinary compound is produced once from the
-                // checker-authored recipe after its selected child identities
-                // are available. Runtime roots can be narrower branch values;
-                // they contribute child selections but never define the whole
-                // compound specialization identity.
-                if (construct_exact_ordinary and
-                    !(occurrence_root.step == .argument and
-                        self.callArgumentUsesCheckedSeed(plan, occurrence_root.index) and
-                        occurrence.selection_edge == occurrence.root_selection_edge)) continue;
+                // This edge reads the exact subtree returned by the completed
+                // runtime producer. An exact compound is therefore selected
+                // atomically here just like an exact leaf; only a slot with no
+                // completed occurrence is constructed from its explicit flat
+                // dependencies below.
                 if (slot.kind == .generated_nominal and
                     !self.graph.nodeIsGeneratedNominal(candidate.node)) continue;
                 try self.recordCallSelection(selections, .{
@@ -27442,10 +27576,18 @@ const BodyContext = struct {
         );
         defer self.active_checked_selections = inherited;
         if (resolvedPayload(self.view, self.view.bodies.expr(expr).ty).payload == .function) {
+            // A checker-designated callable consumer receives its complete
+            // runtime interface from this call edge. That includes the result
+            // destination: rebuilding the result from the callback's own
+            // narrower checked recipe would discard the caller-selected ABI.
             // Nested procedure lowering runs in its own BodyContext after this
-            // operand scope has unwound. Carry the checker's already-mapped
-            // consumer identities on the immutable function request itself;
-            // the nested body then consumes that flat span directly.
+            // operand scope has unwound, so carry both that authority and the
+            // already-mapped identities on the immutable request itself.
+            try self.ensureCallableRequestResultRelation(
+                self.view.bodies.expr(expr).ty,
+                request,
+                .exact_request,
+            );
             try self.recordActiveCheckedSelectionsOnFunction(request);
         }
         return try self.lowerExprAtProducedValueRequest(expr, request);
@@ -27470,6 +27612,11 @@ const BodyContext = struct {
         }
         defer self.active_checked_selections = inherited;
         if (resolvedPayload(self.view, self.view.bodies.expr(expr).ty).payload == .function) {
+            try self.ensureCallableRequestResultRelation(
+                self.view.bodies.expr(expr).ty,
+                request,
+                .exact_request,
+            );
             try self.recordActiveCheckedSelectionsOnFunction(request);
         }
         return try self.lowerExprAtProducedValueRequest(expr, request);
@@ -27627,6 +27774,7 @@ const BodyContext = struct {
             dispatcher,
             request_ret,
             result_authority,
+            .scheduled_operands,
         );
     }
 
@@ -27650,6 +27798,7 @@ const BodyContext = struct {
             dispatcher,
             request_ret,
             result_authority,
+            .scheduled_operands,
         );
     }
 
@@ -27674,6 +27823,7 @@ const BodyContext = struct {
             null,
             function.ret,
             .produced,
+            .scheduled_operands,
         );
         try self.graph.recordDirectRequestSelections(request, selections);
     }
@@ -27983,7 +28133,7 @@ const BodyContext = struct {
             Common.invariant("iterator producer result had no checker-recorded generated-nominal slot");
         }
         // Constructor-specific generated-result edges are checker-authored in
-        // this binding span. Publish the newly constructed atomic identity to
+        // this binding span. Record the newly constructed atomic identity for
         // recursive callback consumers before the callable is materialized.
         try self.applyCallConsumerBindingsToSelections(
             plan.selection_bindings,
@@ -28485,7 +28635,7 @@ const BodyContext = struct {
         const call_plan = self.view.templates.specializationCallPlanForExpr(plan.expr);
         const available = try self.graph.arena().alloc(bool, request_args.len);
         @memset(available, false);
-        const selections = try self.directCallSelectionsFromRecordedPlan(
+        const selections = try self.directSelectionsForCall(
             call_plan,
             source_fn_ty,
             &.{},
@@ -28494,6 +28644,7 @@ const BodyContext = struct {
             null,
             request_ret,
             if (expected_ret_node != null) .request else null,
+            .scheduled_operands,
         );
         const materialized = try self.materializeCallSelectionSpan(
             call_plan,
@@ -28543,7 +28694,7 @@ const BodyContext = struct {
         const call_plan = self.view.templates.specializationCallPlanForCallable(source_fn_ty);
         const available = try self.graph.arena().alloc(bool, request_args.len);
         @memset(available, true);
-        const selections = try self.directCallSelectionsFromRecordedPlan(
+        const selections = try self.directSelectionsForCall(
             call_plan,
             source_fn_ty,
             &.{},
@@ -28552,6 +28703,7 @@ const BodyContext = struct {
             null,
             request_ret,
             .request,
+            .exact_callable_interface,
         );
         return try self.materializeCallSelectionSpan(
             call_plan,
@@ -29677,7 +29829,7 @@ const BodyContext = struct {
         const plan = self.view.templates.specializationCallPlanForCallable(checked_fn_ty);
         const available = try self.graph.arena().alloc(bool, exact.args.len);
         @memset(available, true);
-        const selections = try self.directCallSelectionsFromRecordedPlan(
+        const selections = try self.directSelectionsForCall(
             plan,
             checked_fn_ty,
             self.graph.directRequestSelections(exact_fn_node),
@@ -29686,6 +29838,7 @@ const BodyContext = struct {
             null,
             exact.ret,
             if (result_relation == .exact_destination) .request else null,
+            .exact_callable_interface,
         );
         const scoped_request = try self.materializeCallSelectionSpan(
             plan,
@@ -29888,7 +30041,13 @@ const BodyContext = struct {
             self.draft,
         );
         try body_ctx.inheritActiveConstBinding(self);
-        body_ctx.evidence = rootEvidence(eval.entry_template, self.restore_evidence.vector);
+        body_ctx.evidence = rootEvidence(
+            eval.entry_template,
+            self.restore_evidence.vector[0..@min(
+                self.restore_evidence.vector.len,
+                entry_template.evidence_params.len,
+            )],
+        );
         if (self.restore_evidence.vector.len < entry_template.evidence_params.len) {
             const eval_root = store_view.compile_time_roots.root(body.root);
             if (try self.rootEdgeEvidenceByExpr(store_view, eval_root.expr, entry_template)) |root_evidence| {
@@ -30047,7 +30206,13 @@ const BodyContext = struct {
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
-            const id = try self.builder.staticDataValue(const_locator, node, checked_type, DraftTypeCell.fromSealed(ty));
+            const id = try self.builder.staticDataValue(
+                const_locator,
+                node,
+                checked_type,
+                DraftTypeCell.fromSealed(ty),
+                null,
+            );
             const address: StaticDataCandidateAddress = .{
                 .static_data = id,
                 .owner = self.draft.current_owner,
@@ -30093,7 +30258,8 @@ const BodyContext = struct {
                 const_locator,
                 node,
                 checked_type,
-                DraftTypeCell.fromGraphNode(request_node),
+                DraftTypeCell.fromGraphNode(self.graph.rootNode(request_node)),
+                self.graph,
             );
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_node), .{ .static_data_candidate = .{
                 .static_data = id,
@@ -34777,6 +34943,7 @@ const BodyContext = struct {
             null,
             null,
             null,
+            .scheduled_operands,
         );
         const produced_nominal_recipe = try self.materializeCheckedCallNode(
             plan,
@@ -35112,6 +35279,7 @@ const BodyContext = struct {
                 null,
                 null,
                 null,
+                .scheduled_operands,
             );
         }
 

@@ -1957,7 +1957,7 @@ pub const InstGraph = struct {
         };
     }
 
-    /// Canonicalize one exact producer root at the moment it becomes a
+    /// Intern one exact producer root at the moment it becomes a
     /// specialization identity. This is the root counterpart of recording an
     /// immediate produced child: it consumes only transparent aliases and the
     /// root's row-extension chain, then reuses the existing immediate-shape
