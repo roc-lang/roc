@@ -493,6 +493,11 @@ pub const InstGraph = struct {
     /// NodeId column because request identity is graph-local and every node
     /// already has a stable dense ordinal.
     function_result_relations: std.ArrayList(?FunctionResultRelation),
+    /// Explicit positional authority for every argument of a function
+    /// request. This cannot be keyed by checked type: two positions with the
+    /// same checked type can carry different exact runtime callable sets.
+    function_argument_authority_spans: std.ArrayList(DirectRequestSelectionSpan),
+    function_argument_authorities: std.ArrayList(DirectRequestSelectionAuthority),
     /// Immutable flat substitutions selected by the checker's selection-edge
     /// program for each function request.
     direct_request_selection_spans: std.ArrayList(DirectRequestSelectionSpan),
@@ -548,6 +553,8 @@ pub const InstGraph = struct {
             .generated_nominal_nodes = .empty,
             .request_checked_sources = .empty,
             .function_result_relations = .empty,
+            .function_argument_authority_spans = .empty,
+            .function_argument_authorities = .empty,
             .direct_request_selection_spans = .empty,
             .direct_request_selections = .empty,
             .row_parent_seen_epochs = .empty,
@@ -598,6 +605,8 @@ pub const InstGraph = struct {
         self.direct_request_selection_spans.deinit(allocator);
         self.request_checked_sources.deinit(allocator);
         self.function_result_relations.deinit(allocator);
+        self.function_argument_authority_spans.deinit(allocator);
+        self.function_argument_authorities.deinit(allocator);
         self.row_parent_seen_epochs.deinit(allocator);
         self.node_set_pool.deinit();
         self.row_parents.deinit();
@@ -818,6 +827,56 @@ pub const InstGraph = struct {
     pub fn inheritFunctionResultRelation(self: *InstGraph, source_fn: NodeId, destination_fn: NodeId) void {
         const relation = self.functionResultRelation(source_fn) orelse return;
         self.registerFunctionResultRelation(destination_fn, relation);
+    }
+
+    pub fn functionArgumentAuthorities(
+        self: *const InstGraph,
+        request_fn: NodeId,
+    ) ?[]const DirectRequestSelectionAuthority {
+        const span = self.function_argument_authority_spans.items[@intFromEnum(request_fn)];
+        if (!span.isInitialized()) return null;
+        const start: usize = span.start;
+        return self.function_argument_authorities.items[start .. start + span.len];
+    }
+
+    pub fn registerFunctionArgumentAuthorities(
+        self: *InstGraph,
+        request_fn: NodeId,
+        authorities: []const DirectRequestSelectionAuthority,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        const entry = &self.function_argument_authority_spans.items[@intFromEnum(request_fn)];
+        if (entry.isInitialized()) {
+            const existing = self.functionArgumentAuthorities(request_fn).?;
+            if (!std.mem.eql(DirectRequestSelectionAuthority, existing, authorities)) {
+                Common.invariant("function request was registered with two argument-authority vectors");
+            }
+            return;
+        }
+        const start: u32 = @intCast(self.function_argument_authorities.items.len);
+        try self.function_argument_authorities.appendSlice(self.allocator, authorities);
+        entry.* = .{ .start = start, .len = @intCast(authorities.len) };
+    }
+
+    pub fn registerUniformFunctionArgumentAuthority(
+        self: *InstGraph,
+        request_fn: NodeId,
+        arity: usize,
+        authority: DirectRequestSelectionAuthority,
+    ) Allocator.Error!void {
+        const authorities = try self.arena().alloc(DirectRequestSelectionAuthority, arity);
+        @memset(authorities, authority);
+        return self.registerFunctionArgumentAuthorities(request_fn, authorities);
+    }
+
+    pub fn inheritFunctionArgumentAuthorities(
+        self: *InstGraph,
+        source_fn: NodeId,
+        destination_fn: NodeId,
+    ) Allocator.Error!void {
+        const authorities = self.functionArgumentAuthorities(source_fn) orelse
+            Common.invariant("function request rebasing had no argument-authority vector");
+        return self.registerFunctionArgumentAuthorities(destination_fn, authorities);
     }
 
     pub fn directRequestSelections(self: *const InstGraph, request_fn: NodeId) []const DirectRequestSelection {
@@ -2296,6 +2355,7 @@ pub const InstGraph = struct {
         try self.row_exts.append(self.allocator, null);
         try self.request_checked_sources.append(self.allocator, null);
         try self.function_result_relations.append(self.allocator, null);
+        try self.function_argument_authority_spans.append(self.allocator, .uninitialized);
         try self.direct_request_selection_spans.append(self.allocator, .uninitialized);
         try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");

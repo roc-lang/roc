@@ -3922,6 +3922,35 @@ It does not compare the caller's complete function graph with the target's
 complete checked function, and it does not reconstruct substitutions from
 either graph.
 
+Callable roots are positional values, never substitutions keyed only by a
+`CheckedTypeId`. Two argument positions with the same checked type may contain
+different exact callback sets or closure environments, so storing either whole
+argument in a checked-ID map would conflate distinct runtime values. Every
+materialized function request instead carries one authority entry per argument:
+`request` means the position is an unfinished context used to lower its value,
+and `produced` means the position already contains the exact value returned by
+its producer. Function rebasing copies this positional vector directly. A
+callable-value context may fill a missing vector, but it may not replace a
+vector already recorded by the call schedule.
+
+Checking also records one positional operation for each argument when a source
+callable enters a selected target and when a checked procedure interface enters
+its body patterns. `exact_source_argument` keeps a completed positional root
+atomic. `target_construction` constructs the target's immediate checked shell
+from the flat child selections already named by the relation. At procedure
+entry, the incoming parameter retains its exact ABI node while the body may
+receive one explicit ordinary nominal construction or destructure authorized
+by that operation. The IR contains that constructor boundary; the graph nodes
+are not merged. A content-addressed generated nominal is never reconstructed by
+`target_construction`: its producer-supplied node remains atomic and crosses the
+position unchanged.
+
+These operations are consumed once at the callable boundary. Lowering does not
+store whole argument roots in a checked-ID map, compare complete source and
+target function graphs, scan an argument for generated descendants, propagate
+a generated marker through parent compounds, or recover an argument operation
+from the runtime node's shape.
+
 A selected method's checker-recorded callable plan is the operation interface.
 For a direct dispatch this is the selected instantiation recorded by checking;
 for evidence-dependent dispatch it is the instantiation carried by the chosen

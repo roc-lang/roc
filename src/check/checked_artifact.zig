@@ -16352,6 +16352,9 @@ pub const SpecializationInterfaceRelation = struct {
     /// Identity occurrences in a procedure relation's own checked function
     /// interface. Empty for non-procedure relations.
     identity_slots: artifact_serialize.Span = .{},
+    /// Positional exact-source-or-pattern-construction operations for a
+    /// procedure expression's arguments. Empty for non-procedure relations.
+    argument_flows: artifact_serialize.Span = .{},
     /// Checker-published identity-slot correspondence for this relation. The
     /// checked artifact computes this once from solved checked types; Monotype
     /// consumes these direct pairs and never re-walks the two type graphs.
@@ -16393,11 +16396,12 @@ pub const SpecializationIdentityRelation = extern struct {
     dependent: CheckedTypeId,
 };
 
-/// One directional identity edge from the callable instantiation that selected
-/// a dispatch target to that target's own checked declaration. The two ids are
-/// intentionally relative to different artifacts: `source` belongs to the
-/// entry's source callable artifact, while `dependent` belongs to
-/// `target_artifact`.
+/// One directional exact-value edge from the callable instantiation that
+/// selected a dispatch target to that target's own checked declaration. An
+/// edge can name an identity leaf or a complete input root whose entire runtime
+/// construction is identical on both sides. The two ids are intentionally
+/// relative to different artifacts: `source` belongs to the entry's source
+/// callable artifact, while `dependent` belongs to `target_artifact`.
 pub const SpecializationTargetIdentityRelation = extern struct {
     source: CheckedTypeId,
     dependent: CheckedTypeId,
@@ -16426,13 +16430,28 @@ pub const SpecializationTargetSourceEdge = enum(u8) {
     output,
 };
 
+/// The checker-authored operation that supplies one selected declaration
+/// argument. Exact source arguments stay positional because equal checked
+/// types can still be produced by different runtime callable sets. A target
+/// construction consumes only the flat child identities recorded below.
+pub const SpecializationTargetArgumentFlow = enum(u8) {
+    exact_source_argument,
+    target_construction,
+};
+
 /// Checker-authored correspondence for one concrete dispatch-target
 /// instantiation. Entries are grouped by `source_callable` in the dense span
 /// column on `CheckedProcedureTemplateTable`.
 pub const SpecializationTargetRelationEntry = struct {
     target_artifact: CheckedModuleArtifactKey,
     target_callable: CheckedTypeId,
+    argument_flows: artifact_serialize.Span = .{},
     relations: artifact_serialize.Span,
+};
+
+pub const SpecializationTargetRelationView = struct {
+    argument_flows: []const SpecializationTargetArgumentFlow,
+    relations: []const SpecializationTargetIdentityRelation,
 };
 
 /// One checker-authored concrete source for an identity at a call edge. The
@@ -17045,6 +17064,8 @@ fn sealCheckedProcedureTemplateRefs(
     errdefer specialization_relation_pool.deinit(allocator);
     var specialization_identity_relation_pool = std.ArrayList(SpecializationIdentityRelation).empty;
     errdefer specialization_identity_relation_pool.deinit(allocator);
+    var specialization_argument_flow_pool = std.ArrayList(SpecializationTargetArgumentFlow).empty;
+    errdefer specialization_argument_flow_pool.deinit(allocator);
     var specialization_identity_slot_pool = std.ArrayList(SpecializationIdentitySlot).empty;
     errdefer specialization_identity_slot_pool.deinit(allocator);
     var specialization_concrete_selection_pool = std.ArrayList(SpecializationConcreteSelection).empty;
@@ -17212,6 +17233,15 @@ fn sealCheckedProcedureTemplateRefs(
             switch (relation.data) {
                 .call => |*call| call.args.start += specialization_type_base,
                 .procedure => |procedure| {
+                    const argument_flow_start: u32 = @intCast(specialization_argument_flow_pool.items.len);
+                    try specialization_argument_flow_pool.appendSlice(
+                        allocator,
+                        collector.specialization_argument_flows.items[raw_relation.argument_flows.start .. raw_relation.argument_flows.start + raw_relation.argument_flows.len],
+                    );
+                    relation.argument_flows = .{
+                        .start = argument_flow_start,
+                        .len = raw_relation.argument_flows.len,
+                    };
                     const slot_start: u32 = @intCast(specialization_identity_slot_pool.items.len);
                     var visited = collections.DenseMap(CheckedTypeId, void).init(allocator);
                     defer visited.deinit();
@@ -17276,6 +17306,7 @@ fn sealCheckedProcedureTemplateRefs(
     templates.specialization_interface_relations = try specialization_relation_pool.toOwnedSlice(allocator);
     templates.specialization_procedure_relations_by_expr = specialization_procedure_relations_by_expr;
     templates.specialization_identity_relations = try specialization_identity_relation_pool.toOwnedSlice(allocator);
+    templates.specialization_procedure_argument_flows = try specialization_argument_flow_pool.toOwnedSlice(allocator);
     templates.specialization_identity_slots = try specialization_identity_slot_pool.toOwnedSlice(allocator);
     templates.specialization_concrete_selections = try specialization_concrete_selection_pool.toOwnedSlice(allocator);
     templates.specialization_interface_types = try specialization_type_pool.toOwnedSlice(allocator);
@@ -19908,6 +19939,21 @@ fn specializationSlotHasRoot(
     return false;
 }
 
+fn specializationSlotIsExactRoot(
+    slot: SpecializationCallSlot,
+    step: SpecializationSelectionEdgeStep,
+    index: u32,
+    occurrences: []const SpecializationOccurrence,
+    selection_edges: []const SpecializationSelectionEdge,
+) bool {
+    for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+        if (occurrence.selection_edge != occurrence.root_selection_edge) continue;
+        const root = selection_edges[occurrence.root_selection_edge];
+        if (root.step == step and root.index == index) return true;
+    }
+    return false;
+}
+
 fn sameGeneratedNominalDeclarationAndArguments(
     checked_types: *const CheckedTypePublication,
     source: CheckedTypeId,
@@ -19924,8 +19970,12 @@ fn sameGeneratedNominalDeclarationAndArguments(
     {
         return false;
     }
+    const checked_view = checked_types.store.view();
     for (source_nominal.args, destination_nominal.args) |source_arg, destination_arg| {
-        if (source_arg != destination_arg) return false;
+        if (!std.meta.eql(
+            checked_view.rootKey(source_arg),
+            checked_view.rootKey(destination_arg),
+        )) return false;
     }
     return true;
 }
@@ -19949,7 +19999,7 @@ fn publishIteratorOperationSources(
         var found_result = false;
         for (shape_slots) |*slot| {
             if (slot.kind != .generated_nominal or
-                !specializationSlotHasRoot(slot.*, .result, 0, occurrences, selection_edges)) continue;
+                !specializationSlotIsExactRoot(slot.*, .result, 0, occurrences, selection_edges)) continue;
             slot.generated_source = .iterator_operands;
             found_result = true;
         }
@@ -19960,7 +20010,7 @@ fn publishIteratorOperationSources(
     if (iterator_procedure == .iter_from_step) {
         const result: CheckedTypeId = for (shape_slots) |slot| {
             if (slot.kind == .generated_nominal and
-                specializationSlotHasRoot(slot, .result, 0, occurrences, selection_edges)) break slot.checked;
+                specializationSlotIsExactRoot(slot, .result, 0, occurrences, selection_edges)) break slot.checked;
         } else checkedArtifactInvariant("iter_from_step had no generated result identity", .{});
         for (shape_slots) |*slot| {
             if (slot.kind != .generated_nominal or slot.checked == result) continue;
@@ -19993,7 +20043,7 @@ fn publishIteratorOperationSources(
     }
     if (iterator_procedure != .iter_next) return;
     const source: CheckedTypeId = for (shape_slots) |slot| {
-        if (slot.kind == .generated_nominal and specializationSlotHasRoot(
+        if (slot.kind == .generated_nominal and specializationSlotIsExactRoot(
             slot,
             .argument,
             0,
@@ -20002,14 +20052,22 @@ fn publishIteratorOperationSources(
         )) break slot.checked;
     } else checkedArtifactInvariant("Iter.next callable had no generated iterator argument slot", .{});
 
+    var found_rest = false;
     for (shape_slots) |*slot| {
-        if (slot.checked == source or
-            slot.kind != .generated_nominal or
+        if (slot.kind != .generated_nominal or
             !specializationSlotHasRoot(slot.*, .result, 0, occurrences, selection_edges)) continue;
+        if (slot.checked == source) {
+            found_rest = true;
+            continue;
+        }
         if (!sameGeneratedNominalDeclarationAndArguments(checked_types, source, slot.checked)) {
-            checkedArtifactInvariant("Iter.next result rest used a different public iterator identity", .{});
+            continue;
         }
         slot.operation_source = source;
+        found_rest = true;
+    }
+    if (!found_rest) {
+        checkedArtifactInvariant("Iter.next result had no rest identity matching its exact iterator input", .{});
     }
 }
 
@@ -20392,7 +20450,7 @@ fn collectDirectionalCallIdentityRelations(
 ) Allocator.Error!void {
     var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(allocator);
     defer active.deinit();
-    try collectSpecializationIdentityRelations(
+    _ = try collectSpecializationIdentityRelations(
         allocator,
         &checked_types.store,
         source,
@@ -21413,9 +21471,11 @@ const SpecializationTargetRelationBuild = struct {
     source_callable: CheckedTypeId,
     target_artifact: CheckedModuleArtifactKey,
     target_callable: CheckedTypeId,
+    argument_flows: std.ArrayList(SpecializationTargetArgumentFlow) = .empty,
     relations: std.ArrayList(SpecializationTargetIdentityRelation) = .empty,
 
     fn deinit(self: *SpecializationTargetRelationBuild, allocator: Allocator) void {
+        self.argument_flows.deinit(allocator);
         self.relations.deinit(allocator);
     }
 };
@@ -21423,6 +21483,7 @@ const SpecializationTargetRelationBuild = struct {
 const PublishedSpecializationTargetRelations = struct {
     by_type: []artifact_serialize.Span,
     entries: []SpecializationTargetRelationEntry,
+    argument_flows: []SpecializationTargetArgumentFlow,
     relations: []SpecializationTargetIdentityRelation,
 };
 
@@ -21656,13 +21717,17 @@ fn appendSpecializationTargetRelationBuild(
         for (source_fn.args, target_fn.args) |source_arg, target_arg| {
             local_relations.clearRetainingCapacity();
             active.clearRetainingCapacity();
-            try collectSpecializationIdentityRelations(
+            const whole_root_is_exact = try collectSpecializationIdentityRelations(
                 allocator,
                 &checked_types.store,
                 source_arg,
                 target_arg,
                 &local_relations,
                 &active,
+            );
+            try build.argument_flows.append(
+                allocator,
+                if (whole_root_is_exact) .exact_source_argument else .target_construction,
             );
             for (local_relations.items) |relation| try appendSpecializationTargetRelation(
                 allocator,
@@ -21675,7 +21740,7 @@ fn appendSpecializationTargetRelationBuild(
         }
         local_relations.clearRetainingCapacity();
         active.clearRetainingCapacity();
-        try collectSpecializationIdentityRelations(
+        _ = try collectSpecializationIdentityRelations(
             allocator,
             &checked_types.store,
             source_fn.ret,
@@ -21714,13 +21779,17 @@ fn appendSpecializationTargetRelationBuild(
         for (source_fn.args, target_fn.args) |source_arg, target_arg| {
             local_relations.clearRetainingCapacity();
             active.clearRetainingCapacity();
-            try collectSpecializationIdentityRelations(
+            const whole_root_is_exact = try collectSpecializationIdentityRelations(
                 allocator,
                 &checked_types.store,
                 source_arg,
                 target_arg,
                 &local_relations,
                 &active,
+            );
+            try build.argument_flows.append(
+                allocator,
+                if (whole_root_is_exact) .exact_source_argument else .target_construction,
             );
             for (local_relations.items) |relation| {
                 const dependent = importedCheckedTypeForPublishedEndpoint(
@@ -21741,7 +21810,7 @@ fn appendSpecializationTargetRelationBuild(
         }
         local_relations.clearRetainingCapacity();
         active.clearRetainingCapacity();
-        try collectSpecializationIdentityRelations(
+        _ = try collectSpecializationIdentityRelations(
             allocator,
             &checked_types.store,
             source_fn.ret,
@@ -21944,6 +22013,8 @@ fn publishSpecializationTargetRelations(
     @memset(by_type, .{});
     var entries = std.ArrayList(SpecializationTargetRelationEntry).empty;
     errdefer entries.deinit(allocator);
+    var argument_flows = std.ArrayList(SpecializationTargetArgumentFlow).empty;
+    errdefer argument_flows.deinit(allocator);
     var relations = std.ArrayList(SpecializationTargetIdentityRelation).empty;
     errdefer relations.deinit(allocator);
     var cursor: usize = 0;
@@ -21952,11 +22023,17 @@ fn publishSpecializationTargetRelations(
         const entry_start: u32 = @intCast(entries.items.len);
         while (cursor < builds.items.len and builds.items[cursor].source_callable == source) : (cursor += 1) {
             const build = &builds.items[cursor];
+            const argument_flow_start: u32 = @intCast(argument_flows.items.len);
+            try argument_flows.appendSlice(allocator, build.argument_flows.items);
             const relation_start: u32 = @intCast(relations.items.len);
             try relations.appendSlice(allocator, build.relations.items);
             try entries.append(allocator, .{
                 .target_artifact = build.target_artifact,
                 .target_callable = build.target_callable,
+                .argument_flows = .{
+                    .start = argument_flow_start,
+                    .len = @intCast(build.argument_flows.items.len),
+                },
                 .relations = .{
                     .start = relation_start,
                     .len = @intCast(build.relations.items.len),
@@ -21971,6 +22048,7 @@ fn publishSpecializationTargetRelations(
     return .{
         .by_type = by_type,
         .entries = try entries.toOwnedSlice(allocator),
+        .argument_flows = try argument_flows.toOwnedSlice(allocator),
         .relations = try relations.toOwnedSlice(allocator),
     };
 }
@@ -21999,6 +22077,7 @@ fn publishSpecializationCallPlans(
         templates.specialization_nominal_plans_by_expr.len != 0 or
         templates.specialization_target_relations_by_type.len != 0 or
         templates.specialization_target_relation_entries.len != 0 or
+        templates.specialization_target_argument_flows.len != 0 or
         templates.specialization_target_identity_relations.len != 0 or
         templates.specialization_iterator_iter_plans.len != 0 or
         templates.specialization_iterator_next_plans.len != 0 or
@@ -22828,6 +22907,7 @@ fn publishSpecializationCallPlans(
     templates.specialization_nominal_plans_by_expr = nominal_by_expr;
     templates.specialization_target_relations_by_type = target_relations.by_type;
     templates.specialization_target_relation_entries = target_relations.entries;
+    templates.specialization_target_argument_flows = target_relations.argument_flows;
     templates.specialization_target_identity_relations = target_relations.relations;
     templates.specialization_iterator_iter_plans = iter_plans;
     templates.specialization_iterator_next_plans = next_plans;
@@ -23120,6 +23200,7 @@ const CheckedTemplateRefCollector = struct {
     scope_sites: std.ArrayList(CollectedScopeConstructionSite),
     specialization_relations: std.ArrayList(SpecializationInterfaceRelation),
     specialization_identity_relations: std.ArrayList(SpecializationIdentityRelation),
+    specialization_argument_flows: std.ArrayList(SpecializationTargetArgumentFlow),
     specialization_types: std.ArrayList(CheckedTypeId),
     template_root_expr: ?CheckedExprId = null,
     /// Pooled across templates (ids are global); the stack resets per template.
@@ -23160,6 +23241,7 @@ const CheckedTemplateRefCollector = struct {
             .scope_sites = .empty,
             .specialization_relations = .empty,
             .specialization_identity_relations = .empty,
+            .specialization_argument_flows = .empty,
             .specialization_types = .empty,
             .scopes = .empty,
             .scope_by_checked_expr = collections.DenseMap(CheckedExprId, DispatchScopeId).init(allocator),
@@ -23185,6 +23267,7 @@ const CheckedTemplateRefCollector = struct {
         self.scope_sites.deinit(self.allocator);
         self.specialization_relations.deinit(self.allocator);
         self.specialization_identity_relations.deinit(self.allocator);
+        self.specialization_argument_flows.deinit(self.allocator);
         self.specialization_types.deinit(self.allocator);
         self.scopes.deinit(self.allocator);
         self.scope_by_checked_expr.deinit();
@@ -23203,6 +23286,7 @@ const CheckedTemplateRefCollector = struct {
         self.scope_sites.clearRetainingCapacity();
         self.specialization_relations.clearRetainingCapacity();
         self.specialization_identity_relations.clearRetainingCapacity();
+        self.specialization_argument_flows.clearRetainingCapacity();
         self.specialization_types.clearRetainingCapacity();
         self.template_root_expr = null;
         // `scopes` pools across templates; only the stack resets.
@@ -23249,6 +23333,7 @@ const CheckedTemplateRefCollector = struct {
         } else if (!self.checked_bodies.exprContainsDiagnosticError(expr_id)) {
             checkedArtifactInvariant("non-diagnostic checked procedure had an error callable type", .{});
         }
+        const argument_flow_start: u32 = @intCast(self.specialization_argument_flows.items.len);
         const procedure_data = switch (self.checked_bodies.expr(expr_id).data) {
             .lambda => |lambda| lambda,
             .closure => |closure| blk: {
@@ -23267,9 +23352,21 @@ const CheckedTemplateRefCollector = struct {
                     checkedArtifactInvariant("checked procedure relation had a different argument arity", .{});
                 }
                 for (valid_function.args, lambda.args) |formal, pattern| {
-                    try self.appendBidirectionalSpecializationIdentityRelations(
+                    const pattern_ty = self.checked_bodies.pattern(pattern).ty;
+                    const whole_root_is_exact = try self.appendBidirectionalSpecializationIdentityRelationsWithWholeRoot(
                         formal,
-                        self.checked_bodies.pattern(pattern).ty,
+                        pattern_ty,
+                    );
+                    try self.specialization_argument_flows.append(
+                        self.allocator,
+                        if (whole_root_is_exact and
+                            !specializationProcedureArgumentRequiresCheckedShell(
+                                &self.checked_types.store,
+                                pattern_ty,
+                            ))
+                            .exact_source_argument
+                        else
+                            .target_construction,
                     );
                 }
             } else {
@@ -23285,6 +23382,10 @@ const CheckedTemplateRefCollector = struct {
         try self.specialization_relations.append(self.allocator, .{
             .scope = self.currentScope(),
             .procedure_expr = expr_id,
+            .argument_flows = .{
+                .start = argument_flow_start,
+                .len = @intCast(self.specialization_argument_flows.items.len - argument_flow_start),
+            },
             .identity_relations = identity_relations,
             .data = .{ .procedure = .{
                 .fn_ty = fn_ty,
@@ -23294,14 +23395,43 @@ const CheckedTemplateRefCollector = struct {
         });
     }
 
+    /// A nominal pattern is an explicit checked-facing constructor boundary,
+    /// even when its callable formal uses the same solved checked root. The
+    /// exact runtime argument may be the definition-private backing produced
+    /// at the call site, so Monotype must receive a positional construction
+    /// operation instead of inferring that operation from the runtime graph.
+    fn specializationProcedureArgumentRequiresCheckedShell(
+        store: *const CheckedTypeStore,
+        raw_ty: CheckedTypeId,
+    ) bool {
+        var ty = raw_ty;
+        var remaining = store.roots.items.len + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (store.payload(ty)) {
+                .alias => |alias| ty = alias.backing,
+                .nominal => return true,
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .record_unbound, .record, .tuple, .function, .tag_union => return false,
+            }
+        }
+        checkedArtifactInvariant("procedure argument checked shell contained an alias cycle", .{});
+    }
+
     fn appendBidirectionalSpecializationIdentityRelations(
         self: *CheckedTemplateRefCollector,
         left: CheckedTypeId,
         right: CheckedTypeId,
     ) Allocator.Error!void {
+        _ = try self.appendBidirectionalSpecializationIdentityRelationsWithWholeRoot(left, right);
+    }
+
+    fn appendBidirectionalSpecializationIdentityRelationsWithWholeRoot(
+        self: *CheckedTemplateRefCollector,
+        left: CheckedTypeId,
+        right: CheckedTypeId,
+    ) Allocator.Error!bool {
         var active = std.AutoHashMap(PlatformRequirementTypePair, void).init(self.allocator);
         defer active.deinit();
-        try collectSpecializationIdentityRelations(
+        const whole_root_is_exact = try collectSpecializationIdentityRelations(
             self.allocator,
             &self.checked_types.store,
             left,
@@ -23310,7 +23440,7 @@ const CheckedTemplateRefCollector = struct {
             &active,
         );
         active.clearRetainingCapacity();
-        try collectSpecializationIdentityRelations(
+        _ = try collectSpecializationIdentityRelations(
             self.allocator,
             &self.checked_types.store,
             right,
@@ -23318,6 +23448,7 @@ const CheckedTemplateRefCollector = struct {
             &self.specialization_identity_relations,
             &active,
         );
+        return whole_root_is_exact;
     }
 
     fn appendCallRelation(
@@ -24188,6 +24319,8 @@ pub const CheckedProcedureTemplateTable = struct {
     /// Flat pool backing every specialization relation's direct identity-slot
     /// span.
     specialization_identity_relations: []SpecializationIdentityRelation = &.{},
+    /// Positional source-or-construction operations for procedure relations.
+    specialization_procedure_argument_flows: []SpecializationTargetArgumentFlow = &.{},
     /// Every identity slot in each template's immutable checked function
     /// interface.
     specialization_identity_slots: []SpecializationIdentitySlot = &.{},
@@ -24208,6 +24341,9 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_target_relations_by_type: []artifact_serialize.Span = &.{},
     /// Target correspondence entries grouped by source callable.
     specialization_target_relation_entries: []SpecializationTargetRelationEntry = &.{},
+    /// Positional exact-source-or-target-construction operations backing each
+    /// target correspondence entry.
+    specialization_target_argument_flows: []SpecializationTargetArgumentFlow = &.{},
     /// Flat directional edges backing every target correspondence entry.
     specialization_target_identity_relations: []SpecializationTargetIdentityRelation = &.{},
     /// Synthetic iterator-loop call plans, parallel to `iterator_for_plans`.
@@ -24261,6 +24397,7 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
         specialization_procedure_relations_by_expr: SerializedSlice(u32) = .{},
         specialization_identity_relations: SerializedSlice(SpecializationIdentityRelation) = .{},
+        specialization_procedure_argument_flows: SerializedSlice(SpecializationTargetArgumentFlow) = .{},
         specialization_identity_slots: SerializedSlice(SpecializationIdentitySlot) = .{},
         specialization_concrete_selections: SerializedSlice(SpecializationConcreteSelection) = .{},
         specialization_call_plans_by_expr: SerializedSlice(SpecializationCallPlan) = .{},
@@ -24268,6 +24405,7 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_nominal_plans_by_expr: SerializedSlice(SpecializationNominalPlan) = .{},
         specialization_target_relations_by_type: SerializedSlice(artifact_serialize.Span) = .{},
         specialization_target_relation_entries: SerializedSlice(SpecializationTargetRelationEntry) = .{},
+        specialization_target_argument_flows: SerializedSlice(SpecializationTargetArgumentFlow) = .{},
         specialization_target_identity_relations: SerializedSlice(SpecializationTargetIdentityRelation) = .{},
         specialization_iterator_iter_plans: SerializedSlice(SpecializationCallPlan) = .{},
         specialization_iterator_next_plans: SerializedSlice(SpecializationCallPlan) = .{},
@@ -24527,6 +24665,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.specialization_interface_relations);
         allocator.free(self.specialization_procedure_relations_by_expr);
         allocator.free(self.specialization_identity_relations);
+        allocator.free(self.specialization_procedure_argument_flows);
         allocator.free(self.specialization_identity_slots);
         allocator.free(self.specialization_concrete_selections);
         allocator.free(self.specialization_call_plans_by_expr);
@@ -24534,6 +24673,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.specialization_nominal_plans_by_expr);
         allocator.free(self.specialization_target_relations_by_type);
         allocator.free(self.specialization_target_relation_entries);
+        allocator.free(self.specialization_target_argument_flows);
         allocator.free(self.specialization_target_identity_relations);
         allocator.free(self.specialization_iterator_iter_plans);
         allocator.free(self.specialization_iterator_next_plans);
@@ -24595,6 +24735,14 @@ pub const CheckedProcedureTemplateTable = struct {
     ) []const SpecializationIdentityRelation {
         const span = relation.identity_relations;
         return self.specialization_identity_relations[span.start .. span.start + span.len];
+    }
+
+    pub fn specializationProcedureArgumentFlows(
+        self: *const CheckedProcedureTemplateTable,
+        relation: SpecializationInterfaceRelation,
+    ) []const SpecializationTargetArgumentFlow {
+        const span = relation.argument_flows;
+        return self.specialization_procedure_argument_flows[span.start .. span.start + span.len];
     }
 
     pub fn specializationIdentitySlots(
@@ -24718,12 +24866,12 @@ pub const CheckedProcedureTemplateTable = struct {
         return self.specialization_call_consumer_bindings[span.start .. span.start + span.len];
     }
 
-    pub fn specializationTargetIdentityRelations(
+    pub fn specializationTargetRelation(
         self: *const CheckedProcedureTemplateTable,
         source_callable: CheckedTypeId,
         target_artifact: CheckedModuleArtifactKey,
         target_callable: CheckedTypeId,
-    ) []const SpecializationTargetIdentityRelation {
+    ) SpecializationTargetRelationView {
         const raw = @intFromEnum(source_callable);
         if (raw >= self.specialization_target_relations_by_type.len) {
             checkedArtifactInvariant("dispatch target instantiation exceeded its relation column", .{});
@@ -24733,7 +24881,10 @@ pub const CheckedProcedureTemplateTable = struct {
         for (entries) |entry| {
             if (!checkedArtifactKeyEql(entry.target_artifact, target_artifact) or
                 entry.target_callable != target_callable) continue;
-            return self.specialization_target_identity_relations[entry.relations.start .. entry.relations.start + entry.relations.len];
+            return .{
+                .argument_flows = self.specialization_target_argument_flows[entry.argument_flows.start .. entry.argument_flows.start + entry.argument_flows.len],
+                .relations = self.specialization_target_identity_relations[entry.relations.start .. entry.relations.start + entry.relations.len],
+            };
         }
         checkedArtifactInvariant("dispatch target instantiation had no checker-published target correspondence", .{});
     }
@@ -28161,7 +28312,7 @@ fn collectSpecializationIdentityRelations(
     dependent: CheckedTypeId,
     out: *std.ArrayList(SpecializationIdentityRelation),
     active: *std.AutoHashMap(PlatformRequirementTypePair, void),
-) Allocator.Error!void {
+) Allocator.Error!bool {
     var source_substitutions = std.ArrayList(SpecializationRelationSubstitution).empty;
     defer source_substitutions.deinit(allocator);
     var dependent_substitutions = std.ArrayList(SpecializationRelationSubstitution).empty;
@@ -28216,16 +28367,16 @@ fn collectSpecializationIdentityRelationsInner(
     active: *std.AutoHashMap(PlatformRequirementTypePair, void),
     source_substitutions: *std.ArrayList(SpecializationRelationSubstitution),
     dependent_substitutions: *std.ArrayList(SpecializationRelationSubstitution),
-) Allocator.Error!void {
+) Allocator.Error!bool {
     const source = specializationRelationSubstitute(source_substitutions.items, raw_source);
     const dependent = specializationRelationSubstitute(dependent_substitutions.items, raw_dependent);
-    if (source == dependent) return;
+    if (source == dependent) return true;
     const pair = PlatformRequirementTypePair{
         .expected = @intFromEnum(source),
         .actual = @intFromEnum(dependent),
     };
     const seen = try active.getOrPut(pair);
-    if (seen.found_existing) return;
+    if (seen.found_existing) return true;
     defer _ = active.remove(pair);
 
     const source_payload = store.payload(source);
@@ -28264,10 +28415,10 @@ fn collectSpecializationIdentityRelationsInner(
         checkedTypePayloadIsIdentity(dependent_payload))
     {
         for (out.items) |existing| {
-            if (existing.source == source and existing.dependent == dependent) return;
+            if (existing.source == source and existing.dependent == dependent) return true;
         }
         try out.append(allocator, .{ .source = source, .dependent = dependent });
-        return;
+        return true;
     }
 
     // A generated nominal is one atomic runtime identity, but its declared
@@ -28283,7 +28434,7 @@ fn collectSpecializationIdentityRelationsInner(
             if (existing.source == source and existing.dependent == dependent) break;
         } else try out.append(allocator, .{ .source = source, .dependent = dependent });
 
-        if (source_payload != .nominal or dependent_payload != .nominal) return;
+        if (source_payload != .nominal or dependent_payload != .nominal) return false;
         const source_nominal = source_payload.nominal;
         const dependent_nominal = dependent_payload.nominal;
         if (source_nominal.name != dependent_nominal.name or
@@ -28293,10 +28444,11 @@ fn collectSpecializationIdentityRelationsInner(
             source_nominal.builtin != dependent_nominal.builtin or
             source_nominal.args.len != dependent_nominal.args.len)
         {
-            return;
+            return false;
         }
+        var whole_root_is_exact = true;
         for (source_nominal.args, dependent_nominal.args) |source_arg, dependent_arg| {
-            try collectSpecializationIdentityRelationsInner(
+            if (!try collectSpecializationIdentityRelationsInner(
                 allocator,
                 store,
                 source_arg,
@@ -28305,9 +28457,9 @@ fn collectSpecializationIdentityRelationsInner(
                 active,
                 source_substitutions,
                 dependent_substitutions,
-            );
+            )) whole_root_is_exact = false;
         }
-        return;
+        return whole_root_is_exact;
     }
 
     if (source_payload == .nominal) {
@@ -28320,7 +28472,7 @@ fn collectSpecializationIdentityRelationsInner(
             source_nominal.builtin == dependent_payload.nominal.builtin and
             source_nominal.args.len == dependent_payload.nominal.args.len;
         if (!same_nominal) {
-            const backing = store.nominalBackingTemplateForPayload(source_nominal) orelse return;
+            const backing = store.nominalBackingTemplateForPayload(source_nominal) orelse return false;
             const declaration = store.nominalDeclarationForPayload(source_nominal) orelse
                 checkedArtifactInvariant("specialization relation nominal backing had no declaration", .{});
             const formals = declaration.formalArgs(store);
@@ -28335,7 +28487,7 @@ fn collectSpecializationIdentityRelationsInner(
                     .actual = specializationRelationSubstitute(source_substitutions.items[0..substitution_start], actual),
                 });
             }
-            return collectSpecializationIdentityRelationsInner(
+            _ = try collectSpecializationIdentityRelationsInner(
                 allocator,
                 store,
                 backing,
@@ -28345,11 +28497,12 @@ fn collectSpecializationIdentityRelationsInner(
                 source_substitutions,
                 dependent_substitutions,
             );
+            return false;
         }
     }
     if (dependent_payload == .nominal and source_payload != .nominal) {
         const dependent_nominal = dependent_payload.nominal;
-        const backing = store.nominalBackingTemplateForPayload(dependent_nominal) orelse return;
+        const backing = store.nominalBackingTemplateForPayload(dependent_nominal) orelse return false;
         const declaration = store.nominalDeclarationForPayload(dependent_nominal) orelse
             checkedArtifactInvariant("specialization relation nominal backing had no declaration", .{});
         const formals = declaration.formalArgs(store);
@@ -28364,7 +28517,7 @@ fn collectSpecializationIdentityRelationsInner(
                 .actual = specializationRelationSubstitute(dependent_substitutions.items[0..substitution_start], actual),
             });
         }
-        return collectSpecializationIdentityRelationsInner(
+        _ = try collectSpecializationIdentityRelationsInner(
             allocator,
             store,
             source,
@@ -28374,24 +28527,35 @@ fn collectSpecializationIdentityRelationsInner(
             source_substitutions,
             dependent_substitutions,
         );
+        return false;
     }
 
     switch (source_payload) {
         .function => |source_fn| {
-            if (dependent_payload != .function or source_fn.args.len != dependent_payload.function.args.len) return;
+            if (dependent_payload != .function or source_fn.args.len != dependent_payload.function.args.len) return false;
+            var whole_root_is_exact = true;
             for (source_fn.args, dependent_payload.function.args) |source_arg, dependent_arg| {
-                try collectSpecializationIdentityRelationsInner(allocator, store, source_arg, dependent_arg, out, active, source_substitutions, dependent_substitutions);
+                if (!try collectSpecializationIdentityRelationsInner(allocator, store, source_arg, dependent_arg, out, active, source_substitutions, dependent_substitutions)) {
+                    whole_root_is_exact = false;
+                }
             }
-            try collectSpecializationIdentityRelationsInner(allocator, store, source_fn.ret, dependent_payload.function.ret, out, active, source_substitutions, dependent_substitutions);
+            if (!try collectSpecializationIdentityRelationsInner(allocator, store, source_fn.ret, dependent_payload.function.ret, out, active, source_substitutions, dependent_substitutions)) {
+                whole_root_is_exact = false;
+            }
+            return whole_root_is_exact;
         },
         .tuple => |source_items| {
-            if (dependent_payload != .tuple or source_items.len != dependent_payload.tuple.len) return;
+            if (dependent_payload != .tuple or source_items.len != dependent_payload.tuple.len) return false;
+            var whole_root_is_exact = true;
             for (source_items, dependent_payload.tuple) |source_item, dependent_item| {
-                try collectSpecializationIdentityRelationsInner(allocator, store, source_item, dependent_item, out, active, source_substitutions, dependent_substitutions);
+                if (!try collectSpecializationIdentityRelationsInner(allocator, store, source_item, dependent_item, out, active, source_substitutions, dependent_substitutions)) {
+                    whole_root_is_exact = false;
+                }
             }
+            return whole_root_is_exact;
         },
         .nominal => |source_nominal| {
-            if (dependent_payload != .nominal) return;
+            if (dependent_payload != .nominal) return false;
             const dependent_nominal = dependent_payload.nominal;
             if (source_nominal.name != dependent_nominal.name or
                 source_nominal.origin_module != dependent_nominal.origin_module or
@@ -28400,19 +28564,24 @@ fn collectSpecializationIdentityRelationsInner(
                 source_nominal.builtin != dependent_nominal.builtin or
                 source_nominal.args.len != dependent_nominal.args.len)
             {
-                return;
+                return false;
             }
+            var whole_root_is_exact = true;
             for (source_nominal.args, dependent_nominal.args) |source_arg, dependent_arg| {
-                try collectSpecializationIdentityRelationsInner(allocator, store, source_arg, dependent_arg, out, active, source_substitutions, dependent_substitutions);
+                if (!try collectSpecializationIdentityRelationsInner(allocator, store, source_arg, dependent_arg, out, active, source_substitutions, dependent_substitutions)) {
+                    whole_root_is_exact = false;
+                }
             }
+            return whole_root_is_exact;
         },
         .record, .record_unbound, .empty_record => {
-            const source_parts = recordParts(source_payload) orelse return;
-            const dependent_parts = recordParts(dependent_payload) orelse return;
+            const source_parts = recordParts(source_payload) orelse return false;
+            const dependent_parts = recordParts(dependent_payload) orelse return false;
             const source_row = try flattenPlatformRequirementRecordRow(allocator, store, source_parts.fields, source_parts.ext);
             defer source_row.deinit(allocator);
             const dependent_row = try flattenPlatformRequirementRecordRow(allocator, store, dependent_parts.fields, dependent_parts.ext);
             defer dependent_row.deinit(allocator);
+            var whole_root_is_exact = source_row.fields.len == dependent_row.fields.len;
             for (dependent_row.fields) |dependent_field| {
                 var source_field: ?CheckedRecordField = null;
                 for (source_row.fields) |candidate| {
@@ -28421,21 +28590,31 @@ fn collectSpecializationIdentityRelationsInner(
                         break;
                     }
                 }
-                if (source_field) |field| {
-                    try collectSpecializationIdentityRelationsInner(allocator, store, field.ty, dependent_field.ty, out, active, source_substitutions, dependent_substitutions);
+                const field = source_field orelse {
+                    whole_root_is_exact = false;
+                    continue;
+                };
+                if (!try collectSpecializationIdentityRelationsInner(allocator, store, field.ty, dependent_field.ty, out, active, source_substitutions, dependent_substitutions)) {
+                    whole_root_is_exact = false;
                 }
             }
-            if (source_row.tail) |source_tail| if (dependent_row.tail) |dependent_tail| {
-                try collectSpecializationIdentityRelationsInner(allocator, store, source_tail, dependent_tail, out, active, source_substitutions, dependent_substitutions);
-            };
+            if (source_row.tail) |source_tail| {
+                if (dependent_row.tail) |dependent_tail| {
+                    if (!try collectSpecializationIdentityRelationsInner(allocator, store, source_tail, dependent_tail, out, active, source_substitutions, dependent_substitutions)) {
+                        whole_root_is_exact = false;
+                    }
+                } else whole_root_is_exact = false;
+            } else if (dependent_row.tail != null) whole_root_is_exact = false;
+            return whole_root_is_exact;
         },
         .tag_union, .empty_tag_union => {
-            const source_parts = tagUnionParts(source_payload) orelse return;
-            const dependent_parts = tagUnionParts(dependent_payload) orelse return;
+            const source_parts = tagUnionParts(source_payload) orelse return false;
+            const dependent_parts = tagUnionParts(dependent_payload) orelse return false;
             const source_row = try flattenPlatformRequirementTagRow(allocator, store, source_parts.tags, source_parts.ext);
             defer source_row.deinit(allocator);
             const dependent_row = try flattenPlatformRequirementTagRow(allocator, store, dependent_parts.tags, dependent_parts.ext);
             defer dependent_row.deinit(allocator);
+            var whole_root_is_exact = source_row.tags.len == dependent_row.tags.len;
             for (dependent_row.tags) |dependent_tag| {
                 var source_tag: ?CheckedTag = null;
                 for (source_row.tags) |candidate| {
@@ -28444,20 +28623,32 @@ fn collectSpecializationIdentityRelationsInner(
                         break;
                     }
                 }
-                if (source_tag) |tag| {
-                    const source_args = tag.argsSlice(store);
-                    const dependent_args = dependent_tag.argsSlice(store);
-                    if (source_args.len != dependent_args.len) continue;
-                    for (source_args, dependent_args) |source_arg, dependent_arg| {
-                        try collectSpecializationIdentityRelationsInner(allocator, store, source_arg, dependent_arg, out, active, source_substitutions, dependent_substitutions);
+                const tag = source_tag orelse {
+                    whole_root_is_exact = false;
+                    continue;
+                };
+                const source_args = tag.argsSlice(store);
+                const dependent_args = dependent_tag.argsSlice(store);
+                if (source_args.len != dependent_args.len) {
+                    whole_root_is_exact = false;
+                    continue;
+                }
+                for (source_args, dependent_args) |source_arg, dependent_arg| {
+                    if (!try collectSpecializationIdentityRelationsInner(allocator, store, source_arg, dependent_arg, out, active, source_substitutions, dependent_substitutions)) {
+                        whole_root_is_exact = false;
                     }
                 }
             }
-            if (source_row.tail) |source_tail| if (dependent_row.tail) |dependent_tail| {
-                try collectSpecializationIdentityRelationsInner(allocator, store, source_tail, dependent_tail, out, active, source_substitutions, dependent_substitutions);
-            };
+            if (source_row.tail) |source_tail| {
+                if (dependent_row.tail) |dependent_tail| {
+                    if (!try collectSpecializationIdentityRelationsInner(allocator, store, source_tail, dependent_tail, out, active, source_substitutions, dependent_substitutions)) {
+                        whole_root_is_exact = false;
+                    }
+                } else whole_root_is_exact = false;
+            } else if (dependent_row.tail != null) whole_root_is_exact = false;
+            return whole_root_is_exact;
         },
-        .pending, .err, .flex, .rigid, .alias => {},
+        .pending, .err, .flex, .rigid, .alias => return false,
     }
 }
 
@@ -34465,7 +34656,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 237);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 239);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -34615,7 +34806,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 75;
+    const serialized_layout_version: u32 = 76;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -39318,6 +39509,7 @@ test "target source roots exclude explicit concrete checked sources" {
     const published = PublishedSpecializationTargetRelations{
         .by_type = &by_type,
         .entries = &entries,
+        .argument_flows = &.{},
         .relations = &relations,
     };
     var roots = std.ArrayList(CheckedTypeId).empty;
@@ -39467,6 +39659,52 @@ test "directional specialization relations publish a transparent alias backing e
     try std.testing.expectEqual(@as(usize, 1), relations.items.len);
     try std.testing.expectEqual(source_identity, relations.items[0].source);
     try std.testing.expectEqual(dependent_identity, relations.items[0].dependent);
+}
+
+test "procedure argument flow records nominal checked-shell construction" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    const structural = try store.appendSyntheticPayloadRoot(
+        allocator,
+        &names,
+        .empty_record,
+    );
+    const type_name = try names.internTypeName("State");
+    const module_identity = try names.internModuleIdentity(&([_]u8{0x5a} ** 32));
+    const nominal = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .nominal = .{
+        .name = type_name,
+        .origin_module = module_identity,
+        .owner_module = testCheckedModuleKey(54),
+        .source_decl = 3,
+        .builtin = null,
+        .is_opaque = true,
+        .representation = .opaque_without_backing,
+    } });
+    const alias_name = try names.internTypeName("StateAlias");
+    const alias = try store.appendSyntheticPayloadRoot(allocator, &names, .{ .alias = .{
+        .name = alias_name,
+        .origin_module = module_identity,
+        .owner_module = testCheckedModuleKey(54),
+        .backing = nominal,
+    } });
+
+    try std.testing.expect(!CheckedTemplateRefCollector.specializationProcedureArgumentRequiresCheckedShell(
+        &store,
+        structural,
+    ));
+    try std.testing.expect(CheckedTemplateRefCollector.specializationProcedureArgumentRequiresCheckedShell(
+        &store,
+        nominal,
+    ));
+    try std.testing.expect(CheckedTemplateRefCollector.specializationProcedureArgumentRequiresCheckedShell(
+        &store,
+        alias,
+    ));
 }
 
 test "record specialization shape publishes only an explicitly requested exact compound root" {
@@ -41183,8 +41421,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x96, 0xA0, 0xB8, 0x9F, 0x37, 0x3E, 0x1C, 0x80, 0x90, 0x9A, 0x8A, 0xA4, 0x9C, 0xA8, 0xA2, 0xBD,
-        0x62, 0x2C, 0x5C, 0xF0, 0xC2, 0xAB, 0x52, 0x52, 0xD6, 0x4E, 0x16, 0x25, 0xE8, 0x3C, 0x97, 0x42,
+        0x25, 0xC0, 0x9F, 0x75, 0x20, 0x09, 0x6E, 0xEC, 0x73, 0x66, 0x09, 0x73, 0x40, 0xB0, 0x41, 0x3D,
+        0x2A, 0x29, 0xBA, 0x4E, 0x5B, 0x66, 0x8F, 0xE8, 0x61, 0x6B, 0xD3, 0x15, 0x92, 0x48, 0x5C, 0x47,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
