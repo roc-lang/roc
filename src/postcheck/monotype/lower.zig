@@ -18462,6 +18462,7 @@ const BodyContext = struct {
                 // inline slots (design.md "Defaulted Fields").
                 return try self.lowerRecordExprAtNode(expr_id, .{
                     .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                    .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
                     .ext = @as(?checked.CheckedExprId, null),
                 }, expr_node, &.{});
             },
@@ -18744,6 +18745,7 @@ const BodyContext = struct {
             // fields demanded this produces the empty record constructor.
             .empty_record => return try self.lowerRecordExpr(.{
                 .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
                 .ext = @as(?checked.CheckedExprId, null),
             }, ty, &.{}),
             .str => |segments| try self.lowerStr(segments),
@@ -33197,7 +33199,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         if (record.ext) |ext| {
             const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext);
-            const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len);
+            const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
                 const name = try self.builder.recordFieldName(self.view, field.label);
@@ -33224,6 +33226,22 @@ const BodyContext = struct {
                         else
                             try self.lowerExprAtType(field.value, slot_ty);
                     },
+                };
+            }
+            // An UNSET field becomes an explicitly listed update field whose
+            // value is the slot's Missing tag—the same construction an
+            // omitted optional field uses (design.md "In Progress: Unsetting
+            // an Optional Field"). The backend keeps copying unlisted slots
+            // and writing listed ones.
+            for (record.unsets, 0..) |label, unset_index| {
+                const name = try self.builder.recordFieldName(self.view, label);
+                const target_field = self.builder.recordField(ty, name);
+                if (self.monotypeFieldKindTag(target_field) != .optional) {
+                    Common.invariant("record update unset field was not optional after checking");
+                }
+                fields[record.fields.len + unset_index] = .{
+                    .name = name,
+                    .value = try self.optionalSlotMissingExpr(target_field.ty),
                 };
             }
             return try self.addExpr(.{ .ty = ty, .data = .{ .record_update = .{
@@ -33344,7 +33362,7 @@ const BodyContext = struct {
         if (record.ext) |ext| {
             const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse
                 Common.invariant("record graph update lost its pre-lowered base child");
-            const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len);
+            const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
                 const name = try self.builder.recordFieldName(self.view, field.label);
@@ -33364,6 +33382,26 @@ const BodyContext = struct {
                 else
                     pre;
                 fields[index] = .{ .name = name, .value = value };
+            }
+            // An UNSET field becomes an explicitly listed update field whose
+            // value is the slot's Missing tag—the same construction an
+            // omitted optional field uses (design.md "In Progress: Unsetting
+            // an Optional Field"). The backend keeps copying unlisted slots
+            // and writing listed ones. The Missing tag is constructed at the
+            // slot's own graph node, so unset fields keep the checked
+            // representation and take no part in witness selection below.
+            for (record.unsets, 0..) |label, unset_index| {
+                const name = try self.builder.recordFieldName(self.view, label);
+                const field_kind = try self.graph.recordConstructionFieldKind(record_node, name);
+                if (field_kind != .optional) {
+                    Common.invariant("record graph update unset field was not optional after checking");
+                }
+                fields[record.fields.len + unset_index] = .{
+                    .name = name,
+                    .value = try self.optionalSlotMissingExprAtNode(
+                        try self.graph.recordConstructionFieldNode(record_node, name),
+                    ),
+                };
             }
             // An updated field's producer-authored child can carry a
             // representation distinct from the checked-public field slot, so

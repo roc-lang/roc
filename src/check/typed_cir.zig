@@ -516,6 +516,10 @@ pub const Module = struct {
         return self.env().store.getRecordField(idx);
     }
 
+    pub fn getUnsetField(self: @This(), idx: CIR.UnsetField.Idx) CIR.UnsetField {
+        return self.env().store.getUnsetField(idx);
+    }
+
     pub fn getRecordDestruct(self: @This(), idx: CIR.Pattern.RecordDestruct.Idx) CIR.Pattern.RecordDestruct {
         return self.env().store.getRecordDestruct(idx);
     }
@@ -546,6 +550,10 @@ pub const Module = struct {
 
     pub fn sliceRecordFields(self: @This(), span: CIR.RecordField.Span) []const CIR.RecordField.Idx {
         return self.env().store.sliceRecordFields(span);
+    }
+
+    pub fn sliceUnsetFields(self: @This(), span: CIR.UnsetField.Span) []const CIR.UnsetField.Idx {
+        return self.env().store.sliceUnsetFields(span);
     }
 
     pub fn sliceRecordDestructs(self: @This(), span: CIR.Pattern.RecordDestruct.Span) []const CIR.Pattern.RecordDestruct.Idx {

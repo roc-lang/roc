@@ -152,7 +152,8 @@ pub const Constants = struct {
     /// 65: A hosted entry written without a module resolves to the platform
     ///     module's own declaration.
     /// 66: Record expressions carry a span of unset (`name: _`) fields.
-    pub const CACHE_VERSION = 66;
+    /// 67: Checked record expressions carry their unset field labels.
+    pub const CACHE_VERSION = 67;
 };
 
 /// Configuration for the Roc cache system.

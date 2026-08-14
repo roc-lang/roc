@@ -432,6 +432,54 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "33" },
     },
     .{
+        .name = "unset record field: update unsets a present slot while siblings and base survive",
+        .source_kind = .module,
+        .source =
+        \\r : { keep : U8, gone ?: U8 }
+        \\r = { keep: 7, gone: 4 }
+        \\
+        \\s : { keep : U8, gone ?: U8 }
+        \\s = { ..r, gone: _ }
+        \\
+        \\main = {
+        \\    unset_result = match s.?gone {
+        \\        Ok(_) => 0
+        \\        Err(MissingField) => 33
+        \\    }
+        \\    unset_result + s.keep + (r.?gone ?? 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "44" },
+    },
+    .{
+        .name = "unset record field: construction unset starts the slot missing",
+        .source_kind = .module,
+        .source =
+        \\r : { keep : U8, gone ?: U8 }
+        \\r = { keep: 2, gone: _ }
+        \\
+        \\main = (r.?gone ?? 30) + r.keep
+        ,
+        .expected = .{ .inspect_str = "32" },
+    },
+    .{
+        .name = "unset record field: unset slot can be re-set by a later update",
+        .source_kind = .module,
+        .source =
+        \\r : { a ?: U8 }
+        \\r = { a: 4 }
+        \\
+        \\cleared : { a ?: U8 }
+        \\cleared = { ..r, a: _ }
+        \\
+        \\restored : { a ?: U8 }
+        \\restored = { ..cleared, a: 9 }
+        \\
+        \\main = (cleared.?a ?? 20) + (restored.?a ?? 0)
+        ,
+        .expected = .{ .inspect_str = "29" },
+    },
+    .{
         .name = "optional record field: chain result passed to a function expecting Try",
         .source_kind = .module,
         .source =

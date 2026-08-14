@@ -4842,7 +4842,7 @@ Deferred (explicitly not yet implemented):
   bullet above. SETTING an optional field in an update is IMPLEMENTED—
   see the record-update bullet above.)
   UNSETTING a field in an update (`{ ..r, x: _ }`) has its typing rule
-  in "In Progress: Unsetting an Optional Field" below (CHECK implemented).
+  in "In Progress: Unsetting an Optional Field" below (IMPLEMENTED).
 
 Pinned by tests in src/check/test/type_checking_integration.zig: accepted—
 a value annotated `{ world ?: U8 }` may supply or omit `world`, and its
@@ -5045,7 +5045,7 @@ materializes its default.
 
 ### In Progress: Unsetting an Optional Field (`{ ..r, x: _ }`, `{ x: _ }`)
 
-PARSE, CAN, and CHECK are IMPLEMENTED; LOWER remains (sketch below).
+PARSE, CAN, CHECK, and LOWER are IMPLEMENTED.
 `x: _` marks a field UNSET, in BOTH record update and record construction:
 the result carries `x` as an optional slot in the Missing state. Unsetting
 does NOT remove the field from the row—the `absent` presence state is gone
@@ -5129,15 +5129,23 @@ Only the PER-FIELD demand becomes kind-directed:
   unify. Chained/nested updates compose because every update's type equals
   its base's type.
 
-Lowering. Trivial by construction: `lowerRecordExpr`
-(src/postcheck/monotype/lower.zig) lowers update as CONSTRUCTION-BY-COPY—
-the base binds to a let-local, mentioned fields take their new values,
-unmentioned fields copy via field access. An unset field takes the existing
-`optionalSlotMissingExpr(field.ty)` arm—the same Missing-tag construction
-an omitted optional field uses—in construction and update alike. ARC needs no new rules: the replaced
-Present payload is never read, exactly like a SET field's replaced value
-today, and is freed when ARC decrefs the base after its last use; backends
-keep dumbly following the emitted incref/decref.
+Lowering (IMPLEMENTED). The checked artifact carries each record
+expression's unset field labels explicitly (`CheckedExprData.record.unsets`,
+serialized through `record_unset_label_pool`)—lowering consumes that list,
+never re-derives it. In an UPDATE, both lowering pipelines (monotype
+`lowerRecordExpr`/`lowerRecordExprAtNode` in src/postcheck/monotype/lower.zig
+and boxy `lowerRecordPayloadInto` in src/postcheck/boxy/lower.zig) turn each
+unset field into an explicitly listed field whose value is the slot's
+Missing-tag construction (`optionalSlotMissingExpr` and friends)—never a
+copy from the base, which unlisted fields still take. In CONSTRUCTION an
+unset field simply is not among the supplied fields, so the row-driven loop
+routes it through the same omitted-optional Missing arm; unset and omission
+are identical at this stage by construction. Either pipeline invariant-checks
+that an unset field's kind resolved `optional` (the judgment guarantees it).
+ARC needs no new rules: the replaced Present payload is never read, exactly
+like a SET field's replaced value today, and is freed when ARC decrefs the
+base after its last use; backends keep dumbly following the emitted
+incref/decref.
 
 Interactions:
 
@@ -5186,10 +5194,12 @@ kind to optional, construction `{ x: _ }` inferring `{ x ?: a }` (payload
 generalizing; annotation pinning it), mixed set-and-unset; rejected—unset
 of required (annotated construction AND update of a required base field), of
 defaulted, of a missing field (update), and unset judged through a
-generalized function instantiated at a required row. (4) LOWER—route unset fields to
-`optionalSlotMissingExpr`; an eval test (run-test-eval, all backends)
-proving `.?x` on the updated record yields `Err(MissingField)` while other
-fields survive. Beyond this sketch, FALLBACK destructure (`{ x ?? d }`)
+generalized function instantiated at a required row. (4) LOWER (DONE)—route
+unset fields to `optionalSlotMissingExpr`; eval tests (run-test-eval, all
+backends, src/eval/test/eval_tests.zig "unset record field") pin `.?x` on the
+updated record yielding `Err(MissingField)` while sibling fields and the base
+record survive, construction `{ x: _ }` starting Missing, and an unset slot
+round-tripping back to Present through a later update. Beyond this sketch, FALLBACK destructure (`{ x ?? d }`)
 remains deferred (orthogonal, listed in Field Kinds; plain optional
 destructure is IMPLEMENTED); SETTING an optional field in an update
 (Present-wrapping `{ ..r, x: v }` on an optional `x`) is now IMPLEMENTED—
