@@ -977,6 +977,7 @@ test "Monotype producers return and compose exact graph nodes directly" {
 
 test "generated identities are atomic and reserve before backing work" {
     const solve_source = @embedFile("monotype/solve.zig");
+    const lower_source = @embedFile("monotype/lower.zig");
     const writer = sourceSliceBetween(
         solve_source,
         "fn writeNode(self: *GeneratedIdentityWriter",
@@ -1010,6 +1011,23 @@ test "generated identities are atomic and reserve before backing work" {
     const fill_backing = std.mem.find(u8, reservation, "try fill(context, reserved)") orelse
         return error.TestExpectedEqual;
     try std.testing.expect(publish_identity < fill_backing);
+
+    const generated_call_slot = sourceSliceBetween(
+        lower_source,
+        "fn generatedNominalFromSelectedArguments(",
+        "fn exactSelectionForChecked(",
+    );
+    const produced_lookup = std.mem.find(
+        u8,
+        generated_call_slot,
+        ".recursive_reservation => if (public_argument.authority == .produced)",
+    ) orelse return error.TestExpectedEqual;
+    const recursive_reservation = std.mem.find(
+        u8,
+        generated_call_slot,
+        "try self.reserveGeneratedIteratorNominalNode(",
+    ) orelse return error.TestExpectedEqual;
+    try std.testing.expect(produced_lookup < recursive_reservation);
 }
 
 test "Monotype graph nodes cannot become TypeId views before freeze" {

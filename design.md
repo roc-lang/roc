@@ -3747,9 +3747,11 @@ It does not inspect the callback's result graph, descend through a compound
 result to find `rest`, or propagate a generated classification through any
 parent node.
 
-Each producer reservation asks the dense declaration-plus-item index for the
-same construction. Equal inputs therefore reuse one unstamped nominal
-immediately, before any duplicate private backing or hash work can begin.
+Each request-backed producer reservation asks the dense
+declaration-plus-item index for the same construction. Equal forward cells
+therefore reuse one unstamped nominal immediately. A produced item instead
+uses the content-addressed identity table directly, before any duplicate
+reservation, private backing, or hash work can begin.
 Lowering runs the callback against that reservation's recursive interface,
 requires the callback producer to complete the same item cell, and then
 immediately computes and stamps the SHA-256 identity. An unstamped reservation
@@ -4357,11 +4359,14 @@ point. The item comes from `iter_from_step`'s explicitly recorded callback
 selection. A dense item-node index answers repeated in-graph requests without
 hashing. On a dense miss, one structural digest lookup finds a cross-graph exact
 type or carries the computed digest into one backing construction and
-registration; the inputs are never hashed twice for one miss. `iter_from_step`
-uses `reserveGeneratedIteratorNominalNode` for its unavoidable recursive
+registration; the inputs are never hashed twice for one miss. An
+`iter_from_step` item edge with request authority uses
+`reserveGeneratedIteratorNominalNode` for its unavoidable recursive
 construction state, then invokes the same completion machinery immediately
-after its callback returns. No freeze-time or later-stage pass finishes
-generated identity.
+after its callback returns. An item edge with produced authority performs the
+content-address lookup immediately and reuses an already-stamped identity; it
+must not allocate an unstamped reservation for an input that is already exact.
+No freeze-time or later-stage pass finishes generated identity.
 
 A public `Iter` expected type has already constrained the expression during
 checking. It is only a destination request. The concrete producer constructs

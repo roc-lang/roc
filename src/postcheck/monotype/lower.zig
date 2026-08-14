@@ -27550,10 +27550,12 @@ const BodyContext = struct {
         // this public argument. Even a currently closed request may contain a
         // language default that an explicit operand will replace later. The
         // ordinary generated operation therefore requires produced authority.
-        // A recursive reservation is deliberately weaker: it creates only an
+        // A recursive request is deliberately weaker: it creates only an
         // unstamped construction shell around the exact shared item cell, and
         // the callback producer must complete that cell before the shell can
-        // receive a generated identity.
+        // receive a generated identity. If that same edge already has
+        // produced authority, the content address is complete now and this
+        // operation reuses it instead of allocating another reservation.
         if (construction_mode == .completed_arguments and public_argument.authority != .produced) return null;
         if (construction_mode == .completed_arguments and !try self.graph.typeIsResolved(public_argument.produced)) {
             return null;
@@ -27578,13 +27580,22 @@ const BodyContext = struct {
                     Common.invariant("generated iterator slot had a non-iterator builtin owner");
                 }
                 break :blk switch (construction_mode) {
-                    .recursive_reservation => try self.reserveGeneratedIteratorNominalNode(
-                        checked_ty,
-                        nominal,
-                        public_argument.produced,
-                        def,
-                        declared_order,
-                    ),
+                    .recursive_reservation => if (public_argument.authority == .produced)
+                        try self.generatedIteratorNominalNode(
+                            checked_ty,
+                            nominal,
+                            public_argument.produced,
+                            def,
+                            declared_order,
+                        )
+                    else
+                        try self.reserveGeneratedIteratorNominalNode(
+                            checked_ty,
+                            nominal,
+                            public_argument.produced,
+                            def,
+                            declared_order,
+                        ),
                     .completed_arguments => try self.generatedIteratorNominalNode(
                         checked_ty,
                         nominal,
@@ -28203,11 +28214,12 @@ const BodyContext = struct {
         return request;
     }
 
-    /// `iter_from_step` is recursive through its callback interface. Reserve
-    /// each generated `Iter(item)` occurrence around the same exact forward
-    /// item cell before lowering that callback. No identity is hashed here;
-    /// the callback producer fills the cell, and this operation stamps the
-    /// reservation from that completed cell immediately afterward.
+    /// `iter_from_step` is recursive through its callback interface. Select
+    /// each generated `Iter(item)` occurrence from its explicit item edge
+    /// before lowering that callback. A request edge reserves the identity
+    /// around its exact forward item cell; a produced edge immediately reuses
+    /// the completed content address. The callback producer fills and stamps
+    /// only the former.
     fn applyIterFromStepForwardReservations(
         self: *BodyContext,
         plan: checked.SpecializationCallPlanView,
