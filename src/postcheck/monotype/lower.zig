@@ -4567,7 +4567,53 @@ const Builder = struct {
                     sealer,
                 );
             },
-            else => {},
+            .local,
+            .unit,
+            .pending_deferred,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .list,
+            .tuple,
+            .record,
+            .record_update,
+            .tag,
+            .nominal,
+            .let_,
+            .lambda,
+            .def_ref,
+            .fn_def,
+            .fn_ref,
+            .call_value,
+            .call_proc,
+            .low_level,
+            .field_access,
+            .tuple_access,
+            .structural_eq,
+            .structural_hash,
+            .match_,
+            .if_,
+            .uninitialized,
+            .uninitialized_payload,
+            .if_initialized_payload,
+            .try_sequence,
+            .try_record_sequence,
+            .block,
+            .loop_,
+            .break_,
+            .continue_,
+            .return_,
+            .crash,
+            .comptime_branch_taken,
+            .comptime_exhaustiveness_failed,
+            .dbg,
+            .expect_err,
+            .expect,
+            => {},
         };
     }
 
@@ -26796,14 +26842,6 @@ const BodyContext = struct {
         return self.checkedCallRootEdge(plan, plan.result_root, .result, 0, checked_root);
     }
 
-    fn callDispatcherRootEdge(
-        self: *BodyContext,
-        plan: checked.SpecializationCallPlanView,
-        checked_root: checked.CheckedTypeId,
-    ) u32 {
-        return self.checkedCallRootEdge(plan, plan.dispatcher_root, .dispatcher, 0, checked_root);
-    }
-
     /// Record one exact node for a checker-authored identity slot. A request
     /// is only the context used to lower a producer. When that context is an
     /// occurrence-local forward cell, the first producer completes that exact
@@ -32202,33 +32240,6 @@ const BodyContext = struct {
                 )
             else
                 try self.lowerExpr(checked_expr);
-            try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
-        }
-    }
-
-    fn preLowerDispatchOperands(
-        self: *BodyContext,
-        operands: []const static_dispatch.StaticDispatchOperand,
-        checked_nodes: []const NodeId,
-        pre_lowered: *std.ArrayList(PreLoweredOperand),
-    ) Allocator.Error!void {
-        if (operands.len != checked_nodes.len) {
-            Common.invariant("dispatch argument arity differed from its checked callable");
-        }
-        for (operands, checked_nodes, 0..) |operand, checked_node, index| {
-            const lowered = switch (operand) {
-                .checked_expr => |expr| if (self.valueConsumesCallableRequest(expr) or self.valueConsumesContextualRequest(expr))
-                    continue
-                else
-                    try self.lowerExpr(expr),
-                .generated_interpolation_iter => |expr| blk: {
-                    const produced_node = try self.generatedInterpolationIteratorNode(expr, checked_node);
-                    break :blk try self.lowerGeneratedInterpolationIterAtNode(expr, produced_node);
-                },
-                .generated_numeral,
-                .generated_quote,
-                => try self.lowerDispatchOperandAtNode(operand, checked_node),
-            };
             try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
         }
     }
@@ -37904,18 +37915,6 @@ const BodyContext = struct {
             } else Common.invariant("dispatch runtime evidence was absent from its lexical chain"),
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
             .direct_closed, .direct_parametric, .structural => null,
-        };
-    }
-
-    fn dispatchTarget(
-        self: *BodyContext,
-        plan: static_dispatch.StaticDispatchCallPlan,
-    ) ?MethodLookup {
-        const resolution = self.evidenceResolution(plan) orelse
-            Common.invariant("dispatch plan reached monotype lowering without a resolution");
-        return switch (resolution) {
-            .target => |lookup| lookup,
-            .structural => null,
         };
     }
 

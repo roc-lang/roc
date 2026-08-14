@@ -16449,6 +16449,7 @@ pub const SpecializationTargetRelationEntry = struct {
     relations: artifact_serialize.Span,
 };
 
+/// Read-only slices for one checker-authored target relation.
 pub const SpecializationTargetRelationView = struct {
     argument_flows: []const SpecializationTargetArgumentFlow,
     relations: []const SpecializationTargetIdentityRelation,
@@ -16834,6 +16835,7 @@ pub const SpecializationCallSlot = struct {
     operation_source: CheckedTypeId = no_specialization_operation_source,
 };
 
+/// Sentinel for a slot with no identity-preserving operation source.
 pub const no_specialization_operation_source: CheckedTypeId = @enumFromInt(std.math.maxInt(u32));
 
 /// Dense index of an interned checker-authored call shape.
@@ -16853,7 +16855,6 @@ pub const SpecializationCallShape = struct {
     selection_edges: artifact_serialize.Span = .{},
     argument_roots: artifact_serialize.Span = .{},
     result_root: u32 = no_specialization_selection_edge_parent,
-    dispatcher_root: u32 = no_specialization_selection_edge_parent,
 };
 
 /// One expression edge's small delta over a shared call shape.
@@ -16898,7 +16899,6 @@ pub const SpecializationSelectionEdgePlanView = struct {
     selection_edges: []const SpecializationSelectionEdge,
     argument_roots: []const u32,
     result_root: u32,
-    dispatcher_root: u32,
     operand_flows: []const SpecializationOperandFlow,
     result_context_bindings: []const SpecializationCallConsumerBinding,
     context_bindings: []const SpecializationCallConsumerBinding,
@@ -19865,7 +19865,7 @@ fn finishSpecializationSelectionEdgeShape(
     var argument_roots = std.ArrayList(u32).empty;
     defer argument_roots.deinit(allocator);
     var result_root: u32 = no_specialization_selection_edge_parent;
-    var dispatcher_root: u32 = no_specialization_selection_edge_parent;
+    var saw_dispatcher_root = false;
     for (selection_edges.items, 0..) |selection_edge, edge_index| {
         if (selection_edge.parent != no_specialization_selection_edge_parent) continue;
         const edge: u32 = @intCast(edge_index);
@@ -19883,10 +19883,10 @@ fn finishSpecializationSelectionEdgeShape(
                 result_root = edge;
             },
             .dispatcher => {
-                if (selection_edge.index != 0 or dispatcher_root != no_specialization_selection_edge_parent) {
+                if (selection_edge.index != 0 or saw_dispatcher_root) {
                     checkedArtifactInvariant("call shape had an invalid dispatcher root", .{});
                 }
-                dispatcher_root = edge;
+                saw_dispatcher_root = true;
             },
             .alias_argument,
             .alias_backing,
@@ -19921,7 +19921,6 @@ fn finishSpecializationSelectionEdgeShape(
             .len = @intCast(argument_roots.items.len),
         },
         .result_root = result_root,
-        .dispatcher_root = dispatcher_root,
     };
 }
 
@@ -24795,7 +24794,6 @@ pub const CheckedProcedureTemplateTable = struct {
             .selection_edges = self.specialization_call_selection_edges[shape.selection_edges.start .. shape.selection_edges.start + shape.selection_edges.len],
             .argument_roots = self.specialization_call_root_edges[shape.argument_roots.start .. shape.argument_roots.start + shape.argument_roots.len],
             .result_root = shape.result_root,
-            .dispatcher_root = shape.dispatcher_root,
             .operand_flows = self.specialization_call_operand_flows[plan.field_flows.start .. plan.field_flows.start + plan.field_flows.len],
             .result_context_bindings = &.{},
             .context_bindings = &.{},
@@ -24825,7 +24823,6 @@ pub const CheckedProcedureTemplateTable = struct {
             .selection_edges = self.specialization_call_selection_edges[shape.selection_edges.start .. shape.selection_edges.start + shape.selection_edges.len],
             .argument_roots = self.specialization_call_root_edges[shape.argument_roots.start .. shape.argument_roots.start + shape.argument_roots.len],
             .result_root = shape.result_root,
-            .dispatcher_root = shape.dispatcher_root,
             .operand_flows = &.{},
             .result_context_bindings = &.{},
             .context_bindings = &.{},
@@ -24929,7 +24926,6 @@ pub const CheckedProcedureTemplateTable = struct {
             .selection_edges = self.specialization_call_selection_edges[shape.selection_edges.start .. shape.selection_edges.start + shape.selection_edges.len],
             .argument_roots = self.specialization_call_root_edges[shape.argument_roots.start .. shape.argument_roots.start + shape.argument_roots.len],
             .result_root = shape.result_root,
-            .dispatcher_root = shape.dispatcher_root,
             .operand_flows = self.specialization_call_operand_flows[plan.operand_flows.start .. plan.operand_flows.start + plan.operand_flows.len],
             .result_context_bindings = self.specialization_call_consumer_bindings[plan.result_context_bindings.start .. plan.result_context_bindings.start + plan.result_context_bindings.len],
             .context_bindings = self.specialization_call_consumer_bindings[plan.context_bindings.start .. plan.context_bindings.start + plan.context_bindings.len],
@@ -34806,7 +34802,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 76;
+    const serialized_layout_version: u32 = 77;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -41421,8 +41417,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x25, 0xC0, 0x9F, 0x75, 0x20, 0x09, 0x6E, 0xEC, 0x73, 0x66, 0x09, 0x73, 0x40, 0xB0, 0x41, 0x3D,
-        0x2A, 0x29, 0xBA, 0x4E, 0x5B, 0x66, 0x8F, 0xE8, 0x61, 0x6B, 0xD3, 0x15, 0x92, 0x48, 0x5C, 0x47,
+        0x55, 0x9C, 0x19, 0x5A, 0x74, 0xEE, 0xFA, 0x4B, 0xD7, 0xCC, 0x1E, 0x2B, 0x7E, 0xCF, 0xE3, 0x58,
+        0x94, 0x43, 0x37, 0x20, 0x2B, 0xC0, 0xBB, 0x8D, 0x74, 0x18, 0x7E, 0x78, 0xDC, 0xD6, 0xD3, 0x72,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

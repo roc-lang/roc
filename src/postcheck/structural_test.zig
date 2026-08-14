@@ -761,7 +761,7 @@ test "checked calls share one interned shape and have no whole-value plans" {
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallShape, "materializations"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "argument_roots"));
     try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "result_root"));
-    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallShape, "dispatcher_root"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallShape, "dispatcher_root"));
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallShape, "target_argument_roots"));
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallShape, "target_result_root"));
     try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallPlan, "slots"));
@@ -780,7 +780,7 @@ test "checked calls share one interned shape and have no whole-value plans" {
     const lower_source = @embedFile("monotype/lower.zig");
     try expectContains(lower_source, "plan.argument_roots[index]");
     try expectContains(lower_source, "plan.result_root");
-    try expectContains(lower_source, "plan.dispatcher_root");
+    try expectNotContains(lower_source, "plan.dispatcher_root");
     try expectNotContains(lower_source, "for (plan.selection_edges");
     try expectNotContains(lower_source, "fn callRootSelectionEdge(");
 }
