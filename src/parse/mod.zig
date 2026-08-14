@@ -259,6 +259,72 @@ test "whitespace-separated postfix after pipe applies to pipe result" {
     );
 }
 
+test "uppercase qualified value lookup ignores trivia before dot" {
+    const gpa = std.testing.allocator;
+    const source =
+        "(Blub.go(), Blub\n .go(), Blub\n .Inner\n .go(), " ++
+        "Blub\n .go()\n .next(), (Blub).go())";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const root = ast.store.getExpr(@enumFromInt(ast.root_node_idx));
+    try std.testing.expectEqual(.tuple, std.meta.activeTag(root));
+    const items = ast.store.exprSlice(root.tuple.items);
+    try std.testing.expectEqual(@as(usize, 5), items.len);
+
+    const qualifier_counts = [_]usize{ 1, 1, 2 };
+    for (items[0..3], qualifier_counts) |item, expected_qualifier_count| {
+        const call = ast.store.getExpr(item);
+        try std.testing.expectEqual(.apply, std.meta.activeTag(call));
+
+        const lookup = ast.store.getExpr(call.apply.@"fn");
+        try std.testing.expectEqual(.ident, std.meta.activeTag(lookup));
+        const qualifiers = ast.store.tokenSlice(lookup.ident.qualifiers);
+        try std.testing.expectEqual(expected_qualifier_count, qualifiers.len);
+        try std.testing.expectEqualStrings(
+            "Blub",
+            env.getIdent(ast.tokens.resolveIdentifier(@intCast(qualifiers[0])).?),
+        );
+        if (qualifiers.len == 2) {
+            try std.testing.expectEqualStrings(
+                "Inner",
+                env.getIdent(ast.tokens.resolveIdentifier(@intCast(qualifiers[1])).?),
+            );
+        }
+        try std.testing.expectEqualStrings(
+            "go",
+            env.getIdent(ast.tokens.resolveIdentifier(lookup.ident.token).?),
+        );
+    }
+
+    const chained_call = ast.store.getExpr(items[3]);
+    try std.testing.expectEqual(.method_call, std.meta.activeTag(chained_call));
+    try std.testing.expectEqualStrings(
+        "next",
+        env.getIdent(ast.tokens.resolveIdentifier(chained_call.method_call.method_token).?),
+    );
+    const chained_receiver = ast.store.getExpr(chained_call.method_call.receiver);
+    try std.testing.expectEqual(.apply, std.meta.activeTag(chained_receiver));
+    try std.testing.expectEqual(
+        .ident,
+        std.meta.activeTag(ast.store.getExpr(chained_receiver.apply.@"fn")),
+    );
+
+    const grouped_tag_call = ast.store.getExpr(items[4]);
+    try std.testing.expectEqual(.method_call, std.meta.activeTag(grouped_tag_call));
+    try std.testing.expectEqualStrings(
+        "go",
+        env.getIdent(ast.tokens.resolveIdentifier(grouped_tag_call.method_call.method_token).?),
+    );
+}
+
 test "grouped pipe target ending in a field access starts a new suffix path" {
     const gpa = std.testing.allocator;
 

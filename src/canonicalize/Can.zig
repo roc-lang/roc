@@ -1733,15 +1733,29 @@ fn joinedQualifierIdent(
     self: *Self,
     qualifier_tokens: []const u32,
 ) std.mem.Allocator.Error!?Ident.Idx {
+    std.debug.assert(qualifier_tokens.len > 0);
+    const final_ident = self.parse_ir.tokens.resolveIdentifier(@intCast(qualifier_tokens[qualifier_tokens.len - 1])) orelse return null;
+    return self.joinedQualifiedIdent(qualifier_tokens[0 .. qualifier_tokens.len - 1], final_ident);
+}
+
+/// A complete qualified name assembled from parser-produced identifier tokens.
+/// Source trivia between the segments is intentionally not part of its identity.
+fn joinedQualifiedIdent(
+    self: *Self,
+    qualifier_tokens: []const u32,
+    final_ident: Ident.Idx,
+) std.mem.Allocator.Error!?Ident.Idx {
     const bytes_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(bytes_top);
-    var first = true;
-    for (qualifier_tokens) |raw_tok| {
+
+    for (qualifier_tokens, 0..) |raw_tok, index| {
         const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse return null;
-        if (!first) try self.scratchAppendByte('.');
+        if (index > 0) try self.scratchAppendByte('.');
         try self.scratchAppendSlice(self.env.getIdent(segment));
-        first = false;
     }
+
+    if (qualifier_tokens.len > 0) try self.scratchAppendByte('.');
+    try self.scratchAppendSlice(self.env.getIdent(final_ident));
     return try self.env.insertIdent(base.Ident.for_text(self.scratchBytesFrom(bytes_top)));
 }
 
@@ -7616,7 +7630,7 @@ fn canonicalizeIdentExpr(
     if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
         const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
         if (qualifier_tokens.len > 0) {
-            if (try self.canonicalizeQualifiedIdentExpr(e, ident, region, qualifier_tokens)) |expr| {
+            if (try self.canonicalizeQualifiedIdentExpr(ident, region, qualifier_tokens)) |expr| {
                 return expr;
             }
         }
@@ -7633,18 +7647,11 @@ fn canonicalizeIdentExpr(
 
 fn canonicalizeQualifiedIdentExpr(
     self: *Self,
-    e: @TypeOf(@as(AST.Expr, undefined).ident),
     ident: Ident.Idx,
     region: Region,
     qualifier_tokens: []const u32,
 ) std.mem.Allocator.Error!?CanonicalizedExpr {
-    const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotLowerIdent};
-    const qualified_name_text = self.parse_ir.resolveQualifiedName(
-        e.qualifiers,
-        e.token,
-        &strip_tokens,
-    );
-    const qualified_ident = try self.env.insertIdent(base.Ident.for_text(qualified_name_text));
+    const qualified_ident = (try self.joinedQualifiedIdent(qualifier_tokens, ident)) orelse return null;
 
     switch (self.scopeLookup(.ident, qualified_ident)) {
         .found => |found_pattern_idx| {
@@ -14308,7 +14315,6 @@ fn finishNominalConstructionForType(
     }
 
     const qualifier_toks = self.parse_ir.store.tokenSlice(type_expr.qualifiers);
-    const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
     const first_tok_idx = qualifier_toks[0];
     const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse {
         return CanonicalizedExpr{
@@ -14319,12 +14325,27 @@ fn finishNominalConstructionForType(
         };
     };
     const is_imported = (try self.scopeLookupOrPrepareModule(first_tok_ident)) != null;
-    const full_type_name = self.parse_ir.resolveQualifiedName(type_expr.qualifiers, type_expr.token, &strip_tokens);
+    const final_type_ident = self.parse_ir.tokens.resolveIdentifier(type_expr.token) orelse {
+        return CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } }),
+            .free_vars = DataSpan.empty(),
+        };
+    };
+    const full_type_ident = (try self.joinedQualifiedIdent(qualifier_toks, final_type_ident)) orelse {
+        return CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } }),
+            .free_vars = DataSpan.empty(),
+        };
+    };
+    const full_type_name = self.env.getIdent(full_type_ident);
 
     if (self.lookupAvailableModuleEnv(first_tok_ident)) |auto_imported_type| {
         if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_tok_ident, full_type_name)) |target_node_idx| {
             const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type);
-            const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
 
             if (try self.validateImportedNominalTagTarget(Expr.Idx, auto_imported_type.env, target_node_idx, first_tok_ident, full_type_ident, type_region)) |malformed_idx| {
                 return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
@@ -14343,7 +14364,6 @@ fn finishNominalConstructionForType(
     }
 
     if (!is_imported) {
-        const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
         const nominal_type_decl_stmt_idx = (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) orelse {
             return CanonicalizedExpr{
                 .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
@@ -14691,7 +14711,6 @@ fn finishTagExprWithArgs(
         // If it does, look up the type in that module; otherwise, look up locally.
 
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
-        const strip_tokens = [_]tokenize.Token.Tag{.NoSpaceDotUpperIdent};
 
         // Check if the first qualifier is an imported name
         const first_tok_idx = qualifier_toks[0];
@@ -14703,12 +14722,8 @@ fn finishTagExprWithArgs(
         const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
-        const full_type_name = self.parse_ir.resolveQualifiedName(
-            e.qualifiers,
-            qualifier_toks[qualifier_toks.len - 1],
-            &strip_tokens,
-        );
-        const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
+        const full_type_ident = (try self.joinedQualifierIdent(qualifier_toks)) orelse unreachable;
+        const full_type_name = self.env.getIdent(full_type_ident);
 
         if (!is_imported) {
             // Local reference: look up the type locally
