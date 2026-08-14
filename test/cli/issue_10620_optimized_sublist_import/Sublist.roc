@@ -23,6 +23,7 @@ Sublist :: {}.{
 				length_diff = list2.len() - list1.len()
 				maybe_equal_index =
 					(0..=length_diff)
+						.iter()
 						.fold([], |acc, x| acc.append(x))
 						.find_first(
 							|start| {

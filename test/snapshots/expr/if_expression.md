@@ -10,16 +10,13 @@ if x > 5 "big" else "small"
 # EXPECTED
 UNCONDITIONAL CONDITION - if_expression.md:1:4:1:9
 # PROBLEMS
+── ● unconditional condition ────────────────────────────── if_expression.md:1:4
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
-└┬────────────────────────┘  this conditional will always make the same       │
- │                           choice.                                          │
- │                                                                            │
- │  if x > 5 "big" else "small"                                               │
- │     ‾‾‾‾‾                                                                  │
- └────────────────────────────────────────────────────── if_expression.md:1:4 ┘
+This if condition is known at compile time, so this conditional will always
+make the same choice.
 
+if x > 5 "big" else "small"
+   ^^^^^
 
 # TOKENS
 ~~~zig
@@ -46,7 +43,7 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-dispatch-call (method "is_gt") (constraint-fn-var 208)
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 218)
 				(receiver
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(args

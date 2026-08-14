@@ -17,29 +17,27 @@ app [
 EXPOSED BUT NOT DEFINED - app.md:3:2:3:5
 EXPOSED BUT NOT DEFINED - app.md:2:2:2:5
 # PROBLEMS
+── ✗ exposed but not defined ──────────────────────────────────────── app.md:3:2
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `a2!` is exposed, ───┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  a2!                                                                       │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────────────────── app.md:3:2 ┘
+The mod header says that a2! is exposed, but it is not defined anywhere in
+this mod.
 
-    You can fix this by either defining `a2!` in this mod, or by removing it
-    from the list of exposed values.
+a2!
+^^^
 
+You can fix this by either defining a2! in this mod, or by removing it from
+the list of exposed values.
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `a1!` is exposed, ───┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  a1!,                                                                      │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────────────────── app.md:2:2 ┘
+── ✗ exposed but not defined ──────────────────────────────────────── app.md:2:2
 
-    You can fix this by either defining `a1!` in this mod, or by removing it
-    from the list of exposed values.
+The mod header says that a1! is exposed, but it is not defined anywhere in
+this mod.
+
+a1!,
+^^^
+
+You can fix this by either defining a1! in this mod, or by removing it from
+the list of exposed values.
 
 # TOKENS
 ~~~zig

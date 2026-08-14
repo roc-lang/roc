@@ -30,29 +30,27 @@ VAR REASSIGNMENT ERROR - :0:0:0:0
 VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:2:17:2:22
 # PROBLEMS
+── ✗ var reassignment error ────────────────────────────────────────────────────
 
-VAR REASSIGNMENT ERROR
+Cannot reassign a var from outside the function where it was declared.
 
-Cannot reassign a `var` from outside the function where it was declared.
-Variables declared with `var` can only be reassigned within the same function scope.
+Variables declared with var can only be reassigned within the same function scope.
 
+── ✗ var reassignment error ────────────────────────────────────────────────────
 
-VAR REASSIGNMENT ERROR
+Cannot reassign a var from outside the function where it was declared.
 
-Cannot reassign a `var` from outside the function where it was declared.
-Variables declared with `var` can only be reassigned within the same function scope.
+Variables declared with var can only be reassigned within the same function scope.
 
+── ● unused variable ─────────────────────── can_var_scoping_regular_var.md:2:17
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `items` is defined here and then never used. ───┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processItems = |items| {                                                  │
- │                  ‾‾‾‾‾                                                     │
- └─────────────────────────────────────── can_var_scoping_regular_var.md:2:17 ┘
+Variable items is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_items`
-    to suppress this warning.
+processItems = |items| {
+                ^^^^^
+
+If you don't need this variable, prefix it with an underscore like _items to
+suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -145,7 +143,7 @@ NO CHANGE
 					(e-num (value "0")))
 				(s-reassign
 					(p-assign (ident "count_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 253)
+					(e-dispatch-call (method "plus") (constraint-fn-var 263)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "count_"))))
@@ -153,7 +151,7 @@ NO CHANGE
 							(e-num (value "1")))))
 				(s-reassign
 					(p-assign (ident "total_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 262)
+					(e-dispatch-call (method "plus") (constraint-fn-var 272)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "total_"))))
@@ -178,11 +176,11 @@ NO CHANGE
 									(p-assign (ident "count_")))))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 266)
+					(e-call (constraint-fn-var 276)
 						(e-lookup-local
 							(p-assign (ident "nestedFunc")))
 						(e-empty_record)))
-				(e-dispatch-call (method "plus") (constraint-fn-var 267)
+				(e-dispatch-call (method "plus") (constraint-fn-var 277)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "total_"))))

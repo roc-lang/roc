@@ -611,7 +611,7 @@ pub const SyntaxChecker = struct {
                 for (entry.reports) |report| {
                     switch (report.severity) {
                         .runtime_error, .fatal => return false,
-                        .info, .warning => {},
+                        .warning => {},
                     }
                 }
             }
@@ -832,7 +832,6 @@ pub const SyntaxChecker = struct {
         const range = self.rangeFromReport(rep);
         const severity: u32 = switch (rep.severity) {
             .warning => 2,
-            .info => 3,
             .runtime_error, .fatal => 1,
         };
 
@@ -890,6 +889,7 @@ pub const SyntaxChecker = struct {
                 .link,
                 .vertical_stack,
                 .horizontal_concat,
+                .source_location,
                 => {},
             }
         }
@@ -948,6 +948,7 @@ pub const SyntaxChecker = struct {
             .source_code_region => |region| return textHasAny(region.line_text, needles),
             .source_code_multi_region => |multi| return textHasAny(multi.source, needles),
             .source_code_with_underlines => |with_underlines| return textHasAny(with_underlines.display_region.line_text, needles),
+            .source_location => {},
             .line_break,
             .indent,
             .space,

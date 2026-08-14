@@ -17,18 +17,16 @@ main = {
 # EXPECTED
 TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
 # PROBLEMS
+── ✗ type mismatch ─────────────────────────── generalize_alias_in_tuple.md:7:14
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  (a(1), a("x"), b(2))                                                      │
- │           ‾‾‾                                                              │
- └───────────────────────────────────────── generalize_alias_in_tuple.md:7:14 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+(a(1), a("x"), b(2))
+         ^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -118,15 +116,15 @@ main = {
 					(p-assign (ident "t"))))
 			(e-tuple
 				(elems
-					(e-call (constraint-fn-var 230)
+					(e-call (constraint-fn-var 240)
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-num (value "1")))
-					(e-call (constraint-fn-var 239)
+					(e-call (constraint-fn-var 249)
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-runtime-error (tag "erroneous_value_expr")))
-					(e-call (constraint-fn-var 247)
+					(e-call (constraint-fn-var 257)
 						(e-lookup-local
 							(p-assign (ident "b")))
 						(e-num (value "2"))))))))

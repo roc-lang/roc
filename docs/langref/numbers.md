@@ -117,9 +117,9 @@ general trade-offs are:
 
 ## Ranges
 
-The range operators build an [iterator](iterators) over a span of numbers.
-`start..<end` counts up from `start` to `end` without including `end`, and
-`start..=end` includes `end`:
+The range operators build a reusable [`Range`](../Num#Range) value describing
+a span of numbers. `start..<end` excludes `end`, while `start..=end` includes
+it:
 
 ```roc
 var $sum = 0
@@ -129,22 +129,34 @@ for n in 0..<3 {
 }
 ```
 
-Both bounds must have the same type, and the range is an `Iter` of that type:
-a `U8` range is an `Iter(U8)`, a `Dec` range is an `Iter(Dec)`, and so on.
-When nothing pins the bounds' type, range literals [default](#defaulting-to-dec)
-the same way other number literals do.
+Both bounds must have the same type. A `U8` range is a `Range(U8)`, a `Dec`
+range is a `Range(Dec)`, and so on. When nothing pins the bounds' type, range
+literals [default](#defaulting-to-dec) the same way other number literals do.
 
-A range counts up in steps of 1, and is empty when `start` is not below (`..<`)
-or at (`..=`) `end`—there are no reversed ranges. All the builtin number
-types support ranges, including the fractional ones: `0.5..<3.5` yields `0.5`,
-`1.5`, and `2.5`. For `F32` and `F64`, once the values are large enough that
-adding 1 can no longer produce a bigger float, the range yields that value once
-and then ends.
+A range starts with a step of 1. Calling `range.step_by(new_step)` replaces that
+absolute step; calling it a second time replaces the first step rather than
+multiplying them. `range.size_hint()` returns `Known(count)` when the exact
+count fits in a `U64`, and `Unknown` otherwise.
+
+Call `range.iter()` to obtain a forward iterator. Integer and `Dec` ranges also
+support `range.iter_rev()`, which produces the same lower-anchored members in
+reverse order. For example, `(5.I64..=12).step_by(2).iter_rev()` yields 11, 9,
+7, and 5. `F32` and `F64` support forward ranges but deliberately do not
+support `iter_rev`, because repeated floating-point addition is not exactly
+reversible. Once adding the step can no longer produce a larger float, forward
+iteration yields the current value once and then ends.
+
+A range is empty when its lower bound is not below (`..<`) or at (`..=`) its
+upper bound, or when its step is not positive. `for` loops call the range's
+`iter` method automatically, as in the example above.
 
 Like the other operators, ranges use [static dispatch](static-dispatch#operators):
-`start..<end` calls the `range_exclusive` method on the bounds' type, and
-`start..=end` calls `range_inclusive`, so custom number types can support range
-syntax by defining those methods.
+`start..<end` calls `range_exclusive_to` on the bounds' type, and
+`start..=end` calls `range_inclusive_to`. The corresponding
+`range_exclusive_from` and `range_inclusive_from` methods opt a type into exact
+reverse iteration. Third-party numeric types can construct the stored value
+with `Range.custom` and define `range_iter` using their own arithmetic—no
+interaction with `U64` is required for the stored step.
 
 ### Fractions
 

@@ -19,113 +19,99 @@ UNEXPECTED STATEMENT - fuzz_crash_015.md:3:1:3:4
 UNEXPECTED STATEMENT - fuzz_crash_015.md:3:4:3:6
 UNEXPECTED STATEMENT - fuzz_crash_015.md:4:1:4:3
 # PROBLEMS
-
-LEADING ZERO
+── ✗ leading zero ──────────────────────────────────────────────────────────────
 
 Numbers cannot have leading zeros.
 
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:1:1
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  0o0.0                                                                     │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_015.md:1:1 ┘
+0o0.0
+^^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I found `0o0` here.
+I found 0o0 here.
 
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:1:4
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  0o0.0                                                                     │
- │     ‾‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_015.md:1:4 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+0o0.0
+   ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.0` here.
+For example:
+    answer = 42
 
+I found .0 here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  0_0                                                                       │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_015.md:2:1 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:2:1
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+0_0
+^^^
 
-    I found `0_0` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  0u8.0                                                                     │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_015.md:3:1 ┘
+I found 0_0 here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:3:1
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `0u8` here.
+0u8.0
+^^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  0u8.0                                                                     │
- │     ‾‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_015.md:3:4 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found 0u8 here.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:3:4
 
-    I found `.0` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+0u8.0
+   ^^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  0_                                                                        │
- │  ‾‾                                                                        │
- └───────────────────────────────────────────────────── fuzz_crash_015.md:4:1 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found .0 here.
 
-    I found `0_` here.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_015.md:4:1
+
+I was parsing a statement, and this token cannot start a statement here.
+
+0_
+^^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found 0_ here.
 
 # TOKENS
 ~~~zig

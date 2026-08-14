@@ -10,18 +10,16 @@ type=expr
 # EXPECTED
 MISSING METHOD - bool_closure_type_check.md:1:6:1:8
 # PROBLEMS
+── ✗ missing method ───────────────────────────── bool_closure_type_check.md:1:6
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
-└┬───────────────┘  doesn't have that method.                                 │
- │                                                                            │
- │  (|x| !x)(True)                                                            │
- │       ‾‾                                                                   │
- └──────────────────────────────────────────── bool_closure_type_check.md:1:6 ┘
+This not method is being called on a value whose type doesn't have that method.
 
-    The value's type, which does not have a method named `not`, is:
+(|x| !x)(True)
+     ^^
 
-        [True, ..]
+The value's type, which does not have a method named not, is:
+
+    [True, ..]
 
 # TOKENS
 ~~~zig
@@ -45,7 +43,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 199)
+(e-call (constraint-fn-var 209)
 	(e-lambda
 		(args
 			(p-assign (ident "x")))

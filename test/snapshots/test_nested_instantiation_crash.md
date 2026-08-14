@@ -23,22 +23,20 @@ answer = composed([42])
 # EXPECTED
 TYPE MISMATCH - test_nested_instantiation_crash.md:12:16:12:41
 # PROBLEMS
+── ✗ type mismatch ──────────────────── test_nested_instantiation_crash.md:12:16
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  composed = |n| get_value(make_record(n))                                  │
- │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
- └────────────────────────────────── test_nested_instantiation_crash.md:12:16 ┘
+This expression is used in an unexpected way.
 
-    It has the type:
+composed = |n| get_value(make_record(n))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        List(a)
+It has the type:
 
-    But the annotation says it should be:
+    List(a)
 
-        Str
+But the annotation says it should be:
+
+    Str
 
 # TOKENS
 ~~~zig
@@ -194,7 +192,7 @@ answer = composed([42])
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call (constraint-fn-var 322)
+		(e-call (constraint-fn-var 332)
 			(e-lookup-local
 				(p-assign (ident "composed")))
 			(e-list

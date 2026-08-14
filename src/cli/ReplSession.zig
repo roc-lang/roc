@@ -2883,7 +2883,7 @@ test "Repl - missing file import reports a graceful diagnostic instead of panick
     const result = try repl.step("import \"./repl_file_that_definitely_does_not_exist.txt\" as data : Str");
     defer testing.allocator.free(result);
 
-    try testing.expect(std.mem.find(u8, result, "FILE NOT FOUND") != null);
+    try testing.expect(std.mem.find(u8, result, "file not found") != null);
 }
 
 test "Repl - simple expressions" {
@@ -3076,7 +3076,7 @@ test "Repl - List.append" {
 }
 
 test "Repl - range_to" {
-    try expectInterpreter("Iter.fold(1..=3, [], |acc, item| acc.append(item))", "[1.0, 2.0, 3.0]");
+    try expectInterpreter("Iter.fold((1..=3).iter(), [], |acc, item| acc.append(item))", "[1.0, 2.0, 3.0]");
 }
 
 test "Repl - list_sort_with lengths" {
@@ -3160,7 +3160,7 @@ test "Repl - issue 10576 generalized record update rejects an optional field" {
 
     const result = try repl.step("f(v)");
     defer testing.allocator.free(result);
-    try testing.expect(std.mem.find(u8, result, "TYPE MISMATCH") != null);
+    try testing.expect(std.mem.find(u8, result, "type mismatch") != null);
 }
 
 test "Repl - top-level destructure definitions publish their binders" {
@@ -3248,7 +3248,7 @@ test "Repl - invalid syntax preserves definitions" {
 
     const diagnostic = try repl.step("x +");
     defer testing.allocator.free(diagnostic);
-    try testing.expect(std.mem.find(u8, diagnostic, "UNEXPECTED EXPRESSION SYNTAX") != null);
+    try testing.expect(std.mem.find(u8, diagnostic, "unexpected expression syntax") != null);
 
     const result = try repl.step("x");
     defer testing.allocator.free(result);

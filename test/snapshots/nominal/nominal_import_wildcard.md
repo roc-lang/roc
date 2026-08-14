@@ -22,52 +22,41 @@ UNDECLARED TYPE - nominal_import_wildcard.md:3:7:3:12
 UNDECLARED TYPE - nominal_import_wildcard.md:6:8:6:13
 UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 # PROBLEMS
+── ✗ unexpected statement ────────────────────── nominal_import_wildcard.md:1:13
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  import Color.*                                                            │
- │              ‾‾                                                            │
- └─────────────────────────────────────────── nominal_import_wildcard.md:1:13 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+import Color.*
+            ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.*` here.
+For example:
+    answer = 42
 
+I found .* here.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  red : Color                                                               │
- │        ‾‾‾‾‾                                                               │
- └──────────────────────────────────────────── nominal_import_wildcard.md:3:7 ┘
+── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:3:7
 
+The type Color is not declared in this scope.
 
+red : Color
+      ^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  blue : Color                                                              │
- │         ‾‾‾‾‾                                                              │
- └──────────────────────────────────────────── nominal_import_wildcard.md:6:8 ┘
+── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:6:8
 
+The type Color is not declared in this scope.
 
+blue : Color
+       ^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  green : Color                                                             │
- │          ‾‾‾‾‾                                                             │
- └──────────────────────────────────────────── nominal_import_wildcard.md:9:9 ┘
+── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:9:9
 
+The type Color is not declared in this scope.
+
+green : Color
+        ^^^^^
 
 # TOKENS
 ~~~zig

@@ -151,8 +151,7 @@ pub const IteratorKind = enum(u8) {
     list_rev,
     str,
     single,
-    range_exclusive,
-    range_inclusive,
+    range,
     numeric_until,
     numeric_to,
     map,
@@ -169,7 +168,7 @@ pub const IteratorKind = enum(u8) {
     pub fn componentTopology(self: IteratorKind) ?IteratorComponentTopology {
         return switch (self) {
             .none, .forced_dynamic => null,
-            .range_exclusive, .range_inclusive, .numeric_until, .numeric_to => .source_without_components,
+            .range, .numeric_until, .numeric_to => .source_without_components,
             .custom, .list, .list_rev, .str, .single => .source_with_components,
             .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append => .adapter,
         };
@@ -212,10 +211,8 @@ pub const IteratorProcedureId = enum(u8) {
     iter_drop_first,
     iter_concat,
     iter_append,
-    iter_exclusive_range,
-    iter_inclusive_range,
-    numeric_range_exclusive,
-    numeric_range_inclusive,
+    range_iter,
+    numeric_range_delegate,
     numeric_to,
     numeric_until,
     iter_from_step,
@@ -242,10 +239,8 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_drop_first,
             .iter_concat,
             .iter_append,
-            .iter_exclusive_range,
-            .iter_inclusive_range,
-            .numeric_range_exclusive,
-            .numeric_range_inclusive,
+            .range_iter,
+            .numeric_range_delegate,
             .numeric_to,
             .numeric_until,
             .iter_from_step,
@@ -260,7 +255,7 @@ pub const IteratorProcedureId = enum(u8) {
     /// construction reads it instead of restating kinds beside each arm.
     pub fn iteratorKind(self: IteratorProcedureId) ?IteratorKind {
         return switch (self) {
-            .iter_iter, .iter_next, .iter_from_step, .range_done => null,
+            .iter_iter, .iter_next, .numeric_range_delegate, .iter_from_step, .range_done => null,
             .iter_custom => .custom,
             .iter_single => .single,
             .list_iter => .list,
@@ -273,8 +268,7 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_drop_first => .drop_first,
             .iter_concat => .concat,
             .iter_append => .append,
-            .iter_exclusive_range, .numeric_range_exclusive => .range_exclusive,
-            .iter_inclusive_range, .numeric_range_inclusive => .range_inclusive,
+            .range_iter => .range,
             .numeric_to => .numeric_to,
             .numeric_until => .numeric_until,
         };
@@ -304,10 +298,8 @@ pub const IteratorProcedureId = enum(u8) {
             .iter_drop_first,
             .iter_concat,
             .iter_append,
-            .iter_exclusive_range,
-            .iter_inclusive_range,
-            .numeric_range_exclusive,
-            .numeric_range_inclusive,
+            .range_iter,
+            .numeric_range_delegate,
             .numeric_to,
             .numeric_until,
             .iter_from_step,
@@ -334,17 +326,16 @@ const iterator_procedure_base_names = [_]IteratorProcedureNameEntry{
     .{ "Builtin.Iter.drop_first", .iter_drop_first },
     .{ "Builtin.Iter.concat", .iter_concat },
     .{ "Builtin.Iter.append", .iter_append },
-    .{ "Builtin.Iter.exclusive_range", .iter_exclusive_range },
-    .{ "Builtin.Iter.inclusive_range", .iter_inclusive_range },
+    .{ "Builtin.Num.Range.iter", .range_iter },
     .{ "iter_from_step", .iter_from_step },
     .{ "Builtin.iter_from_step", .iter_from_step },
     .{ "range_done", .range_done },
     .{ "Builtin.range_done", .range_done },
 };
 
-// Single-sourced from BuiltinLowLevel so the numeric rosters cannot drift
-// from the low-level registration tables: ranges cover every numeric type,
-// while `to`/`until` (which need `minus_try`) exclude the IEEE floats.
+// Single-sourced from BuiltinLowLevel so the numeric rosters cannot drift from
+// the low-level registration tables. Range iteration covers every numeric
+// type, while `to`/`until` need `minus_try` and therefore exclude IEEE floats.
 const iterator_range_numeric_type_names = can.BuiltinLowLevel.numeric_type_names;
 
 const iterator_to_until_numeric_type_names = can.BuiltinLowLevel.non_float_numeric_type_names;
@@ -352,15 +343,13 @@ const iterator_to_until_numeric_type_names = can.BuiltinLowLevel.non_float_numer
 const iterator_procedure_name_entries = blk: {
     var entries: [
         iterator_procedure_base_names.len +
-            iterator_range_numeric_type_names.len * 2 +
+            iterator_range_numeric_type_names.len +
             iterator_to_until_numeric_type_names.len * 2
     ]IteratorProcedureNameEntry = undefined;
     for (iterator_procedure_base_names, 0..) |entry, index| entries[index] = entry;
     var index = iterator_procedure_base_names.len;
     for (iterator_range_numeric_type_names) |numeric| {
-        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".range_exclusive", .numeric_range_exclusive };
-        index += 1;
-        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".range_inclusive", .numeric_range_inclusive };
+        entries[index] = .{ "Builtin.Num." ++ numeric ++ ".range_iter", .numeric_range_delegate };
         index += 1;
     }
     for (iterator_to_until_numeric_type_names) |numeric| {
@@ -398,7 +387,7 @@ pub const hoist_preserving_method_names = [_][]const u8{ "iter", "iter_rev" };
 /// representation arrives through procedure-return propagation—but their
 /// closed receiver must stay hoistable exactly like the producer they
 /// delegate to.
-const hoist_preserving_delegating_owners = [_][]const u8{ "Builtin.Dict", "Builtin.Set" };
+const hoist_preserving_delegating_owners = [_][]const u8{ "Builtin.Dict", "Builtin.Set", "Builtin.Num.Range" };
 
 /// Built from the two rosters above rather than listed separately, so the
 /// delegating names cannot drift from the method names the checker

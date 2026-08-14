@@ -10,25 +10,22 @@ match 42 {}
 # EXPECTED
 EMPTY MATCH - empty_match.md:1:1:1:6
 # PROBLEMS
+── ✗ empty match ──────────────────────────────────────────── empty_match.md:1:1
 
-┌─────────────┐
-│ EMPTY MATCH ├─ I was parsing a match expression, but it has no branches. ───┐
-└┬────────────┘                                                               │
- │                                                                            │
- │  match 42 {}                                                               │
- │  ‾‾‾‾‾                                                                     │
- └──────────────────────────────────────────────────────── empty_match.md:1:1 ┘
+I was parsing a match expression, but it has no branches.
 
-    A match expression needs at least one branch inside the braces.
+match 42 {}
+^^^^^
 
-    For example:
-        match result {
-            Ok(value) => value
-        }
+A match expression needs at least one branch inside the braces.
 
-    I found `match` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+For example:
+    match result {
+        Ok(value) => value
+    }
+
+I found match here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
 # TOKENS
 ~~~zig

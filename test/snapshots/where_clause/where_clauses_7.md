@@ -21,37 +21,25 @@ Decode(a) : a
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:1:1:8:19
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:10:1:11:34
 # PROBLEMS
+── ✗ where clause not allowed in type declaration ─────── where_clauses_7.md:1:1
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  Hash(a, hasher) # After header                                            │
- │      : # After colon                                                       │
- │          a # After var                                                     │
- │              where [ # After where                                         │
- │                  a.hash : hasher # After method                            │
- │                      -> # After arrow                                      │
- │                          hasher, # After first clause                      │
- │                  hasher.Hasher]                                            │
- │                                                                            │
- └──────────────────────────────────────────────────── where_clauses_7.md:1:1 ┘
+You cannot define a where clause inside a type declaration.
 
-    You're attempting do this here:
+Hash(a, hasher) # After header
+    : # After colon
+        a # After var
+            where [ # After where
+                a.hash : hasher # After method
+                    -> # After arrow
+                        hasher, # After first clause
+                hasher.Hasher]
 
+── ✗ where clause not allowed in type declaration ────── where_clauses_7.md:10:1
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  Decode(a) : a                                                             │
- │      where [a.decode : List(U8) -> a]                                      │
- │                                                                            │
- └─────────────────────────────────────────────────── where_clauses_7.md:10:1 ┘
+You cannot define a where clause inside a type declaration.
 
-    You're attempting do this here:
+Decode(a) : a
+    where [a.decode : List(U8) -> a]
 
 # TOKENS
 ~~~zig

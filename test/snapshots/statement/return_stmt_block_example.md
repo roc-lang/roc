@@ -100,7 +100,7 @@ foo = |num| {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 250)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 260)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num"))))
