@@ -4920,6 +4920,22 @@ of the value.
 
 Restrictions:
 
+- `??` may be declared ONLY on a direct field of the record that is the
+  immediate backing of a nominal (`:=`) type declaration. Every structural
+  record type position—a type alias, an inline value annotation, or a
+  record NESTED inside a nominal backing—rejects at canonicalization with
+  "Default Not Allowed In Structural Record" (judged on `is_nominal_backing`
+  in the record-annotation kernel, the same flag as the unnamed-field
+  restriction; the default is dropped and the field degrades to required).
+  Two payoffs: two same-shape structural types can no longer be silently
+  default-incompatible—the `defaulted(d1) ~ defaulted(d2)` conflict and its
+  "Incompatible Defaults" report are no longer constructible from source and
+  remain as identity-skew invariants, pinned at the unify level—and every
+  omission site of a defaulted field is a syntactically explicit nominal
+  construction (`Cfg.{...}`), which is what enables canonicalize-side
+  default-cycle analysis for the pure-expression defaults work. Derived
+  codecs reach defaulted fields through the nominal's derived methods
+  (`parser_for : _` etc.), which derive against the backing row.
 - `?:` and `??` do not combine: a default makes the field never missing,
   which makes the tagged slot and `.?` pointless—`a ?: U8 ?? 10` is
   rejected at canonicalization with exactly that explanation.
@@ -5134,7 +5150,7 @@ Only the PER-FIELD demand becomes kind-directed:
   unify. Chained/nested updates compose because every update's type equals
   its base's type.
 
-Lowering (IMPLEMENTED). The checked artifact carries each record
+Lowering (IMPLEMENTED). The CheckedModule carries each record
 expression's unset field labels explicitly (`CheckedExprData.record.unsets`,
 serialized through `record_unset_label_pool`)—lowering consumes that list,
 never re-derives it. In an UPDATE, both lowering pipelines (monotype

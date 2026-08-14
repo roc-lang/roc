@@ -3069,7 +3069,14 @@ pub const ReportBuilder = struct {
         for (hints.slice()) |hint| {
             switch (hint) {
                 .field_default_mismatch => |fdm| return fdm,
-                else => {},
+                .arity_mismatch,
+                .fields_missing,
+                .field_typo,
+                .tag_typo,
+                .effect_mismatch,
+                .ext_mismatch,
+                .field_presence_mismatch,
+                => {},
             }
         }
         return null;

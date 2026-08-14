@@ -22,8 +22,10 @@ maximum_memory = 65536
 initial_stack_size = 14752
 global_base = 6592
 
-config : { retries : U8 ?? 3 }
-config = {}
+Config := { retries : U8 ?? 3 }
+
+config : Config
+config = Config.{}
 
 main_for_host! : () => Str
 main_for_host! = main!

@@ -291,6 +291,7 @@ pub const Tag = enum {
     diag_deprecated_number_suffix,
     diag_range_op_chained,
     diag_unnamed_field_cannot_have_default,
+    diag_default_not_allowed_in_structural_record,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.

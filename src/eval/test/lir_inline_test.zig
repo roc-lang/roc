@@ -6988,10 +6988,10 @@ test "custom literal field default owns its conversion root" {
         \\    from_quote = |str| Ok(Label(str))
         \\}
         \\
-        \\Config : { size : MyNum ?? 5, label : Label ?? "hi" }
+        \\Config := { size : MyNum ?? 5, label : Label ?? "hi" }
         \\
         \\config : Config
-        \\config = {}
+        \\config = Config.{}
         \\
         \\main = config.size
     ;

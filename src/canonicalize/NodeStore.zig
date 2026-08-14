@@ -267,6 +267,7 @@ const DiagnosticNodeTag = enum {
     diag_deprecated_number_suffix,
     diag_range_op_chained,
     diag_unnamed_field_cannot_have_default,
+    diag_default_not_allowed_in_structural_record,
 };
 
 gpa: Allocator,
@@ -746,7 +747,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 92;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 93;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5230,6 +5231,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_unnamed_field_cannot_have_default;
             region = r.region;
         },
+        .default_not_allowed_in_structural_record => |r| {
+            node.tag = .diag_default_not_allowed_in_structural_record;
+            region = r.region;
+        },
         .record_default_not_literal => |r| {
             node.tag = .diag_record_default_not_literal;
             region = r.region;
@@ -5819,6 +5824,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_unnamed_field_cannot_have_default => return CIR.Diagnostic{ .unnamed_field_cannot_have_default = .{
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_default_not_allowed_in_structural_record => return CIR.Diagnostic{ .default_not_allowed_in_structural_record = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_record_default_not_literal => return CIR.Diagnostic{ .record_default_not_literal = .{

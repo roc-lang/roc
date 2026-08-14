@@ -394,7 +394,7 @@ test "long alternating field-access chains canonicalize without recursive path n
 
 test "defaulted record annotation field canonicalizes its default expression" {
     const allocator = std.testing.allocator;
-    const source = "Example : { x : U32, y : U32 ?? 10, z : U32 }";
+    const source = "Example := { x : U32, y : U32 ?? 10, z : U32 }";
 
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
@@ -417,9 +417,9 @@ test "defaulted record annotation field canonicalizes its default expression" {
     const statement_idx = env.store.statementAt(env.type_decls, 0);
     const anno_idx = blk_anno_idx: {
         const scrutinee = env.store.getStatement(statement_idx);
-        if (scrutinee != .s_alias_decl) return error.ExpectedAliasDeclaration;
-        const alias = scrutinee.s_alias_decl;
-        break :blk_anno_idx alias.anno;
+        if (scrutinee != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+        const nominal = scrutinee.s_nominal_decl;
+        break :blk_anno_idx nominal.anno;
     };
     const record = blk_record: {
         const scrutinee = env.store.getTypeAnno(anno_idx);
@@ -461,12 +461,15 @@ test "optional field with default is rejected at canonicalization" {
     try can.canonicalizeFile();
 
     // The `?:` + `??` combination is rejected and the default dropped
-    // (design.md "Defaulted Fields").
+    // (design.md "Defaulted Fields"). PRECEDENCE PIN: even though this alias
+    // is also an illegal position for a default, the more specific shape
+    // conflict wins and exactly one diagnostic fires per offending field.
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
     var found = false;
     for (diagnostics) |diag| {
         if (diag == .optional_field_cannot_have_default) found = true;
+        try std.testing.expect(diag != .default_not_allowed_in_structural_record);
     }
     try std.testing.expect(found);
 
@@ -518,8 +521,12 @@ test "unnamed nominal field with a default reports the padding restriction" {
     try std.testing.expectEqualStrings("Unnamed Field Cannot Have A Default", report.title);
 }
 
-test "local-binding default is rejected as non-literal at canonicalization" {
+test "default in an inline annotation is rejected as structural" {
     const allocator = std.testing.allocator;
+    // Formerly the local-capture non-literal test: under the nominal-only
+    // rule an inline annotation can never carry a `??` at all, so the
+    // local-capture scenario (a default referencing a lambda binding) is
+    // structurally unreachable—nominal declarations are top-level only.
     const source =
         \\f = |n| {
         \\    y : { a : U8 ?? n }
@@ -545,23 +552,96 @@ test "local-binding default is rejected as non-literal at canonicalization" {
 
     try can.canonicalizeFile();
 
-    // A default must be a closed literal; a reference to the lambda
-    // parameter is a name reference and is rejected, dropping the default
-    // (design.md "Defaulted Fields").
+    // The position error fires (and, because the default is dropped before
+    // it is canonicalized, the literal judgment never runs on it).
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
     var found = false;
     for (diagnostics) |diag| {
-        if (diag == .record_default_not_literal) found = true;
+        if (diag == .default_not_allowed_in_structural_record) found = true;
+        try std.testing.expect(diag != .record_default_not_literal);
     }
     try std.testing.expect(found);
+}
+
+test "default in a type alias is rejected as structural" {
+    const allocator = std.testing.allocator;
+    const source = "Cfg : { a : U8 ?? 1 }";
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.len);
+    var report = try env.diagnosticToReport(diagnostics[0], allocator, "Test.roc");
+    defer report.deinit();
+    try std.testing.expectEqualStrings("Default Not Allowed In Structural Record", report.title);
+
+    // The field survives as plain required with no default.
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_alias_decl) return error.ExpectedAliasDeclaration;
+    const anno = env.store.getTypeAnno(statement.s_alias_decl.anno);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), fields.len);
+    const field = env.store.getAnnoRecordField(fields[0]);
+    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), field.default_value);
+}
+
+test "default on a nested record inside a nominal backing is rejected" {
+    const allocator = std.testing.allocator;
+    // Direct fields only: the nested record type is structural even though
+    // it appears inside a nominal declaration's backing.
+    const source = "A := { inner : { x : U8 ?? 1 } }";
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.len);
+    var report = try env.diagnosticToReport(diagnostics[0], allocator, "Test.roc");
+    defer report.deinit();
+    try std.testing.expectEqualStrings("Default Not Allowed In Structural Record", report.title);
 }
 
 test "self-referential default is rejected as non-literal at canonicalization" {
     const allocator = std.testing.allocator;
     const source =
-        \\x : { a : U8 ?? x.a }
-        \\x = {}
+        \\X := { a : U8 ?? x.a }
+        \\
+        \\x : X
+        \\x = X.{}
     ;
 
     var builtin_ctx = try BuiltinTestContext.init(allocator);
@@ -596,7 +676,7 @@ test "self-referential default is rejected as non-literal at canonicalization" {
 test "type-declaration default referencing a def is rejected as non-literal" {
     const allocator = std.testing.allocator;
     const source =
-        \\Cfg : { a : U8 ?? foo }
+        \\Cfg := { a : U8 ?? foo }
         \\
         \\foo : U8
         \\foo = 10
@@ -619,12 +699,12 @@ test "type-declaration default referencing a def is rejected as non-literal" {
 
     try can.canonicalizeFile();
 
-    // THIS is the alias-mediated gap the literal-only rule closes: a value
-    // annotated `x : Cfg` could cycle through `Cfg`'s default (`foo` reads
-    // `x`), a shape neither the old self-reference judgment (type decls had
-    // no annotated value) nor the def-dependency walk (it never followed
-    // alias lookups) could see. Banning references outright closes the gap
-    // by construction (design.md "Defaulted Fields").
+    // THIS is the declaration-mediated gap the literal-only rule closes: a
+    // value annotated `x : Cfg` could cycle through `Cfg`'s default (`foo`
+    // reads `x`), a shape neither the old self-reference judgment (type
+    // decls had no annotated value) nor the def-dependency walk (it never
+    // followed declaration lookups) could see. Banning references outright
+    // closes the gap by construction (design.md "Defaulted Fields").
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
     var found = false;
@@ -640,7 +720,7 @@ test "literal defaults of every accepted shape canonicalize with their defaults 
     // negated numeral, interpolation-free string, empty list, tag application
     // of literals, and a record literal of literals.
     const source =
-        \\Example : {
+        \\Example := {
         \\    a : U8 ?? 10,
         \\    b : Str ?? "hi",
         \\    c : I8 ?? -1,
@@ -673,8 +753,8 @@ test "literal defaults of every accepted shape canonicalize with their defaults 
 
     const statement_idx = env.store.statementAt(env.type_decls, 0);
     const statement = env.store.getStatement(statement_idx);
-    if (statement != .s_alias_decl) return error.ExpectedAliasDeclaration;
-    const anno_idx = statement.s_alias_decl.anno;
+    if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const anno_idx = statement.s_nominal_decl.anno;
     const anno = env.store.getTypeAnno(anno_idx);
     if (anno != .record) return error.ExpectedRecordAnnotation;
     const record = anno.record;
