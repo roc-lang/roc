@@ -1837,6 +1837,33 @@ pub const InstGraph = struct {
         try bucket.value_ptr.append(self.allocator, node);
     }
 
+    /// Materialize only defaults explicitly recorded by checking. Such a
+    /// variable is a concrete immutable recipe at an exact producer boundary;
+    /// a variable without one remains open and may not become a produced
+    /// child.
+    fn explicitInstVariableDefault(variable: InstVariable) ?InstNode {
+        if (variable.numeric_default_phase) |phase| {
+            const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                Common.invariant("checking-finalized numeric variable reached exact producer interning");
+            return switch (target) {
+                .dec => .{ .primitive = .dec },
+                .str => .{ .primitive = .str },
+            };
+        }
+        if (variable.row_default) |row_default| {
+            return switch (row_default) {
+                .empty_record => .empty_record,
+                .empty_tag_union => .empty_tag_union,
+            };
+        }
+        if (variable.specialization_default) |default| {
+            return switch (default) {
+                .empty_tag_union => .empty_tag_union,
+            };
+        }
+        return null;
+    }
+
     /// Convert one immutable concrete checked recipe into the produced
     /// interner domain. This follows the recipe once, at the producer that
     /// actually needs it, and memoizes every structural node by dense ID.
@@ -1849,7 +1876,10 @@ pub const InstGraph = struct {
 
         const produced = switch (self.nodes.items[@intFromEnum(node)]) {
             .redirect => unreachable,
-            .unresolved => Common.invariant("an unresolved checked recipe reached an exact producer child"),
+            .unresolved => |variable| if (explicitInstVariableDefault(variable)) |default|
+                try self.newNode(default)
+            else
+                Common.invariant("an unresolved checked recipe reached an exact producer child"),
             .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
             .named => |named| if (named.def.generated != null)
                 node
@@ -1924,19 +1954,9 @@ pub const InstGraph = struct {
                 Common.invariant("transparent alias child had no backing")).node);
         }
         if (self.nodes.items[@intFromEnum(node)] == .unresolved) {
-            const variable = self.nodes.items[@intFromEnum(node)].unresolved;
-            const completed: ?InstNode = if (variable.numeric_default_phase) |phase| blk: {
-                const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
-                    Common.invariant("checking-finalized numeric variable reached exact producer interning");
-                break :blk switch (target) {
-                    .dec => .{ .primitive = .dec },
-                    .str => .{ .primitive = .str },
-                };
-            } else if (variable.row_default) |row_default| switch (row_default) {
-                .empty_record => .empty_record,
-                .empty_tag_union => .empty_tag_union,
-            } else null;
-            if (completed) |defaulted| node = try self.newNode(defaulted);
+            if (explicitInstVariableDefault(self.nodes.items[@intFromEnum(node)].unresolved)) |defaulted| {
+                node = try self.newNode(defaulted);
+            }
         }
         if (self.checked_base_construction_depth == 0 and
             self.checked_base_nodes.items[@intFromEnum(node)])
@@ -6030,7 +6050,14 @@ test "exact producers convert a concrete checked recipe bottom-up once" {
     graph.markCheckedBase(item);
     const checked_list = try graph.newNode(.{ .list = item });
     graph.markCheckedBase(checked_list);
-    const checked_tuple_items = try graph.arena().dupe(NodeId, &.{checked_list});
+    const checked_default = try graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
+        null,
+        null,
+        .empty_tag_union,
+        [_]u8{0} ** 32,
+    ) });
+    graph.markCheckedBase(checked_default);
+    const checked_tuple_items = try graph.arena().dupe(NodeId, &.{ checked_list, checked_default });
     const checked_tuple = try graph.newNode(.{ .tuple = checked_tuple_items });
     graph.markCheckedBase(checked_tuple);
     graph.endCheckedBaseConstruction();
@@ -6038,11 +6065,14 @@ test "exact producers convert a concrete checked recipe bottom-up once" {
     const produced_box = try graph.newProducedBox(checked_tuple);
     const produced_tuple = graph.content(produced_box).box;
     const produced_list = graph.content(produced_tuple).tuple[0];
+    const produced_default = graph.content(produced_tuple).tuple[1];
 
     try std.testing.expect(!graph.nodeIsCheckedBase(produced_box));
     try std.testing.expect(!graph.nodeIsCheckedBase(produced_tuple));
     try std.testing.expect(!graph.nodeIsCheckedBase(produced_list));
     try std.testing.expectEqual(item, graph.content(produced_list).list);
+    try std.testing.expect(!graph.nodeIsCheckedBase(produced_default));
+    try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(produced_default));
 
     const node_count = graph.nodes.items.len;
     try std.testing.expectEqual(produced_box, try graph.newProducedBox(checked_tuple));
