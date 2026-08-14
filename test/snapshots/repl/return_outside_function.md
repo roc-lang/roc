@@ -10,7 +10,6 @@ type=repl
 # OUTPUT
 **Return Outside Function**
 The `return` keyword can only be used inside function bodies.
-**repl:2:5:2:14:**
 ```roc
     return 42
 ```

@@ -14,35 +14,31 @@ a={
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_101.md:2:8:2:10
 TYPE MISMATCH - fuzz_crash_101.md:2:3:2:13
 # PROBLEMS
+── ✗ empty tuple not allowed ───────────────────────────── fuzz_crash_101.md:2:8
 
-┌─────────────────────────┐
-│ EMPTY TUPLE NOT ALLOWED ├─ I am part way through parsing this tuple, but ───┐
-└┬────────────────────────┘  it is empty.                                     │
- │                                                                            │
- │  r=|()|(()())                                                              │
- │         ‾‾                                                                 │
- └───────────────────────────────────────────────────── fuzz_crash_101.md:2:8 ┘
+I am part way through parsing this tuple, but it is empty.
 
-    If you want to represent nothing, try using an empty record: `{}`.
+r=|()|(()())
+       ^^
 
+If you want to represent nothing, try using an empty record: {}.
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  r=|()|(()())                                                              │
- │    ‾‾‾‾‾‾‾‾‾‾                                                              │
- └───────────────────────────────────────────────────── fuzz_crash_101.md:2:3 ┘
+── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_101.md:2:3
 
-    It has the type:
+This expression is used in an unexpected way.
 
-        () -> Error
+r=|()|(()())
+  ^^^^^^^^^^
 
-    But the annotation says it should be:
+It has the type:
 
-        (), (({}) -> c), (({}) -> d) -> c
+    () -> Error
 
-    Hint: This function expects 3 arguments but got 1.
+But the annotation says it should be:
+
+    (), (({}) -> c), (({}) -> d) -> c
+
+Hint: This function expects 3 arguments but got 1.
 
 # TOKENS
 ~~~zig

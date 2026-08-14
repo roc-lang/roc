@@ -12,18 +12,17 @@ if bool {
 # EXPECTED
 MISSING METHOD - if_then_else_simple_block_formatting.md:3:8:3:9
 # PROBLEMS
+── ✗ missing method ──────────────── if_then_else_simple_block_formatting.md:3:8
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  } else 2                                                                  │
- │         ‾                                                                  │
- └─────────────────────────────── if_then_else_simple_block_formatting.md:3:8 ┘
+This from_numeral method is being called on a value whose type doesn't have
+that method.
 
-    The value's type, which does not have a method named `from_numeral`, is:
+} else 2
+       ^
 
-        [A, ..]
+The value's type, which does not have a method named from_numeral, is:
+
+    [A, ..]
 
 # TOKENS
 ~~~zig

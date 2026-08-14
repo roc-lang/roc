@@ -49,7 +49,6 @@ assigned `Latitude`
 ---
 **Type Mismatch**
 The `encode_f64` method on `JsonEncoding` has an incompatible type.
-**repl:8:8:8:19:**
 ```roc
 main = Json.to_str(Latitude.(51.5))
 ```

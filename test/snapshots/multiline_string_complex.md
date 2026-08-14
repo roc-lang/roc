@@ -57,38 +57,34 @@ x = {
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
+── ✗ missing method ─────────────────────────── multiline_string_complex.md:40:5
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
-└┬───────────────┘  doesn't have that method.                                 │
- │                                                                            │
- │  e: !\\                                                                    │
- │     ‾‾‾                                                                    │
- └────────────────────────────────────────── multiline_string_complex.md:40:5 ┘
+This not method is being called on a value whose type doesn't have that method.
 
-    The value's type, which does not have a method named `not`, is:
+e: !\\
+   ^^^
 
-        Str
+The value's type, which does not have a method named not, is:
 
-    Hint: For this to work, the type would need to have a method named `not`
-    associated with it in the type's declaration.
+    Str
 
+Hint: For this to work, the type would need to have a method named not
+associated with it in the type's declaration.
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The `minus` method on `Dec` has an incompatible type. ─────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  0 - \\                                                                    │
- │  ‾                                                                         │
- └────────────────────────────────────────── multiline_string_complex.md:37:3 ┘
+── ✗ type mismatch ──────────────────────────── multiline_string_complex.md:37:3
 
-    The method `minus` has the type:
+The minus method on Dec has an incompatible type.
 
-        Dec, Dec -> Dec
+0 - \\
+^
 
-    But I need it to have the type:
+The method minus has the type:
 
-        Dec, Str -> Dec
+    Dec, Dec -> Dec
+
+But I need it to have the type:
+
+    Dec, Str -> Dec
 
 # TOKENS
 ~~~zig
@@ -269,7 +265,7 @@ x = {
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 278) (dispatcher-var 15)
+			(e-interpolation (constraint-fn-var 288) (dispatcher-var 15)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -285,7 +281,7 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 296) (dispatcher-var 25)
+			(e-interpolation (constraint-fn-var 306) (dispatcher-var 25)
 				(first
 					(e-literal (string "This is a string
 With multiple lines

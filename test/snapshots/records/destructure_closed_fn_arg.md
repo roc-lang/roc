@@ -11,24 +11,22 @@ get_sum = |{ x, y }| x + y
 # EXPECTED
 TYPE MISMATCH - destructure_closed_fn_arg.md:2:12:2:20
 # PROBLEMS
+── ✗ type mismatch ─────────────────────────── destructure_closed_fn_arg.md:2:12
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  get_sum = |{ x, y }| x + y                                                │
- │             ‾‾‾‾‾‾‾‾                                                       │
- └───────────────────────────────────────── destructure_closed_fn_arg.md:2:12 ┘
+This expression is used in an unexpected way.
 
-    It has the type:
+get_sum = |{ x, y }| x + y
+           ^^^^^^^^
 
-        { x: U64, y: U64 }
+It has the type:
 
-    But the annotation says it should be:
+    { x: U64, y: U64 }
 
-        { x: U64, y: U64, z: U64 }
+But the annotation says it should be:
 
-    Hint: This record is missing the field: `z`
+    { x: U64, y: U64, z: U64 }
+
+Hint: This record is missing the field: z
 
 # TOKENS
 ~~~zig

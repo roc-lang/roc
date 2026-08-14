@@ -10,18 +10,16 @@ type=expr
 # EXPECTED
 INVALID NUMBER - frac_tiny_scientific.md:1:1:1:9
 # PROBLEMS
+── ✗ invalid number ──────────────────────────────── frac_tiny_scientific.md:1:1
 
-┌────────────────┐
-│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  1.0e-100                                                                  │
- │  ‾‾‾‾‾‾‾‾                                                                  │
- └─────────────────────────────────────────────── frac_tiny_scientific.md:1:1 ┘
+This number literal does not fit in the inferred type.
 
-    The inferred type is:
+1.0e-100
+^^^^^^^^
 
-        Dec
+The inferred type is:
+
+    Dec
 
 # TOKENS
 ~~~zig

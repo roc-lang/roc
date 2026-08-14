@@ -13,40 +13,34 @@ EFFECTFUL FUNCTION NAME - fuzz_crash_103.md:1:1:1:9
 EFFECTFUL FUNCTION NAME - fuzz_crash_103.md:1:31:1:36
 INVALID NUMBER - fuzz_crash_103.md:2:4:2:12
 # PROBLEMS
+── ● effectful function name ───────────────────────────── fuzz_crash_103.md:1:1
 
-┌─────────────────────────┐
-│ EFFECTFUL FUNCTION NAME ├─ This function performs an effect, so its name ───┐
-└┬────────────────────────┘  must end in `!`.                                 │
- │                                                                            │
- │  topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()          │
- │  ‾‾‾‾‾‾‾‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_103.md:1:1 ┘
+This function performs an effect, so its name must end in `!`.
 
-    Add a trailing `!` to this function name.
+topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()
+^^^^^^^^
 
+Add a trailing ! to this function name.
 
-┌─────────────────────────┐
-│ EFFECTFUL FUNCTION NAME ├─ This function performs an effect, so its name ───┐
-└┬────────────────────────┘  must end in `!`.                                 │
- │                                                                            │
- │  topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()          │
- │                                ‾‾‾‾‾                                       │
- └──────────────────────────────────────────────────── fuzz_crash_103.md:1:31 ┘
+── ● effectful function name ──────────────────────────── fuzz_crash_103.md:1:31
 
-    Add a trailing `!` to this function name.
+This function performs an effect, so its name must end in `!`.
 
+topThunk=||echo!("")main!=|_|{thunk=||echo!("")thunk()topThunk()
+                              ^^^^^
 
-┌────────────────┐
-│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  ({}1E483647)}                                                             │
- │     ‾‾‾‾‾‾‾‾                                                               │
- └───────────────────────────────────────────────────── fuzz_crash_103.md:2:4 ┘
+Add a trailing ! to this function name.
 
-    The inferred type is:
+── ✗ invalid number ────────────────────────────────────── fuzz_crash_103.md:2:4
 
-        a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+This number literal does not fit in the inferred type.
+
+({}1E483647)}
+   ^^^^^^^^
+
+The inferred type is:
+
+    a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 # TOKENS
 ~~~zig
@@ -117,7 +111,7 @@ main! = |_| {
 		(p-assign (ident "topThunk"))
 		(e-lambda
 			(args)
-			(e-call (constraint-fn-var 248)
+			(e-call (constraint-fn-var 258)
 				(e-lookup-local
 					(p-assign (ident "echo!")))
 				(e-string
@@ -132,17 +126,17 @@ main! = |_| {
 					(p-assign (ident "thunk"))
 					(e-lambda
 						(args)
-						(e-call (constraint-fn-var 257)
+						(e-call (constraint-fn-var 267)
 							(e-lookup-local
 								(p-assign (ident "echo!")))
 							(e-string
 								(e-literal (string ""))))))
 				(s-expr
-					(e-call (constraint-fn-var 258)
+					(e-call (constraint-fn-var 268)
 						(e-lookup-local
 							(p-assign (ident "thunk")))))
 				(s-expr
-					(e-call (constraint-fn-var 260)
+					(e-call (constraint-fn-var 270)
 						(e-lookup-local
 							(p-assign (ident "topThunk")))))
 				(e-tuple

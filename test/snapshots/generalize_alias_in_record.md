@@ -14,18 +14,16 @@ main = ((r.f)(1), (r.f)("a"))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_in_record.md:5:25:5:28
 # PROBLEMS
+── ✗ type mismatch ────────────────────────── generalize_alias_in_record.md:5:25
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  main = ((r.f)(1), (r.f)("a"))                                             │
- │                          ‾‾‾                                               │
- └──────────────────────────────────────── generalize_alias_in_record.md:5:25 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+main = ((r.f)(1), (r.f)("a"))
+                        ^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -94,7 +92,7 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 228)
+				(e-call (constraint-fn-var 238)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -102,7 +100,7 @@ NO CHANGE
 						(segments
 							(segment (name "f") (mode "required"))))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 240)
+				(e-call (constraint-fn-var 250)
 					(e-field-access
 						(receiver
 							(e-lookup-local

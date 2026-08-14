@@ -13,21 +13,18 @@ match list {
 # EXPECTED
 POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
 # PROBLEMS
+── ✗ polymorphic value ───────────────────────── list_destructure_scoping.md:1:1
 
-┌───────────────────┐
-│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
-└┬──────────────────┘  polymorphic type.                                      │
- │                                                                            │
- │  match list {                                                              │
- │      [first] => first                                                      │
- │      [first, second] => first + second                                     │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────────────────────── list_destructure_scoping.md:1:1 ┘
+This top-level value still has an unresolved polymorphic type.
 
-    Its type is:
-    a where [a.plus : a, a -> a]
-    Add an annotation or use this value in a way that fixes its concrete type.
+match list {
+    [first] => first
+    [first, second] => first + second
+}
+
+Its type is:
+a where [a.plus : a, a -> a]
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -85,7 +82,7 @@ match list {
 								(p-assign (ident "first"))
 								(p-assign (ident "second"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 207)
+					(e-dispatch-call (method "plus") (constraint-fn-var 217)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "first"))))

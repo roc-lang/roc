@@ -5822,6 +5822,49 @@ fn mkIterVar(self: *Self, item_var: Var, env: *Env, region: Region) Allocator.Er
     return iter_var;
 }
 
+/// Instantiate the builtin Num.Range type declaration and bind its numeric parameter.
+fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Error!Var {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    const range_decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
+        const indices = self.builtin_ctx.builtin_indices orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: builtin module env present without builtin indices", .{});
+            }
+            unreachable;
+        };
+        break :blk try self.copyVar(ModuleEnv.varFrom(indices.range_type), builtin_env, region);
+    } else blk: {
+        const range_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_range) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("type checker invariant violated: Builtin.Num.Range declaration not found while checking Builtin", .{});
+            }
+            unreachable;
+        };
+        break :blk ModuleEnv.varFrom(range_stmt_idx);
+    };
+
+    const range_var = try self.instantiateVar(range_decl_var, env, .{ .explicit = region });
+    const range_content = self.types.resolveVar(range_var).desc.content;
+    const nominal = range_content.unwrapNominalType() orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: Builtin.Num.Range did not instantiate to a nominal type", .{});
+        }
+        unreachable;
+    };
+    const args = self.types.sliceNominalArgs(nominal);
+    if (args.len != 1) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("type checker invariant violated: Builtin.Num.Range expected one type argument, found {d}", .{args.len});
+        }
+        unreachable;
+    }
+
+    _ = try self.unify(args[0], num_var, env);
+    return range_var;
+}
+
 const IteratorStepBuild = struct {
     content: Content,
     topology: ModuleEnv.IteratorStepTopology,
@@ -19951,8 +19994,8 @@ fn checkBinopExpr(
         },
         .range_exclusive, .range_inclusive => {
             const method_name = switch (binop.op) {
-                .range_exclusive => self.cir.idents.range_exclusive,
-                .range_inclusive => self.cir.idents.range_inclusive,
+                .range_exclusive => self.cir.idents.range_exclusive_to,
+                .range_inclusive => self.cir.idents.range_inclusive_to,
                 .add,
                 .sub,
                 .mul,
@@ -19984,14 +20027,14 @@ fn checkBinopExpr(
 
             const arg_var = rhs_var;
 
-            // Range binops carry the contract `ret = Iter(bound)`: the
-            // operator exists to produce an iterator over the bound type, and
-            // pinning that shape here lets context at the iterator (a `for`
-            // loop's item type, an `Iter(U8)` annotation) flow back into
+            // Range binops carry the contract `ret = Range(bound)`: the
+            // operator exists to produce a reusable range over the bound type,
+            // and pinning that shape here lets context at the range (a `for`
+            // loop's item type, a `Range(U8)` annotation) flow back into
             // still-open numeral bounds before they default.
-            const ret_var = try self.mkIterVar(arg_var, env, expr_region);
+            const ret_var = try self.mkRangeVar(arg_var, env, expr_region);
 
-            // Create the binop static dispatch function: bound.method(bound) -> Iter(bound)
+            // Create the binop static dispatch function: bound.method(bound) -> Range(bound)
             try self.mkBinopConstraint(
                 arg_var,
                 arg_var,

@@ -775,6 +775,13 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .invalid_associated_statement = .{
+            .stmt = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .expr_not_canonicalized = .{
             .region = rand_region(),
         },

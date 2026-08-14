@@ -5568,6 +5568,52 @@ pub const SharedMemoryResult = struct {
     diagnostics: CheckDiagnosticCounts,
 };
 
+fn renderSummaryHeaderLine(
+    writer: anytype,
+    error_count: usize,
+    warning_count: usize,
+    path: []const u8,
+    config: reporting.ReportingConfig,
+) error{WriteFailed}!void {
+    const palette = reporting.ColorUtils.getPaletteForConfig(config);
+
+    const error_suffix = if (error_count == 1) "" else "s";
+    const warning_suffix = if (warning_count == 1) "" else "s";
+
+    var error_buf: [32]u8 = undefined;
+    const err_str = std.fmt.bufPrint(&error_buf, "{} error{s}", .{ error_count, error_suffix }) catch "";
+
+    var warn_buf: [32]u8 = undefined;
+    const warn_str = std.fmt.bufPrint(&warn_buf, "{} warning{s}", .{ warning_count, warning_suffix }) catch "";
+
+    const total_w = @min(config.getMaxLineWidth(), 120);
+    const prefix_w = 3 + err_str.len + 5 + warn_str.len + 1;
+
+    const sanitised_path = reporting.sanitisePathForSnapshots(path);
+    const loc_w = if (sanitised_path.len > 0) 1 + reporting.source_region.displayWidth(sanitised_path) else 0;
+
+    const dashes = @max(total_w -| prefix_w -| loc_w, 1);
+
+    try writer.writeAll(palette.secondary);
+    try writer.writeAll("── ");
+    try writer.writeAll(palette.error_color);
+    try writer.writeAll(err_str);
+    try writer.writeAll(palette.reset);
+    try writer.writeAll(" and ");
+    try writer.writeAll(palette.warning);
+    try writer.writeAll(warn_str);
+    try writer.writeAll(palette.secondary);
+    try writer.writeByte(' ');
+    try writer.splatBytesAll("─", dashes);
+    if (sanitised_path.len > 0) {
+        try writer.writeByte(' ');
+        try writer.writeAll(palette.primary);
+        try writer.writeAll(sanitised_path);
+    }
+    try writer.writeAll(palette.reset);
+    try writer.writeAll("\n\n");
+}
+
 fn writeDiagnosticCounts(writer: *std.Io.Writer, error_count: anytype, warning_count: anytype, use_color: bool) std.Io.Writer.Error!void {
     const error_suffix = if (error_count == 1) "" else "s";
     const warning_suffix = if (warning_count == 1) "" else "s";
@@ -5615,6 +5661,40 @@ test "diagnostic summaries support colored and plain output" {
             "No errors",
         output.written(),
     );
+}
+
+test "diagnostic summary header has exact colors and bounded width" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    var plain_config = reporting.ReportingConfig.initColorTerminal();
+    plain_config.color_preference = .never;
+    plain_config.max_line_width = 80;
+    try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
+    try std.testing.expectEqualStrings(
+        "── 1 error and 1 warning " ++ ("─" ** 43) ++ " example.roc\n\n",
+        output.written(),
+    );
+
+    output.clearRetainingCapacity();
+    var color_config = reporting.ReportingConfig.initColorTerminal();
+    color_config.max_line_width = 80;
+    try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", color_config);
+    try std.testing.expectEqualStrings(
+        ansi_term.bright_black ++ "── " ++
+            ansi_term.red ++ "1 error" ++ ansi_term.reset ++ " and " ++
+            ansi_term.yellow ++ "1 warning" ++ ansi_term.bright_black ++ " " ++
+            ("─" ** 43) ++ " " ++ ansi_term.cyan ++ "example.roc" ++ ansi_term.reset ++ "\n\n",
+        output.written(),
+    );
+
+    inline for (.{ .{ 55, 55 }, .{ 200, 120 } }) |case| {
+        output.clearRetainingCapacity();
+        plain_config.max_line_width = case[0];
+        try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
+        const first_newline = std.mem.findScalar(u8, output.written(), '\n') orelse unreachable;
+        try std.testing.expectEqual(@as(usize, case[1]), reporting.source_region.displayWidth(output.written()[0..first_newline]));
+    }
 }
 
 const LoweredCoordinatorResult = struct {
@@ -5666,7 +5746,6 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
     for (drained) |mod| {
         for (mod.reports) |*report| {
             switch (report.severity) {
-                .info => continue,
                 .fatal, .runtime_error => counts.errors += 1,
                 .warning => counts.warnings += 1,
             }
@@ -5678,10 +5757,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
 
     if (counts.errors > 0 or counts.warnings > 0) {
         const stderr = ctx.io.stderr();
-        stderr.writeAll("\n") catch {};
-        stderr.writeAll("Found ") catch {};
-        writeDiagnosticCounts(stderr, counts.errors, counts.warnings, report_config.shouldUseColors()) catch {};
-        stderr.print(" for {s}.\n", .{display_path}) catch {};
+        renderSummaryHeaderLine(stderr, counts.errors, counts.warnings, display_path, report_config) catch {};
     }
 
     ctx.io.flush();
@@ -7460,7 +7536,6 @@ fn discoverAndAddBundleModules(
                     .warning => {
                         try stderr.print("{s}: warning in module\n", .{mod.abs_path});
                     },
-                    .info => {},
                 }
             }
         }
@@ -16159,6 +16234,14 @@ fn remapDefaultAppDocumentElement(
                 underline.end_line -= synthetic_header_lines;
             }
         }
+    } else if (element.* == .source_location) {
+        const location = &element.source_location;
+        if (location.line <= synthetic_header_lines) return;
+
+        const filename = try allocator.dupe(u8, original_path);
+        if (location.filename) |old_filename| allocator.free(old_filename);
+        location.filename = filename;
+        location.line -= synthetic_header_lines;
     }
 }
 
@@ -16342,7 +16425,6 @@ fn checkFileWithBuildEnvPreserved(
         for (drained) |mod| {
             for (mod.reports) |report| {
                 switch (report.severity) {
-                    .info => {},
                     .runtime_error, .fatal => error_count += 1,
                     .warning => warning_count += 1,
                 }
@@ -16392,7 +16474,6 @@ fn checkFileWithBuildEnvPreserved(
     for (drained) |mod| {
         for (mod.reports) |report| {
             switch (report.severity) {
-                .info => {},
                 .runtime_error, .fatal => error_count += 1,
                 .warning => warning_count += 1,
             }
@@ -16549,7 +16630,6 @@ fn checkFileWithBuildEnv(
         for (drained) |mod| {
             for (mod.reports) |report| {
                 switch (report.severity) {
-                    .info => {},
                     .runtime_error, .fatal => error_count += 1,
                     .warning => warning_count += 1,
                 }
@@ -16587,7 +16667,6 @@ fn checkFileWithBuildEnv(
     for (drained) |mod| {
         for (mod.reports) |report| {
             switch (report.severity) {
-                .info => {},
                 .runtime_error, .fatal => error_count += 1,
                 .warning => warning_count += 1,
             }
@@ -16643,12 +16722,7 @@ fn finishRocCheck(
     ctx.io.flush();
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.writeAll("Found ") catch {};
-        writeDiagnosticCounts(stderr, check_result.error_count, check_result.warning_count, stderr_report_config.shouldUseColors()) catch {};
-        stderr.writeAll(" in ") catch {};
-        formatElapsedTimeMs(stderr, elapsed) catch {};
-        stderr.print(" for {s}.\n", .{args.path}) catch {};
+        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, args.path, stderr_report_config) catch {};
 
         if (args.verbose) {
             printVerboseStats(stderr, check_result);
@@ -17622,8 +17696,6 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     const stderr = ctx.io.stderr();
     const report_config = ctx.reportConfig(.stderr);
 
-    const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
-
     // Set up cache configuration based on command line args
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
@@ -17653,7 +17725,6 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     defer result_with_env.deinit(ctx.gpa);
 
     const check_result = &result_with_env.check_result;
-    const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
 
     // Render reports grouped by module
     for (check_result.reports) |module| {
@@ -17669,13 +17740,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     }
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.print("Found {} error(s) and {} warning(s) in ", .{
-            check_result.error_count,
-            check_result.warning_count,
-        }) catch {};
-        formatElapsedTime(stderr, elapsed) catch {};
-        stderr.print(" for {s}.", .{args.path}) catch {};
+        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, args.path, report_config) catch {};
 
         if (check_result.error_count > 0) {
             return error.DocsFailed;

@@ -12,60 +12,54 @@ UNEXPECTED STATEMENT - fuzz_crash_007.md:1:1:1:4
 UNEXPECTED STATEMENT - fuzz_crash_007.md:1:4:1:6
 UNEXPECTED STATEMENT - fuzz_crash_007.md:1:6:1:8
 # PROBLEMS
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_007.md:1:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ff8.8.d                                                                   │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_007.md:1:1 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+ff8.8.d
+^^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `ff8` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    answer = 42
 
+I found ff8 here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ff8.8.d                                                                   │
- │     ‾‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_007.md:1:4 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_007.md:1:4
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+ff8.8.d
+   ^^
 
-    I found `.8` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  ff8.8.d                                                                   │
- │       ‾‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_007.md:1:6 ┘
+I found .8 here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_007.md:1:6
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `.d` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+ff8.8.d
+     ^^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found .d here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
 # TOKENS
 ~~~zig

@@ -4834,8 +4834,8 @@ pub const ReportBuilder = struct {
         if (method_ident.eql(idents.is_gt)) return ">";
         if (method_ident.eql(idents.is_gte)) return ">=";
         if (method_ident.eql(idents.not)) return "not";
-        if (method_ident.eql(idents.range_exclusive)) return "..<";
-        if (method_ident.eql(idents.range_inclusive)) return "..=";
+        if (method_ident.eql(idents.range_exclusive_to)) return "..<";
+        if (method_ident.eql(idents.range_inclusive_to)) return "..=";
         return null;
     }
 };
