@@ -4969,7 +4969,7 @@ Restrictions:
   identities back to the starting default is rejected as `recursive_default_value`.
   This judgment runs before building `CheckedModule`, so postcheck lowering
   only receives defaults whose materialization graph is acyclic.
-- The declared FIELD type of a default must be CONCRETE: the one archived
+- The declared FIELD type of a default must be CONCRETE: the one declared
   default is materialized at every construction site, so a parametric field
   has no single runtime representation even when the default literal itself
   happens to settle concretely in an instantiated check copy. Judged at
@@ -4988,34 +4988,38 @@ identity in the same form on both the solver and checked sides, so the two
 representations key identically and two rows defaulting a field
 differently digest differently.
 
-Construction-site materialization: the declaring module's CheckedModule
-archives each locally-declared default as a checked expression
-(`CheckedBodyStore.default_exprs`, keyed by `DefaultId.expr_node`—the
-source-node walk already records every checked expression, so the table
-is a serialized index over it, surviving the discard of the build-time
-source-node map). Monotype lowering of a record construction that omits a
-defaulted field resolves the field's default on the checked row and
-materializes it at the field's monotype. Inlining the archived expression
-IS the defining behavior—defaults are literals (see Restrictions
-above), so inlining is their evaluation—and the finalized `field_default`
-compile-time root is a cache of the same value: materialization prefers
-restoring the declaring module's finalized constant and inlines only
-while that module's own roots are still mid-finalization (a cache-hit
-split, not a fallback—both paths produce the identical literal).
-When the default literal uses a custom `from_numeral` or `from_quote`, that
-same `field_default` root owns the literal-conversion mode and has the
-conversion call's `Try` result type. Its wrapper evaluates the raw conversion
-once; finalization reports `Err` with the literal-specific diagnostic or
-archives the `Ok` payload as the field-default constant. A second
-`numeral_conversion` or `quote_conversion` root for the same checked expression
-is forbidden.
+Construction-site materialization is PER SPECIALIZATION: the declaring
+module's CheckedModule archives each locally-declared default as a checked
+expression (`CheckedBodyStore.default_exprs`, keyed by
+`DefaultId.expr_node`—the source-node walk already records every checked
+expression, so the table is a serialized index over it, surviving the
+discard of the build-time source-node map), and that expression is the
+SINGLE source of value: every construction site that omits the field
+lowers it inline at the site's field monotype (`defaultedFieldValueAt` in
+src/postcheck/monotype/lower.zig; boxy's `lowerDefaultedRecordFieldInto`
+mirrors it through `lowerModuleExprInto`). There is no archived VALUE, no
+`field_default` compile-time root, and no cross-root ordering: the inlined
+expression evaluates as part of whatever body consumes it—a comptime
+root's own evaluation for top-level constants, a runtime body otherwise—
+so each specialization computes its own value, exactly as if the default
+had been written at the site.
+When the default literal uses a custom `from_numeral` or `from_quote`, the
+conversion gets an ORDINARY `numeral_conversion`/`quote_conversion` root
+in the declaring module: finalization still evaluates the raw conversion
+once and reports `Err` with the literal-specific diagnostic; sites restore
+the archived `Ok` payload when it is finalized and lower the real dispatch
+call inside their own comptime evaluation while the declaring module's
+roots are still mid-finalization (the same split every custom literal
+gets).
 CROSS-MODULE materialization is COMPLETE through the same route: the
 default identity's declaring-module content hash resolves the declaring
-view (`moduleForIdentityHash`), and an imported checked module is always
-finalized, so a foreign default always restores from its archived
-constant. Checking keeps the `does_fx` → `effectful_default_value`
-rejection as a backstop invariant only: canonicalization's literal
-restriction already makes an effectful default unreachable from source.
+view (`moduleForIdentityHash`), and the foreign checked expression lowers
+under a scoped view swap (fresh instantiation context and binder state,
+mirroring cross-module local-procedure lowering; boxy swaps its
+module-context the same way). Checking keeps the `does_fx` →
+`effectful_default_value` rejection as a backstop invariant only:
+canonicalization's literal restriction already makes an effectful default
+unreachable from source.
 
 Monotype default identity (`Type.FieldDefault`): the Monotype record
 field itself carries the `??` default identity—the declaring module's
@@ -5040,7 +5044,7 @@ the checked kind at the same point the kind is consumed into the slot
 encoding.
 
 Derived JSON parse of `??` fields (IMPLEMENTED): an absent key fills the
-field's archived default into the inline slot—the codec sibling of
+field's declared default into the inline slot—the codec sibling of
 construction-site omission—while a present key parses at the inline
 type; an explicit `null` is an ERROR for a defaulted field (null is a
 value, absence is not—same rule as `?:`), and encode always emits the
@@ -5050,14 +5054,16 @@ field (`parserFieldDefaultFor`), and the checker's derived-parse gate
 all-self-filling record validates with a closed error row; the lowering
 mirrors of that analysis (`parserShapeNeedsRequiredFieldError` and its
 graph twin) recognize the same two self-fill cases. Pinned by
-test/cli/JsonOptionalFieldKinds.roc. Evaluation ordering: each archived
-default is a `field_default` compile-time root, registered BEFORE every
-other root kind, and finalization encodes the conservative dependency
-edge explicitly—a non-default root is not ready while any requested
-`field_default` root is unfinished
-(`RootCompletionState.pending_field_defaults`)—so the defaults always
-evaluate as their own leading batch before any parser that might
-restore them lowers.
+test/cli/JsonOptionalFieldKinds.roc. The absent-key arm materializes the
+default PER SPECIALIZATION: the generated parser body lowers the
+declaring module's checked default expression at the field's monotype
+(the parser is generated per record monotype, so this is naturally
+per-specialization). Parser generation runs after the instantiation
+graph freezes, so sealed expression lowering skips the graph cross-check
+there and relies on the produced-type verification
+(`constrainKnownType`'s phase rule). No leading-batch root ordering
+exists anymore—the former `pending_field_defaults` machinery existed
+only to finalize archived constants before parsers could restore them.
 
 Optional-field lowering is COMPLETE (see Field Kinds above): an omitted
 optional field constructs the `#Missing` tag in the same
