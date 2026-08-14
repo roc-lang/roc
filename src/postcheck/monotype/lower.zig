@@ -10619,8 +10619,10 @@ const BodyDraftStore = struct {
     /// recipe without replacing this output cell.
     nested_result_producers: collections.DenseMap(NodeId, u32),
     /// Exact forward result node to the deferred constant that produces it.
-    /// Only evaluation templates own entries; stored constants are already
-    /// complete and therefore require no scheduling edge.
+    /// Both evaluated and stored constants own an output: restoring a stored
+    /// compound reconstructs it from its immediate children's produced nodes,
+    /// so the stored outer type remains a request recipe rather than becoming
+    /// the restored expression's result by assumption.
     deferred_const_result_producers: collections.DenseMap(NodeId, u32),
     /// Exact forward result node to a deferred structural codec producer.
     structural_serialization_result_producers: collections.DenseMap(NodeId, u32),
@@ -18348,19 +18350,13 @@ const BodyContext = struct {
         );
         return switch (template.state) {
             .stored_const => |stored| blk: {
-                const exact_result = switch (destination_relation) {
-                    .exact_request => result_node,
-                    .exact_producer => producer: {
-                        const stored_node = try self.storedConstRootTypeNode(
-                            self.view,
-                            stored,
-                            entry.checked_type,
-                        );
-                        if (!self.graph.sameClass(result_node, stored_node)) {
-                            try self.graph.completeProducedSelection(result_node, stored_node);
-                        }
-                        break :producer self.graph.rootNode(result_node);
-                    },
+                const restoration_request = switch (destination_relation) {
+                    .exact_request => request_node,
+                    .exact_producer => try self.storedConstRootTypeNode(
+                        self.view,
+                        stored,
+                        entry.checked_type,
+                    ),
                     .checked_mapping => Common.invariant("stored hoisted const received a checked-only result relation"),
                 };
                 const saved_loc = self.builder.program.current_loc;
@@ -18369,15 +18365,26 @@ const BodyContext = struct {
                 defer self.builder.program.current_region = saved_region;
                 self.builder.program.current_loc = try self.sourceLocFor(source_region);
                 self.builder.program.current_region = source_region;
-                break :blk try self.restoredStaticDataCandidateNodeAtNode(
+                const restored = try self.restoredStaticDataCandidateNodeAtNode(
                     self.view,
                     self.view,
                     stored.node,
-                    exact_result,
+                    restoration_request,
                     entry.const_ref,
                     entry.checked_type,
                     .disallow,
                 );
+                switch (destination_relation) {
+                    .exact_request => {},
+                    .exact_producer => {
+                        const restored_node = try self.exprTypeCell(restored).toGraphNode(self.graph);
+                        if (!self.graph.sameClass(result_node, restored_node)) {
+                            try self.graph.completeProducedSelection(result_node, restored_node);
+                        }
+                    },
+                    .checked_mapping => unreachable,
+                }
+                break :blk restored;
             },
             .eval_template => |eval| blk: {
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
@@ -29582,11 +29589,11 @@ const BodyContext = struct {
         };
         const nodes: DeferredConstNodes = switch (template.state) {
             .stored_const => |stored| blk: {
-                const exact = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
+                const request = try self.storedConstRootTypeNode(store_view, stored, requested_ty);
                 break :blk .{
-                    .request = exact,
-                    .witness = exact,
-                    .destination_relation = .exact_request,
+                    .request = request,
+                    .witness = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() }),
+                    .destination_relation = .exact_producer,
                 };
             },
             .eval_template => .{
@@ -29902,8 +29909,8 @@ const BodyContext = struct {
         );
         return switch (template.state) {
             .stored_const => |stored| blk: {
-                if (destination_relation != .exact_request) {
-                    Common.invariant("stored declared const did not receive its completed exact result");
+                if (destination_relation != .exact_producer) {
+                    Common.invariant("stored declared const did not receive a producer-owned result cell");
                 }
                 var active_const_scope: ActiveConstBindingScope = .{};
                 const has_active_const_binding = try self.enterActiveConstBindingAtCell(
@@ -29917,13 +29924,24 @@ const BodyContext = struct {
                     store_view,
                     self.view,
                     stored.node,
-                    result_node,
+                    request_node,
                     const_use.const_ref,
                     requested_ty,
                     .disallow,
                 );
-                if (has_active_const_binding) break :blk try self.finishActiveConstBinding(active_const_scope.active, restored);
-                break :blk restored;
+                const restored_node = try self.exprTypeCell(restored).toGraphNode(self.graph);
+                if (!self.graph.sameClass(result_node, restored_node)) {
+                    try self.graph.completeProducedSelection(result_node, restored_node);
+                }
+                const completed = if (has_active_const_binding)
+                    try self.finishActiveConstBinding(active_const_scope.active, restored)
+                else
+                    restored;
+                const completed_node = try self.exprTypeCell(completed).toGraphNode(self.graph);
+                if (!self.graph.sameClass(result_node, completed_node)) {
+                    Common.invariant("stored const restoration did not return its producer-owned result cell");
+                }
+                break :blk completed;
             },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| blk: {
