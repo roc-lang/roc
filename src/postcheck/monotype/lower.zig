@@ -5496,8 +5496,11 @@ const Builder = struct {
     ) Allocator.Error!NodeId {
         const completed = try self.completePendingProducedNode(body_ctx, raw_node);
         if (body_ctx.graph.content(completed) != .unresolved) return completed;
-        return try self.pendingProducedRepresentationRequest(body_ctx, raw_node) orelse
-            Common.invariant("representation consumer reached an unresolved producer without an explicit request recipe");
+        return switch (body_ctx.graph.content(completed).unresolved.origin) {
+            .checked_variable, .row_extension => completed,
+            .placeholder => try self.pendingProducedRepresentationRequest(body_ctx, raw_node) orelse
+                Common.invariant("representation consumer reached an unresolved producer without an explicit request recipe"),
+        };
     }
 
     fn hasQueuedTemplateSpecs(body_draft: *const BodyDraftStore) bool {
@@ -34654,7 +34657,7 @@ const BodyContext = struct {
                 };
             };
             if (produced_fields) |produced| {
-                const produced_value_node = try self.builder.completePendingProducedNode(
+                const produced_value_node = try self.builder.completePendingProducedRepresentationNode(
                     self,
                     try self.exprTypeCell(value).toGraphNode(self.graph),
                 );
@@ -34796,22 +34799,23 @@ const BodyContext = struct {
         const lowered = try self.allocator.alloc(DraftExprId, tag.args.len);
         defer self.allocator.free(lowered);
         for (tag.args, 0..) |arg, index| {
-            lowered[index] = switch (destination_relation) {
+            const value_flow = self.view.templates.specializationValueFlowForExpr(arg);
+            lowered[index] = if (value_flow == .produced) blk: {
+                const produced = try self.lowerExpr(arg);
+                break :blk try self.applyProducedExprToExactDestination(
+                    produced,
+                    payload_nodes[index],
+                );
+            } else switch (destination_relation) {
                 .exact_request => try self.lowerExprAtExactRequest(
                     arg,
                     DraftTypeCell.fromGraphNode(payload_nodes[index]),
                 ),
-                .checked_mapping, .exact_producer => if (self.view.templates.specializationValueFlowForExpr(arg) == .produced)
-                    try self.lowerExpr(arg)
-                else
-                    try self.lowerExprAtProducedValueRequest(arg, payload_nodes[index]),
+                .checked_mapping, .exact_producer => try self.lowerExprAtProducedValueRequest(
+                    arg,
+                    payload_nodes[index],
+                ),
             };
-        }
-        if (destination_relation == .exact_request) {
-            return try self.addConstructorExprAtNode(tag_node, .{ .tag = .{
-                .name = name,
-                .payloads = try self.addExprSpan(lowered),
-            } });
         }
         const produced_tags = try self.graph.arena().dupe(InstTag, request_row.tags);
         var found = false;
@@ -34823,7 +34827,7 @@ const BodyContext = struct {
                 }
                 const produced_payloads = try self.graph.arena().alloc(NodeId, lowered.len);
                 for (lowered, produced_payloads) |payload_expr, *produced_payload| {
-                    produced_payload.* = try self.builder.completePendingProducedNode(
+                    produced_payload.* = try self.builder.completePendingProducedRepresentationNode(
                         self,
                         try self.exprTypeCell(payload_expr).toGraphNode(self.graph),
                     );
@@ -35146,7 +35150,7 @@ const BodyContext = struct {
                 try children.append(self.allocator, .{
                     .checked_expr = field.value,
                     .expr = value,
-                    .node = try self.builder.completePendingProducedNode(
+                    .node = try self.builder.completePendingProducedRepresentationNode(
                         self,
                         try self.exprTypeCell(value).toGraphNode(self.graph),
                     ),
@@ -35174,7 +35178,7 @@ const BodyContext = struct {
                 try children.append(self.allocator, .{
                     .checked_expr = field.value,
                     .expr = value,
-                    .node = try self.builder.completePendingProducedNode(
+                    .node = try self.builder.completePendingProducedRepresentationNode(
                         self,
                         try self.exprTypeCell(value).toGraphNode(self.graph),
                     ),
@@ -35248,7 +35252,7 @@ const BodyContext = struct {
                         request,
                     );
                 } else try self.lowerExpr(field.value);
-                const value_node = try self.builder.completePendingProducedNode(
+                const value_node = try self.builder.completePendingProducedRepresentationNode(
                     self,
                     try self.exprTypeCell(value).toGraphNode(self.graph),
                 );
@@ -44806,12 +44810,20 @@ const BodyContext = struct {
         const destination = self.graph.rootNode(raw_destination);
         if (self.graph.sameClass(produced_node, destination)) return produced_expr;
 
-        // An open producer cell belongs to the deferred producer that
-        // reserved it. A consumer may retain that exact edge, but must never
-        // complete it from the consumer's request: the producer will record
-        // its result exactly once when its body finishes.
+        // A deferred producer owns its placeholder and will complete that one
+        // forward result itself. A checked identity or row cell is instead an
+        // unfinished requested value: at this explicit boundary it consumes
+        // the destination cell directly. Neither case requires inspecting a
+        // parent compound or relating two completed type graphs.
         if (self.graph.content(produced_node) == .unresolved) {
-            return produced_expr;
+            switch (self.graph.content(produced_node).unresolved.origin) {
+                .placeholder => return produced_expr,
+                .checked_variable, .row_extension => {
+                    self.draft.exprs.items[@intFromEnum(produced_expr)].ty =
+                        DraftTypeCell.fromGraphNode(destination);
+                    return produced_expr;
+                },
+            }
         }
 
         switch (self.graph.content(destination)) {
@@ -44826,8 +44838,11 @@ const BodyContext = struct {
                     if (!self.sameProducedNamedIdentity(requested_named, produced_named)) {
                         Common.invariant("exact nominal destination received a different produced nominal identity");
                     }
-                    self.draft.exprs.items[@intFromEnum(produced_expr)].ty =
-                        DraftTypeCell.fromGraphNode(destination);
+                    // The request proves which nominal declaration may cross
+                    // this boundary; the value producer owns the declaration's
+                    // exact arguments and backing. Replacing that completed
+                    // nominal with the request would discard identities first
+                    // produced inside the nominal's immediate children.
                     return produced_expr;
                 },
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {
@@ -44850,13 +44865,12 @@ const BodyContext = struct {
                 },
             },
             // Checking has already proved that this value may flow to the
-            // destination. Structural requests carry representation identity,
-            // not a runtime constructor: retain the value and record the
-            // destination directly without comparing, merging, or traversing
-            // either graph.
+            // destination. The destination may have supplied requests to the
+            // producer's immediate children, but the completed compound is
+            // still the producer's exact result. Retagging the expression with
+            // the checked recipe would discard identities selected while those
+            // children were lowered.
             .redirect, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {
-                self.draft.exprs.items[@intFromEnum(produced_expr)].ty =
-                    DraftTypeCell.fromGraphNode(destination);
                 return produced_expr;
             },
         }
@@ -46899,7 +46913,7 @@ const BodyContext = struct {
                 request,
                 .exact_request,
             );
-        } else if (selection.destination_relation != .exact_request and value_flow == .produced)
+        } else if (value_flow == .produced)
             try self.lowerBranchValueAtTypeCell(
                 checked_expr,
                 selection.declared,
