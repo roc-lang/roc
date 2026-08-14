@@ -4897,7 +4897,12 @@ kinds and treats a default identity as construction-only information:
   expected—the merged use is required and has the same inline layout.
 - `defaulted(d1) ~ defaulted(d2)` unifies exactly when `d1 = d2`. Two
   annotations defaulting one field differently have no coherent merged
-  default; the conflict is a type mismatch.
+  default; unification rejects the pair, and the failure renders as the
+  dedicated "Incompatible Defaults" report—detected from the mismatch
+  snapshots at report time (both sides' resolved kinds carry their
+  `DefaultId`s), naming the field, rendering both types, and pointing at
+  whichever declaring sites are local—rather than as a generic type
+  mismatch whose two rendered types can look identical.
 - `optional ~ defaulted` is a type mismatch (tagged slot vs inline slot).
 
 The default VALUE never lives in the type graph. The row's kind carries only

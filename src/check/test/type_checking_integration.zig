@@ -1845,27 +1845,24 @@ test "check type - record - default - separately written defaults do not merge" 
     // Two separately written defaults are two default identities even when
     // the rest of the shape matches; merging them would leave no coherent
     // default for construction sites (design.md "Defaulted Fields"). The
-    // report renders both defaults and points at both declarations.
+    // dedicated Incompatible Defaults report renders both types and points
+    // at both declarations.
     try checkTypesModule(source, .fail_with,
-        \\**Type Mismatch**
-        \\The two elements in this list have incompatible types.
+        \\**Incompatible Defaults**
+        \\The `x` field has a `??` default in both of these types, but they are two different defaults—two separately written defaults never merge, even when their values look the same.
         \\```roc
         \\lst = [a, b]
         \\```
         \\          ^
         \\
-        \\The first element has this type:
-        \\
-        \\    { x: U8 ?? 1 }
-        \\
-        \\However, the second element has this type:
+        \\One type is:
         \\
         \\    { x: U8 ?? 2 }
         \\
-        \\All elements in a list must have compatible types.
-        \\__Note:__ You can wrap each element in a tag to make them compatible.
-        \\To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-        \\**Hint:** The `x` field has a `??` default in both types, but they are two DIFFERENT defaults—two separately written defaults never merge, even when their values look the same. To share one default, declare the record type once (e.g. as a type alias) and annotate both values with it.
+        \\The other is:
+        \\
+        \\    { x: U8 ?? 1 }
+        \\
         \\One default is declared here:
         \\```roc
         \\b : { x: U8 ?? 2 }
@@ -1878,6 +1875,54 @@ test "check type - record - default - separately written defaults do not merge" 
         \\```
         \\               ^
         \\
+        \\To share one default, declare it once on a nominal type and use that type in both places.
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - incompatible defaults reported through an annotation" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\a : { x: U8 ?? 1 }
+        \\a = {}
+        \\
+        \\b : { x: U8 ?? 2 }
+        \\b = a
+    ;
+    // The same identity conflict arising through a different unify context
+    // (annotation, not list entry): the divert to the dedicated report is
+    // context-independent because it inspects the mismatch snapshots.
+    try checkTypesModule(source, .fail_with,
+        \\**Incompatible Defaults**
+        \\The `x` field has a `??` default in both of these types, but they are two different defaults—two separately written defaults never merge, even when their values look the same.
+        \\```roc
+        \\b = a
+        \\```
+        \\    ^
+        \\
+        \\One type is:
+        \\
+        \\    { x: U8 ?? 1 }
+        \\
+        \\The other is:
+        \\
+        \\    { x: U8 ?? 2 }
+        \\
+        \\One default is declared here:
+        \\```roc
+        \\a : { x: U8 ?? 1 }
+        \\```
+        \\               ^
+        \\
+        \\And the other is declared here:
+        \\```roc
+        \\b : { x: U8 ?? 2 }
+        \\```
+        \\               ^
+        \\
+        \\To share one default, declare it once on a nominal type and use that type in both places.
         \\
         \\
     );

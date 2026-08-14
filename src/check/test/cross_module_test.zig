@@ -296,7 +296,10 @@ test "cross-module - defaulted record - textually identical local default does n
     ;
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
-    try test_env_b.assertOneTypeError("Type Mismatch");
+    // The conflict renders as the dedicated Incompatible Defaults report;
+    // A's declaration region is unreachable from B's report, so only the
+    // local declaration is pointed at (the one-region degradation).
+    try test_env_b.assertOneTypeError("Incompatible Defaults");
 }
 
 test "cross-module - check type - static dispatch" {
