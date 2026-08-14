@@ -1195,6 +1195,12 @@ pub fn main(init: std.process.Init) anyerror!void {
     const args = args_list.items;
 
     var wasm_path: ?[]const u8 = null;
+    // The version the playground module under test reports. It is passed in
+    // because that module is built at its own optimize mode, and the build-mode
+    // prefix in `compiler_version` comes from each binary's own
+    // `@import("builtin").mode`. Falling back to this runner's own version keeps
+    // manual invocations working when both were built the same way.
+    var playground_version: []const u8 = build_options.compiler_version;
     var stats_args: PlaygroundStatsArgs = .{};
     var case_filters = std.ArrayList([]const u8).empty;
     defer case_filters.deinit(allocator);
@@ -1208,6 +1214,7 @@ pub fn main(init: std.process.Init) anyerror!void {
             std.debug.print("Options:\n", .{});
             std.debug.print("  --verbose           Enable verbose mode\n", .{});
             std.debug.print("  --wasm-path PATH    Path to the playground WASM file\n", .{});
+            std.debug.print("  --playground-version VERSION  Compiler version the WASM file reports\n", .{});
             std.debug.print("  --stats-json PATH   Write MiniCI stats JSON\n", .{});
             std.debug.print("  --filter SUBSTRING  Only run cases whose name contains SUBSTRING\n", .{});
             std.debug.print("  --help              Display this help message\n", .{});
@@ -1219,6 +1226,13 @@ pub fn main(init: std.process.Init) anyerror!void {
                 return;
             }
             wasm_path = args[i];
+        } else if (std.mem.eql(u8, arg, "--playground-version")) {
+            i += 1;
+            if (i >= args.len) {
+                std.debug.print("Error: --playground-version requires a version argument\n", .{});
+                return;
+            }
+            playground_version = args[i];
         } else if (std.mem.eql(u8, arg, "--stats-json")) {
             i += 1;
             if (i >= args.len) {
@@ -1248,8 +1262,8 @@ pub fn main(init: std.process.Init) anyerror!void {
 
     // Functional Test
     var happy_path_steps = try allocator.alloc(MessageStep, 8);
-    // Check that INIT returns the compiler version (both test and WASM are built with same options)
-    happy_path_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS", .expected_message_contains = build_options.compiler_version };
+    // Check that INIT returns the compiler version the playground was built with
+    happy_path_steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS", .expected_message_contains = playground_version };
     const happy_path_code = try TestData.happyPathRocCode(allocator);
     happy_path_steps[1] = .{
         .message = .{ .type = "LOAD_SOURCE", .source = happy_path_code },
