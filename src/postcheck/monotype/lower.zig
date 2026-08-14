@@ -26470,11 +26470,14 @@ const BodyContext = struct {
                     .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .alias, .record_unbound, .record, .tuple, .nominal, .function => Common.invariant("tag-payload selection edge had a non-tag-union checked parent"),
                 };
                 if (selection_edge.index >= tag_union.tags.len) Common.invariant("checked tag selection edge exceeded tag arity");
-                break :blk try self.graph.tagPayloadNode(
+                const payloads = try self.graph.tagPayloadNodesOrNull(
                     parent,
                     try self.builder.tagName(self.view, tag_union.tags[selection_edge.index].name),
-                    selection_edge.payload_index,
-                );
+                ) orelse break :blk null;
+                if (selection_edge.payload_index >= payloads.len) {
+                    Common.invariant("checked tag payload selection edge exceeded payload arity");
+                }
+                break :blk payloads[selection_edge.payload_index];
             },
             .tag_remainder => blk: {
                 const tag_union = switch (checkedPayload(self.view, parent_selection_edge.checked)) {
@@ -36924,10 +36927,10 @@ const BodyContext = struct {
             .constraint => |constraint_ref| {
                 const entry = self.evidence.at(constraint_ref) orelse
                     Common.invariant("checked evidence reference was absent from its lexical chain");
-                return .{
-                    .dispatcher = ref_dispatcher,
-                    .resolution = entry.resolution,
-                };
+                // Constraint substitution reuses the complete bound evidence
+                // value. Its dispatcher is the exact representation edge;
+                // retaining only the method resolution would sever that edge.
+                return entry;
             },
             .structural => |evidence| return .{
                 .dispatcher = .{ .checked = .{
@@ -37146,6 +37149,20 @@ const BodyContext = struct {
                 .authority = .produced,
             }),
             .checked => |source| blk: {
+                // A parameter's own checked dispatcher is named by its
+                // checker-authored callable path. Compound occurrences are
+                // intentionally absent from the flat identity-selection span.
+                if (moduleBytesEqual(source.view.key.bytes, callee_view.key.bytes) and
+                    source.ty == param.dispatcher_ty)
+                {
+                    const path = callee_view.templates.evidenceParamPath(param);
+                    const node = if (path.len == 0)
+                        try self.defaultedEvidenceParamNode(param)
+                    else
+                        try self.walkEvidencePathNode(callee_view, request_fn_node, path) orelse
+                            Common.invariant("checked evidence dispatcher path did not match its procedure request");
+                    break :blk try self.callArgumentSelection(node);
+                }
                 const key = solve.CheckedBaseKey{
                     .module_bytes = source.view.key.bytes,
                     .checked = source.ty,

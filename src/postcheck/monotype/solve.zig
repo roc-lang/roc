@@ -2630,6 +2630,7 @@ pub const InstGraph = struct {
         name: names.TagNameId,
     ) Allocator.Error!?[]const NodeId {
         const structural = try self.shapeRoot(node, "tag payloads", .inspectable);
+        if (self.content(structural) == .empty_tag_union) return null;
         if (self.content(structural) != .tag_union) {
             Common.invariant("instantiation tag payload span read had a non-tag-union node");
         }
