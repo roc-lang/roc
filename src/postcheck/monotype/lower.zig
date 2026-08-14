@@ -16126,29 +16126,9 @@ const BodyContext = struct {
         return request;
     }
 
-    fn graphFunctionNodeFromMono(
-        self: *BodyContext,
-        arg_tys: []const Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!NodeId {
-        const args = try self.graph.arena().alloc(NodeId, arg_tys.len);
-        for (arg_tys, 0..) |arg_ty, index| {
-            args[index] = try self.graph.importMono(arg_ty);
-        }
-        return try self.graphFunctionNode(args, try self.graph.importMono(ret_ty));
-    }
-
-    fn graphFunctionTypeCellFromMono(
-        self: *BodyContext,
-        arg_tys: []const Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!DraftTypeCell {
-        return DraftTypeCell.fromGraphNode(try self.graphFunctionNodeFromMono(arg_tys, ret_ty));
-    }
-
     fn hashFnTypeCell(self: *BodyContext, value_ty: Type.TypeId, hasher_ty: Type.TypeId) Allocator.Error!DraftTypeCell {
         const args = [_]Type.TypeId{ value_ty, hasher_ty };
-        return try self.graphFunctionTypeCellFromMono(&args, hasher_ty);
+        return DraftTypeCell.fromSealed(try self.builder.closedFunctionType(&args, hasher_ty));
     }
 
     /// Instantiate a checked type into this specialization's graph, caching by
@@ -51537,7 +51517,10 @@ const EqDeriver = struct {
     }
 
     fn fnType(self: *BodyContext, value_ty: Type.TypeId, result_ty: Type.TypeId) Allocator.Error!DraftTypeCell {
-        return try self.graphFunctionTypeCellFromMono(&.{ value_ty, value_ty }, result_ty);
+        return DraftTypeCell.fromSealed(try self.builder.closedFunctionType(
+            &.{ value_ty, value_ty },
+            result_ty,
+        ));
     }
 
     fn callArgs(operand: Operand) [2]DraftExprId {
