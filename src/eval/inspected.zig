@@ -1217,6 +1217,42 @@ pub fn compileInspectedProgramWithLambdaMono(
     };
 }
 
+/// Compile the interpreter side of the Lambda Mono differential using the
+/// same lowering options as `compileInspectedProgramWithLambdaMono`, without
+/// retaining a second materialized Lambda Mono program. The differential
+/// runner uses this after independently evaluating its captured program so
+/// the two large IRs do not need to remain live during either execution.
+pub fn compileInspectedProgramForLambdaMonoDifferential(
+    allocator: Allocator,
+    io: std.Io,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+) Error!CompiledTargetProgram {
+    var resources = try parseAndCanonicalizeProgramWithRootMode(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        true,
+        .{ .eval_root = true },
+        null,
+        null,
+    );
+    errdefer cleanupParseAndCanonical(allocator, resources);
+
+    const lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, .native, .{
+        .list_in_place_map = false,
+        .monotype_cache = lir.CheckedPipeline.MonotypeCacheControl.disabled,
+    });
+    errdefer {
+        var owned = lowered;
+        owned.deinit(allocator);
+    }
+
+    return .{ .resources = resources, .lowered = lowered };
+}
+
 /// Free all resources held by a ParsedResources value.
 pub fn cleanupParseAndCanonical(allocator: Allocator, resources: ParsedResources) void {
     var owned = resources;
@@ -2209,9 +2245,12 @@ fn renderCheckedModuleProblemsWithConfig(
         try reporting.renderReportWithConfig(&report, &out.writer, config);
     }
     const raw = try out.toOwnedSlice();
-    const trimmed = std.mem.trimEnd(u8, raw, "\r\n");
-    if (trimmed.len == raw.len) return raw;
-    const result = try allocator.dupe(u8, trimmed);
+    var trimmed_len = raw.len;
+    while (trimmed_len > 0 and (raw[trimmed_len - 1] == '\r' or raw[trimmed_len - 1] == '\n')) {
+        trimmed_len -= 1;
+    }
+    if (trimmed_len == raw.len) return raw;
+    const result = try allocator.dupe(u8, raw[0..trimmed_len]);
     allocator.free(raw);
     return result;
 }
@@ -2997,12 +3036,13 @@ pub fn llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
         bitcode_slices,
         compile_options.options,
     );
+    const dylib_path_bytes: []const u8 = dylib_path[0..dylib_path.len];
     defer {
-        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, std.mem.sliceTo(dylib_path, 0)) catch {};
+        std.Io.Dir.deleteFileAbsolute(std.Options.debug_io, dylib_path_bytes) catch {};
         allocator.free(dylib_path);
     }
 
-    var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
+    var lib = try EvalDynLib.open(allocator, dylib_path);
     defer lib.close();
 
     var longjmp_on_crash = true;

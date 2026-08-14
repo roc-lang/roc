@@ -7433,6 +7433,13 @@ pub const Interpreter = struct {
             .box_unbox => try self.evalBoxUnbox(args[0], ll.ret_layout),
             .box_prepare_update => try self.evalBoxPrepareUpdate(args[0], ll.ret_layout, ll.unique_args),
             .erased_capture_load => try self.evalErasedCaptureLoad(args[0], ll.ret_layout),
+            .erased_callable_result_desc => try self.evalErasedCallableResultDesc(args[0], ll.ret_layout),
+            .erased_callable_arg_desc => try self.evalErasedCallableArgDesc(
+                args[0],
+                args[1].read(u64),
+                args[2].read(u64),
+                ll.ret_layout,
+            ),
             .ptr_alloca => try self.evalPtrAlloca(ll.ret_layout),
             .box_alloc_zeroed => try self.evalBoxAllocZeroed(ll.ret_layout),
             .ptr_store => try self.evalPtrStore(args[0], args[1], ll.arg_layouts[1]),
@@ -9387,6 +9394,124 @@ pub const Interpreter = struct {
         }
 
         return result;
+    }
+
+    fn evalErasedCallableResultDesc(
+        self: *LirInterpreter,
+        callable: Value,
+        ret_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (ret_layout != .opaque_ptr) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable result descriptor target had layout {d}, expected opaque_ptr",
+                .{@intFromEnum(ret_layout)},
+            );
+        }
+        const data_ptr = self.readBoxedDataPointer(callable) orelse
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable result descriptor received a null callable",
+                .{},
+            );
+        const payload = builtins.erased_callable.payloadPtr(data_ptr);
+        if (@intFromPtr(payload.callable_fn_ptr) != @intFromPtr(&interpreterErasedCallableTrampoline)) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable result descriptor requested metadata from an unregistered host callable",
+                .{},
+            );
+        }
+        const context = erasedCallableInterpreterContextFromPayload(data_ptr);
+        const desc = context.result_desc orelse
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable result descriptor metadata was null",
+                .{},
+            );
+        return try self.allocPointerIntValue(@intFromPtr(desc));
+    }
+
+    fn evalErasedCallableArgDesc(
+        self: *LirInterpreter,
+        callable: Value,
+        raw_arg_index: u64,
+        raw_descriptor_index: u64,
+        ret_layout: layout_mod.Idx,
+    ) Error!Value {
+        if (ret_layout != .opaque_ptr) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable argument descriptor target had layout {d}, expected opaque_ptr",
+                .{@intFromEnum(ret_layout)},
+            );
+        }
+        if (raw_arg_index > std.math.maxInt(u16) or raw_descriptor_index > std.math.maxInt(u16)) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable argument descriptor key overflowed u16",
+                .{},
+            );
+        }
+        const data_ptr = self.readBoxedDataPointer(callable) orelse
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable argument descriptor received a null callable",
+                .{},
+            );
+        const payload = builtins.erased_callable.payloadPtr(data_ptr);
+        if (@intFromPtr(payload.callable_fn_ptr) != @intFromPtr(&interpreterErasedCallableTrampoline)) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable argument descriptor requested metadata from an unregistered host callable",
+                .{},
+            );
+        }
+        const context = erasedCallableInterpreterContextFromPayload(data_ptr);
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(context.proc_id);
+        const proc_spec = self.store.getProcSpec(proc_id);
+        const offsets_start: usize = proc_spec.erased_arg_desc_offsets.start;
+        const offsets_end = offsets_start + proc_spec.erased_arg_desc_offsets.len;
+        if (offsets_end > self.boxy_runtime.boxy_tables.erased_arg_desc_offsets.len) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable argument descriptor offsets exceeded the table",
+                .{},
+            );
+        }
+        const key = LIR.ErasedArgDescKey{
+            .arg_index = @intCast(raw_arg_index),
+            .descriptor_index = @intCast(raw_descriptor_index),
+        };
+        var matched_offset: ?u32 = null;
+        for (self.boxy_runtime.boxy_tables.erased_arg_desc_offsets[offsets_start..offsets_end]) |entry| {
+            if (!std.meta.eql(entry.key, key)) continue;
+            if (matched_offset != null) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased callable argument descriptor key had multiple offsets",
+                    .{},
+                );
+            }
+            matched_offset = entry.offset;
+        }
+        const offset = matched_offset orelse return self.invariantFailedError(
+            "LIR/interpreter invariant violated: erased callable argument descriptor key had no offset",
+            .{},
+        );
+        const capture_layout: layout_mod.Idx = if (context.capture_layout_plus_one == 0)
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable argument descriptor had no capture layout",
+                .{},
+            )
+        else
+            @enumFromInt(context.capture_layout_plus_one - 1);
+        const capture_size = self.helper.sizeOf(capture_layout);
+        if (@as(usize, offset) + @sizeOf(usize) > capture_size) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable argument descriptor offset exceeded the capture",
+                .{},
+            );
+        }
+        const capture = erasedCallableInterpreterCaptureValuePtr(data_ptr);
+        const raw_desc = self.readPointerInt(.{ .ptr = capture + offset });
+        if (raw_desc == 0) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased callable argument descriptor capture was null",
+                .{},
+            );
+        }
+        return try self.allocPointerIntValue(raw_desc);
     }
 
     /// ptr_alloca: reserve a zeroed frame slot for the ptr layout's element and

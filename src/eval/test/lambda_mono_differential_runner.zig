@@ -646,27 +646,103 @@ fn printHelp() void {
     );
 }
 
-fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Error!CaseResult {
-    var materialized: ?LambdaMonoProgram = null;
+const LambdaMonoTranscript = struct {
+    outcome: union(enum) {
+        output: []u8,
+        aborted: struct { kind: LambdaMonoEval.AbortKind, message: []u8 },
+    },
+    dbg_events: [][]u8,
+    expect_failures: [][]u8,
 
-    // On compile failure the pipeline's shared-memory arena is already gone,
-    // and any captured program with it; the slot must not be deinit'd then.
-    var compiled = helpers.compileInspectedProgramWithLambdaMono(
+    fn deinit(self: *LambdaMonoTranscript, allocator: std.mem.Allocator) void {
+        switch (self.outcome) {
+            .output => |bytes| allocator.free(bytes),
+            .aborted => |aborted| allocator.free(aborted.message),
+        }
+        for (self.dbg_events) |bytes| allocator.free(bytes);
+        allocator.free(self.dbg_events);
+        for (self.expect_failures) |bytes| allocator.free(bytes);
+        allocator.free(self.expect_failures);
+    }
+};
+
+fn copyMessages(allocator: std.mem.Allocator, messages: []const []const u8) std.mem.Allocator.Error![][]u8 {
+    const copied = try allocator.alloc([]u8, messages.len);
+    errdefer allocator.free(copied);
+    var initialized: usize = 0;
+    errdefer for (copied[0..initialized]) |bytes| allocator.free(bytes);
+    for (messages, copied) |message, *target| {
+        target.* = try allocator.dupe(u8, message);
+        initialized += 1;
+    }
+    return copied;
+}
+
+fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Error!CaseResult {
+    var lambda_transcript = lambda: {
+        var materialized: ?LambdaMonoProgram = null;
+        var compiled = helpers.compileInspectedProgramWithLambdaMono(
+            gpa,
+            io,
+            case.source_kind,
+            case.source,
+            case.imports,
+            null,
+            &materialized,
+        ) catch |err| switch (classifyTestHelperError(err)) {
+            .out_of_memory => return error.OutOfMemory,
+            .crash, .other => return CaseResult{ .status = .compile_skip },
+        };
+        defer helpers.cleanupParseAndCanonical(gpa, compiled.resources);
+        defer if (materialized) |*program| program.deinit();
+        compiled.lowered.deinit(gpa);
+
+        const program = if (materialized) |*captured| captured else return CaseResult{
+            .status = .interpreter_error,
+            .detail = try gpa.dupe(u8, "no materialized Lambda Mono program was captured"),
+        };
+        if (program.rootCount() == 0) return CaseResult{
+            .status = .interpreter_error,
+            .detail = try gpa.dupe(u8, "materialized program has no roots"),
+        };
+
+        var evaluator = LambdaMonoEval.Evaluator.init(gpa, program);
+        defer evaluator.deinit();
+        const outcome = evaluator.runRoot(0) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Unsupported => return CaseResult{
+                .status = .unsupported,
+                .detail = try gpa.dupe(u8, evaluator.unsupported orelse "(unknown construct)"),
+            },
+        };
+
+        var durable = LambdaMonoTranscript{
+            .outcome = switch (outcome) {
+                .value => |value| .{ .output = try gpa.dupe(u8, LambdaMonoEval.strBytes(value)) },
+                .aborted => |aborted| .{ .aborted = .{
+                    .kind = aborted.kind,
+                    .message = try gpa.dupe(u8, aborted.message),
+                } },
+            },
+            .dbg_events = try copyMessages(gpa, evaluator.dbg_events.items),
+            .expect_failures = try copyMessages(gpa, evaluator.expect_failures.items),
+        };
+        errdefer durable.deinit(gpa);
+        break :lambda durable;
+    };
+    defer lambda_transcript.deinit(gpa);
+
+    var compiled = helpers.compileInspectedProgramForLambdaMonoDifferential(
         gpa,
         io,
         case.source_kind,
         case.source,
         case.imports,
-        null,
-        &materialized,
     ) catch |err| switch (classifyTestHelperError(err)) {
         .out_of_memory => return error.OutOfMemory,
         .crash, .other => return CaseResult{ .status = .compile_skip },
     };
-    // LIFO defers: the materialized program (allocated from the compile's
-    // shared-memory arena) is deinit'd before the arena itself unmaps.
     defer compiled.deinit(gpa);
-    defer if (materialized) |*program| program.deinit();
 
     var transcript = helpers.lirInterpreterTranscript(gpa, &compiled.lowered) catch |err| switch (classifyTestHelperError(err)) {
         .out_of_memory => return error.OutOfMemory,
@@ -677,62 +753,26 @@ fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Err
     };
     defer transcript.deinit(gpa);
 
-    if (materialized == null) {
-        // The capture slot is filled by the Debug verifier; an empty slot
-        // means the pipeline did not run it.
-        return CaseResult{
-            .status = .interpreter_error,
-            .detail = try gpa.dupe(u8, "no materialized Lambda Mono program was captured"),
-        };
-    }
-    const program = &materialized.?;
-
-    if (program.rootCount() == 0) {
-        return CaseResult{
-            .status = .interpreter_error,
-            .detail = try gpa.dupe(u8, "materialized program has no roots"),
-        };
-    }
-
-    var evaluator = LambdaMonoEval.Evaluator.init(gpa, program);
-    defer evaluator.deinit();
-
-    // Root 0 matches the interpreter's `mainProc()` (`root_procs.items[0]`):
-    // both sides bind roots from the same checked root-request order.
-    const outcome = evaluator.runRoot(0) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.Unsupported => return CaseResult{
-            .status = .unsupported,
-            .detail = try gpa.dupe(u8, evaluator.unsupported orelse "(unknown construct)"),
-        },
-    };
-
-    if (try compareOutcomes(gpa, case, &transcript, &evaluator, outcome)) |detail| {
+    if (try compareOutcomes(gpa, case, &transcript, &lambda_transcript)) |detail| {
         return CaseResult{ .status = .diverged, .detail = detail };
     }
-
-    // Cross-backend agreement for the sweep corpus: the dev JIT must agree
-    // with the interpreter on the same compile.
     if (case.origin == .generated) {
         if (try compareDevBackend(gpa, case, &compiled.lowered, &transcript)) |detail| {
             return CaseResult{ .status = .dev_diverged, .detail = detail };
         }
     }
-
-    return CaseResult{ .status = .pass };
+    return .{ .status = .pass };
 }
 
 fn compareOutcomes(
     gpa: std.mem.Allocator,
     case: Case,
     transcript: *const helpers.InterpreterTranscript,
-    evaluator: *const LambdaMonoEval.Evaluator,
-    outcome: LambdaMonoEval.RunOutcome,
+    lambda: *const LambdaMonoTranscript,
 ) std.mem.Allocator.Error!?[]u8 {
     switch (transcript.outcome) {
-        .output => |interp_bytes| switch (outcome) {
-            .value => |value| {
-                const lm_bytes = LambdaMonoEval.strBytes(value);
+        .output => |interp_bytes| switch (lambda.outcome) {
+            .output => |lm_bytes| {
                 if (!std.mem.eql(u8, interp_bytes, lm_bytes)) {
                     return try divergence(gpa, case, "inspect output", interp_bytes, lm_bytes);
                 }
@@ -743,11 +783,11 @@ fn compareOutcomes(
                 return try divergence(gpa, case, "termination", interp_bytes, lm_text);
             },
         },
-        .aborted => |interp_abort| switch (outcome) {
-            .value => |value| {
+        .aborted => |interp_abort| switch (lambda.outcome) {
+            .output => |lm_bytes| {
                 const interp_text = try abortSummary(gpa, @tagName(interp_abort.kind), interp_abort.message);
                 defer gpa.free(interp_text);
-                return try divergence(gpa, case, "termination", interp_text, LambdaMonoEval.strBytes(value));
+                return try divergence(gpa, case, "termination", interp_text, lm_bytes);
             },
             .aborted => |lm_abort| {
                 if (!std.mem.eql(u8, @tagName(interp_abort.kind), @tagName(lm_abort.kind))) {
@@ -766,31 +806,31 @@ fn compareOutcomes(
         },
     }
 
-    if (transcript.dbg_events.len != evaluator.dbg_events.items.len) {
+    if (transcript.dbg_events.len != lambda.dbg_events.len) {
         return try divergenceCounts(
             gpa,
             case,
             "dbg event count",
             transcript.dbg_events.len,
-            evaluator.dbg_events.items.len,
+            lambda.dbg_events.len,
         );
     }
-    for (transcript.dbg_events, evaluator.dbg_events.items) |interp_dbg, lm_dbg| {
+    for (transcript.dbg_events, lambda.dbg_events) |interp_dbg, lm_dbg| {
         if (!std.mem.eql(u8, interp_dbg, lm_dbg)) {
             return try divergence(gpa, case, "dbg event", interp_dbg, lm_dbg);
         }
     }
 
-    if (transcript.expect_failures.len != evaluator.expect_failures.items.len) {
+    if (transcript.expect_failures.len != lambda.expect_failures.len) {
         return try divergenceCounts(
             gpa,
             case,
             "expect-failure count",
             transcript.expect_failures.len,
-            evaluator.expect_failures.items.len,
+            lambda.expect_failures.len,
         );
     }
-    for (transcript.expect_failures, evaluator.expect_failures.items) |interp_msg, lm_msg| {
+    for (transcript.expect_failures, lambda.expect_failures) |interp_msg, lm_msg| {
         if (!std.mem.eql(u8, interp_msg, lm_msg)) {
             return try divergence(gpa, case, "expect-failure message", interp_msg, lm_msg);
         }

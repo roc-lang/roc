@@ -9030,6 +9030,8 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_call_dict", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_register_proc", &.{ .i32, .i32, .i32, .i64, .i32, .i64 }, &.{});
     try self.registerBoxySymbol("roc_boxy_register_erased_proc", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_erased_callable_result_desc", &.{.i32}, &.{.i32});
+    try self.registerBoxySymbol("roc_boxy_erased_callable_arg_desc", &.{ .i32, .i64, .i64 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_call_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_concat", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_prepend", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
@@ -14732,6 +14734,16 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 }
             }
         },
+        .erased_callable_result_desc => {
+            try self.emitProcLocal(GuardedList.at(args, 0));
+            try self.emitBoxyCall("roc_boxy_erased_callable_result_desc");
+        },
+        .erased_callable_arg_desc => {
+            try self.emitProcLocal(GuardedList.at(args, 0));
+            try self.emitProcLocal(GuardedList.at(args, 1));
+            try self.emitProcLocal(GuardedList.at(args, 2));
+            try self.emitBoxyCall("roc_boxy_erased_callable_arg_desc");
+        },
 
         .ptr_alloca => {
             // ptr_alloca: () -> Ptr(T). Reserve a zeroed shadow-stack slot for T
@@ -16510,6 +16522,8 @@ fn numericOpFromLowLevel(op: LIR.LowLevel) NumericOp {
         .box_unbox,
         .box_prepare_update,
         .erased_capture_load,
+        .erased_callable_result_desc,
+        .erased_callable_arg_desc,
         .ptr_alloca,
         .box_alloc_zeroed,
         .ptr_store,

@@ -1,6 +1,7 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Host
+import pf.Stdin
 import pf.Stdout
 
 sum_tree : Host.Tree -> I64
@@ -142,6 +143,18 @@ run_host_store! = || {
     result
 }
 
+run_erased_call_in_branch! : () => I64
+run_erased_call_in_branch! = || {
+    boxed = Host.boxed_add!(10)
+    callback = Box.unbox(boxed)
+
+    if Stdin.line!() == "call" {
+        callback(32)
+    } else {
+        0
+    }
+}
+
 main! = || {
     Host.reset_boxed_drop_report!()
 
@@ -157,5 +170,6 @@ main! = || {
     Stdout.line!("host declines reuse: ${run_host_declines_reuse!().to_str()}")
     Stdout.line!("host consumes reuse: ${run_host_consumes_reuse!().to_str()}")
     Stdout.line!("host store: ${run_host_store!().to_str()}")
+    Stdout.line!("erased call in branch: ${run_erased_call_in_branch!().to_str()}")
     Stdout.line!(Host.boxed_drop_report!())
 }

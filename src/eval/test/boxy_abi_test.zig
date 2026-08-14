@@ -66,6 +66,17 @@ fn customInspectProc(
     ret_desc.* = null;
 }
 
+fn metadataOnlyErasedCallable(
+    _: *builtins.host_abi.RocOps,
+    _: ?[*]u8,
+    _: ?[*]const u8,
+    _: ?[*]u8,
+    _: ?[*]u8,
+    out_desc: *?*const anyopaque,
+) callconv(.c) void {
+    out_desc.* = null;
+}
+
 var expectedInspectArgDesc: ?*const BoxyTypeDesc = null;
 
 fn customInspectChecksArgDesc(
@@ -149,6 +160,100 @@ test "boxy abi static descriptor lookup resolves ids to the descriptor table" {
 
     try std.testing.expectEqual(&descs[0], boxy_abi.roc_boxy_static_desc(0));
     try std.testing.expectEqual(&descs[1], boxy_abi.roc_boxy_static_desc(1));
+}
+
+test "boxy abi reads registered erased callable result metadata" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .u64, .contains_refcounted = false },
+    };
+    try setup.startRuntime(allocator, .{ .type_descs = &descs });
+
+    const capture_size: u32 = 3;
+    const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size));
+    const total_capture_size = metadata_offset + @sizeOf(builtins.erased_callable.CompilerMetadata);
+    const callable = builtins.erased_callable.allocate(
+        &metadataOnlyErasedCallable,
+        null,
+        total_capture_size,
+        setup.env.get_ops(),
+    );
+    defer builtins.erased_callable.decref(callable, setup.env.get_ops());
+    builtins.erased_callable.compilerMetadataPtr(
+        builtins.erased_callable.capturePtr(callable),
+        metadata_offset,
+    ).result_desc = @ptrCast(&descs[0]);
+
+    boxy_abi.roc_boxy_register_erased_proc(
+        @ptrCast(&metadataOnlyErasedCallable),
+        0,
+        @intFromEnum(layout_mod.Idx.u64),
+        metadata_offset,
+        0,
+        0,
+        0,
+        0,
+        0,
+    );
+    try std.testing.expectEqual(
+        &descs[0],
+        boxy_abi.roc_boxy_erased_callable_result_desc(callable),
+    );
+}
+
+test "boxy abi reads registered erased callable argument descriptor after capture prefix" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .u64, .contains_refcounted = false },
+    };
+    const offsets = [_]LIR.ErasedArgDescOffset{.{
+        .key = .{ .arg_index = 2, .descriptor_index = 3 },
+        .offset = 8,
+    }};
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .erased_arg_desc_offsets = &offsets,
+    });
+
+    const capture_offset_base: u32 = 16;
+    const metadata_offset: u32 = 32;
+    const total_capture_size = metadata_offset + @sizeOf(builtins.erased_callable.CompilerMetadata);
+    const callable = builtins.erased_callable.allocate(
+        &metadataOnlyErasedCallable,
+        null,
+        total_capture_size,
+        setup.env.get_ops(),
+    );
+    defer builtins.erased_callable.decref(callable, setup.env.get_ops());
+    const capture = builtins.erased_callable.capturePtr(callable);
+    const captured_desc: ?*const BoxyTypeDesc = &descs[0];
+    @memcpy(
+        capture[capture_offset_base + offsets[0].offset ..][0..@sizeOf(?*const BoxyTypeDesc)],
+        std.mem.asBytes(&captured_desc),
+    );
+    builtins.erased_callable.compilerMetadataPtr(capture, metadata_offset).result_desc = null;
+
+    boxy_abi.roc_boxy_register_erased_proc(
+        @ptrCast(&metadataOnlyErasedCallable),
+        0,
+        @intFromEnum(layout_mod.Idx.u64),
+        metadata_offset,
+        0,
+        0,
+        0,
+        offsets.len,
+        capture_offset_base,
+    );
+    try std.testing.expectEqual(
+        &descs[0],
+        boxy_abi.roc_boxy_erased_callable_arg_desc(callable, 2, 3),
+    );
 }
 
 test "boxy abi Box payload descriptor projection accepts both descriptor conventions" {
