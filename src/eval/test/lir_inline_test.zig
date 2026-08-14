@@ -8529,3 +8529,23 @@ test "issue 10409 duplicate top-level value defs do not panic constant root look
     var lowered = try lowerModule(allocator, source, .wrappers);
     defer lowered.deinit(allocator);
 }
+
+test "issue 10731 mapping over a List-recursive tag union lowers under wrapper inlining" {
+    try expectOptimizedDbgEvents(
+        \\Tree(a) := [Node(a, List(Tree(a)))]
+        \\
+        \\tree_map : Tree(a), (a -> b) -> Tree(b)
+        \\tree_map = |tree, f|
+        \\    match tree {
+        \\        Node(value, children) => Node(f(value), children.map(|child| tree_map(child, f)))
+        \\    }
+        \\
+        \\main : {}
+        \\main = {
+        \\    Node(root, children) = tree_map(Node(1.U64, [Node(2.U64, [])]), |value| Wrap(value))
+        \\    dbg root
+        \\    dbg children.map(|Node(value, _)| value)
+        \\    {}
+        \\}
+    , &.{ "Wrap(1)", "[Wrap(2)]" });
+}

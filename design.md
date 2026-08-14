@@ -3626,14 +3626,22 @@ a known iterator constructor, SpecConstr can:
 
 When the continuation observes only part of a compiler-generated tuple loop
 result, SpecConstr may narrow the loop's exit ABI without narrowing its
-back-edge state. That rewrite is lexical: the ordinary full expression clone
-carries the selected exit ABI while cloning the owning loop body, rewrites
-every `break` owned by that loop wherever it occurs (including inside mixed
-value-producing branch arms and statement values), and pushes an explicit null
-selection while cloning a nested loop body. Initial values remain in the
-enclosing lexical loop context. Re-cloned output breaks carry an explicit
-SpecConstr-owned selected-ABI stamp, so normalization propagates the already
-completed transfer instead of trying to recognize it from its scalar shape.
+back-edge state. Exit selection is a distinct final clone phase after the
+specialization graph is complete. Ordinary specialization and body-rewrite
+clones never initiate it. The exit-selection clone keeps calls opaque, does not
+rewrite call patterns, and cannot emit callable workers, so it cannot reopen
+the specialization graph through recursive call edges. Its recursive input is
+limited to the selected function's finite, acyclic expression ownership.
+
+That rewrite is lexical: the dedicated full expression clone carries the
+selected exit ABI while cloning the owning loop body, rewrites every `break`
+owned by that loop wherever it occurs (including inside mixed value-producing
+branch arms and statement values), and pushes an explicit null selection while
+cloning a nested loop body. Initial values remain in the enclosing lexical loop
+context. Re-cloned output breaks carry an explicit SpecConstr-owned selected-ABI
+stamp, so the exit-selection clone's internal normalization propagates the
+already completed transfer instead of trying to recognize it from its scalar
+shape.
 It is invalid to change the loop result type after rewriting only a terminating
 spine or a subset of exits; every selected exit must transfer exactly the
 explicitly selected tuple items.
