@@ -4338,7 +4338,11 @@ const Builder = struct {
         }
         var declared_fields = Span.empty();
         const declared_order = store.type_store.declaredFieldSpan(named.declared_order);
-        if (declared_order.len != 0) {
+        var has_declared_padding = false;
+        for (declared_order) |field| {
+            has_declared_padding = has_declared_padding or field == .padding;
+        }
+        if (has_declared_padding) {
             if (named.kind == .alias) boxyPlanInvariant("stored alias carried nominal declared field order");
             const backing = backing_rep orelse
                 boxyPlanInvariant("stored nominal declared field order had no backing representation");
@@ -4878,14 +4882,17 @@ const Builder = struct {
     }
 
     fn nominalDeclaredSource(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) ?NominalDeclaredSource {
-        if (nominal.declared_fields.len != 0) return .{
-            .field_view = view,
-            .fields = nominal.declared_fields,
-            .padding_view = view,
-            .padding_types = nominal.padding_field_types,
-        };
+        if (nominal.declared_fields.len != 0 and nominal.padding_field_types.len != 0) {
+            return .{
+                .field_view = view,
+                .fields = nominal.declared_fields,
+                .padding_view = view,
+                .padding_types = nominal.padding_field_types,
+            };
+        }
         if (nominal.builtin != null) return null;
         const lookup = self.nominalDeclarationFor(view, nominal) orelse return null;
+        if (lookup.padding_types.len == 0) return null;
         const fields = lookup.declaration.declaredFields(lookup.view.checked_types);
         if (fields.len == 0) return null;
         return .{

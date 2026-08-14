@@ -150,7 +150,8 @@ pub const InstBacking = struct {
     authority: Type.BackingAuthority = .checked_public,
 };
 
-/// Declared field order while a named type is still in the instantiation graph.
+/// Declared layout order while an opted-in named record is still in the
+/// instantiation graph.
 pub const InstDeclaredField = union(enum(u8)) {
     named: names.RecordFieldNameId,
     padding: NodeId,
@@ -170,9 +171,9 @@ const InstNamed = struct {
     /// types. Imported finished Monotypes have this null and already carry
     /// their producer digest in `def.generated`.
     generated_iterator: ?InstGeneratedIterator = null,
-    /// Declared field order for a nominal/opaque record backing (empty
-    /// otherwise). Padding field types are graph nodes so sealing maps them to
-    /// immutable type ids with the rest of the named type.
+    /// Declared layout order for a nominal/opaque record with unnamed padding
+    /// (empty otherwise). Padding field types are graph nodes so sealing maps
+    /// them to immutable type ids with the rest of the named type.
     declared_order: []const InstDeclaredField = &.{},
 };
 

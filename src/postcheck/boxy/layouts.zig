@@ -708,8 +708,8 @@ const GraphBuilder = struct {
                     if (rep.declared_fields.len != 0) {
                         const node = try self.graph.reserveNode(self.parent.allocator);
                         self.local_nodes[index] = node;
-                        self.graph.setNode(node, .{ .struct_ = try self.nominalDeclaredFields(rep) });
-                        try self.graph.markNominalStruct(self.parent.allocator, node);
+                        const fields = try self.nominalDeclaredFields(rep);
+                        self.graph.setNode(node, .{ .struct_ = self.graph.declaredOrder(fields) });
                         return .{ .local = node };
                     }
                     return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .nominal_backing).rep);
@@ -774,27 +774,12 @@ const GraphBuilder = struct {
 
         const fields = try self.parent.allocator.alloc(layout.GraphField, declared_fields.len);
         defer self.parent.allocator.free(fields);
-        var has_padding = false;
         for (declared_fields, fields) |field, *out| {
-            if (field.is_padding) has_padding = true;
             out.* = .{
                 .index = field.index,
                 .child = try self.inputForRep(field.rep),
                 .is_padding = field.is_padding,
             };
-        }
-        // Without padding a nominal record lays out exactly like a structural
-        // record: the shared struct commit sorts by descending alignment and
-        // breaks ties by input order, so the fields are presented in identity
-        // index order to match how structural records (already alphabetical)
-        // are presented. Records that opt into declared order carry padding and
-        // keep their source-declared field order verbatim.
-        if (!has_padding) {
-            std.mem.sort(layout.GraphField, fields, {}, struct {
-                fn lessThan(_: void, a: layout.GraphField, b: layout.GraphField) bool {
-                    return a.index < b.index;
-                }
-            }.lessThan);
         }
         return try self.graph.appendFields(self.parent.allocator, fields);
     }
@@ -1287,6 +1272,66 @@ test "boxy layout planner commits nominal declared fields through shared layout 
     try std.testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
     try std.testing.expectEqual(@as(u32, 2), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     try std.testing.expectEqual(@as(u32, 4), store.getStructSize(struct_idx));
+}
+
+test "boxy layout planner reuses structural backing order without padding" {
+    const gpa = std.testing.allocator;
+
+    const field_a: RecordFieldLabelId = @enumFromInt(1);
+    const field_b: RecordFieldLabelId = @enumFromInt(2);
+    const record_fields = [_]checked.CheckedRecordField{
+        .{ .name = field_a, .ty = @enumFromInt(fixtureTableIndex(0)) },
+        .{ .name = field_b, .ty = @enumFromInt(fixtureTableIndex(0)) },
+    };
+    const declared_fields = [_]checked.CheckedDeclaredField{
+        .{ .named = field_b },
+        .{ .named = field_a },
+    };
+    const nominal_declarations = [_]checked.CheckedNominalDeclaration{.{
+        .id = @enumFromInt(fixtureTableIndex(0)),
+        .nominal = .{ .module = @enumFromInt(4), .type_name = @enumFromInt(3), .source_decl = null },
+        .source_statement = 0,
+        .declaration_root = @enumFromInt(3),
+        .backing = @enumFromInt(2),
+        .df_start = 0,
+        .df_len = declared_fields.len,
+    }};
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.f32, @enumFromInt(fixtureTableIndex(0)), .{}) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(1) } },
+        .{ .nominal = .{
+            .name = @enumFromInt(3),
+            .origin_module = @enumFromInt(4),
+            .owner_module = .{},
+            .is_opaque = false,
+            .representation = .{ .local_declaration = @enumFromInt(fixtureTableIndex(0)) },
+            .declared_fields = .{ .start = 0, .len = 2 },
+        } },
+    };
+    const view = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .nominal_declarations = &nominal_declarations,
+        .record_field_pool = &record_fields,
+        .declared_field_pool = &declared_fields,
+    };
+
+    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(3))}, .{});
+    defer program.deinit();
+    const nominal = program.representations.items[@intFromEnum(program.root_reps.items[0])];
+    try std.testing.expectEqual(@as(usize, 0), program.declaredFieldSlice(nominal.declared_fields).len);
+
+    var store = try layout.Store.init(gpa, .u64);
+    defer store.deinit();
+
+    var layouts = try build(gpa, &program, &store, .{});
+    defer layouts.deinit();
+
+    const runtime = layouts.rep_layouts[@intFromEnum(program.root_reps.items[0])].worker;
+    const struct_idx = store.getLayout(runtime.layoutIdx()).getStruct().idx;
+    try std.testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 4), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    try std.testing.expectEqual(@as(u32, 8), store.getStructSize(struct_idx));
 }
 
 fn builtinNominal(

@@ -243,11 +243,10 @@ pub const MonoTypeTag = struct {
 /// Compatibility name for existing Monotype tag-union variant entries.
 pub const Tag = MonoTypeTag;
 
-/// One entry of a nominal record's declared layout order. The backing row is
-/// always lexicographic (for name resolution and digests); a nominal type
-/// additionally carries this declared order, which the layout commit consumes to
-/// place fields in source order with no internal padding. See design.md
-/// "Nominal Record Field Order".
+/// One entry of an opted-in nominal record's declared layout order. The backing
+/// row is always lexicographic; only a declaration containing an unnamed field
+/// carries this separate source order into post-check layout selection. See
+/// design.md "Nominal Record Field Order".
 pub const DeclaredField = union(enum(u8)) {
     /// A named backing field, matched against the lexicographic backing row by
     /// name at layout time.
@@ -267,8 +266,8 @@ pub const MonoTypeNode = union(enum(u8)) {
         builtin_owner: ?static_dispatch.BuiltinOwner = null,
         args: Span,
         backing: ?NamedBacking = null,
-        /// Declared field order for a nominal/opaque record backing; empty for
-        /// every other named type (consumed only by layout).
+        /// Declared layout order for a nominal/opaque record with unnamed
+        /// padding; empty for structural-layout records and other named types.
         declared_order: Span = Span.empty(),
     },
     record: Span,
@@ -3616,6 +3615,7 @@ test "monotype named type digest includes declared field order" {
     const field_b = try name_store.internRecordFieldLabel("b");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
+    const padding_ty = try store.add(.zst);
     const fields = try store.addFields(&.{
         .{ .name = field_a, .ty = i64_ty, .default = null },
         .{ .name = field_b, .ty = i64_ty, .default = null },
@@ -3623,10 +3623,12 @@ test "monotype named type digest includes declared field order" {
     const backing = try store.add(.{ .record = fields });
     const order_ab = try store.addDeclaredFields(&.{
         .{ .named = field_a },
+        .{ .padding = padding_ty },
         .{ .named = field_b },
     });
     const order_ba = try store.addDeclaredFields(&.{
         .{ .named = field_b },
+        .{ .padding = padding_ty },
         .{ .named = field_a },
     });
 

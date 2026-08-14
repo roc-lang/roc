@@ -43,16 +43,6 @@ fn assertAppendIdx(expected: usize, idx: anytype) void {
     }
 }
 
-/// Whether any field is an unnamed `_` padding spacer. A nominal record opts into
-/// declared-order-plus-padding layout by including such a field; without one it
-/// lays out like a structural record.
-fn hasAnyPaddingField(fields: []const StructField) bool {
-    for (fields) |field| {
-        if (field.is_padding) return true;
-    }
-    return false;
-}
-
 /// Errors that can occur during layout computation
 /// Stores Layout instances by Idx.
 ///
@@ -561,15 +551,15 @@ pub const Store = struct {
     pub const insertTuple = insertStruct;
 
     /// Insert a record layout from field layouts in canonical record-field order.
-    /// The shared layout commit performs one stable sort by descending alignment,
-    /// preserving canonical alphabetical order among equal-alignment fields.
+    /// The shared layout commit sorts by descending sort key, then canonical
+    /// semantic index.
     pub fn putRecord(self: *Self, field_layouts: []const Layout) std.mem.Allocator.Error!Idx {
         return self.putTuple(field_layouts);
     }
 
     /// Insert a struct layout from semantic fields.
-    /// `fields[i].index` is the canonical semantic field index before the shared
-    /// stable alignment sort at layout commit.
+    /// `fields[i].index` is the canonical semantic field index used to break
+    /// ties between equal sort keys.
     pub fn putStructFields(self: *Self, fields: []const StructField) std.mem.Allocator.Error!Idx {
         const trace = tracy.traceNamed(@src(), "layoutStore.putStructFields");
         defer trace.end();
@@ -581,7 +571,7 @@ pub const Store = struct {
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
         try temp_fields.appendSlice(self.allocator, fields);
-        try self.stableSortStructFieldsByLayoutAlignment(temp_fields.items);
+        self.sortStructFields(temp_fields.items);
 
         const sizes = self.structSizes(temp_fields.items);
         if (sizes.get(.u64) == 0) {
@@ -631,36 +621,31 @@ pub const Store = struct {
         return self.putStructFields(temp_fields.items);
     }
 
-    /// Sort structural-record / tuple fields by descending sort key, stably.
-    /// Routes through the shared `field_order.computeStructuralFieldOrder` so the
-    /// layout store and `roc glue` order structural records by the exact same
-    /// logic. The sort key is target-independent (a pointer sorts between 4- and
-    /// 8-byte alignment), so the resulting field order is identical on 32-bit and
-    /// 64-bit targets. Empty field names keep the pure stable sort: callers
-    /// presort by name elsewhere, so equal-key fields stay in input order.
-    fn stableSortStructFieldsByLayoutAlignment(self: *Self, fields: []StructField) std.mem.Allocator.Error!void {
+    /// Sort structural-record / tuple fields by the total canonical key:
+    /// descending target-independent sort key, then ascending semantic index.
+    /// This is independent of the order in which callers present the fields.
+    fn sortStructFields(self: *Self, fields: []StructField) void {
         if (fields.len <= 1) return;
 
-        const structural = try self.allocator.alloc(field_order.StructuralField, fields.len);
-        defer self.allocator.free(structural);
-        for (fields, structural) |field, *out| {
-            out.* = .{
-                .sort_key = if (field.is_padding)
-                    .align_1
-                else
-                    self.getLayout(field.layout).sortKey(),
-                .name = "",
-            };
-        }
+        const SortContext = struct {
+            store: *const Self,
 
-        const order = try self.allocator.alloc(u16, fields.len);
-        defer self.allocator.free(order);
-        field_order.computeStructuralFieldOrder(structural, order);
+            fn key(ctx: @This(), field: StructField) field_order.StructuralField {
+                return .{
+                    .sort_key = if (field.is_padding)
+                        .align_1
+                    else
+                        ctx.store.getLayout(field.layout).sortKey(),
+                    .semantic_index = field.index,
+                };
+            }
 
-        const scratch = try self.allocator.alloc(StructField, fields.len);
-        defer self.allocator.free(scratch);
-        for (order, scratch) |src, *dst| dst.* = fields[src];
-        @memcpy(fields, scratch);
+            fn lessThan(ctx: @This(), a: StructField, b: StructField) bool {
+                return field_order.comesBefore(ctx.key(a), ctx.key(b));
+            }
+        };
+
+        std.sort.pdq(StructField, fields, SortContext{ .store = self }, SortContext.lessThan);
     }
 
     /// Create a tag union layout from pre-computed variant payload layouts.
@@ -694,7 +679,7 @@ pub const Store = struct {
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
         try temp_fields.appendSlice(self.allocator, input_fields);
-        try self.stableSortStructFieldsByLayoutAlignment(temp_fields.items);
+        self.sortStructFields(temp_fields.items);
 
         const sizes = self.structSizes(temp_fields.items);
         if (sizes.get(.u64) == 0) {
@@ -888,9 +873,7 @@ pub const Store = struct {
                 .struct_ => |span| {
                     try key.append(allocator, 4);
                     const fields = graph.getFields(span);
-                    var has_padding = false;
-                    for (fields) |field| has_padding = has_padding or field.is_padding;
-                    try key.append(allocator, @intFromBool(graph.isNominalStruct(node_id) and has_padding));
+                    try key.append(allocator, @intFromEnum(span.order));
                     try appendValue(key, allocator, @as(u16, @intCast(fields.len)));
                     for (fields) |field| {
                         try appendValue(key, allocator, field.index);
@@ -1113,7 +1096,9 @@ pub const Store = struct {
                             .is_padding = field.is_padding,
                         });
                     }
-                    break :blk .{ .struct_ = try working.appendFields(self.allocator, fields.items) };
+                    var translated = try working.appendFields(self.allocator, fields.items);
+                    if (span.order == .declared) translated = working.declaredOrder(translated);
+                    break :blk .{ .struct_ = translated };
                 },
                 .tag_union => |span| blk: {
                     var refs = std.ArrayList(GraphRef).empty;
@@ -1126,9 +1111,6 @@ pub const Store = struct {
                 },
             };
             working.setNode(working_node_id, translated_node);
-            if (graph.isNominalStruct(@enumFromInt(i))) {
-                try working.markNominalStruct(self.allocator, working_node_id);
-            }
         }
 
         const raw_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
@@ -1801,12 +1783,7 @@ pub const Store = struct {
                                     });
                                 }
 
-                                // A nominal record keeps its declared order (and auto-pads)
-                                // only when it opts in with an unnamed `_` field; otherwise it
-                                // lays out exactly like a structural record (sort-key sorted).
-                                const keep_declared = self_finalizer.graph.isNominalStruct(node_id) and
-                                    hasAnyPaddingField(fields.items);
-                                break :blk_struct if (keep_declared)
+                                break :blk_struct if (span.order == .declared)
                                     try self_finalizer.store.putNominalStructFields(fields.items)
                                 else
                                     try self_finalizer.store.putStructFields(fields.items);
@@ -2643,7 +2620,7 @@ pub const Store = struct {
     }
 };
 
-test "layout store commits struct fields with a stable alignment sort" {
+test "layout store commits struct fields in canonical structural order" {
     const testing = std.testing;
 
     var store = try Store.init(testing.allocator, .u64);
@@ -2752,8 +2729,7 @@ test "commitGraph keeps a nominal struct with a `_` field in declared order" {
         .{ .index = 4, .child = .{ .canonical = .u32 } },
         .{ .index = 5, .child = .{ .canonical = .zst }, .is_padding = true },
     });
-    graph.setNode(struct_node, .{ .struct_ = fields });
-    try graph.markNominalStruct(testing.allocator, struct_node);
+    graph.setNode(struct_node, .{ .struct_ = graph.declaredOrder(fields) });
 
     var commit = try store.commitGraph(&graph, .{ .local = struct_node });
     defer commit.deinit(testing.allocator);
@@ -2765,7 +2741,7 @@ test "commitGraph keeps a nominal struct with a `_` field in declared order" {
     try testing.expectEqual(@as(u32, 8), store.getStructSize(struct_idx));
 }
 
-test "commitGraph lays out a no-padding nominal struct structurally" {
+test "commitGraph structural order ignores graph field presentation order" {
     const testing = std.testing;
 
     var store = try Store.init(testing.allocator, .u64);
@@ -2775,30 +2751,24 @@ test "commitGraph lays out a no-padding nominal struct structurally" {
     defer graph.deinit(testing.allocator);
 
     const struct_node = try graph.reserveNode(testing.allocator);
-    // Declared order { a:U8, b:U8, c:U8, d:U8, e:U32 } with no `_` field: a
-    // nominal record without an opt-in marker lays out like a structural record,
-    // so the u32 sorts to offset 0.
+    // The graph presents two equal-key fields in reverse semantic order. A
+    // structural commit must use their canonical indices, never input order.
     const fields = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
-        .{ .index = 0, .child = .{ .canonical = .u8 } },
-        .{ .index = 1, .child = .{ .canonical = .u8 } },
-        .{ .index = 2, .child = .{ .canonical = .u8 } },
-        .{ .index = 3, .child = .{ .canonical = .u8 } },
-        .{ .index = 4, .child = .{ .canonical = .u32 } },
+        .{ .index = 1, .child = .{ .canonical = .f32 } },
+        .{ .index = 0, .child = .{ .canonical = .f32 } },
     });
     graph.setNode(struct_node, .{ .struct_ = fields });
-    try graph.markNominalStruct(testing.allocator, struct_node);
 
     var commit = try store.commitGraph(&graph, .{ .local = struct_node });
     defer commit.deinit(testing.allocator);
 
     const struct_idx = store.getLayout(commit.root_idx).getStruct().idx;
-    // Structural sort hoists the u32 to offset 0.
-    try testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 4));
-    try testing.expectEqual(@as(u32, 4), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try testing.expectEqual(@as(u32, 4), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     try testing.expectEqual(@as(u32, 8), store.getStructSize(struct_idx));
 }
 
-test "uninterned struct layouts use the same stable alignment sort as interned ones" {
+test "uninterned struct layouts use the same structural order as interned ones" {
     const testing = std.testing;
 
     var store = try Store.init(testing.allocator, .u64);
