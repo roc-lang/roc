@@ -3382,9 +3382,14 @@ type graph.
 
 Generated iterator identity is content-addressed at the producer. Its complete
 identity inputs are the public iterator declaration and the exact item type.
-Every iterator-producing operation first obtains that item type from its
-completed operands, computes the stable SHA-256 identity, and interns it before
-constructing a backing. Equal inputs select one dense in-session node; a
+An operand-directed iterator-producing operation obtains that item type from
+its completed operands and interns the stable SHA-256 identity at that operation
+boundary. The recursively typed `iter_from_step` operation reserves the same
+declaration-plus-item construction before its callback runs and completes that
+one reservation immediately when the callback produces the item. The sole
+request-directed empty constructor consumes its explicitly recorded result
+request and commits any checker-authored language default while hashing at its
+own operation boundary. Equal inputs select one dense in-session node; a
 cross-body hit imports the already-sealed authoritative Monotype. The producer
 operation, adapter chain, captures, and runtime values are deliberately not
 identity inputs: they are possible inhabitants of the callable slot in the one
@@ -3456,20 +3461,22 @@ while constructing later Monotype bodies compares generated content addresses
 directly. It must not compute a fresh whole-type digest or descend into the
 generated nominal's backing, declared layout metadata, or public arguments.
 
-Every representation producer consumes its current exact operand cells. An
-expected result type is a destination request, never a source from which the
-producer may read adapter inputs, state, callable evidence, or a prior
+Every representation producer consumes its current exact operand cells. By
+default an expected result type is a destination request, never a source from
+which the producer may read adapter inputs, state, callable evidence, or a prior
 function interface. This remains true when the expected result is an imported
 finished generated nominal: the current producer constructs its own exact
 identity from its explicit inputs, then applies that output to the request.
+Only an operation explicitly declared request-directed in the shared checked
+vocabulary may consume a result request as one of its identity inputs.
 An iterator producer also names the checked-public `Iter` declaration and the
 exact source of its output item independently. For example, `List.iter` takes
 the declaration contract from the checked builtin return and the item cell
 from the exact list operand. The producer passes those two authorities directly
 to generated-type interning; it does not allocate a temporary public nominal
-merely to combine them. It never treats a destination cell—or a field or
-payload read from that destination's public backing—as the declaration or item
-authority.
+merely to combine them. An operand-directed iterator producer never treats a
+destination cell—or a field or payload read from that destination's public
+backing—as the declaration or item authority.
 
 Representation-sensitive low-level operations define one explicit
 `ProducedTypeFlow` alongside the shared low-level vocabulary. The flow says
@@ -3636,6 +3643,39 @@ absent; the next refinement that records that producer executes the same
 checker-authored operation. This is scheduling, not a fallback: no alternative
 source is tried and no checked or produced graph is inspected to discover one.
 
+The slot separately records who constructs the generated identity. A completed
+value edge supplies an already-atomic identity. A generated interface slot may
+construct one only after its exact public-argument producer has completed; this
+is used by `Field` and by recursive callable interfaces whose `Iter(item)` item
+is already exact. An iterator operation constructs its own result at its
+explicit `IteratorProcedureId` boundary from completed operands rather than
+from a destination request. `iter_from_step` takes its item identity from the
+completed step callback. Its recursive callback interface must nevertheless
+name `Iter(item)` before that callback body can be lowered. Checking therefore
+emits the result occurrence and each recursive `rest` occurrence as separate
+generated-construction slots over the same explicit item selection. Lowering
+asks the dense declaration-plus-item reservation index for each such slot.
+Equal inputs reuse the same unstamped nominal immediately, before any duplicate
+private backing or hash work can begin. Lowering then runs the callback against
+that reservation's recursive interface and requires the completed callback to
+return the same item cell. Only then does the operation compute and stamp the
+SHA-256 identity. An unstamped reservation is construction state, not a type
+identity: it cannot be sealed, serialized, compared for generated equality, or
+used by a later stage. Reaching relation freeze with an unstamped reservation
+is a compiler invariant violation; freeze never completes one.
+
+A recursive `rest` occurrence asks for the same declaration-plus-item
+construction and therefore reaches that early reservation or the completed
+content address directly. It does not copy the outer result's generated root or
+private backing, and it does not construct or hash equivalent inputs twice. The
+direct item selection may already have been produced by the enclosing iterator
+operation—for example, `List.iter` selects it from the exact list operand—so
+the reservation does not turn the enclosing result destination into production
+evidence. `range_done` is the sole explicitly request-directed iterator
+constructor because it has no value edge that can produce an item identity. No
+other iterator producer may treat a result request, even a currently closed or
+defaulted one, as production evidence.
+
 Operations that preserve an already-generated identity record that source
 directly on every generated output slot. In particular, `Iter.next` records its
 iterator input as the operation source for every returned `rest` iterator,
@@ -3648,7 +3688,12 @@ Constructing a compound public argument from checked substitutions uses request
 authority. It preserves every unresolved selected child as the exact forward
 cell supplied by the call and cannot consume a language default. Only the
 explicit operand producer, or an independently checker-proven concrete source,
-may complete such a child before the generated identity is interned.
+may complete such a child before the generated identity is interned. A generic
+generated constructor cannot intern from that request merely because it is
+currently resolved: a closed request can still contain a language default that
+a later value producer replaces. The only exception is a result request named
+directly by an explicitly request-directed producer operation as described
+above.
 
 Operand scheduling direction says only whether an operand needs an exact
 request before lowering can begin. Once lowering finishes, every operand is an
@@ -4181,13 +4226,20 @@ generated nominal whenever they produce the same item type. Their different
 step closures become members of the callable slot in that common backing; a
 closure identity is not part of the surrounding iterator type.
 
-The sole construction choke point is `generatedIteratorNode` in
-`src/postcheck/monotype/lower.zig`. It receives the checker-authored public
-declaration and the exact item node already produced by the operation. A dense
-item-node index answers repeated in-graph requests without hashing. On a dense
-miss, one structural digest lookup finds a cross-graph exact type or carries
-the computed digest into one backing construction and registration; the inputs
-are never hashed twice for one miss.
+The sole content-identity choke point is `lookupGeneratedIterator` plus
+`addRecursiveGeneratedIterator` in `src/postcheck/monotype/solve.zig`.
+`generatedIteratorNode` adapts an already-instantiated public source and
+`generatedIteratorNominalNode` adapts a checker-authored generated call slot;
+both pass exactly the same public declaration and item node into that choke
+point. The item comes from the operation's explicitly recorded operand or
+request source. A dense item-node index answers repeated in-graph requests
+without hashing. On a dense miss, one structural digest lookup finds a
+cross-graph exact type or carries the computed digest into one backing
+construction and registration; the inputs are never hashed twice for one miss.
+`iter_from_step` additionally uses `reserveGeneratedIteratorNominalNode` for its
+unavoidable recursive construction state, then invokes the same completion
+machinery immediately after its callback returns. No freeze-time or later-stage
+pass finishes generated identity.
 
 A public `Iter` expected type has already constrained the expression during
 checking. It is only a destination request. The concrete producer constructs

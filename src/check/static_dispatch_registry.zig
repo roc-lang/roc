@@ -221,6 +221,43 @@ pub const IteratorProcedureId = enum(u8) {
     iter_from_step,
     range_done,
 
+    /// Exact input from which the iterator producer computes its generated
+    /// result identity. Most procedures read completed operands. The empty
+    /// constructor has no completed value edge that can supply the item,
+    /// so checking explicitly directs it to the exact result request instead.
+    pub const GeneratedIdentitySource = enum(u8) {
+        completed_operands,
+        result_request,
+    };
+
+    pub fn generatedIdentitySource(self: IteratorProcedureId) ?GeneratedIdentitySource {
+        return switch (self) {
+            .range_done => .result_request,
+            .iter_iter,
+            .iter_custom,
+            .iter_single,
+            .list_iter,
+            .list_iter_rev,
+            .str_iter_utf8,
+            .iter_map,
+            .iter_keep_if,
+            .iter_drop_if,
+            .iter_take_first,
+            .iter_drop_first,
+            .iter_concat,
+            .iter_append,
+            .iter_exclusive_range,
+            .iter_inclusive_range,
+            .numeric_range_exclusive,
+            .numeric_range_inclusive,
+            .numeric_to,
+            .numeric_until,
+            .iter_from_step,
+            => .completed_operands,
+            .iter_next => null,
+        };
+    }
+
     /// Whether this exact checked procedure returns an iterator value. Keep
     /// this exhaustive: adding an iterator procedure must declare its producer
     /// role here instead of letting a later pass infer it from result shape.
@@ -316,6 +353,22 @@ pub const IteratorProcedureId = enum(u8) {
         };
     }
 };
+
+test "iterator identity inputs are explicit" {
+    try std.testing.expectEqual(
+        IteratorProcedureId.GeneratedIdentitySource.completed_operands,
+        IteratorProcedureId.iter_from_step.generatedIdentitySource().?,
+    );
+    try std.testing.expectEqual(
+        IteratorProcedureId.GeneratedIdentitySource.result_request,
+        IteratorProcedureId.range_done.generatedIdentitySource().?,
+    );
+    try std.testing.expectEqual(
+        IteratorProcedureId.GeneratedIdentitySource.completed_operands,
+        IteratorProcedureId.list_iter.generatedIdentitySource().?,
+    );
+    try std.testing.expectEqual(@as(?IteratorProcedureId.GeneratedIdentitySource, null), IteratorProcedureId.iter_next.generatedIdentitySource());
+}
 
 const IteratorProcedureNameEntry = struct { []const u8, IteratorProcedureId };
 

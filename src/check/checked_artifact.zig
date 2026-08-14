@@ -16759,8 +16759,20 @@ pub const SpecializationCallSlotKind = enum(u8) {
 /// may construct the content-addressed identity directly from the slot's exact
 /// public arguments before lowering a callback that mentions it.
 pub const SpecializationGeneratedSlotSource = enum(u8) {
+    /// A completed value edge supplies the already-constructed atomic identity.
     producer,
+    /// A generated interface slot constructs the identity after its exact
+    /// public argument producer has completed.
     exact_arguments,
+    /// One `iter_from_step` callback-interface occurrence shares the explicit
+    /// forward item cell owned by that operation's recursive reservation.
+    recursive_iterator_interface,
+    /// An iterator operation constructs the identity from its completed runtime
+    /// operands at the operation boundary.
+    iterator_operands,
+    /// A request-directed iterator constructor constructs its empty identity
+    /// from the exact result request at the operation boundary.
+    iterator_result_request,
 };
 
 /// Explicit source operation for a generated nominal's public argument.
@@ -19475,7 +19487,7 @@ fn builtinCanGenerateFromExactArguments(builtin_nominal: CheckedBuiltinNominal) 
     };
 }
 
-test "generated iterators and field handles consume exact public arguments" {
+test "generated iterators and field handles consume exact produced arguments" {
     try std.testing.expect(builtinCanGenerateFromExactArguments(.iter));
     try std.testing.expect(builtinCanGenerateFromExactArguments(.field));
     try std.testing.expect(!builtinCanGenerateFromExactArguments(.fields));
@@ -19933,8 +19945,53 @@ fn publishIteratorOperationSources(
     occurrences: []const SpecializationOccurrence,
     selection_edges: []const SpecializationSelectionEdge,
 ) void {
-    if (procedure != .iter_next) return;
     const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
+    if (procedure) |iterator_procedure| {
+        if (iterator_procedure.generatedIdentitySource()) |identity_source| {
+            var found_result = false;
+            for (shape_slots) |*slot| {
+                if (slot.kind != .generated_nominal or
+                    !specializationSlotHasRoot(slot.*, .result, 0, occurrences, selection_edges)) continue;
+                slot.generated_source = switch (identity_source) {
+                    .completed_operands => .iterator_operands,
+                    .result_request => .iterator_result_request,
+                };
+                found_result = true;
+            }
+            if (!found_result) {
+                checkedArtifactInvariant("iterator producer had no generated result identity", .{});
+            }
+        }
+        if (iterator_procedure == .iter_from_step) {
+            const result: CheckedTypeId = for (shape_slots) |slot| {
+                if (slot.kind == .generated_nominal and
+                    specializationSlotHasRoot(slot, .result, 0, occurrences, selection_edges)) break slot.checked;
+            } else checkedArtifactInvariant("iter_from_step had no generated result identity", .{});
+            for (shape_slots) |*slot| {
+                if (slot.kind != .generated_nominal or slot.checked == result) continue;
+                var has_producer = false;
+                var has_argument_consumer = false;
+                for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+                    if (occurrence.production == .producer) has_producer = true;
+                    if (occurrence.production == .consumer and
+                        selection_edges[occurrence.root_selection_edge].step == .argument)
+                    {
+                        has_argument_consumer = true;
+                    }
+                }
+                if (has_producer or !has_argument_consumer) continue;
+                if (!sameGeneratedNominalDeclarationAndArguments(checked_types, result, slot.checked)) {
+                    checkedArtifactInvariant("iter_from_step recursive iterator used a different public identity", .{});
+                }
+                // The recursive `rest` type is closure-interface input, not an
+                // identity copied from the outer result. Reserve it from the
+                // same explicit item selection; the callback producer must
+                // complete that cell before Monotype stamps the identity.
+                slot.generated_source = .recursive_iterator_interface;
+            }
+        }
+    }
+    if (procedure != .iter_next) return;
     const source: CheckedTypeId = for (shape_slots) |slot| {
         if (slot.kind == .generated_nominal and specializationSlotHasRoot(
             slot,
@@ -21246,81 +21303,6 @@ fn appendResultOnlyCallContextBindings(
     }
 }
 
-/// `iter_from_step` constructs one generated iterator identity. Its result and
-/// every recursive `rest` accepted from the step callback are the same runtime
-/// identity, even though checking publishes them as distinct `Iter(item)`
-/// occurrences. Record that constructor operation explicitly; Monotype must
-/// never infer it from equal public nominal types.
-fn appendIterFromStepIdentityBindings(
-    allocator: Allocator,
-    procedure: ?IteratorProcedureId,
-    argument_index: ?usize,
-    checked_types: *const CheckedTypePublication,
-    shape: SpecializationCallShape,
-    slots: []const SpecializationCallSlot,
-    occurrences: []const SpecializationOccurrence,
-    selection_edges: []const SpecializationSelectionEdge,
-    pool: *std.ArrayList(SpecializationCallConsumerBinding),
-    start: u32,
-) Allocator.Error!void {
-    if (procedure != .iter_from_step) return;
-    const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
-    const shape_edges = selection_edges[shape.selection_edges.start .. shape.selection_edges.start + shape.selection_edges.len];
-    var result: ?CheckedTypeId = null;
-    for (shape_slots) |slot| {
-        if (slot.kind != .generated_nominal) continue;
-        for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
-            if (occurrence.production != .producer) continue;
-            if (shape_edges[occurrence.root_selection_edge].step != .result) continue;
-            if (result != null and result.? != slot.checked) {
-                checkedArtifactInvariant("iter_from_step published multiple generated result identities", .{});
-            }
-            result = slot.checked;
-        }
-    }
-    const source = result orelse
-        checkedArtifactInvariant("iter_from_step published no generated result identity", .{});
-    const source_nominal = checked_types.store.payload(source).nominal;
-    for (shape_slots) |slot| {
-        if (slot.kind != .generated_nominal or slot.checked == source) continue;
-        var has_producer = false;
-        var has_selected_argument_consumer = false;
-        for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
-            if (occurrence.production == .producer) has_producer = true;
-            if (occurrence.production == .consumer and
-                shape_edges[occurrence.root_selection_edge].step == .argument and
-                (argument_index == null or
-                    shape_edges[occurrence.root_selection_edge].index == argument_index.?))
-            {
-                has_selected_argument_consumer = true;
-            }
-        }
-        if (has_producer or !has_selected_argument_consumer) continue;
-        const consumer_nominal = checked_types.store.payload(slot.checked).nominal;
-        if (source_nominal.name != consumer_nominal.name or
-            source_nominal.origin_module != consumer_nominal.origin_module or
-            !checkedArtifactKeyEql(source_nominal.owner_module, consumer_nominal.owner_module) or
-            source_nominal.source_decl != consumer_nominal.source_decl or
-            source_nominal.builtin != consumer_nominal.builtin or
-            source_nominal.args.len != consumer_nominal.args.len)
-        {
-            continue;
-        }
-        for (source_nominal.args, consumer_nominal.args) |source_arg, consumer_arg| {
-            if (source_arg != consumer_arg) {
-                checkedArtifactInvariant("iter_from_step recursive iterator used a different public argument identity", .{});
-            }
-        }
-        for (pool.items[start..]) |existing| {
-            if (existing.source == source and existing.consumer == slot.checked) break;
-        } else try pool.append(allocator, .{
-            .source = source,
-            .consumer = slot.checked,
-            .source_kind = .exact_selection,
-        });
-    }
-}
-
 fn compileCallConcreteSelections(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
@@ -22236,18 +22218,6 @@ fn publishSpecializationCallPlans(
                 &consumer_bindings,
             );
         }
-        try appendIterFromStepIdentityBindings(
-            allocator,
-            iterator_procedure,
-            null,
-            checked_types,
-            shapes.items[@intFromEnum(by_expr[raw_expr].shape)],
-            slots.items,
-            occurrences.items,
-            selection_edges.items,
-            &consumer_bindings,
-            selection_binding_start,
-        );
         by_expr[raw_expr].selection_bindings = .{
             .start = selection_binding_start,
             .len = @intCast(consumer_bindings.items.len - selection_binding_start),
@@ -22268,18 +22238,6 @@ fn publishSpecializationCallPlans(
                 ordinary_function.args[index],
                 checked_bodies.expr(arg).ty,
                 &consumer_bindings,
-            );
-            try appendIterFromStepIdentityBindings(
-                allocator,
-                iterator_procedure,
-                index,
-                checked_types,
-                shapes.items[@intFromEnum(by_expr[raw_expr].shape)],
-                slots.items,
-                occurrences.items,
-                selection_edges.items,
-                &consumer_bindings,
-                operand_binding_start,
             );
             consumer_binding_spans.items[by_expr[raw_expr].operand_consumer_binding_spans.start + index] = .{
                 .start = operand_binding_start,
