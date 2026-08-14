@@ -88,6 +88,14 @@ const FunctionEffectResolution = enum {
     }
 };
 
+/// How a type variable occurrence will be represented in the checked type
+/// artifact consumed by later compiler stages.
+const InspectTypePosition = enum(u2) {
+    value,
+    record_row,
+    tag_row,
+};
+
 /// Transient checker input carrying the platform root's requirement surface:
 /// the platform's checked env (read-only; instantiated into the app's store,
 /// never referenced by checker output) and its path for diagnostics.
@@ -163,6 +171,11 @@ return_constraint_frames: std.ArrayListUnmanaged(ReturnConstraintFrame),
 var_map: std.AutoHashMap(Var, Var),
 /// A map from one var to another. Used in instantiation and var copying
 var_set: std.AutoHashMap(Var, void),
+/// Reusable visited set for validating the concrete content of values passed
+/// to `Str.inspect`. Each value is a bitset of occurrence positions because
+/// the same type variable can appear both as a row tail and as an ordinary
+/// value.
+inspect_type_visits: std.AutoHashMap(Var, u8),
 /// Explicit visit stack for `varContainsError`'s heap-worklist type-graph
 /// walk. Entries are base-relative: each entry point operates only on the
 /// slots it pushed and drains back to its entry length, so the walk may nest
@@ -2215,6 +2228,7 @@ fn initAssumePrepared(
         .return_constraints = .empty,
         .return_constraint_frames = .empty,
         .var_set = std.AutoHashMap(Var, void).init(gpa),
+        .inspect_type_visits = std.AutoHashMap(Var, u8).init(gpa),
         .type_visit_stack = .empty,
         .alias_row_frames = .empty,
         .alias_row_names = .empty,
@@ -2393,6 +2407,7 @@ pub fn deinit(self: *Self) void {
     self.return_constraints.deinit(self.gpa);
     self.return_constraint_frames.deinit(self.gpa);
     self.var_set.deinit();
+    self.inspect_type_visits.deinit();
     self.type_visit_stack.deinit(self.gpa);
     self.alias_row_frames.deinit(self.gpa);
     self.alias_row_names.deinit(self.gpa);
@@ -9556,48 +9571,62 @@ fn checkEffectfulFunctionName(self: *Self, pattern_idx: CIR.Pattern.Idx, expr_id
     } });
 }
 
-fn varHasUnresolvedContent(
+fn varHasUnresolvedInspectContent(
     self: *Self,
     var_: Var,
-    visited: *std.AutoHashMap(Var, void),
+    position: InspectTypePosition,
+    visited: *std.AutoHashMap(Var, u8),
 ) std.mem.Allocator.Error!bool {
     const resolved = self.types.resolveVar(var_);
-    if (visited.contains(resolved.var_)) return false;
-    try visited.put(resolved.var_, {});
+    const position_bit = @as(u8, 1) << @intFromEnum(position);
+    const visit = try visited.getOrPut(resolved.var_);
+    if (!visit.found_existing) visit.value_ptr.* = 0;
+    if (visit.value_ptr.* & position_bit != 0) return false;
+    visit.value_ptr.* |= position_bit;
 
+    // Checked-type publication attaches an explicit close-to-empty default to
+    // each unconstrained row-tail occurrence. Ordinary value occurrences have
+    // no such default, and constrained variables cannot receive a row default.
     return switch (resolved.desc.content) {
-        .flex, .rigid => true,
+        .flex => |flex| switch (position) {
+            .value => true,
+            .record_row, .tag_row => flex.constraints.len() > 0,
+        },
+        .rigid => |rigid| switch (position) {
+            .value => true,
+            .record_row, .tag_row => rigid.constraints.len() > 0,
+        },
         .err, .field_presence => false,
-        .alias => |alias| try self.varHasUnresolvedContent(self.types.getAliasBackingVar(alias), visited),
-        .structure => |flat_type| try self.flatTypeHasUnresolvedContent(flat_type, visited),
+        .alias => |alias| try self.varHasUnresolvedInspectContent(self.types.getAliasBackingVar(alias), position, visited),
+        .structure => |flat_type| try self.flatTypeHasUnresolvedInspectContent(flat_type, visited),
     };
 }
 
-fn flatTypeHasUnresolvedContent(
+fn flatTypeHasUnresolvedInspectContent(
     self: *Self,
     flat_type: FlatType,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *std.AutoHashMap(Var, u8),
 ) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
-        .tuple => |tuple| try self.varsHaveUnresolvedContent(self.types.sliceVars(tuple.elems), visited),
-        .nominal_type => |nominal| try self.varsHaveUnresolvedContent(self.types.sliceNominalArgs(nominal), visited),
+        .tuple => |tuple| try self.varsHaveUnresolvedInspectContent(self.types.sliceVars(tuple.elems), visited),
+        .nominal_type => |nominal| try self.varsHaveUnresolvedInspectContent(self.types.sliceNominalArgs(nominal), visited),
         .fn_pure, .fn_effectful, .fn_unbound => false,
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
             for (fields.items(.presence)) |presence| {
                 {
                     const field_var = presence.typeVar();
-                    if (try self.varHasUnresolvedContent(field_var, visited)) break :blk true;
+                    if (try self.varHasUnresolvedInspectContent(field_var, .value, visited)) break :blk true;
                 }
             }
-            break :blk try self.varHasUnresolvedContent(record.ext, visited);
+            break :blk try self.varHasUnresolvedInspectContent(record.ext, .record_row, visited);
         },
         .record_unbound => |fields_range| blk: {
             const fields = self.types.getRecordFieldsSlice(fields_range);
             for (fields.items(.presence)) |presence| {
                 {
                     const field_var = presence.typeVar();
-                    if (try self.varHasUnresolvedContent(field_var, visited)) break :blk true;
+                    if (try self.varHasUnresolvedInspectContent(field_var, .value, visited)) break :blk true;
                 }
             }
             break :blk false;
@@ -9605,21 +9634,21 @@ fn flatTypeHasUnresolvedContent(
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |args| {
-                if (try self.varsHaveUnresolvedContent(self.types.sliceVars(args), visited)) break :blk true;
+                if (try self.varsHaveUnresolvedInspectContent(self.types.sliceVars(args), visited)) break :blk true;
             }
-            break :blk try self.varHasUnresolvedContent(tag_union.ext, visited);
+            break :blk try self.varHasUnresolvedInspectContent(tag_union.ext, .tag_row, visited);
         },
         .empty_record, .empty_tag_union => false,
     };
 }
 
-fn varsHaveUnresolvedContent(
+fn varsHaveUnresolvedInspectContent(
     self: *Self,
     vars: []const Var,
-    visited: *std.AutoHashMap(Var, void),
+    visited: *std.AutoHashMap(Var, u8),
 ) std.mem.Allocator.Error!bool {
     for (vars) |var_| {
-        if (try self.varHasUnresolvedContent(var_, visited)) return true;
+        if (try self.varHasUnresolvedInspectContent(var_, .value, visited)) return true;
     }
     return false;
 }
@@ -17288,8 +17317,8 @@ fn validateToInspectMethodTypeForArg(
     const resolved = self.types.resolveVar(arg_var);
 
     if (self.exprIsTopLevelLookup(arg_expr_idx)) {
-        self.var_set.clearRetainingCapacity();
-        if (try self.varHasUnresolvedContent(arg_var, &self.var_set)) {
+        self.inspect_type_visits.clearRetainingCapacity();
+        if (try self.varHasUnresolvedInspectContent(arg_var, .value, &self.inspect_type_visits)) {
             try self.reportPolymorphicValueProblem(arg_var, arg_var, null);
             return;
         }
