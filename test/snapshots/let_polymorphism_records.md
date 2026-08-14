@@ -62,34 +62,29 @@ main = |_| {
 TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
 TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 # PROBLEMS
+── ✗ type mismatch ──────────────────────────── let_polymorphism_records.md:48:6
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ I'm having trouble with this bool operation. ──────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  1 + update_data                                                           │
- │      ‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └────────────────────────────────────────── let_polymorphism_records.md:48:6 ┘
+I'm having trouble with this bool operation.
 
-    Both sides of `and` must be `Bool` values, but the right side is:
+1 + update_data
+    ^^^^^^^^^^^
 
-        { data: a, ..b }, a -> { data: a, ..b }
+Both sides of and must be Bool values, but the right side is:
 
-    Note: Roc does not have "truthiness". You must convert values to bools
-    yourself.
+    { data: a, ..b }, a -> { data: a, ..b }
 
+Note: Roc does not have "truthiness". You must convert values to bools yourself.
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  str = "hello"                                                             │
- │        ‾‾‾‾‾‾‾                                                             │
- └─────────────────────────────────────────── let_polymorphism_records.md:8:7 ┘
+── ✗ type mismatch ───────────────────────────── let_polymorphism_records.md:8:7
 
-    The type was determined to be:
+This string literal is being used where a non-string type is needed.
 
-        Dec
+str = "hello"
+      ^^^^^^^
+
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -293,21 +288,21 @@ NO CHANGE
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "int_container"))
-		(e-call (constraint-fn-var 343)
+		(e-call (constraint-fn-var 353)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "str_container"))
-		(e-call (constraint-fn-var 352)
+		(e-call (constraint-fn-var 362)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "list_container"))
-		(e-call (constraint-fn-var 361)
+		(e-call (constraint-fn-var 371)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -328,7 +323,7 @@ NO CHANGE
 							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
-		(e-call (constraint-fn-var 377)
+		(e-call (constraint-fn-var 387)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -336,7 +331,7 @@ NO CHANGE
 			(e-num (value "100"))))
 	(d-let
 		(p-assign (ident "updated_str"))
-		(e-call (constraint-fn-var 391)
+		(e-call (constraint-fn-var 401)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -345,7 +340,7 @@ NO CHANGE
 				(e-literal (string "world")))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
-		(e-call (constraint-fn-var 404)
+		(e-call (constraint-fn-var 414)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -363,20 +358,20 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "int_record"))
-		(e-call (constraint-fn-var 418)
+		(e-call (constraint-fn-var 428)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "str_record"))
-		(e-call (constraint-fn-var 431)
+		(e-call (constraint-fn-var 441)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "list_record"))
-		(e-call (constraint-fn-var 457)
+		(e-call (constraint-fn-var 467)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-list
@@ -392,7 +387,7 @@ NO CHANGE
 			(e-block
 				(s-expr
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 478)
+				(e-dispatch-call (method "plus") (constraint-fn-var 488)
 					(receiver
 						(e-field-access
 							(receiver

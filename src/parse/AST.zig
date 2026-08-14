@@ -798,6 +798,42 @@ pub fn resolveQualifiedName(
     }
 }
 
+/// Push a qualified name assembled from its interned identifier tokens. Unlike
+/// `resolveQualifiedName`, this intentionally excludes trivia between segments.
+fn pushQualifiedNameString(
+    self: *const AST,
+    env: *const CommonEnv,
+    tree: *SExprTree,
+    qualifiers: Token.Span,
+    final_token: Token.Idx,
+) std.mem.Allocator.Error!void {
+    const qualifier_tokens = self.store.tokenSlice(qualifiers);
+    const final_ident = self.tokens.resolveIdentifier(final_token) orelse unreachable;
+
+    var byte_count = env.getIdent(final_ident).len;
+    for (qualifier_tokens) |raw_token| {
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        byte_count += env.getIdent(segment).len + 1;
+    }
+
+    const begin = try tree.reserveStringBuffer(byte_count);
+    const buffer = tree.reservedStringBuffer(begin);
+    var offset: usize = 0;
+    for (qualifier_tokens) |raw_token| {
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        const text = env.getIdent(segment);
+        std.mem.copyForwards(u8, buffer[offset..][0..text.len], text);
+        offset += text.len;
+        buffer[offset] = '.';
+        offset += 1;
+    }
+    const final_text = env.getIdent(final_ident);
+    std.mem.copyForwards(u8, buffer[offset..][0..final_text.len], final_text);
+    offset += final_text.len;
+    std.debug.assert(offset == buffer.len);
+    try tree.pushReservedString(begin, buffer);
+}
+
 /// Resolves the complete target spelling selected by import parsing.
 pub fn resolveImportTarget(self: *const AST, target: ImportTarget) []const u8 {
     const start_offset: usize = self.tokens.resolve(target.start_tok).start.offset;
@@ -3205,10 +3241,11 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-tag");
                 try ast.appendRegionInfoToSexprTree(env, tree, tag.region);
 
-                // Resolve the fully qualified name
-                const strip_tokens = [_]Token.Tag{.NoSpaceDotUpperIdent};
-                const fully_qualified_name = ast.resolveQualifiedName(tag.qualifiers, tag.token, &strip_tokens);
-                try tree.pushStringPair("raw", fully_qualified_name);
+                const raw_begin = tree.beginNode();
+                try tree.pushStaticAtom("raw");
+                try ast.pushQualifiedNameString(env, tree, tag.qualifiers, tag.token);
+                const raw_attrs = tree.beginNode();
+                try tree.endNode(raw_begin, raw_attrs);
                 const attrs = tree.beginNode();
 
                 try tree.endNode(begin, attrs);
@@ -3306,10 +3343,7 @@ pub const Expr = union(enum) {
                 // Add raw attribute
                 const raw_begin = tree.beginNode();
                 try tree.pushStaticAtom("raw");
-                // Resolve the fully qualified name
-                const strip_tokens = [_]Token.Tag{ .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent };
-                const fully_qualified_name = ast.resolveQualifiedName(ident.qualifiers, ident.token, &strip_tokens);
-                try tree.pushString(fully_qualified_name);
+                try ast.pushQualifiedNameString(env, tree, ident.qualifiers, ident.token);
                 const attrs2 = tree.beginNode();
                 try tree.endNode(raw_begin, attrs2);
 

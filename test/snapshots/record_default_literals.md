@@ -23,33 +23,29 @@ bad_list = {}
 DEFAULT VALUE MUST BE A LITERAL - record_default_literals.md:7:23:7:26
 DEFAULT VALUE NOT CONCRETE - record_default_literals.md:10:32:10:34
 # PROBLEMS
+── ✗ default value must be a literal ─────────── record_default_literals.md:7:23
 
-┌─────────────────────────────────┐
-│ DEFAULT VALUE MUST BE A LITERAL ├─ The default value for the `a` field is ──┐
-└┬────────────────────────────────┘  not a literal.                           │
- │                                                                            │
- │  bad_ref : { a : U8 ?? ten }                                               │
- │                        ‾‾‾                                                 │
- └─────────────────────────────────────────── record_default_literals.md:7:23 ┘
+The default value for the a field is not a literal.
 
-    A field default (`??`) is materialized by the compiler at every
-    construction site that omits the field, so it must be a literal: a number,
-    an interpolation-free string, a tag, or a list, record, or tuple built only
-    from literals. Anything that refers to another value could form an
-    evaluation cycle the compiler will not chase.
+bad_ref : { a : U8 ?? ten }
+                      ^^^
 
+A field default (??) is materialized by the compiler at every construction site
+that omits the field, so it must be a literal: a number, an interpolation-free
+string, a tag, or a list, record, or tuple built only from literals. Anything
+that refers to another value could form an evaluation cycle the compiler will
+not chase.
 
-┌────────────────────────────┐
-│ DEFAULT VALUE NOT CONCRETE ├─ The default value for the `items` field ──────┐
-└┬───────────────────────────┘  does not have a concrete type.                │
- │                                                                            │
- │  Pair(x) : { items : List(x) ?? [] }                                       │
- │                                 ‾‾                                         │
- └────────────────────────────────────────── record_default_literals.md:10:32 ┘
+── ✗ default value not concrete ─────────────── record_default_literals.md:10:32
 
-    A default is evaluated once at compile time and filled in wherever
-    construction omits the field, so it must have exactly one runtime
-    representation. Annotate the field (or the default) with a concrete type.
+The default value for the items field does not have a concrete type.
+
+Pair(x) : { items : List(x) ?? [] }
+                               ^^
+
+A default is evaluated once at compile time and filled in wherever construction
+omits the field, so it must have exactly one runtime representation. Annotate
+the field (or the default) with a concrete type.
 
 # TOKENS
 ~~~zig

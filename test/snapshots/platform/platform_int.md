@@ -19,30 +19,26 @@ multiplyInts : I64, I64 -> I64
 EXPOSED BUT NOT DEFINED - platform_int.md:7:16:7:48
 DECLARATION HAS NO VALUE - platform_int.md:9:1:9:31
 # PROBLEMS
+── ✗ exposed but not defined ────────────────────────────── platform_int.md:7:16
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `multiplyInts` is ───┐
-└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
- │                           this mod.                                     │
- │                                                                            │
- │  provides { "roc_multiplyInts": multiplyInts }                             │
- │             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
- └────────────────────────────────────────────────────── platform_int.md:7:16 ┘
+The mod header says that multiplyInts is exposed, but it is not defined
+anywhere in this mod.
 
-    You can fix this by either defining `multiplyInts` in this mod, or by
-    removing it from the list of exposed values.
+provides { "roc_multiplyInts": multiplyInts }
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+You can fix this by either defining multiplyInts in this mod, or by removing
+it from the list of exposed values.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  multiplyInts : I64, I64 -> I64                                            │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └─────────────────────────────────────────────────────── platform_int.md:9:1 ┘
+── ● declaration has no value ────────────────────────────── platform_int.md:9:1
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+This declaration has a type annotation but no implementation.
+
+multiplyInts : I64, I64 -> I64
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig

@@ -17,59 +17,49 @@ UNEXPECTED STATEMENT - fuzz_hang_003.md:4:11:4:12
 UNDECLARED TYPE - fuzz_hang_003.md:1:3:1:4
 UNDECLARED TYPE - fuzz_hang_003.md:3:3:3:4
 # PROBLEMS
+── ✗ unexpected statement ───────────────────────────────── fuzz_hang_003.md:4:4
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  b=G.70000c:c=0                                                            │
- │     ‾‾‾‾‾‾‾                                                                │
- └────────────────────────────────────────────────────── fuzz_hang_003.md:4:4 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+b=G.70000c:c=0
+   ^^^^^^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `.70000c` here.
+For example:
+    answer = 42
 
+I found .70000c here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  b=G.70000c:c=0                                                            │
- │            ‾                                                               │
- └───────────────────────────────────────────────────── fuzz_hang_003.md:4:11 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_hang_003.md:4:11
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+b=G.70000c:c=0
+          ^
 
-    I found `:` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `F` is not declared in this scope. ─────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  a:F                                                                       │
- │    ‾                                                                       │
- └────────────────────────────────────────────────────── fuzz_hang_003.md:1:3 ┘
+I found : here.
 
+── ✗ undeclared type ────────────────────────────────────── fuzz_hang_003.md:1:3
 
+The type F is not declared in this scope.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `F` is not declared in this scope. ─────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  b:F                                                                       │
- │    ‾                                                                       │
- └────────────────────────────────────────────────────── fuzz_hang_003.md:3:3 ┘
+a:F
+  ^
 
+── ✗ undeclared type ────────────────────────────────────── fuzz_hang_003.md:3:3
+
+The type F is not declared in this scope.
+
+b:F
+  ^
 
 # TOKENS
 ~~~zig

@@ -10,16 +10,13 @@ if True 1 else 2
 # EXPECTED
 UNCONDITIONAL CONDITION - if_true_literal.md:1:4:1:8
 # PROBLEMS
+── ● unconditional condition ──────────────────────────── if_true_literal.md:1:4
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
-└┬────────────────────────┘  this conditional will always make the same       │
- │                           choice.                                          │
- │                                                                            │
- │  if True 1 else 2                                                          │
- │     ‾‾‾‾                                                                   │
- └──────────────────────────────────────────────────── if_true_literal.md:1:4 ┘
+This if condition is known at compile time, so this conditional will always
+make the same choice.
 
+if True 1 else 2
+   ^^^^
 
 # TOKENS
 ~~~zig

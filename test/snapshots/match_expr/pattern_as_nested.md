@@ -13,29 +13,26 @@ match person {
 # EXPECTED
 TYPE MISMATCH - pattern_as_nested.md:1:1:1:1
 # PROBLEMS
+── ✗ type mismatch ──────────────────────────────────── pattern_as_nested.md:1:5
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The second branch of this `match` does not match the ──────┐
-└┬──────────────┘  previous ones.                                             │
- │                                                                            │
- │  match person {                                                            │
- │      { name, address: { city } as addr } as fullPerson => (fullPerson, ad… │
- │      { name } as simplePerson => (simplePerson, name, "unknown")           │
- │  }                                                                         │
- │                                                                            │
- └────────────────────────────────────────────────── pattern_as_nested.md:1:5 ┘
+The second branch of this match does not match the previous ones.
 
-    This second branch is trying to match:
+match person {
+    { name, address: { city } as addr } as fullPerson => (fullPerson, addr, city)
+    { name } as simplePerson => (simplePerson, name, "unknown")
+}
 
-        { name: _field }
+This second branch is trying to match:
 
-    But the expression between the `match` parenthesis has the type:
+    { name: _field }
 
-        { address: _field, name: _field2 }
+But the expression between the match parenthesis has the type:
 
-    These can never match! Either the pattern or expression has a problem.
-    Hint: This pattern doesn't bind the `address` field. Match it explicitly
-    with `address: _`, or add `..` to match all the remaining fields.
+    { address: _field, name: _field2 }
+
+These can never match! Either the pattern or expression has a problem.
+Hint: This pattern doesn't bind the address field. Match it explicitly with
+address: _, or add .. to match all the remaining fields.
 
 # TOKENS
 ~~~zig

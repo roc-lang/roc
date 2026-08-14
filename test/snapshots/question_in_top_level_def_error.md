@@ -15,16 +15,13 @@ result = f(3)?
 # EXPECTED
 TRY OPERATOR OUTSIDE FUNCTION - question_in_top_level_def_error.md:6:10:6:15
 # PROBLEMS
+── ✗ try operator outside function ───── question_in_top_level_def_error.md:6:10
 
-┌───────────────────────────────┐
-│ TRY OPERATOR OUTSIDE FUNCTION ├─ The `?` operator can only be used inside ──┐
-└┬──────────────────────────────┘  function bodies because it can cause an    │
- │                                 early return.                              │
- │                                                                            │
- │  result = f(3)?                                                            │
- │           ‾‾‾‾‾                                                            │
- └─────────────────────────────────── question_in_top_level_def_error.md:6:10 ┘
+The ? operator can only be used inside function bodies because it can cause an
+early return.
 
+result = f(3)?
+         ^^^^^
 
 # TOKENS
 ~~~zig
@@ -102,7 +99,7 @@ result = f(3)?
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 268)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 278)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -130,7 +127,7 @@ result = f(3)?
 		(e-match
 			(match
 				(cond
-					(e-call (constraint-fn-var 295)
+					(e-call (constraint-fn-var 305)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-num (value "3"))))

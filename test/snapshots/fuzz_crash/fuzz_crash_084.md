@@ -12,23 +12,20 @@ t=|(0|(#\r))|0
 MISPLACED CARRIAGE RETURN - :0:0:0:0
 NOT IMPLEMENTED - fuzz_crash_084.md:1:5:1:11
 # PROBLEMS
-
-MISPLACED CARRIAGE RETURN
+── ✗ misplaced carriage return ─────────────────────────────────────────────────
 
 Carriage return characters (\r) are not allowed in Roc source code.
 
+── ✗ not implemented ───────────────────────────────────── fuzz_crash_084.md:1:5
 
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  t=|(0|(#\r))|0                                                             │
- │      ‾‾‾‾‾‾                                                                │
- └───────────────────────────────────────────────────── fuzz_crash_084.md:1:5 ┘
+t=|(0|(#\r))|0
+    ^^^^^^
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
 # TOKENS
 ~~~zig

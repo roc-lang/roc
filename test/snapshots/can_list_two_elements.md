@@ -10,18 +10,16 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_two_elements.md:1:5:1:12
 # PROBLEMS
+── ✗ type mismatch ──────────────────────────────── can_list_two_elements.md:1:5
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  [1, "hello"]                                                              │
- │      ‾‾‾‾‾‾‾                                                               │
- └────────────────────────────────────────────── can_list_two_elements.md:1:5 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+[1, "hello"]
+    ^^^^^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig

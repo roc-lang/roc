@@ -10,18 +10,16 @@ type=expr
 # EXPECTED
 INVALID NUMBER - dec_scientific_negative_exp.md:1:1:1:24
 # PROBLEMS
+── ✗ invalid number ───────────────────────── dec_scientific_negative_exp.md:1:1
 
-┌────────────────┐
-│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  1.23456789012345678e-10                                                   │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
- └──────────────────────────────────────── dec_scientific_negative_exp.md:1:1 ┘
+This number literal does not fit in the inferred type.
 
-    The inferred type is:
+1.23456789012345678e-10
+^^^^^^^^^^^^^^^^^^^^^^^
 
-        Dec
+The inferred type is:
+
+    Dec
 
 # TOKENS
 ~~~zig

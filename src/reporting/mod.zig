@@ -8,6 +8,7 @@ pub const Annotation = @import("document.zig").Annotation;
 pub const SourceCodeDisplayRegion = @import("document.zig").SourceCodeDisplayRegion;
 pub const UnderlineRegion = @import("document.zig").UnderlineRegion;
 pub const SourceRegion = @import("document.zig").SourceRegion;
+pub const SourceLocation = @import("document.zig").SourceLocation;
 pub const ColorPalette = @import("style.zig").ColorPalette;
 pub const ColorUtils = @import("style.zig").ColorUtils;
 pub const ColorPreference = @import("config.zig").ColorPreference;
@@ -22,7 +23,7 @@ pub const renderReport = @import("renderer.zig").renderReport;
 pub const renderReportWithConfig = @import("renderer.zig").renderReportWithConfig;
 pub const renderReportToTerminal = @import("renderer.zig").renderReportToTerminal;
 pub const renderReportToMarkdown = @import("renderer.zig").renderReportToMarkdown;
-pub const renderReportToBoxPlain = @import("renderer.zig").renderReportToBoxPlain;
+pub const renderReportToPlain = @import("renderer.zig").renderReportToPlain;
 pub const renderReportToHtml = @import("renderer.zig").renderReportToHtml;
 pub const renderReportToLsp = @import("renderer.zig").renderReportToLsp;
 pub const renderDocument = @import("renderer.zig").renderDocument;
@@ -31,6 +32,7 @@ pub const renderDocumentToMarkdown = @import("renderer.zig").renderDocumentToMar
 pub const renderDocumentToHtml = @import("renderer.zig").renderDocumentToHtml;
 pub const renderDocumentToLsp = @import("renderer.zig").renderDocumentToLsp;
 pub const writeShouted = @import("renderer.zig").writeShouted;
+pub const sanitisePathForSnapshots = @import("renderer.zig").sanitisePathForSnapshots;
 
 // Configuration utilities
 pub const validateUtf8 = @import("config.zig").validateUtf8;

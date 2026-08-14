@@ -13,20 +13,18 @@ main! = |_args| {
 # EXPECTED
 NON EXHAUSTIVE DESTRUCTURE - for_loop_refutable_tag_pattern.md:2:9:2:19
 # PROBLEMS
+── ✗ non exhaustive destructure ────────── for_loop_refutable_tag_pattern.md:2:9
 
-┌────────────────────────────┐
-│ NON EXHAUSTIVE DESTRUCTURE ├─ This destructuring pattern doesn't cover ─────┐
-└┬───────────────────────────┘  all possible cases.                           │
- │                                                                            │
- │  for Ok(_value) in [Ok(1), Err("bad")] {}                                  │
- │      ‾‾‾‾‾‾‾‾‾‾                                                            │
- └───────────────────────────────────── for_loop_refutable_tag_pattern.md:2:9 ┘
+This destructuring pattern doesn't cover all possible cases.
 
-    The value being destructured has type:
-            [Err(Str), Ok(Dec), ..]
+for Ok(_value) in [Ok(1), Err("bad")] {}
+    ^^^^^^^^^^
 
-    Missing patterns:
-            Err _
+The value being destructured has type:
+        [Err(Str), Ok(Dec), ..]
+
+Missing patterns:
+        Err _
 
 # TOKENS
 ~~~zig

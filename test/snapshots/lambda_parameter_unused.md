@@ -35,29 +35,25 @@ main! = |_| {
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
+── ● unused variable ──────────────────────────── lambda_parameter_unused.md:5:8
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `unused` is defined here and then never used. ──┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  add = |unused| 42                                                         │
- │         ‾‾‾‾‾‾                                                             │
- └──────────────────────────────────────────── lambda_parameter_unused.md:5:8 ┘
+Variable unused is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like
-    `_unused` to suppress this warning.
+add = |unused| 42
+       ^^^^^^
 
+If you don't need this variable, prefix it with an underscore like _unused to
+suppress this warning.
 
-┌──────────────────────────┐
-│ UNDERSCORE VARIABLE USED ├─ Variable `_factor` is prefixed with an ─────────┐
-└┬─────────────────────────┘  underscore but is actually used.                │
- │                                                                            │
- │  multiply = |_factor| _factor * 2                                          │
- │                       ‾‾‾‾‾‾‾                                              │
- └─────────────────────────────────────────── lambda_parameter_unused.md:9:22 ┘
+── ● underscore variable used ────────────────── lambda_parameter_unused.md:9:22
 
-    Variables prefixed with `_` are intended to be unused. Remove the
-    underscore prefix: `factor`.
+Variable _factor is prefixed with an underscore but is actually used.
+
+multiply = |_factor| _factor * 2
+                     ^^^^^^^
+
+Variables prefixed with _ are intended to be unused. Remove the underscore
+prefix: factor.
 
 # TOKENS
 ~~~zig
@@ -219,7 +215,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "_factor")))
-			(e-dispatch-call (method "times") (constraint-fn-var 298)
+			(e-dispatch-call (method "times") (constraint-fn-var 308)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "_factor"))))
@@ -244,7 +240,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "times") (constraint-fn-var 326)
+			(e-dispatch-call (method "times") (constraint-fn-var 336)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))
@@ -262,33 +258,33 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 337)
+					(e-call (constraint-fn-var 347)
 						(e-lookup-local
 							(p-assign (ident "add")))
 						(e-num (value "5"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 345)
+					(e-call (constraint-fn-var 355)
 						(e-lookup-local
 							(p-assign (ident "multiply")))
 						(e-num (value "3"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 353)
+					(e-call (constraint-fn-var 363)
 						(e-lookup-local
 							(p-assign (ident "process")))
 						(e-num (value "7"))))
 				(s-let
 					(p-assign (ident "result4"))
-					(e-call (constraint-fn-var 361)
+					(e-call (constraint-fn-var 371)
 						(e-lookup-local
 							(p-assign (ident "double")))
 						(e-num (value "4"))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 372)
+				(e-dispatch-call (method "plus") (constraint-fn-var 382)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 368)
+						(e-dispatch-call (method "plus") (constraint-fn-var 378)
 							(receiver
-								(e-dispatch-call (method "plus") (constraint-fn-var 362)
+								(e-dispatch-call (method "plus") (constraint-fn-var 372)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "result1"))))

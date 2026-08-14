@@ -453,7 +453,7 @@ pub fn allocDefType(self: *TestEnv, allocator: Allocator, target_def_name: []con
     return allocator.dupe(u8, self.type_writer.get());
 }
 
-/// Count compilation-blocking type problems, excluding warning/info reports.
+/// Count compilation-blocking type problems, excluding warning reports.
 /// Generated rejection tests use this instead of the raw problem-list length
 /// so a `LITERAL DEFAULTED` warning cannot masquerade as the expected error.
 pub fn typeProblemCount(self: *TestEnv) TestEnvError!usize {
@@ -466,7 +466,7 @@ pub fn typeProblemCount(self: *TestEnv) TestEnvError!usize {
         defer report.deinit();
         switch (report.severity) {
             .runtime_error, .fatal => count += 1,
-            .info, .warning => {},
+            .warning => {},
         }
     }
     return count;

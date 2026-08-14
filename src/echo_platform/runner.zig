@@ -359,7 +359,7 @@ fn emitDiagnostics(build_env: *BuildEnv, diag: Diagnostics, gpa: Allocator) Allo
         for (mod.reports) |*report| {
             switch (report.severity) {
                 .runtime_error, .fatal => has_blocking_error = true,
-                .info, .warning => {},
+                .warning => {},
             }
             diag.emitReport(gpa, report);
         }

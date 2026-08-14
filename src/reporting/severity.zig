@@ -2,10 +2,6 @@
 
 /// Represents the severity level of a problem.
 pub const Severity = enum {
-    /// Informational messages that provide helpful context.
-    /// These are purely informational and don't affect compilation or exit codes.
-    info,
-
     /// Non-blocking issues that should be addressed.
     /// Will return a non-zero exit code to block committing to CI.
     warning,
@@ -21,7 +17,6 @@ pub const Severity = enum {
     /// Returns a human-readable string representation.
     pub fn toString(self: Severity) []const u8 {
         return switch (self) {
-            .info => "INFO",
             .warning => "WARNING",
             .runtime_error => "ERROR",
             .fatal => "FATAL",
@@ -31,7 +26,6 @@ pub const Severity = enum {
     /// Returns a short code suitable for prefixing error messages.
     pub fn toCode(self: Severity) []const u8 {
         return switch (self) {
-            .info => "I",
             .warning => "W",
             .runtime_error => "E",
             .fatal => "F",

@@ -16,28 +16,24 @@ Foo := [Whatever].{
 NAME NOT IN SCOPE - canon_revamp_forward_ref_to_anno_only.md:3:14:3:20
 DECLARATION HAS NO VALUE - canon_revamp_forward_ref_to_anno_only.md:5:5:5:17
 # PROBLEMS
+── ✗ name not in scope ─────────── canon_revamp_forward_ref_to_anno_only.md:3:14
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `absent` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  callMe = absent                                                           │
- │           ‾‾‾‾‾‾                                                           │
- └───────────────────────────── canon_revamp_forward_ref_to_anno_only.md:3:14 ┘
+Nothing is named absent in this scope.
 
-    Is it misspelled, or is there an import missing?
+callMe = absent
+         ^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  absent : Foo                                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────── canon_revamp_forward_ref_to_anno_only.md:5:5 ┘
+── ● declaration has no value ───── canon_revamp_forward_ref_to_anno_only.md:5:5
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+This declaration has a type annotation but no implementation.
+
+absent : Foo
+^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig
