@@ -949,7 +949,8 @@ pub const tests = [_]TestCase{
         \\
         \\{ ops, .. } = s
         \\
-        \\main = ops.scale(21)
+        \\scale = ops.scale
+        \\main = scale(21)
         ,
         .expected = .{ .inspect_str = "42" },
     },
