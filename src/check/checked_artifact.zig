@@ -31880,6 +31880,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_erroneous_value_expr,
             .diag_qualified_ident_does_not_exist,
             .diag_invalid_top_level_statement,
+            .diag_invalid_associated_statement,
             .diag_expr_not_canonicalized,
             .diag_invalid_string_interpolation,
             .diag_unreachable_string_pattern_capture,
