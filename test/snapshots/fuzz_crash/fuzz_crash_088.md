@@ -11,24 +11,22 @@ main!=|0|""_=""
 # EXPECTED
 NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_088.md:1:8:1:9
 # PROBLEMS
+── ✗ non exhaustive destructure ────────────────────────── fuzz_crash_088.md:1:8
 
-┌────────────────────────────┐
-│ NON EXHAUSTIVE DESTRUCTURE ├─ This destructuring pattern doesn't cover ─────┐
-└┬───────────────────────────┘  all possible cases.                           │
- │                                                                            │
- │  main!=|0|""_=""                                                           │
- │         ‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_088.md:1:8 ┘
+This destructuring pattern doesn't cover all possible cases.
 
-    The value being destructured has type:
-            a
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        a.is_eq : a, a -> Bool,
-      ]
+main!=|0|""_=""
+       ^
 
-    Missing patterns:
-            _
+The value being destructured has type:
+        a
+  where [
+    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+    a.is_eq : a, a -> Bool,
+  ]
+
+Missing patterns:
+        _
 
 # TOKENS
 ~~~zig

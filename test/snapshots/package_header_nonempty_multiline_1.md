@@ -13,28 +13,23 @@ package # This comment is here
 MOD NOT FOUND - package_header_nonempty_multiline_1.md:2:14:2:22
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_1.md:2:3:2:12
 # PROBLEMS
+── ✗ mod not found ────────────── package_header_nonempty_multiline_1.md:2:14
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `SomeType` was not found in this Roc ────────┐
-└┬─────────────────┘  project.                                                │
- │                                                                            │
- │  [something, SomeType]                                                     │
- │              ‾‾‾‾‾‾‾‾                                                      │
- └─────────────────────────────── package_header_nonempty_multiline_1.md:2:14 ┘
+The mod SomeType was not found in this Roc project.
 
+[something, SomeType]
+            ^^^^^^^^
 
+── ✗ exposed but not defined ──────── package_header_nonempty_multiline_1.md:2:3
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `something` is ──────┐
-└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
- │                           this mod.                                     │
- │                                                                            │
- │  [something, SomeType]                                                     │
- │   ‾‾‾‾‾‾‾‾‾                                                                │
- └──────────────────────────────── package_header_nonempty_multiline_1.md:2:3 ┘
+The mod header says that something is exposed, but it is not defined
+anywhere in this mod.
 
-    You can fix this by either defining `something` in this mod, or by
-    removing it from the list of exposed values.
+[something, SomeType]
+ ^^^^^^^^^
+
+You can fix this by either defining something in this mod, or by removing it
+from the list of exposed values.
 
 # TOKENS
 ~~~zig

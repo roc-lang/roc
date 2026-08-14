@@ -10,16 +10,13 @@ if x > 5 "big" else "small"
 # EXPECTED
 UNCONDITIONAL CONDITION - if_expression.md:1:4:1:9
 # PROBLEMS
+── ● unconditional condition ────────────────────────────── if_expression.md:1:4
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
-└┬────────────────────────┘  this conditional will always make the same       │
- │                           choice.                                          │
- │                                                                            │
- │  if x > 5 "big" else "small"                                               │
- │     ‾‾‾‾‾                                                                  │
- └────────────────────────────────────────────────────── if_expression.md:1:4 ┘
+This if condition is known at compile time, so this conditional will always
+make the same choice.
 
+if x > 5 "big" else "small"
+   ^^^^^
 
 # TOKENS
 ~~~zig

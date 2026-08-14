@@ -18,15 +18,13 @@ match ... {
 # EXPECTED
 UNCONDITIONAL CONDITION - record_pattern_edge_cases.md:1:7:1:10
 # PROBLEMS
+── ● unconditional condition ────────────────── record_pattern_edge_cases.md:1:7
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
-└┬────────────────────────┘  this match will always inspect the same value.   │
- │                                                                            │
- │  match ... {                                                               │
- │        ‾‾‾                                                                 │
- └────────────────────────────────────────── record_pattern_edge_cases.md:1:7 ┘
+This match value is known at compile time, so this match will always inspect
+the same value.
 
+match ... {
+      ^^^
 
 # TOKENS
 ~~~zig

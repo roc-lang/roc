@@ -16,15 +16,13 @@ match ... {
 # EXPECTED
 UNCONDITIONAL CONDITION - nested_record_patterns.md:1:7:1:10
 # PROBLEMS
+── ● unconditional condition ───────────────────── nested_record_patterns.md:1:7
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
-└┬────────────────────────┘  this match will always inspect the same value.   │
- │                                                                            │
- │  match ... {                                                               │
- │        ‾‾‾                                                                 │
- └───────────────────────────────────────────── nested_record_patterns.md:1:7 ┘
+This match value is known at compile time, so this match will always inspect
+the same value.
 
+match ... {
+      ^^^
 
 # TOKENS
 ~~~zig

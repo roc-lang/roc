@@ -35,41 +35,35 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 # PROBLEMS
+── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:20:5
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result1` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result1 = testEllipsis(42)                                                │
- │  ‾‾‾‾‾‾‾                                                                   │
- └─────────────────────────────────────────── crash_and_ellipsis_test.md:20:5 ┘
+Variable result1 is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result1` to suppress this warning.
+result1 = testEllipsis(42)
+^^^^^^^
 
+If you don't need this variable, prefix it with an underscore like _result1 to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result2` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result2 = testCrash(42)                                                   │
- │  ‾‾‾‾‾‾‾                                                                   │
- └─────────────────────────────────────────── crash_and_ellipsis_test.md:21:5 ┘
+── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:21:5
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result2` to suppress this warning.
+Variable result2 is defined here and then never used:
 
+result2 = testCrash(42)
+^^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result3` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result3 = testCrashSimple(42)                                             │
- │  ‾‾‾‾‾‾‾                                                                   │
- └─────────────────────────────────────────── crash_and_ellipsis_test.md:22:5 ┘
+If you don't need this variable, prefix it with an underscore like _result2 to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result3` to suppress this warning.
+── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:22:5
+
+Variable result3 is defined here and then never used:
+
+result3 = testCrashSimple(42)
+^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like _result3 to
+suppress this warning.
 
 # TOKENS
 ~~~zig

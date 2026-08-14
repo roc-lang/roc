@@ -2222,11 +2222,12 @@ pub const InstGraph = struct {
             .list => |element| try self.newProducedList(element),
             .box => |element| try self.newProducedBox(element),
             .tuple => |items| try self.newProducedTuple(items),
+            .func => |function| try self.newProducedFunction(function.args, function.ret),
             .named => |named| if (try self.internNamedArguments(named)) |interned|
                 try self.newNode(.{ .named = interned })
             else
                 node,
-            .redirect, .unresolved, .primitive, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => node,
+            .redirect, .unresolved, .primitive, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => node,
         };
     }
 
@@ -5408,6 +5409,39 @@ test "produced functions with the same exact children share one runtime node" {
     const right = try graph.newProducedFunction(&.{arg}, ret);
 
     try std.testing.expect(graph.sameClass(left, right));
+}
+
+test "produced identity strips function request protocol before interning" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const arg = try graph.newNode(.{ .primitive = .u64 });
+    const ret = try graph.newNode(.{ .primitive = .bool });
+    const left_request = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = ret,
+    } });
+    const right_request = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = ret,
+    } });
+    graph.registerFunctionResultRelation(left_request, .exact_destination);
+    graph.registerFunctionResultRelation(right_request, .produced);
+
+    const left_produced = try graph.internProducedIdentity(left_request);
+    const right_produced = try graph.internProducedIdentity(right_request);
+
+    try std.testing.expect(graph.sameClass(left_produced, right_produced));
+    try std.testing.expect(!graph.sameClass(left_request, right_request));
+    try std.testing.expectEqual(FunctionResultRelation.exact_destination, graph.functionResultRelation(left_request).?);
+    try std.testing.expectEqual(FunctionResultRelation.produced, graph.functionResultRelation(right_request).?);
+    try std.testing.expectEqual(@as(?FunctionResultRelation, null), graph.functionResultRelation(left_produced));
 }
 
 test "cyclic row extension is not a resolved graph type" {

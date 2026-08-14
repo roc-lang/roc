@@ -15,29 +15,26 @@ match data {
 # EXPECTED
 POLYMORPHIC VALUE - mixed_pattern_scoping.md:1:1:6:2
 # PROBLEMS
+── ✗ polymorphic value ──────────────────────────── mixed_pattern_scoping.md:1:1
 
-┌───────────────────┐
-│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
-└┬──────────────────┘  polymorphic type.                                      │
- │                                                                            │
- │  match data {                                                              │
- │      Ok([x, y]) => x + y                                                   │
- │      Err(x) => x - 1                                                       │
- │      Ok([x]) => x * 2                                                      │
- │      Err(y) => y / 2                                                       │
- │  }                                                                         │
- │                                                                            │
- └────────────────────────────────────────────── mixed_pattern_scoping.md:1:1 ┘
+This top-level value still has an unresolved polymorphic type.
 
-    Its type is:
-    a
-      where [
-        a.div_by : a, Dec -> a,
-        a.minus : a, Dec -> a,
-        a.plus : a, a -> a,
-        a.times : a, Dec -> a,
-      ]
-    Add an annotation or use this value in a way that fixes its concrete type.
+match data {
+    Ok([x, y]) => x + y
+    Err(x) => x - 1
+    Ok([x]) => x * 2
+    Err(y) => y / 2
+}
+
+Its type is:
+a
+  where [
+    a.div_by : a, Dec -> a,
+    a.minus : a, Dec -> a,
+    a.plus : a, a -> a,
+    a.times : a, Dec -> a,
+  ]
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig

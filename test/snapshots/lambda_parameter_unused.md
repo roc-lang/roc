@@ -35,29 +35,25 @@ main! = |_| {
 UNUSED VARIABLE - lambda_parameter_unused.md:5:8:5:14
 UNDERSCORE VARIABLE USED - lambda_parameter_unused.md:9:22:9:29
 # PROBLEMS
+── ● unused variable ──────────────────────────── lambda_parameter_unused.md:5:8
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `unused` is defined here and then never used. ──┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  add = |unused| 42                                                         │
- │         ‾‾‾‾‾‾                                                             │
- └──────────────────────────────────────────── lambda_parameter_unused.md:5:8 ┘
+Variable unused is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like
-    `_unused` to suppress this warning.
+add = |unused| 42
+       ^^^^^^
 
+If you don't need this variable, prefix it with an underscore like _unused to
+suppress this warning.
 
-┌──────────────────────────┐
-│ UNDERSCORE VARIABLE USED ├─ Variable `_factor` is prefixed with an ─────────┐
-└┬─────────────────────────┘  underscore but is actually used.                │
- │                                                                            │
- │  multiply = |_factor| _factor * 2                                          │
- │                       ‾‾‾‾‾‾‾                                              │
- └─────────────────────────────────────────── lambda_parameter_unused.md:9:22 ┘
+── ● underscore variable used ────────────────── lambda_parameter_unused.md:9:22
 
-    Variables prefixed with `_` are intended to be unused. Remove the
-    underscore prefix: `factor`.
+Variable _factor is prefixed with an underscore but is actually used.
+
+multiply = |_factor| _factor * 2
+                     ^^^^^^^
+
+Variables prefixed with _ are intended to be unused. Remove the underscore
+prefix: factor.
 
 # TOKENS
 ~~~zig

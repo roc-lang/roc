@@ -10,19 +10,17 @@ a = a
 # EXPECTED
 INVALID ASSIGNMENT TO ITSELF - self_referential_variable_8942.md:1:5:1:6
 # PROBLEMS
+── ✗ invalid assignment to itself ──────── self_referential_variable_8942.md:1:5
 
-┌──────────────────────────────┐
-│ INVALID ASSIGNMENT TO ITSELF ├─ The value `a` is assigned to itself, ───────┐
-└┬─────────────────────────────┘  which would cause an infinite loop at       │
- │                                runtime.                                    │
- │                                                                            │
- │  a = a                                                                     │
- │      ‾                                                                     │
- └───────────────────────────────────── self_referential_variable_8942.md:1:5 ┘
+The value a is assigned to itself, which would cause an infinite loop at
+runtime.
 
-    Only functions can reference themselves (for recursion). For non-function
-    values, the right-hand side must be fully computable without referring to
-    the value being assigned.
+a = a
+    ^
+
+Only functions can reference themselves (for recursion). For non-function
+values, the right-hand side must be fully computable without referring to the
+value being assigned.
 
 # TOKENS
 ~~~zig

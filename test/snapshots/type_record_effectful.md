@@ -19,16 +19,14 @@ main! = |_| {}
 # EXPECTED
 NAME NOT IN SCOPE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
+── ✗ name not in scope ──────────────────────────── type_record_effectful.md:7:5
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!(person.name)                                                 │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────────────────────── type_record_effectful.md:7:5 ┘
+Nothing is named line! in this scope.
 
-    Is it misspelled, or is there an import missing?
+Stdout.line!(person.name)
+^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

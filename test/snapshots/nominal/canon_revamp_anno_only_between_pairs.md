@@ -18,17 +18,15 @@ Foo := [Whatever].{
 # EXPECTED
 DECLARATION HAS NO VALUE - canon_revamp_anno_only_between_pairs.md:5:5:5:17
 # PROBLEMS
+── ● declaration has no value ────── canon_revamp_anno_only_between_pairs.md:5:5
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  middle : Foo                                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────── canon_revamp_anno_only_between_pairs.md:5:5 ┘
+This declaration has a type annotation but no implementation.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+middle : Foo
+^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig

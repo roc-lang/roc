@@ -19,18 +19,17 @@ test = |{}| {
 # EXPECTED
 MISSING METHOD - nominal_local.md:9:5:9:15
 # PROBLEMS
+── ✗ missing method ─────────────────────────────────────── nominal_local.md:9:5
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `encode_str` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  Str.encode("hi", fmt)                                                     │
- │  ‾‾‾‾‾‾‾‾‾‾                                                                │
- └────────────────────────────────────────────────────── nominal_local.md:9:5 ┘
+This encode_str method is being called on a value whose type doesn't have that
+method.
 
-    The value's type, which does not have a method named `encode_str`, is:
+Str.encode("hi", fmt)
+^^^^^^^^^^
 
-        [Utf8Format, ..]
+The value's type, which does not have a method named encode_str, is:
+
+    [Utf8Format, ..]
 
 # TOKENS
 ~~~zig

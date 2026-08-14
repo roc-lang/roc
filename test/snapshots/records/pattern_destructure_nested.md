@@ -14,28 +14,24 @@ match person {
 NAME NOT IN SCOPE - pattern_destructure_nested.md:1:7:1:13
 UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 # PROBLEMS
+── ✗ name not in scope ─────────────────────── pattern_destructure_nested.md:1:7
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `person` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  match person {                                                            │
- │        ‾‾‾‾‾‾                                                              │
- └───────────────────────────────────────── pattern_destructure_nested.md:1:7 ┘
+Nothing is named person in this scope.
 
-    Is it misspelled, or is there an import missing?
+match person {
+      ^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `zipCode` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  …, city, zipCode } } => "${name} lives on ${street} in ${city}"           │
- │           ‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────────── pattern_destructure_nested.md:2:38 ┘
+── ● unused variable ──────────────────────── pattern_destructure_nested.md:2:38
 
-    If you don't need this variable, prefix it with an underscore like
-    `_zipCode` to suppress this warning.
+Variable zipCode is defined here and then never used:
+
+{ name, address: { street, city, zipCode } } => "${name} lives on ${street} in ${city}"
+                                 ^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like _zipCode to
+suppress this warning.
 
 # TOKENS
 ~~~zig

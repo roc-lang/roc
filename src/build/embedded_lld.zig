@@ -8,6 +8,10 @@ const collections = @import("collections");
 /// embedded-lld COFF link of Roc-generated code.
 pub const stack_probe = @import("stack_probe.zig");
 
+/// Darwin sysroot resolution, shared by every embedded-lld Mach-O link of
+/// Roc-generated code.
+pub const darwin_sysroot = @import("darwin_sysroot.zig");
+
 /// Object format handled by one of the embedded LLD frontends.
 pub const Format = enum {
     elf,

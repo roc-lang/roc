@@ -62,34 +62,29 @@ main = |_| {
 TYPE MISMATCH - let_polymorphism_records.md:48:6:48:17
 TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 # PROBLEMS
+── ✗ type mismatch ──────────────────────────── let_polymorphism_records.md:48:6
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ I'm having trouble with this bool operation. ──────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  1 + update_data                                                           │
- │      ‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └────────────────────────────────────────── let_polymorphism_records.md:48:6 ┘
+I'm having trouble with this bool operation.
 
-    Both sides of `and` must be `Bool` values, but the right side is:
+1 + update_data
+    ^^^^^^^^^^^
 
-        { data: a, ..b }, a -> { data: a, ..b }
+Both sides of and must be Bool values, but the right side is:
 
-    Note: Roc does not have "truthiness". You must convert values to bools
-    yourself.
+    { data: a, ..b }, a -> { data: a, ..b }
 
+Note: Roc does not have "truthiness". You must convert values to bools yourself.
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  str = "hello"                                                             │
- │        ‾‾‾‾‾‾‾                                                             │
- └─────────────────────────────────────────── let_polymorphism_records.md:8:7 ┘
+── ✗ type mismatch ───────────────────────────── let_polymorphism_records.md:8:7
 
-    The type was determined to be:
+This string literal is being used where a non-string type is needed.
 
-        Dec
+str = "hello"
+      ^^^^^^^
+
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig

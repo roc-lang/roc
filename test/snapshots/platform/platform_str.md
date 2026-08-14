@@ -19,30 +19,26 @@ processString : Str -> Str
 EXPOSED BUT NOT DEFINED - platform_str.md:7:16:7:50
 DECLARATION HAS NO VALUE - platform_str.md:9:1:9:27
 # PROBLEMS
+── ✗ exposed but not defined ────────────────────────────── platform_str.md:7:16
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `processString` is ──┐
-└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
- │                           this mod.                                     │
- │                                                                            │
- │  provides { "roc_processString": processString }                           │
- │             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                             │
- └────────────────────────────────────────────────────── platform_str.md:7:16 ┘
+The mod header says that processString is exposed, but it is not defined
+anywhere in this mod.
 
-    You can fix this by either defining `processString` in this mod, or by
-    removing it from the list of exposed values.
+provides { "roc_processString": processString }
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+You can fix this by either defining processString in this mod, or by
+removing it from the list of exposed values.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  processString : Str -> Str                                                │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
- └─────────────────────────────────────────────────────── platform_str.md:9:1 ┘
+── ● declaration has no value ────────────────────────────── platform_str.md:9:1
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+This declaration has a type annotation but no implementation.
+
+processString : Str -> Str
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig

@@ -258,11 +258,12 @@ pub const CliCtx = struct {
         self.no_color = no_color;
     }
 
-    /// Build the terminal-layout defaults before applying color policy.
+    /// Build terminal-layout defaults before applying color policy. Diagnostic
+    /// headers use the detected width, capped by the renderer at 120 columns.
     fn baseReportConfig(self: *const Self) ReportingConfig {
         var config = ReportingConfig.initColorTerminal();
         if (self.coreCtx().terminalWidth()) |cols| {
-            if (cols >= 40) config.max_line_width = cols;
+            if (cols > 0) config.max_line_width = cols;
         }
         return config;
     }
@@ -296,8 +297,8 @@ pub const CliCtx = struct {
         return policy.usesColor(self.streamSupportsAnsi(stream));
     }
 
-    /// Build the box-style terminal reporting configuration while applying the
-    /// shared color policy for the selected output stream.
+    /// Build the terminal reporting configuration while applying the shared
+    /// color policy for the selected output stream.
     pub fn reportConfig(self: *Self, stream: OutputStream) ReportingConfig {
         const policy = self.colorPolicy();
         const supports_ansi = self.streamSupportsAnsi(stream);
@@ -341,7 +342,7 @@ pub const CliCtx = struct {
             .runtime_error => if (self.exit_code == 0) {
                 self.exit_code = 1;
             },
-            .warning, .info => {},
+            .warning => {},
         }
     }
 

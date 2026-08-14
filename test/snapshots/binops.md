@@ -26,24 +26,22 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - binops.md:16:5:16:5
 # PROBLEMS
+── ✗ type mismatch ────────────────────────────────────────────── binops.md:16:5
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first pattern in this `match` is incompatible. ────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  None ?? 0,                                                                │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └──────────────────────────────────────────────────────────── binops.md:16:5 ┘
+The first pattern in this match is incompatible.
 
-    The first pattern is trying to match:
+None ?? 0,
+^^^^^^^^^
 
-        Try(ok, err)
+The first pattern is trying to match:
 
-    But the expression between the `match` parenthesis has the type:
+    Try(ok, err)
 
-        [None, ..]
+But the expression between the match parenthesis has the type:
 
-    These can never match! Either the pattern or expression has a problem.
+    [None, ..]
+
+These can never match! Either the pattern or expression has a problem.
 
 # TOKENS
 ~~~zig

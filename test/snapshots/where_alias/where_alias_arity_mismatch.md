@@ -13,15 +13,12 @@ encode_once = |value| value.encode("")
 # EXPECTED
 TOO FEW ARGS - where_alias_arity_mismatch.md:3:31:3:42
 # PROBLEMS
+── ✗ too few args ─────────────────────────── where_alias_arity_mismatch.md:3:31
 
-┌──────────────┐
-│ TOO FEW ARGS ├─ The type Encodable expects 1 argument, but got 0 instead. ──┐
-└┬─────────────┘                                                              │
- │                                                                            │
- │  encode_once : a -> Str where [a.Encodable]                                │
- │                                ‾‾‾‾‾‾‾‾‾‾‾                                 │
- └──────────────────────────────────────── where_alias_arity_mismatch.md:3:31 ┘
+The type Encodable expects 1 argument, but got 0 instead.
 
+encode_once : a -> Str where [a.Encodable]
+                              ^^^^^^^^^^^
 
 # TOKENS
 ~~~zig

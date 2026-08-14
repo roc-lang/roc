@@ -819,7 +819,7 @@ fn linkSharedLibrary(
             try args.append(allocator, roc_target.macos_deployment.linker_version);
             try args.append(allocator, roc_target.macos_deployment.linker_version);
             try args.append(allocator, "-syslibroot");
-            try args.append(allocator, build_options.darwin_sysroot);
+            try args.append(allocator, embedded_lld.darwin_sysroot.find(arena, io) catch return Error.OutOfMemory);
             try args.append(allocator, std.mem.sliceTo(object_path, 0));
             try args.append(allocator, "-lSystem");
         },

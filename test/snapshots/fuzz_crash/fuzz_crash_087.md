@@ -10,16 +10,14 @@ a=(0->b .c())
 # EXPECTED
 NAME NOT IN SCOPE - fuzz_crash_087.md:1:7:1:8
 # PROBLEMS
+── ✗ name not in scope ─────────────────────────────────── fuzz_crash_087.md:1:7
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  a=(0->b .c())                                                             │
- │        ‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_087.md:1:7 ┘
+Nothing is named b in this scope.
 
-    Is it misspelled, or is there an import missing?
+a=(0->b .c())
+      ^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

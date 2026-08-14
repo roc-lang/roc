@@ -12,15 +12,13 @@ match (1, 2) {
 # EXPECTED
 UNCONDITIONAL CONDITION - pattern_as_basic.md:1:7:1:13
 # PROBLEMS
+── ● unconditional condition ─────────────────────────── pattern_as_basic.md:1:7
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
-└┬────────────────────────┘  this match will always inspect the same value.   │
- │                                                                            │
- │  match (1, 2) {                                                            │
- │        ‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── pattern_as_basic.md:1:7 ┘
+This match value is known at compile time, so this match will always inspect
+the same value.
 
+match (1, 2) {
+      ^^^^^^
 
 # TOKENS
 ~~~zig

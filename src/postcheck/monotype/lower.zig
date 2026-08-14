@@ -30032,7 +30032,7 @@ const BodyContext = struct {
             available,
             null,
             exact.ret,
-            .request,
+            if (result_relation == .exact_destination) .request else null,
             .exact_callable_interface,
         );
         const args = try self.graph.arena().alloc(NodeId, exact.args.len);

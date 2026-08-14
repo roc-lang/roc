@@ -14,33 +14,30 @@ describe = |value| value.to_str()
 RECURSIVE WHERE ALIAS - where_alias_recursive.md:1:21:1:29
 MISSING METHOD - where_alias_recursive.md:4:26:4:32
 # PROBLEMS
+── ✗ recursive where alias ─────────────────────── where_alias_recursive.md:1:21
 
-┌───────────────────────┐
-│ RECURSIVE WHERE ALIAS ├─ The where alias Looping names itself. ─────────────┐
-└┬──────────────────────┘                                                     │
- │                                                                            │
- │  a.Looping : where [a.Looping, a.to_str : a -> Str]                        │
- │                      ‾‾‾‾‾‾‾‾                                              │
- └───────────────────────────────────────────── where_alias_recursive.md:1:21 ┘
+The where alias Looping names itself.
 
-    A where alias is expanded where it is used, so it cannot reach itself,
-    directly or through other where aliases.
+a.Looping : where [a.Looping, a.to_str : a -> Str]
+                    ^^^^^^^^
 
+A where alias is expanded where it is used, so it cannot reach itself, directly
+or through other where aliases.
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `to_str` method is being called on a value whose ────┐
-└┬───────────────┘  type doesn't have that method.                            │
- │                                                                            │
- │  describe = |value| value.to_str()                                         │
- │                           ‾‾‾‾‾‾                                           │
- └───────────────────────────────────────────── where_alias_recursive.md:4:26 ┘
+── ✗ missing method ────────────────────────────── where_alias_recursive.md:4:26
 
-    The value's type, which does not have a method named `to_str`, is:
+This to_str method is being called on a value whose type doesn't have that
+method.
 
-        a
+describe = |value| value.to_str()
+                         ^^^^^^
 
-    Hint: For this to work, the type would need to have a method named `to_str`
-    associated with it in the type's declaration.
+The value's type, which does not have a method named to_str, is:
+
+    a
+
+Hint: For this to work, the type would need to have a method named to_str
+associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

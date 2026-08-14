@@ -30,20 +30,17 @@ use_it = {
 # EXPECTED
 MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:12:9:12:24
 # PROBLEMS
+── ✗ missing method ──── static_dispatch_where_forced_numeric_issue_9657.md:12:9
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named `encode` on ────┐
-└┬───────────────┘  an unresolved type variable, but unresolved type          │
- │                  variables have no methods.                                │
- │                                                                            │
- │  output.encode()                                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └─────────────────── static_dispatch_where_forced_numeric_issue_9657.md:12:9 ┘
+This is trying to dispatch a method named encode on an unresolved type
+variable, but unresolved type variables have no methods.
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+output.encode()
+^^^^^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig

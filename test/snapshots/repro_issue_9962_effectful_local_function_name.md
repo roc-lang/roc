@@ -18,27 +18,23 @@ main! = |_| {
 EFFECTFUL FUNCTION NAME - repro_issue_9962_effectful_local_function_name.md:1:1:1:9
 EFFECTFUL FUNCTION NAME - repro_issue_9962_effectful_local_function_name.md:4:5:4:10
 # PROBLEMS
+── ● effectful function name ─ repro_issue_9962_effectful_local_function_name.md:1:1
 
-┌─────────────────────────┐
-│ EFFECTFUL FUNCTION NAME ├─ This function performs an effect, so its name ───┐
-└┬────────────────────────┘  must end in `!`.                                 │
- │                                                                            │
- │  topThunk = || echo!("top")                                                │
- │  ‾‾‾‾‾‾‾‾                                                                  │
- └───────────────────── repro_issue_9962_effectful_local_function_name.md:1:1 ┘
+This function performs an effect, so its name must end in `!`.
 
-    Add a trailing `!` to this function name.
+topThunk = || echo!("top")
+^^^^^^^^
 
+Add a trailing ! to this function name.
 
-┌─────────────────────────┐
-│ EFFECTFUL FUNCTION NAME ├─ This function performs an effect, so its name ───┐
-└┬────────────────────────┘  must end in `!`.                                 │
- │                                                                            │
- │  thunk = || echo!("local")                                                 │
- │  ‾‾‾‾‾                                                                     │
- └───────────────────── repro_issue_9962_effectful_local_function_name.md:4:5 ┘
+── ● effectful function name ─ repro_issue_9962_effectful_local_function_name.md:4:5
 
-    Add a trailing `!` to this function name.
+This function performs an effect, so its name must end in `!`.
+
+thunk = || echo!("local")
+^^^^^
+
+Add a trailing ! to this function name.
 
 # TOKENS
 ~~~zig
