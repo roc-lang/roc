@@ -228,19 +228,19 @@ use_it = {
 		(e-block
 			(s-let
 				(p-assign (ident "transform"))
-				(e-call (constraint-fn-var 328)
+				(e-call (constraint-fn-var 331)
 					(e-lookup-local
 						(p-assign (ident "make_map")))
 					(e-lambda
 						(args
 							(p-assign (ident "n")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 326)
+						(e-dispatch-call (method "plus") (constraint-fn-var 329)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
 							(args
 								(e-num (value "1")))))))
-			(e-call (constraint-fn-var 336)
+			(e-call (constraint-fn-var 339)
 				(e-lookup-local
 					(p-assign (ident "transform")))
 				(e-num (value "41"))))))

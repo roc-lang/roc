@@ -201,10 +201,10 @@ main! = |_| {}
 					(ty-rigid-var-lookup (ty-rigid-var (name "b")))))))
 	(d-let
 		(p-assign (ident "total"))
-		(e-call (constraint-fn-var 379)
+		(e-call (constraint-fn-var 383)
 			(e-lookup-local
 				(p-assign (ident "sum")))
-			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 377)
+			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 381)
 				(receiver
 					(e-num (value "1")))
 				(args
