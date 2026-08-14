@@ -4163,15 +4163,24 @@ pub fn build(b: *std.Build) void {
     // The playground Wasm module compiles the whole compiler for wasm32, which
     // makes it the most expensive job in `build-ci`. Measured peak linker RSS
     // for the same sources: Debug 11.8 GiB (85 MB of output), ReleaseSafe
-    // 9.6 GiB, ReleaseSmall 4.0 GiB. Nothing here needs a Debug Wasm module --
-    // the playground is driven over a Wasm protocol rather than a debugger, and
-    // the compiler code it contains is safety-checked by the native Debug tests
-    // -- so pin Debug to ReleaseSmall and pass explicit `-Doptimize=` values
-    // through unchanged. That also makes the local build agree with CI, which
-    // runs `run-test-playground -Doptimize=ReleaseSmall`, and with `repl_wasm`
-    // and `echo`, which are pinned to ReleaseSmall for the same reason.
+    // 9.6 GiB, ReleaseSmall 4.0 GiB. The default build does not need a Debug
+    // Wasm module -- the playground is driven over a Wasm protocol rather than
+    // a debugger, and the compiler code it contains is safety-checked by the
+    // native Debug tests -- so an unrequested Debug default becomes
+    // ReleaseSmall. That also makes the default build agree with CI, which runs
+    // `run-test-playground -Doptimize=ReleaseSmall`, and with `repl_wasm` and
+    // `echo`, which are pinned to ReleaseSmall for the same reason.
+    //
+    // Every explicitly requested mode is honored, including `-Doptimize=Debug`:
+    // an omitted `-Doptimize` also resolves to `.Debug`, so the two are only
+    // distinguishable through `user_input_options` (as with `target` and `cpu`
+    // above). Asking for a Debug playground has to keep working -- it is just
+    // not what an unqualified `zig build` should spend 12 GiB on.
     const playground_wasm_optimize: std.builtin.OptimizeMode =
-        if (optimize == .Debug) .ReleaseSmall else optimize;
+        if (optimize == .Debug and !b.user_input_options.contains("optimize"))
+            .ReleaseSmall
+        else
+            optimize;
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
