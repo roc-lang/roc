@@ -36,6 +36,7 @@ const RocBinaryenOptimizeConfig = extern struct {
     strip_debug: u8,
     strip_producers: u8,
     strip_target_features: u8,
+    simd128: u8,
     validate: u8,
 };
 
@@ -169,6 +170,10 @@ pub const LinkConfig = struct {
 
     /// Whether to run Binaryen over linked wasm output.
     wasm_optimize: WasmOptimizeMode = .none,
+
+    /// The selected Wasm CPU contract whose instruction features Binaryen may
+    /// preserve or introduce while optimizing the linked module.
+    wasm_cpu_level: roc_target.CpuLevel = .default,
 
     /// Optional data/global base for freestanding WASM links.
     wasm_global_base: ?u32 = null,
@@ -1017,6 +1022,45 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     }
 }
 
+/// Combine Wasm objects and archives into one relocatable object.
+///
+/// This is the one-time correctness link used to prepare a platform host for
+/// later surgical dev links. Whole-archive preserves the surgical linker's
+/// previous contract of loading every declared archive member, while LLD owns
+/// normal strong/weak and COMDAT resolution.
+pub fn linkWasmRelocatable(
+    ctx: *CliCtx,
+    output_path: []const u8,
+    input_paths: []const []const u8,
+) LinkError!void {
+    if (comptime !llvm_available) {
+        return LinkError.LLVMNotAvailable;
+    }
+
+    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, input_paths.len + 7) catch
+        return LinkError.OutOfMemory;
+    try args.append("wasm-ld");
+    try args.append("-r");
+    try args.append("-o");
+    try args.append(output_path);
+    try args.append("--whole-archive");
+    try args.appendSlice(input_paths);
+    try args.append("--no-whole-archive");
+
+    std.log.debug("Relocatable Wasm linker command:", .{});
+    for (args.items) |arg| {
+        std.log.debug("  {s}", .{arg});
+    }
+
+    embedded_lld.link(ctx.arena, .wasm, args.items, .{
+        .can_exit_early = false,
+        .disable_output = false,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return LinkError.OutOfMemory,
+        error.LinkFailed => return LinkError.LinkFailed,
+    };
+}
+
 fn binaryenStatusName(status: c_int) []const u8 {
     return switch (status) {
         1 => "invalid arguments",
@@ -1045,6 +1089,7 @@ fn binaryenConfig(config: LinkConfig) RocBinaryenOptimizeConfig {
         .strip_debug = @intFromBool(!config.wasm_debug_info),
         .strip_producers = 1,
         .strip_target_features = @intFromBool(config.wasm_optimize == .size and !config.wasm_debug_info),
+        .simd128 = @intFromBool(config.wasm_cpu_level == .default),
         .validate = 1,
     };
 }
@@ -1303,6 +1348,10 @@ test "size wasm strips final target feature metadata" {
 
     const speed = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .speed });
     try std.testing.expectEqual(@as(u8, 0), speed.strip_target_features);
+    try std.testing.expectEqual(@as(u8, 1), speed.simd128);
+
+    const v1 = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .speed, .wasm_cpu_level = .v1 });
+    try std.testing.expectEqual(@as(u8, 0), v1.simd128);
 }
 
 test "force undefined symbols use target linker spelling" {

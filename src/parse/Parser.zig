@@ -2215,6 +2215,7 @@ const QualificationResult = struct {
 
 const QualificationMode = enum {
     all_segments,
+    expression_primary,
     expression_value_boundary,
 };
 
@@ -3002,6 +3003,9 @@ fn readQualificationChain(self: *Parser, mode: QualificationMode) std.mem.Alloca
     const scratch_top = self.store.scratchTokenTop();
     var final_token = self.pos; // Capture position of the identifier
     var is_upper = true;
+    const accepts_trivia_separated_segments =
+        mode == .expression_primary and self.peek() == .UpperIdent;
+    const stops_at_value_boundary = mode != .all_segments;
 
     const saved_pos = self.pos;
     self.advance();
@@ -3009,16 +3013,20 @@ fn readQualificationChain(self: *Parser, mode: QualificationMode) std.mem.Alloca
     var saw_qualifier = false;
     var saw_lower_segment = false;
     while (true) {
-        if (self.peek() == .NoSpaceDotUpperIdent) {
+        if (stops_at_value_boundary and saw_lower_segment) break;
+
+        const next = self.peek();
+        if (next == .NoSpaceDotUpperIdent or
+            (accepts_trivia_separated_segments and next == .DotUpperIdent))
+        {
             saw_qualifier = true;
             try self.store.addScratchToken(final_token);
             final_token = self.pos;
             is_upper = true;
             self.advance();
-        } else if (self.peek() == .NoSpaceDotLowerIdent) {
-            if (mode == .expression_value_boundary and saw_lower_segment) {
-                break;
-            }
+        } else if (next == .NoSpaceDotLowerIdent or
+            (accepts_trivia_separated_segments and next == .DotLowerIdent))
+        {
             saw_qualifier = true;
             try self.store.addScratchToken(final_token);
             final_token = self.pos;
@@ -3389,7 +3397,7 @@ fn runExprStatementKernel(
                 }
                 if (tok == .UpperIdent) {
                     const start = self.pos;
-                    const qual_result = try self.readQualificationChain(.expression_value_boundary);
+                    const qual_result = try self.readQualificationChain(.expression_primary);
                     self.pos = qual_result.final_token + 1;
                     const expr = if (qual_result.is_upper)
                         try self.store.addExpr(.{ .tag = .{

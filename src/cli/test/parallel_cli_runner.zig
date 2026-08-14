@@ -381,6 +381,7 @@ const CustomCase = enum {
     default_platform_build_x64openbsd_rejected,
     default_platform_build_wasm32,
     default_platform_wasm32_archive_reproducible,
+    issue_10733_wasm_boxy_dev_cache,
     macos_output_basename_reproducible,
     default_platform_crash_x64musl,
     default_platform_crash_arm64musl,
@@ -1391,6 +1392,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 schedules field defaults before explicit platform roots", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/field_default_root_order/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compile-time root request order placed a root before its field defaults or another dependency" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10733: dev wasm32 caches a valid Boxy-prepared compiler-rt host", .backend = .dev, .body = .{ .custom = .issue_10733_wasm_boxy_dev_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM size wasm32 links the Boxy runtime", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", "--output=boxed_closure_size.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM speed wasm32 links the Boxy runtime", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=boxed_closure_speed.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build Shared output links a Windows DLL", .body = .{ .custom = .build_windows_shared_library } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_passing_results } },
@@ -2612,6 +2616,7 @@ fn runCustomCase(
         .default_platform_build_x64openbsd_rejected => customDefaultPlatformOpenBsdRejected(io, allocator, &env, &timer, timeout_ms),
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
+        .issue_10733_wasm_boxy_dev_cache => customIssue10733WasmBoxyDevCache(io, allocator, &env, &timer, timeout_ms),
         .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
         .default_platform_crash_x64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64musl, .crash),
         .default_platform_crash_arm64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64musl, .crash),
@@ -5062,6 +5067,89 @@ fn customDefaultPlatformWasm32ArchiveReproducible(
         if (!std.mem.eql(u8, first, second)) {
             return customFailure(allocator, timer, "default wasm {s} archive bytes were not reproducible", .{opt});
         }
+    }
+
+    return null;
+}
+
+fn validateIssue10733Wasm(
+    io: std.Io,
+    allocator: Allocator,
+    timer: *harness.Timer,
+    path: []const u8,
+) ?TestResult {
+    const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read wasm output {s}: {}", .{ path, err });
+    defer allocator.free(wasm_bytes);
+
+    var module_def = bytebox.createModuleDefinition(allocator, .{ .debug_name = "issue_10733_boxy" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create wasm validator: {}", .{err});
+    defer module_def.destroy();
+    module_def.decode(wasm_bytes) catch |err|
+        return customFailure(allocator, timer, "generated invalid wasm {s}: {}", .{ path, err });
+    return null;
+}
+
+fn customIssue10733WasmBoxyDevCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const first_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxed-first.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate first wasm output path: {}", .{err});
+    defer allocator.free(first_path);
+    const second_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "boxed-second.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate second wasm output path: {}", .{err});
+    defer allocator.free(second_path);
+    const first_output_arg = outputArg(allocator, first_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate first wasm output argument: {}", .{err});
+    defer allocator.free(first_output_arg);
+    const second_output_arg = outputArg(allocator, second_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate second wasm output argument: {}", .{err});
+    defer allocator.free(second_output_arg);
+
+    const contains = [_]OutputNeedle{.{ .stream = .stdout, .text = "successfully building" }};
+    const not_contains = [_]OutputNeedle{
+        .{ .stream = .stderr, .text = "DuplicateSymbol" },
+        .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" },
+        .{ .stream = .stderr, .text = "panic" },
+    };
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache", first_output_arg },
+        .roc_file = "test/wasm/boxed_closure_app.roc",
+        .exit = .success,
+        .contains = &contains,
+        .not_contains = &not_contains,
+    })) |failure| return failure;
+    if (validateIssue10733Wasm(io, allocator, timer, first_path)) |failure| return failure;
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache", second_output_arg },
+        .roc_file = "test/wasm/boxed_closure_app.roc",
+        .exit = .success,
+        .contains = &contains,
+        .not_contains = &not_contains,
+    })) |failure| return failure;
+    if (validateIssue10733Wasm(io, allocator, timer, second_path)) |failure| return failure;
+
+    const first_bytes = std.Io.Dir.cwd().readFileAlloc(io, first_path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to reread first wasm output: {}", .{err});
+    defer allocator.free(first_bytes);
+    const second_bytes = std.Io.Dir.cwd().readFileAlloc(io, second_path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to reread cached wasm output: {}", .{err});
+    defer allocator.free(second_bytes);
+    if (!std.mem.eql(u8, first_bytes, second_bytes)) {
+        return customFailure(allocator, timer, "cached prepared host changed the final wasm bytes", .{});
+    }
+    if (std.mem.find(u8, first_bytes, "wasm_main") == null) {
+        return customFailure(allocator, timer, "prepared host lost its platform export", .{});
+    }
+    if (std.mem.find(u8, first_bytes, "roc_boxy_init_embedded") != null or
+        std.mem.find(u8, first_bytes, "roc_builtins_str_concat") != null)
+    {
+        return customFailure(allocator, timer, "prepared host leaked runtime internals into final wasm exports", .{});
     }
 
     return null;

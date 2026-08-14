@@ -25,6 +25,7 @@ pub const RegisterPlacement = call.RegisterPlacement;
 pub const RegisterCarrier = call.RegisterCarrier;
 pub const RegPiece = call.RegPiece;
 pub const RegClass = call.RegClass;
+pub const RegExtension = call.RegExtension;
 pub const Target = call.Target;
 pub const aarch64Target = call.aarch64Target;
 pub const lower = call.lower;
