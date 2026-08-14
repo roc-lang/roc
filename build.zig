@@ -2334,6 +2334,9 @@ fn buildAndCopyWasmHostObject(
     // Per-function/data sections so wasm final-link DCE can strip unused host code.
     obj.link_function_sections = true;
     obj.link_data_sections = true;
+    // Match production Rust hosts, which contribute weak compiler-rt symbols.
+    // Wasm LLD must resolve these against Roc's strong builtins definitions.
+    obj.bundle_compiler_rt = true;
 
     const dest_path = "test/wasm/platform/targets/wasm32/host.wasm";
     const copy_step = b.addUpdateSourceFiles();
@@ -6753,7 +6756,10 @@ fn buildBoxyRuntimeObject(
             .optimize = optimize,
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
-            .pic = true,
+            // Native runtime objects can participate in shared-library links.
+            // Wasm uses direct data-symbol relocations so a prepared host can
+            // retain its app-specific Boxy sidecar references across `-r`.
+            .pic = target.result.cpu.arch != .wasm32,
         }),
     });
     const boxy_eval_module = b.createModule(.{

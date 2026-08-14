@@ -7891,13 +7891,31 @@ reaching `assign_boxy_adapt` is never treated as unsupported.
 
 Machine-code backends lower the complete Boxy statement surface to the shared
 `roc_boxy_*` C ABI. Native LLVM links the target's standalone Boxy runtime
-object and an object containing the serialized sidecar. Wasm merges the
-relocatable Boxy runtime object and a static-data module containing that same
-sidecar into either the final surgical-link module or the emitted relocatable
-object. Entrypoint wrappers initialize the embedded runtime before calling Roc
-code. Dictionary worker thunks and erased-callable registrations expose only
-the proc ids, layouts, descriptor sources, and ownership metadata already
-present in LIR; backend code does not derive any of them from procedure bodies.
+object and an object containing the serialized sidecar. Optimized Wasm links
+the relocatable Boxy runtime object and a static-data module containing that
+same sidecar into the emitted app object, then resolves the complete app and
+host link with Wasm LLD. When standalone Wasm dev LIR explicitly requires
+Boxy, the build prepares each distinct host through a content-addressed
+relocatable LLD link with the builtins object and relocatable Boxy runtime
+object. Later builds load that cached prepared-host variant and surgically
+merge only the generated app code and its exact sidecar. Non-Boxy dev builds
+directly use the fast surgical merge because no runtime object needs LLD
+symbol resolution. The cache identity includes every ordered input's bytes;
+changing any input produces a different prepared host. The cached object
+preserves only the platform's original function exports, leaving builtins and
+Boxy runtime functions internal and eligible for dead-code elimination during
+the surgical link. Preparation is serialized per content identity across
+compiler processes and remains available when the checked module cache and
+generated app-object cache are disabled: it is the exact prepared platform
+link output, not a cached app result. The
+standalone Wasm runtime uses direct
+data-symbol relocations rather than PIC GOT
+globals, so the partial link preserves its unresolved sidecar references for
+the later surgical merge. Entrypoint wrappers initialize the embedded runtime
+before calling Roc code. Dictionary worker thunks and erased-callable
+registrations expose only the proc ids, layouts, descriptor sources, and
+ownership metadata already present in LIR; backend code does not derive any of
+them from procedure bodies.
 
 In-process test invocation context is also an explicit execution ABI input. It
 is threaded through ordinary procedures, Boxy dictionary calls and their
@@ -7924,8 +7942,10 @@ Every linked Wasm image has exactly one provider for compiler runtime libcalls.
 Standalone Wasm obtains them from the builtins object and the standalone Boxy
 runtime suppresses its copies. Evaluator Wasm has no companion builtins object,
 so its vtable-mode Boxy runtime exports the small required libcall set itself.
-Runtime-object construction must preserve this ownership split; duplicate weak
-or strong exports are not resolved by link order.
+Runtime-object construction must preserve this ownership split. LLD resolves
+the strong/weak and COMDAT rules while preparing a surgical-link host or
+producing an optimized final image; the surgical linker never guesses among
+duplicate weak or strong definitions and link order never chooses the owner.
 
 Dynamic RC in boxy LIR is explicit. A local whose boxy runtime layout is a
 dynamic value has a pointer-sized committed storage layout, but its nested

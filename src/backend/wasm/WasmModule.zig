@@ -2358,14 +2358,20 @@ fn patchResolvedRelocation(
                 .table_index_rel_sleb,
                 => {
                     const sym = try self.relocationSymbol(idx.symbol_index);
-                    const value = sym.index;
-                    const table_idx = self.findTableIndex(value) orelse value;
+                    if (!sym.isFunction()) return logInvalidRelocation(
+                        "table index relocation references a {s} symbol",
+                        .{@tagName(sym.kind)},
+                    );
+                    const table_idx = try self.ensureTableElement(sym.index);
                     overwritePaddedI32(target_bytes, patch_offset, @intCast(table_idx));
                 },
                 .table_index_i32 => {
                     const sym = try self.relocationSymbol(idx.symbol_index);
-                    const value = sym.index;
-                    const table_idx = self.findTableIndex(value) orelse value;
+                    if (!sym.isFunction()) return logInvalidRelocation(
+                        "table index relocation references a {s} symbol",
+                        .{@tagName(sym.kind)},
+                    );
+                    const table_idx = try self.ensureTableElement(sym.index);
                     writeRawU32Relocation(target_bytes, patch_offset, table_idx);
                 },
                 .global_index_i32 => {
@@ -2432,28 +2438,6 @@ pub fn resolveCodeRelocations(self: *Self) RelocationError!void {
 
 /// Resolve all data relocations in place.
 pub fn resolveDataRelocations(self: *Self) RelocationError!void {
-    // First pass: ensure functions referenced by table_index_* relocations
-    // are present in the element section. This is needed because data segments
-    // can store function pointers (e.g. hosted_function_ptrs) which need valid
-    // table indices, and the functions must be in the table for call_indirect.
-    for (self.reloc_data.entries.items) |entry| {
-        switch (entry) {
-            .index => |idx| {
-                if (idx.type_id == .table_index_i32 or
-                    idx.type_id == .table_index_sleb or
-                    idx.type_id == .table_index_rel_sleb)
-                {
-                    const sym = self.linking.symbol_table.items[idx.symbol_index];
-                    if (sym.isFunction()) {
-                        _ = try self.ensureTableElement(sym.index);
-                    }
-                }
-            },
-            .offset => {},
-        }
-    }
-
-    // Second pass: patch data bytes with resolved values.
     for (self.reloc_data.entries.items) |entry| {
         const segment_idx = switch (entry) {
             .index => |idx| idx.data_segment_index,
@@ -2548,19 +2532,37 @@ pub fn materializeFuncBodies(self: *Self) Allocator.Error!void {
 /// `roc_panic` is also tolerated because current host platforms still import it
 /// behind the `roc_crashed` wrapper, and verification runs before DCE.
 pub fn verifyNoBuiltinImports(self: *const Self) error{UnresolvedBuiltinImport}!void {
-    const allowed = shim_symbols.runtime_set ++ [_][:0]const u8{"roc_panic"};
     for (self.imports.items) |imp| {
-        var is_allowed = false;
-        for (allowed) |name| {
-            if (std.mem.eql(u8, imp.field_name, name)) {
-                is_allowed = true;
-                break;
-            }
-        }
-        if (!is_allowed and std.mem.startsWith(u8, imp.field_name, "roc_")) {
+        if (!isAllowedBuiltinImport(imp.field_name) and std.mem.startsWith(u8, imp.field_name, "roc_")) {
             return error.UnresolvedBuiltinImport;
         }
     }
+}
+
+/// Verify that a relocatable object's undefined function symbols contain no
+/// references in an explicitly owned ABI namespace. Resolved symbols can leave
+/// dead import entries until the final linker compacts function indices, so
+/// symbol state—not the raw import list—is the correctness boundary for an
+/// object.
+pub fn verifyNoUndefinedFunctionSymbolsInNamespace(
+    self: *const Self,
+    namespace: []const u8,
+) error{UnresolvedBuiltinImport}!void {
+    for (self.linking.symbol_table.items) |sym| {
+        if (sym.kind != .function or !sym.isUndefined()) continue;
+        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
+        if (std.mem.startsWith(u8, name, namespace)) {
+            return error.UnresolvedBuiltinImport;
+        }
+    }
+}
+
+fn isAllowedBuiltinImport(name: []const u8) bool {
+    const allowed = shim_symbols.runtime_set ++ [_][:0]const u8{"roc_panic"};
+    for (allowed) |allowed_name| {
+        if (std.mem.eql(u8, name, allowed_name)) return true;
+    }
+    return false;
 }
 
 /// Errors reported when a wasm no-link object violates its public linking contract.
@@ -2957,18 +2959,6 @@ fn traceLiveFunctions(
 
 // --- Phase 5: Memory, Table, and Stack Pointer Ownership ---
 
-/// Setup step (called after preload, before code generation):
-/// Validate that memory and table ownership is correctly configured.
-///
-/// In relocatable WASM objects, memory, table, and __stack_pointer are imported.
-/// Our parser already strips non-function imports from the imports array—only
-/// function imports are stored. Memory and table state is tracked via `has_memory`
-/// and `has_table` flags, and will be emitted as defined sections (not imports)
-/// when the module is encoded.
-///
-/// The __stack_pointer global import is handled implicitly: it exists in the
-/// symbol table for relocation resolution and will become a defined global
-/// during `finalizeMemoryAndTable()`.
 /// Promote globally-visible, defined function symbols from the linking section
 /// to actual WASM exports. In relocatable objects, `export fn` in Zig generates
 /// symbols with `binding=global vis=default`, but no Export section exists.
@@ -2996,10 +2986,13 @@ pub fn exportGlobalSymbols(self: *Self) Allocator.Error!void {
     }
 }
 
-/// No-op: memory and table imports are already stored in separate lists
-/// during parsing (has_memory, has_table flags). This method only asserts
-/// that the host module declared memory.
-pub fn removeMemoryAndTableImports(self: *Self) void {
+/// Prepare the explicit Wasm object ABI symbols for a final surgical link.
+///
+/// Memory and table ownership is already represented by module state. Imported
+/// `__stack_pointer`, `__memory_base`, `__table_base`, and table symbols must be
+/// promoted to their final definitions so relocations cannot keep object-file
+/// indices that do not exist in the encoded final module.
+pub fn prepareObjectAbiForFinalLink(self: *Self) (Allocator.Error || error{ UnexpectedGlobalImport, UnexpectedTableImport })!void {
     // The parser separates function imports from memory/table/global imports.
     // Non-function imports are NOT in self.imports, so import_fn_count is correct.
     // Memory and table flags were set during parseImportSection.
@@ -3008,6 +3001,108 @@ pub fn removeMemoryAndTableImports(self: *Self) void {
     std.debug.assert(self.has_memory);
     // Note: has_table may not be set if the host doesn't use indirect calls yet.
     // Table will be set during finalization if table_func_indices are populated.
+
+    for (self.global_imports.items, 0..) |imp, import_index| {
+        const is_stack = std.mem.eql(u8, imp.field_name, "__stack_pointer");
+        const is_base = std.mem.eql(u8, imp.field_name, "__memory_base") or
+            std.mem.eql(u8, imp.field_name, "__table_base");
+        if (!std.mem.eql(u8, imp.module_name, "env") or
+            imp.val_type != @intFromEnum(ValType.i32) or
+            !(is_stack or is_base) or
+            (is_stack and !imp.mutable))
+        {
+            return error.UnexpectedGlobalImport;
+        }
+
+        var has_symbol = false;
+        for (self.linking.symbol_table.items) |sym| {
+            if (sym.kind == .global and sym.isUndefined() and sym.index == import_index) {
+                has_symbol = true;
+                break;
+            }
+        }
+        if (!has_symbol) return error.UnexpectedGlobalImport;
+    }
+
+    for (self.table_imports.items, 0..) |imp, import_index| {
+        if (!std.mem.eql(u8, imp.module_name, "env") or
+            !std.mem.eql(u8, imp.field_name, "__indirect_function_table"))
+        {
+            return error.UnexpectedTableImport;
+        }
+
+        var has_symbol = false;
+        for (self.linking.symbol_table.items) |sym| {
+            if (sym.kind == .table and sym.isUndefined() and sym.index == import_index) {
+                has_symbol = true;
+                break;
+            }
+        }
+        if (!has_symbol) return error.UnexpectedTableImport;
+    }
+
+    var memory_base_index: ?u32 = null;
+    var memory_base_mutable: ?bool = null;
+    var table_base_index: ?u32 = null;
+    var table_base_mutable: ?bool = null;
+    for (self.linking.symbol_table.items) |*sym| {
+        if (sym.kind != .global or !sym.isUndefined()) continue;
+        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse
+            return error.UnexpectedGlobalImport;
+        if (sym.index >= self.global_imports.items.len or
+            !std.mem.eql(u8, self.global_imports.items[sym.index].field_name, name))
+        {
+            return error.UnexpectedGlobalImport;
+        }
+        const imported = self.global_imports.items[sym.index];
+
+        const final_index = if (std.mem.eql(u8, name, "__stack_pointer")) blk: {
+            self.enableStackPointer(self.stack_pointer_init);
+            break :blk 0;
+        } else if (std.mem.eql(u8, name, "__memory_base")) blk: {
+            if (memory_base_index == null) {
+                memory_base_index = try self.addDefinedGlobal(@intFromEnum(ValType.i32), imported.mutable, 0);
+                memory_base_mutable = imported.mutable;
+            }
+            if (memory_base_mutable.? != imported.mutable) return error.UnexpectedGlobalImport;
+            break :blk memory_base_index.?;
+        } else if (std.mem.eql(u8, name, "__table_base")) blk: {
+            if (table_base_index == null) {
+                table_base_index = try self.addDefinedGlobal(@intFromEnum(ValType.i32), imported.mutable, 0);
+                table_base_mutable = imported.mutable;
+            }
+            if (table_base_mutable.? != imported.mutable) return error.UnexpectedGlobalImport;
+            break :blk table_base_index.?;
+        } else {
+            return error.UnexpectedGlobalImport;
+        };
+
+        sym.flags &= ~WasmLinking.SymFlag.UNDEFINED;
+        sym.flags |= WasmLinking.SymFlag.EXPLICIT_NAME;
+        sym.name = name;
+        sym.index = final_index;
+    }
+
+    for (self.linking.symbol_table.items) |*sym| {
+        if (sym.kind != .table or !sym.isUndefined()) continue;
+        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse
+            return error.UnexpectedTableImport;
+        if (sym.index >= self.table_imports.items.len or
+            !std.mem.eql(u8, self.table_imports.items[sym.index].field_name, name) or
+            !std.mem.eql(u8, name, "__indirect_function_table"))
+        {
+            return error.UnexpectedTableImport;
+        }
+
+        sym.flags &= ~WasmLinking.SymFlag.UNDEFINED;
+        sym.flags |= WasmLinking.SymFlag.EXPLICIT_NAME;
+        sym.name = name;
+        sym.index = 0;
+    }
+
+    self.global_imports.clearRetainingCapacity();
+    self.import_global_count = 0;
+    self.table_imports.clearRetainingCapacity();
 }
 
 /// Memory settings used when finalizing a wasm module after code generation.
@@ -5261,6 +5356,12 @@ fn buildPhase5TestModule(allocator: Allocator) Allocator.Error!Self {
     module.has_table = true;
 
     // Simulate a __stack_pointer global import
+    try module.global_imports.append(allocator, .{
+        .module_name = "env",
+        .field_name = "__stack_pointer",
+        .val_type = @intFromEnum(ValType.i32),
+        .mutable = true,
+    });
     module.import_global_count = 1;
 
     // One defined function
@@ -5290,12 +5391,12 @@ fn buildPhase5TestModule(allocator: Allocator) Allocator.Error!Self {
     return module;
 }
 
-test "setup—memory and table imports removed from host module" {
+test "setup—function imports survive object ABI preparation" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
 
-    module.removeMemoryAndTableImports();
+    try module.prepareObjectAbiForFinalLink();
 
     // After setup, the imports array should only contain function imports
     try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
@@ -5307,13 +5408,40 @@ test "setup—memory and table imports removed from host module" {
     try std.testing.expect(module.has_table);
 }
 
-test "setup—import_fn_count unchanged after removing non-function imports" {
+test "setup—object ABI globals become valid final global indices" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+    module.has_memory = true;
+
+    _ = try module.addGlobalImportWithSymbol("env", "__stack_pointer", .i32, true);
+    _ = try module.addGlobalImportWithSymbol("env", "__memory_base", .i32, true);
+    _ = try module.addGlobalImportWithSymbol("env", "__table_base", .i32, false);
+    const table_symbol = try module.addTableImportWithSymbol();
+
+    try module.prepareObjectAbiForFinalLink();
+
+    try std.testing.expect(module.has_stack_pointer);
+    try std.testing.expectEqual(@as(usize, 0), module.global_imports.items.len);
+    try std.testing.expectEqual(@as(u32, 0), module.import_global_count);
+    try std.testing.expectEqual(@as(usize, 0), module.table_imports.items.len);
+    try std.testing.expectEqual(@as(usize, 2), module.extra_globals.items.len);
+    for (module.linking.symbol_table.items[0..3], 0..) |sym, expected_index| {
+        try std.testing.expect(!sym.isUndefined());
+        try std.testing.expectEqual(@as(u32, @intCast(expected_index)), sym.index);
+    }
+    const table = module.linking.symbol_table.items[table_symbol.raw()];
+    try std.testing.expect(!table.isUndefined());
+    try std.testing.expectEqual(@as(u32, 0), table.index);
+}
+
+test "setup—object ABI preparation leaves function import count unchanged" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
 
     const fn_count_before = module.import_fn_count;
-    module.removeMemoryAndTableImports();
+    try module.prepareObjectAbiForFinalLink();
 
     // import_fn_count should be unchanged—it only counts function imports
     try std.testing.expectEqual(fn_count_before, module.import_fn_count);
@@ -5325,7 +5453,7 @@ test "setup—__stack_pointer global defined with correct initial value" {
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
 
-    module.removeMemoryAndTableImports();
+    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(1024); // 1KB stack
 
     // __stack_pointer should be defined (not imported)
@@ -5340,7 +5468,7 @@ test "setup—memory section has correct minimum pages" {
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
 
-    module.removeMemoryAndTableImports();
+    try module.prepareObjectAbiForFinalLink();
 
     // Data segment: 12 bytes at offset 1024 → data_end = 1036
     // data_offset is 1024 (init default), data_end = max(1024, 1036) = 1036
@@ -5367,7 +5495,7 @@ test "setup—table size matches element count after finalization" {
     try module.table_func_indices.append(allocator, 3); // another fn
     try module.table_func_indices.append(allocator, 4); // another fn
 
-    module.removeMemoryAndTableImports();
+    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(1024);
 
     // Encode and verify the table section uses the correct size
@@ -5411,7 +5539,7 @@ test "setup—memory exported as 'memory'" {
     defer module.deinit();
 
     const exports_before = module.exports.items.len;
-    module.removeMemoryAndTableImports();
+    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(1024);
 
     // Should have one more export than before
@@ -5445,7 +5573,7 @@ test "setup—finalized module encodes and re-parses as valid WASM" {
     // Add table entries for encoding
     try module.table_func_indices.append(allocator, 2);
 
-    module.removeMemoryAndTableImports();
+    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(4096);
 
     // Encode to final WASM binary
@@ -5476,7 +5604,7 @@ test "setup—finalized module encodes and re-parses as valid WASM" {
     try std.testing.expect(decoded.has_stack_pointer);
 }
 
-test "phase5—real host module: removeMemoryAndTableImports preserves function imports" {
+test "phase5—real host object ABI preparation preserves function imports" {
     const allocator = std.testing.allocator;
     const host_bytes = @import("wasm_host_fixture").host_wasm;
 
@@ -5486,7 +5614,7 @@ test "phase5—real host module: removeMemoryAndTableImports preserves function 
     const fn_count_before = module.import_fn_count;
     const imports_before = module.imports.items.len;
 
-    module.removeMemoryAndTableImports();
+    try module.prepareObjectAbiForFinalLink();
 
     // Function imports should be completely unchanged
     try std.testing.expectEqual(fn_count_before, module.import_fn_count);
@@ -5504,7 +5632,7 @@ test "phase5—real host module: full setup and finalization produces valid WASM
     defer module.deinit();
 
     // Phase 5 setup
-    module.removeMemoryAndTableImports();
+    try module.prepareObjectAbiForFinalLink();
 
     // Phase 5 finalization with 64KB stack
     try module.finalizeMemoryAndTable(65536);
@@ -6350,6 +6478,39 @@ test "resolveCodeRelocations—table_index_sleb resolves to table index not func
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
 
+test "resolveCodeRelocations—table index relocation materializes a missing element" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    _ = try module.addFuncType(&.{}, &.{});
+    try module.func_type_indices.append(allocator, 0);
+
+    try module.code_bytes.appendSlice(allocator, &.{ 0x08, 0x00, Op.i32_const });
+    try appendPaddedU32(allocator, &module.code_bytes, 99);
+    try module.code_bytes.append(allocator, Op.end);
+    try module.function_offsets.append(allocator, 0);
+
+    try module.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = WasmLinking.SymFlag.BINDING_WEAK,
+        .name = "address_taken_fn",
+        .index = 0,
+    });
+    try module.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .table_index_sleb,
+        .offset = 3,
+        .symbol_index = 0,
+    } });
+
+    try module.resolveCodeRelocations();
+
+    try std.testing.expectEqualSlices(u32, &.{0}, module.table_func_indices.items);
+    var expected = [_]u8{0} ** 5;
+    overwritePaddedI32(&expected, 0, 0);
+    try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
+}
+
 test "parseElementSection_—parses function indices into table_func_indices" {
     const allocator = std.testing.allocator;
 
@@ -6706,6 +6867,23 @@ test "verifyNoBuiltinImports—allows roc_panic platform import" {
     _ = try module.addImport("env", "roc_panic", 0);
 
     try module.verifyNoBuiltinImports();
+}
+
+test "verifyNoUndefinedFunctionSymbolsInNamespace—uses relocatable symbol resolution state" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    const imported = try module.addFunctionImportWithSymbol("env", "roc_boxy_register_proc", type_idx);
+    try std.testing.expectError(
+        error.UnresolvedBuiltinImport,
+        module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_"),
+    );
+
+    const symbol = &module.linking.symbol_table.items[imported.symbol.raw()];
+    symbol.flags &= ~WasmLinking.SymFlag.UNDEFINED;
+    try module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_");
 }
 
 test "verifyNoLinkObjectContract - allows only env wasm object ABI imports" {

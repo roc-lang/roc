@@ -16,6 +16,7 @@ typedef struct RocBinaryenOptimizeConfig {
     uint8_t strip_debug;
     uint8_t strip_producers;
     uint8_t strip_target_features;
+    uint8_t simd128;
     uint8_t validate;
 } RocBinaryenOptimizeConfig;
 
@@ -81,10 +82,26 @@ extern "C" int RocBinaryenOptimizeWasm(
     BinaryenSetZeroFilledMemory(config.zero_filled_memory != 0);
     BinaryenSetDebugInfo(config.debug_info != 0);
 
+    // This is Roc's explicit Wasm codegen contract. LLD's target_features
+    // section can omit features used by linked code, while FeatureAll lets
+    // optimization introduce proposals outside the selected target.
+    BinaryenFeatures features =
+        BinaryenFeatureMVP() |
+        BinaryenFeatureMutableGlobals() |
+        BinaryenFeatureNontrappingFPToInt() |
+        BinaryenFeatureBulkMemory() |
+        BinaryenFeatureSignExt() |
+        BinaryenFeatureMultivalue() |
+        BinaryenFeatureExtendedConst() |
+        BinaryenFeatureBulkMemoryOpt() |
+        BinaryenFeatureCallIndirectOverlong();
+    if (config.simd128 != 0) {
+        features |= BinaryenFeatureSIMD128();
+    }
     BinaryenModuleRef module = BinaryenModuleReadWithFeatures(
         reinterpret_cast<char*>(const_cast<uint8_t*>(input)),
         input_len,
-        BinaryenFeatureAll()
+        features
     );
     if (module == nullptr) {
         return RocBinaryenStatusReadFailed;
