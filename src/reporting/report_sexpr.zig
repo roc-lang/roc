@@ -34,7 +34,6 @@ const base = @import("base");
 
 const SExprTree = base.SExprTree;
 const Report = @import("report.zig").Report;
-const Severity = @import("severity.zig").Severity;
 const document_mod = @import("document.zig");
 const DocumentElement = document_mod.DocumentElement;
 const Annotation = document_mod.Annotation;
@@ -240,7 +239,7 @@ fn pushEscapedString(tree: *SExprTree, value: []const u8) Allocator.Error!void {
     try tree.pushString(escaped.items);
 }
 
-fn treeToString(allocator: Allocator, tree: *const SExprTree) ![]u8 {
+fn treeToString(allocator: Allocator, tree: *const SExprTree) error{ OutOfMemory, WriteFailed }![]u8 {
     var buffer = std.Io.Writer.Allocating.init(allocator);
     errdefer buffer.deinit();
     try tree.toStringPretty(&buffer.writer, .skip_linecol);

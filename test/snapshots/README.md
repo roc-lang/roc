@@ -16,7 +16,7 @@ semantic changes and presentation changes never show up in the same files:
   serialization of each `reporting.Report` (see
   `src/reporting/report_sexpr.zig`): severity, title, source regions, and the
   full document structure (text, annotations, source excerpts, underlines).
-  It contains no renderer-specific details — no box-drawing characters, ANSI
+  It contains no renderer-specific details: no box-drawing characters, ANSI
   escapes, wrapping, or markup. `NIL` means the compile produced no reports.
   These snapshots answer: *did the compiler produce the correct diagnostic?*
 
@@ -30,8 +30,8 @@ semantic changes and presentation changes never show up in the same files:
 A renderer-only change must only affect files in `reporting/`; a change to
 diagnostic semantics shows up in ordinary snapshots (and possibly in
 `reporting/` too). Note that snapshot post-processing globally rewrites the
-text `module` to `mod` (the removed keyword), which also applies inside the
-S-expression output.
+removed header keyword to `mod`, which also applies inside the S-expression
+output.
 
 ## Usage
 

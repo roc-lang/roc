@@ -17,8 +17,8 @@ Diagnostic coverage is split between semantic and presentation snapshots:
   (serialized by `src/reporting/report_sexpr.zig`), so those snapshots change
   only when diagnostic semantics change.
 - `type=reporting` snapshots (in `test/snapshots/reporting/`) render the same
-  semantic reports through every user-facing renderer — `REPORT` (canonical
-  S-expression), `CLI`, `MARKDOWN`, `HTML`, and `LSP` — and are the only place
+  semantic reports through every user-facing renderer: `REPORT` (canonical
+  S-expression), `CLI`, `MARKDOWN`, `HTML`, and `LSP`; they are the only place
   where renderer-specific layout and markup are pinned.
 
 See `test/snapshots/README.md` for details.
