@@ -940,7 +940,7 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
-        .record_default_not_literal = .{
+        .record_default_reference_cycle = .{
             .field_name = rand_ident_idx(),
             .region = rand_region(),
         },

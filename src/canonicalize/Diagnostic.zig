@@ -185,7 +185,12 @@ pub const Diagnostic = union(enum) {
     default_not_allowed_in_structural_record: struct {
         region: Region,
     },
-    record_default_not_literal: struct {
+    /// A `??` default whose materialization cycles back to itself through
+    /// name-resolvable edges: references to same-module top-level defs
+    /// and/or local nominal constructions that omit defaulted fields.
+    /// Detected by the end-of-module default-cycle pass; dispatch-mediated
+    /// cycles are the checker's residue (design.md "Defaulted Fields").
+    record_default_reference_cycle: struct {
         field_name: Ident.Idx,
         region: Region,
     },
@@ -478,7 +483,7 @@ pub const Diagnostic = union(enum) {
             .optional_field_cannot_have_default => |d| d.region,
             .unnamed_field_cannot_have_default => |d| d.region,
             .default_not_allowed_in_structural_record => |d| d.region,
-            .record_default_not_literal => |d| d.region,
+            .record_default_reference_cycle => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,

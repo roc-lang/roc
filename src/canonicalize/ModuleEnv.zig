@@ -2943,15 +2943,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .record_default_not_literal => |data| blk: {
+        .record_default_reference_cycle => |data| blk: {
             const field_name = self.getIdent(data.field_name);
             const region_info = self.calcRegionInfo(data.region);
 
-            var report = try Report.init(allocator, "Default Value Must Be A Literal", "", .runtime_error);
+            var report = try Report.init(allocator, "Default Value Cycle", "", .runtime_error);
             const owned_field_name = try report.addOwnedString(field_name);
             try report.headline.addReflowingText("The default value for the ");
             try report.headline.addRecordField(owned_field_name);
-            try report.headline.addReflowingText(" field is not a literal.");
+            try report.headline.addReflowingText(" field depends on itself.");
 
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
@@ -2965,7 +2965,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("A field default (");
             try report.document.addInlineCode("??");
-            try report.document.addReflowingText(") is materialized by the compiler at every construction site that omits the field, so it must be a literal: a number, an interpolation-free string, a tag, or a list, record, or tuple built only from literals. Anything that refers to another value could form an evaluation cycle the compiler will not chase.");
+            try report.document.addReflowingText(") is materialized at every construction site that omits the field. This default reaches itself again—through values it references, or through constructions that omit the field and would materialize it—so there is no value to start from. Break the cycle by supplying the field at one of the constructions involved, or by removing the self-dependent reference from the default.");
 
             break :blk report;
         },

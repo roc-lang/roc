@@ -102,7 +102,6 @@ const TupleAccessNeedsAnnotation = problem_mod.TupleAccessNeedsAnnotation;
 const InvalidTupleAccess = problem_mod.InvalidTupleAccess;
 const OptionalAccessOfRequiredField = problem_mod.OptionalAccessOfRequiredField;
 const EffectfulDefaultValue = problem_mod.EffectfulDefaultValue;
-const NonConcreteDefaultValue = problem_mod.NonConcreteDefaultValue;
 const RecursiveDefaultValue = problem_mod.RecursiveDefaultValue;
 const CircularValueDefinition = problem_mod.CircularValueDefinition;
 const LiteralDefaulted = problem_mod.LiteralDefaulted;
@@ -1028,7 +1027,7 @@ pub const ReportBuilder = struct {
             .unset_of_required_field => |data| return self.buildUnsetOfRequiredFieldReport(data),
             .unset_of_defaulted_field => |data| return self.buildUnsetOfDefaultedFieldReport(data),
             .effectful_default_value => |data| return self.buildEffectfulDefaultValueReport(data),
-            .non_concrete_default_value => |data| return self.buildNonConcreteDefaultValueReport(data),
+            .default_literal_not_concrete => |data| return self.buildDefaultLiteralNotConcreteReport(data),
             .recursive_default_value => |data| return self.buildRecursiveDefaultValueReport(data),
             .circular_value_definition => |data| return self.buildCircularValueDefinitionReport(data),
             .literal_defaulted => |data| return self.buildLiteralDefaultedReport(data),
@@ -3155,15 +3154,15 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    fn buildNonConcreteDefaultValueReport(
+    fn buildDefaultLiteralNotConcreteReport(
         self: *Self,
-        data: NonConcreteDefaultValue,
+        data: problem_mod.DefaultLiteralNotConcrete,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Default Value Not Concrete", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Default Literal Needs A Concrete Type", "", .runtime_error);
         errdefer report.deinit();
 
         try D.renderSliceInto(&.{
-            D.bytes("The default value for the"),
+            D.bytes("This literal in the default value for the"),
             D.ident(data.field_name).withAnnotation(.inline_code),
             D.bytes("field does not have a concrete type."),
         }, self, &report, &report.headline);
@@ -3177,7 +3176,7 @@ pub const ReportBuilder = struct {
             self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
-        try report.document.addReflowingText("A default is evaluated once at compile time and filled in wherever construction omits the field, so it must have exactly one runtime representation. Annotate the field (or the default) with a concrete type.");
+        try report.document.addReflowingText("A default is materialized at every construction site that omits the field, at that site's own type—and a literal is converted through the type it lands in, so a literal whose type stays parametric could land in a type with no literal conversion at all. Give the literal a concrete type, or use an expression that does not need literal conversion.");
 
         return report;
     }

@@ -70,7 +70,7 @@ pub const Problem = union(enum) {
     unset_of_required_field: UnsetOfRequiredField,
     unset_of_defaulted_field: UnsetOfDefaultedField,
     effectful_default_value: EffectfulDefaultValue,
-    non_concrete_default_value: NonConcreteDefaultValue,
+    default_literal_not_concrete: DefaultLiteralNotConcrete,
     recursive_default_value: RecursiveDefaultValue,
     circular_value_definition: CircularValueDefinition,
     literal_defaulted: LiteralDefaulted,
@@ -317,11 +317,14 @@ pub const EffectfulDefaultValue = struct {
     field_name: Ident.Idx,
 };
 
-/// A record field default (`a : T ?? expr`) whose type is not concrete
-/// (contains type variables). A default is evaluated once at compile time
-/// and materialized at construction sites, so it must have exactly one
-/// runtime representation (design.md "Defaulted Fields").
-pub const NonConcreteDefaultValue = struct {
+/// A numeral or string literal DIRECTLY inside a `??` default expression
+/// whose solved type is not concrete: literal lowering is dispatch-directed
+/// by the materialization site's monotype, and a parametric field can hand
+/// it an instantiation with no `from_numeral`/`from_quote` implementation,
+/// so the literal's own dispatch type must be pinned at the declaration
+/// (design.md "Defaulted Fields"). The default EXPRESSION may still be
+/// polymorphic (e.g. `?? []`)—only its literal-dispatch types must not be.
+pub const DefaultLiteralNotConcrete = struct {
     region: base.Region,
     field_name: Ident.Idx,
 };

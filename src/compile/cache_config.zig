@@ -154,7 +154,9 @@ pub const Constants = struct {
     /// 66: Record expressions carry a span of unset (`name: _`) fields.
     /// 67: Checked record expressions carry their unset field labels.
     /// 68: `??` defaults restricted to nominal backing records (new diagnostic).
-    pub const CACHE_VERSION = 68;
+    /// 69: Defaults are any pure expression; the not-literal diagnostic became
+    ///     the CAN default-cycle diagnostic.
+    pub const CACHE_VERSION = 69;
 };
 
 /// Configuration for the Roc cache system.
