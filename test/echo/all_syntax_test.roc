@@ -187,13 +187,13 @@ if_demo = |num| {
 	# every if must have an else branch!
 	one_line_if = if num == 1 "One" else "NotOne"
 
-	two_line_if = 
+	two_line_if =
 		if num == 2
 			"Two"
 		else
 			"NotTwo"
 
-	with_curlies = 
+	with_curlies =
 		if num == 5 {
 			"Five"
 		} else {
@@ -209,7 +209,7 @@ if_demo = |num| {
 		one_line_if.concat(two_line_if).concat(with_curlies)
 }
 
-tuple_demo = 
+tuple_demo =
 # tuples can contain multiple types
 	("Roc", 1)
 
@@ -292,7 +292,7 @@ number_literals = {
 }
 
 # Opaque type
-# Useful if you want to hide fields e.g. so users of the type can not access some implementation detail you did not want to expose. 
+# Useful if you want to hide fields e.g. so users of the type can not access some implementation detail you did not want to expose.
 Secret :: {
 	key : Str,
 }.{
@@ -319,7 +319,7 @@ Animal := [Dog(Str), Cat(Str)].{
 }
 
 early_return = |arg| {
-	first = 
+	first =
 		if !arg {
 			return 99
 		} else {
@@ -337,8 +337,8 @@ format_names : List(Str) -> Str
 format_names = |names|
 	names
 		.map(|name| name.trim())
-		->Str.join_with(", ")
-		->(|joined| {
+		|> Str.join_with(", ")
+		|> (|joined| {
 			if joined.is_empty() "No names provided" else "Names: ${joined}"
 		})
 
@@ -383,12 +383,12 @@ main! = |_args| {
 	echo!("${Str.inspect(number_operators(10, 5))}\n")
 	print!(boolean_operators(Bool.True, Bool.False))
 
-	# pizza operator (|>) is gone, we now have static dispatch instead.
-	# It allows you to call methods that are defined on the type (like `Animal.is_eq` above).
+	# `.` (Static Dispatch) allows you to call methods that are defined on the type,
+	# like Str.concat below, or Animal.is_eq above
 	print!("One".concat(" Two"))
 
-	# If you want a very similar style for a function that is not defined on the type but is in scope, you can use `->`:
-	print!("Three"->my_concat(" Four"))
+	# If you want a very similar style for a function that is not defined on the type but is in scope, you can use `|>` (Pizza Operator):
+	print!("Three" |> my_concat(" Four"))
 
 	echo!("${simple_match(Red)}\n")
 	print!(match_list_patterns([1, 10]))
