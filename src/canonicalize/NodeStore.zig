@@ -192,6 +192,7 @@ const DiagnosticNodeTag = enum {
     diag_erroneous_value_expr,
     diag_qualified_ident_does_not_exist,
     diag_invalid_top_level_statement,
+    diag_invalid_associated_statement,
     diag_expr_not_canonicalized,
     diag_invalid_string_interpolation,
     diag_unreachable_string_pattern_capture,
@@ -740,7 +741,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 91;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 92;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5103,6 +5104,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.stmt) } });
         },
+        .invalid_associated_statement => |r| {
+            node.tag = .diag_invalid_associated_statement;
+            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.stmt) } });
+        },
         .expr_not_canonicalized => |r| {
             node.tag = .diag_expr_not_canonicalized;
             region = r.region;
@@ -5577,6 +5583,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
+            .stmt = @enumFromInt(payload.diag_single_value.value),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_invalid_associated_statement => return CIR.Diagnostic{ .invalid_associated_statement = .{
             .stmt = @enumFromInt(payload.diag_single_value.value),
             .region = store.getRegionAt(node_idx),
         } },

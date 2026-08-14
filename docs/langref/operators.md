@@ -19,8 +19,8 @@ The method is selected at compile time from the operand types.
 | `<=` | `is_lte` |
 | `>` | `is_gt` |
 | `>=` | `is_gte` |
-| `..<` | `range_exclusive` |
-| `..=` | `range_inclusive` |
+| `..<` | `range_exclusive_to` |
+| `..=` | `range_inclusive_to` |
 | `-x` | `negate` |
 | `!x` | `not` |
 
@@ -49,11 +49,11 @@ dispatch page.
 
 ### Range Operators
 
-`start..<end` and `start..=end` build an [`Iter`](../Iter) over the
-numbers from `start` up to `end`—excluding `end` with `..<`, including it
-with `..=`. They dispatch to methods on the bound type: `..<` calls
-`range_exclusive` and `..=` calls `range_inclusive`. Both operands must have
-the same type, and the result is an `Iter` of that type. See
+`start..<end` and `start..=end` build a reusable [`Range`](../Num#Range)
+describing the numbers from `start` up to `end`—excluding `end` with `..<`,
+including it with `..=`. They dispatch to methods on the bound type: `..<`
+calls `range_exclusive_to` and `..=` calls `range_inclusive_to`. Both operands
+must have the same type, and the result is a `Range` of that type. See
 [Ranges](numbers#ranges) in the numbers page.
 
 Range operators bind more loosely than the other binary operators, so

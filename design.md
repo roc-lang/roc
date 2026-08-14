@@ -3309,12 +3309,39 @@ Stream(item) :: {
     len_if_known : [Known(U64), Unknown],
     step! : () => [One({ item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
 }
+
+Range(num) :: {
+    lower : num,
+    upper : num,
+    step : num,
+    upper_bound : [Exclusive, Inclusive],
+    direction : [To, From],
+    len_if_known : [Known(U64), Unknown],
+}
 ```
 
 Adapters, custom sources, and consumers remain ordinary Roc functions. There is
 no public chain type, iterator trait, extra public step tag, or source-visible
 compiler representation. Internal representation data is attached only after
 checking, when Monotype creates concrete iterator call results.
+
+Range syntax produces a reusable `Range(num)`, not an `Iter(num)`. The
+exclusive and inclusive operators dispatch to `num.range_exclusive_to` and
+`num.range_inclusive_to`, respectively. `Range.step_by` replaces the stored
+absolute step with another value of `num`; it does not compose or multiply
+steps. `Range.size_hint` returns the stored exact count when that count fits in
+`U64`, otherwise `Unknown`. `Range.iter` delegates to `num.range_iter` and
+propagates that hint into the resulting iterator.
+
+Reverse iteration is an explicit numeric capability. `Range.iter_rev`
+reconstructs the opposite direction through `num.range_exclusive_from` or
+`num.range_inclusive_from`, reapplies the stored step, and iterates that range.
+Integers and `Dec` provide both `_to` and `_from` constructors. `F32` and `F64`
+provide only `_to`, so their ranges deliberately have no `iter_rev` dispatch.
+`Range.custom` permits third-party number types to construct the same stored
+representation and participate by implementing the explicit range methods;
+range behavior comes only from those explicit methods, and arithmetic method
+names are not consulted.
 
 #### Explicit Iterator Representation Tiers
 
@@ -3335,8 +3362,7 @@ const IteratorKind = enum(u8) {
     list_rev,
     str,
     single,
-    range_exclusive,
-    range_inclusive,
+    range,
     numeric_until,
     numeric_to,
     map,

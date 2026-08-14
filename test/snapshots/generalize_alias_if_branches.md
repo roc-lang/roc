@@ -91,11 +91,11 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 231)
+				(e-call (constraint-fn-var 241)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 240)
+				(e-call (constraint-fn-var 250)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-runtime-error (tag "erroneous_value_expr")))))))

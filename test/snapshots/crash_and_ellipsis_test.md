@@ -239,19 +239,19 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 293)
+					(e-call (constraint-fn-var 303)
 						(e-lookup-local
 							(p-assign (ident "testEllipsis")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 301)
+					(e-call (constraint-fn-var 311)
 						(e-lookup-local
 							(p-assign (ident "testCrash")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 309)
+					(e-call (constraint-fn-var 319)
 						(e-lookup-local
 							(p-assign (ident "testCrashSimple")))
 						(e-num (value "42"))))
