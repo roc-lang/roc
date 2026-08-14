@@ -12565,8 +12565,8 @@ const ControlFlowDestinationRelation = enum {
 const ControlFlowResultSelection = struct {
     declared: DraftTypeCell,
     selected: DraftTypeCell,
-    destination_relation: ControlFlowDestinationRelation,
-    has_exact_producer: bool,
+    has_outer_exact_request: bool,
+    has_exact_result: bool,
 };
 
 const ActiveReturnTarget = struct {
@@ -46906,36 +46906,46 @@ const BodyContext = struct {
         return try self.unwrapStateResultAtTypeCells(state_expr, state_cell, result_cell, merge_binders);
     }
 
-    /// A value-producing control-flow expression owns one result selection.
-    /// One reachable branch completes that selection with its exact graph
-    /// cell; every later branch consumes the completed selection directly.
+    /// A value-producing control-flow expression owns one exact result
+    /// selection. An enclosing exact request selects the first result without
+    /// allocating a forward cell; the exact cell that value returns becomes
+    /// the selection. Otherwise one reachable branch completes a forward
+    /// result cell. Every later branch consumes the selection directly.
     fn initControlFlowResultSelection(
         self: *BodyContext,
         declared: DraftTypeCell,
         destination_relation: ControlFlowDestinationRelation,
     ) Allocator.Error!ControlFlowResultSelection {
+        if (destination_relation == .exact_request) {
+            return .{
+                .declared = declared,
+                .selected = declared,
+                .has_outer_exact_request = true,
+                .has_exact_result = false,
+            };
+        }
         return .{
             .declared = declared,
             .selected = DraftTypeCell.fromGraphNode(try self.graph.newNode(.{
                 .unresolved = InstVariable.producerPlaceholder(),
             })),
-            .destination_relation = destination_relation,
-            .has_exact_producer = false,
+            .has_outer_exact_request = false,
+            .has_exact_result = false,
         };
     }
 
     /// Lower one reachable result on the directional edge owned by its
-    /// control-flow selection. Before a producer exists, a checker-designated
-    /// producer lowers independently (or against an explicit outer request),
-    /// while a requested value uses the declared request as the component
-    /// seed. Once the selection is complete, every result consumes it.
+    /// control-flow selection. Before a selection exists, a checker-designated
+    /// producer lowers independently, while a requested value uses the
+    /// declared request as the component seed. Once the selection exists,
+    /// every result consumes it.
     fn lowerControlFlowResultValue(
         self: *BodyContext,
         selection: *ControlFlowResultSelection,
         checked_expr: checked.CheckedExprId,
     ) Allocator.Error!DraftExprId {
         const value_flow = self.view.templates.specializationValueFlowForExpr(checked_expr);
-        const value = if (selection.has_exact_producer) produced: {
+        const value = if (selection.has_exact_result) produced: {
             const selected_node = try selection.selected.toGraphNode(self.graph);
             // An active recursive producer may have recorded its one forward
             // result cell before its body can complete the cell's shape. The
@@ -46952,7 +46962,13 @@ const BodyContext = struct {
                 request,
                 .exact_request,
             );
-        } else if (value_flow == .produced)
+        } else if (selection.has_outer_exact_request)
+            try self.lowerBranchValueAtTypeCell(
+                checked_expr,
+                selection.declared,
+                .exact_request,
+            )
+        else if (value_flow == .produced)
             try self.lowerBranchValueAtTypeCell(
                 checked_expr,
                 selection.declared,
@@ -46988,7 +47004,7 @@ const BodyContext = struct {
         if (self.graph.content(value_node) != .unresolved) {
             value_node = try self.graph.internProducedIdentity(value_node);
         }
-        if (selection.has_exact_producer and
+        if (selection.has_exact_result and
             self.graph.content(selected_node) != .unresolved and
             self.graph.content(value_node) != .unresolved and
             !self.graph.sameClass(selected_node, value_node))
@@ -47001,11 +47017,13 @@ const BodyContext = struct {
             _ = try self.applyProducedExprToExactDestination(value, selected_node);
             value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
         }
-        if (!selection.has_exact_producer) {
-            try self.graph.completeProducedSelection(selected_node, value_node);
+        if (!selection.has_exact_result) {
+            if (!selection.has_outer_exact_request) {
+                try self.graph.completeProducedSelection(selected_node, value_node);
+            }
             selection.selected = DraftTypeCell.fromGraphNode(value_node);
             selected_node = value_node;
-            selection.has_exact_producer = true;
+            selection.has_exact_result = true;
         } else if (self.graph.content(selected_node) == .unresolved and
             self.graph.content(value_node) != .unresolved)
         {
@@ -47038,7 +47056,7 @@ const BodyContext = struct {
         // produces a runtime result. Its checked result variable may therefore
         // remain unconstrained, and cannot supply representation evidence for
         // the enclosing continuation's declared result cell.
-        return if (selection.has_exact_producer) selection.selected else selection.declared;
+        return if (selection.has_exact_result) selection.selected else selection.declared;
     }
 
     fn stateMergeBinders(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error![]MergeBinder {

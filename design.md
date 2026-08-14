@@ -4052,13 +4052,19 @@ the substitution span determines whether the body can reuse a previously
 completed specialization.
 
 Every explicit `return` and the ordinary fall-through value contribute to one
-stable exact result-selection cell owned by the active function
-specialization. The first scheduled reachable producer completes that cell.
-Every return or fall-through value lowered afterward consumes the completed
-cell as its exact request; it is never lowered independently and compared with
-the result afterward. Return expressions name that cell directly; they do not
-seal the checker-public return and leave the final body to choose a different
-type.
+exact result selection owned by the active function specialization. Without an
+enclosing exact result request, the selection starts as one stable forward cell
+that the first scheduled reachable producer completes. Every return or
+fall-through value lowered afterward consumes the selected result cell as its
+exact request; it is never lowered independently and compared with the result
+afterward. Return expressions name that cell directly; they do not seal the
+checker-public return and leave the final body to choose a different type.
+When the enclosing operation already supplies an exact result request, the
+first reachable value consumes that request directly and the exact value cell
+it produces becomes the stable selected result. For a function value, the
+request supplies the function's argument cells while the producer supplies its
+result cell. Monotype does not allocate a second forward result cell or run one
+producer independently of the request.
 Synthetic argument-destructuring `let` expressions sequence work around the
 already-lowered body and retain that body's exact result cell.
 

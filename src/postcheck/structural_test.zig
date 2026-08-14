@@ -2096,7 +2096,10 @@ test "Monotype returns share the active specialization result selection" {
         "fn initControlFlowResultSelection(",
         "fn stateMergeBinders(",
     );
-    try expectContains(result_selection, "selection.has_exact_producer");
+    try expectContains(result_selection, "if (destination_relation == .exact_request)");
+    try expectContains(result_selection, ".selected = declared");
+    try expectContains(result_selection, ".has_outer_exact_request = true");
+    try expectContains(result_selection, "selection.has_exact_result");
     try expectContains(result_selection, "self.lowerBranchValueAtTypeCell(");
     try expectContains(result_selection, ".exact_request");
     try expectContains(result_selection, "self.graph.completeProducedSelection(selected_node, value_node)");
