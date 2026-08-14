@@ -7,7 +7,7 @@ const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
 
 /// Version tag for the checked-stage hoisted-root selection algorithm.
-pub const selection_algorithm_version: u64 = 1;
+pub const selection_algorithm_version: u64 = 2;
 
 /// Collection of hoisted roots selected for a checked module.
 pub const SelectedHoistedRootSet = struct {
@@ -25,6 +25,16 @@ pub const PatternExtraction = struct {
 pub const Body = union(enum) {
     expr,
     pattern_extraction: PatternExtraction,
+};
+
+/// The runtime value shape produced by a selected root.
+///
+/// This is decided by the checker after solving and consumed directly by
+/// checked artifact publication. Later stages must not recover it from the
+/// source expression or checked type.
+pub const ValueKind = enum(u8) {
+    data_constant,
+    callable_binding,
 };
 
 /// A root selected during checking for compile-time evaluation.
@@ -45,6 +55,8 @@ pub const SelectedHoistedRoot = struct {
     /// The root body shape. Pattern extraction roots are sparse selected-root
     /// metadata; no per-expression hoistability summary is stored.
     body: Body = .expr,
+    /// Whether finalization archives a data constant or an exact callable.
+    value_kind: ValueKind = .data_constant,
 };
 
 /// Clones a hoisted-root body into the caller's allocator when needed.
@@ -69,6 +81,7 @@ pub fn cloneSelectedRoot(allocator: Allocator, root: SelectedHoistedRoot) Alloca
         .expr = root.expr,
         .pattern = root.pattern,
         .body = try cloneBody(allocator, root.body),
+        .value_kind = root.value_kind,
     };
 }
 

@@ -925,4 +925,32 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .crash = {} },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/10483
+        .name = "issue 10483: top-level record destructure binder is callable from another root",
+        .source_kind = .module,
+        .source =
+        \\s : { scale : U64 -> U64, other : U64 }
+        \\s = { scale: |x| x * 2, other: 0 }
+        \\
+        \\{ scale, .. } = s
+        \\
+        \\main = scale(21)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10483
+        .name = "issue 10483: top-level destructure preserves callable values nested in data",
+        .source_kind = .module,
+        .source =
+        \\s : { ops : { scale : U64 -> U64 }, other : U64 }
+        \\s = { ops: { scale: |x| x * 2 }, other: 0 }
+        \\
+        \\{ ops, .. } = s
+        \\
+        \\main = ops.scale(21)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
 };
