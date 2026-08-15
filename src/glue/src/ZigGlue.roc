@@ -599,7 +599,13 @@ generate_roc_list_generic =
 	\\            return list;
 	\\        }
 	\\
-	\\        /// Decrement the reference count; frees the allocation when it reaches zero.
+	\\        /// Drop this reference to the list allocation, freeing it when this was
+	\\        /// the last one.
+	\\        ///
+	\\        /// Shallow: it never touches the elements. To release an owned list whose
+	\\        /// elements are refcounted, call that list's generated `decrefListOf...`
+	\\        /// helper instead, which drops the elements when this reference is the
+	\\        /// last one and then calls this.
 	\\        pub fn decref(self: Self, roc_host: *RocHost) void {
 	\\            const alloc_ptr = self.getAllocationPtr() orelse return;
 	\\            const data_addr = @intFromPtr(alloc_ptr);
@@ -1014,6 +1020,49 @@ indent_lines = |text, prefix| {
 box_payload_decref_name : U64 -> Str
 box_payload_decref_name = |inner_id| "decrefBoxPayloadType${U64.to_str(inner_id)}"
 
+## Identifier fragment naming one type inside a generated helper name. It is
+## derived from the type's structure rather than its rendered Zig type, so it is
+## always a valid identifier and always the same fragment for the same type.
+type_ident_zig : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
+type_ident_zig = |type_table, duplicate_tag_names, preferred_names, type_id|
+	match type_table.get(type_id) {
+		RocStr => "Str"
+		RocList(elem_id) => "ListOf${type_ident_zig(type_table, duplicate_tag_names, preferred_names, elem_id)}"
+		RocBox(inner_id) =>
+			match type_table.get(inner_id) {
+				RocFunction(_) => "ErasedCallable"
+				_ => "BoxOf${type_ident_zig(type_table, duplicate_tag_names, preferred_names, inner_id)}"
+			}
+		RocRecord(rec) =>
+			if rec.name == "" {
+				"Type${U64.to_str(type_id)}"
+			} else {
+				name_to_struct_name(rec.name)
+			}
+		RocTagUnion(tu) =>
+			# Mirrors `resolve_tag_union_type`, except a single-variant union
+			# resolves through its payload's fragment: that function can return
+			# a rendered type such as `RocList(RocStr)`, which is not an
+			# identifier.
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => type_ident_zig(type_table, duplicate_tag_names, preferred_names, payload_id)
+				SingleNoPayload => "Type${U64.to_str(type_id)}"
+				NotSingleVariant =>
+					if tu.name != "" {
+						tag_union_struct_name(preferred_names, duplicate_tag_names, type_id, tu)
+					} else {
+						"Type${U64.to_str(type_id)}"
+					}
+				}
+		_ => "Type${U64.to_str(type_id)}"
+	}
+
+## Name of the generated helper that releases one owned reference to a list
+## whose elements are refcounted.
+list_decref_helper_name : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
+list_decref_helper_name = |type_table, duplicate_tag_names, preferred_names, elem_id|
+	"decrefListOf${type_ident_zig(type_table, duplicate_tag_names, preferred_names, elem_id)}"
+
 decref_stmt_for_type_id : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 decref_stmt_for_type_id = |type_table, duplicate_tag_names, preferred_names, type_id, expr| {
 	type_repr = type_table.get(type_id)
@@ -1030,7 +1079,7 @@ decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 				if elem_stmt == "" {
 					"    comptime { @compileError(\"missing decref helper for refcounted list element type id ${U64.to_str(elem_id)}\"); }\n"
 				} else {
-					"    {\n        const list = ${expr};\n        if (list.hasOneRef()) {\n            for (list.allocationItems()) |item| {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+					"    ${list_decref_helper_name(type_table, duplicate_tag_names, preferred_names, elem_id)}(${expr}, roc_host);\n"
 				}
 			} else {
 				"    ${expr}.decref(roc_host);\n"
@@ -1279,6 +1328,44 @@ generate_tag_union_refcount_helpers = |type_table, duplicate_tag_names, preferre
 	"fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${decref_unused}    switch (value.tag) {\n${$decref_branches}    }\n}\n\nfn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${incref_unused}    switch (value.tag) {\n${$incref_branches}    }\n}\n\n"
 }
 
+## Generate one release helper per list type whose elements are refcounted.
+##
+## `RocList.decref` is a shallow primitive: it drops the list's own reference
+## and frees the allocation, and knows nothing about the elements. Releasing an
+## owned list therefore needs the element teardown these helpers perform, gated
+## on the list's own count reaching zero. That gate is the whole point—dropping
+## the elements unconditionally double-frees them whenever another owner still
+## holds the list.
+generate_list_decref_helpers : TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
+generate_list_decref_helpers = |type_table, duplicate_tag_names, preferred_names| {
+	var $helpers = ""
+	var $seen_names = []
+
+	for type_info in type_table_entries(type_table) {
+		match type_info.repr {
+			RocList(elem_id) =>
+				if is_type_refcounted(type_table, elem_id) {
+					helper_name = list_decref_helper_name(type_table, duplicate_tag_names, preferred_names, elem_id)
+					if !(List.contains($seen_names, helper_name)) {
+						elem_stmt = decref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, elem_id, "item")
+						if elem_stmt != "" {
+							$seen_names = $seen_names.append(helper_name)
+							elem_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, elem_id)
+							doc = "/// Release one owned reference to a `RocList(${elem_zig})`.\n///\n/// The elements are released only when this reference is the last one, which\n/// is exactly what compiled Roc code does when it drops a list it owns.\n"
+							$helpers = Str.concat(
+								$helpers,
+								"${doc}pub fn ${helper_name}(value: RocList(${elem_zig}), roc_host: *RocHost) void {\n    if (value.hasOneRef()) {\n        for (value.allocationItems()) |item| {\n${indent_lines(elem_stmt, "        ")}        }\n    }\n    value.decref(roc_host);\n}\n\n",
+							)
+						}
+					}
+				}
+			_ => {}
+		}
+	}
+
+	$helpers
+}
+
 generate_box_payload_decref_helpers : TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
 generate_box_payload_decref_helpers = |type_table, duplicate_tag_names, preferred_names| {
 	var $helpers = ""
@@ -1333,8 +1420,9 @@ generate_refcount_helpers = |type_table, duplicate_tag_names, preferred_names| {
 		$type_id = $type_id + 1
 	}
 
+	list_helpers = generate_list_decref_helpers(type_table, duplicate_tag_names, preferred_names)
 	box_helpers = generate_box_payload_decref_helpers(type_table, duplicate_tag_names, preferred_names)
-	all_helpers = Str.concat($helpers, box_helpers)
+	all_helpers = Str.concat(Str.concat($helpers, list_helpers), box_helpers)
 	if all_helpers == "" {
 		""
 	} else {
@@ -1565,7 +1653,7 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 ## File header comment
 file_header : Str
 file_header =
-	"//! Roc Platform ABI\n//!\n//! This file defines Zig declarations for the direct symbol ABI used by a Roc platform.\n//! It is automatically generated by the Roc glue generator.\n//!\n//! Hosted argument ownership:\n//! - Roc transfers ownership of refcounted arguments to the hosted function.\n//! - The hosted function must decref owned refcounted arguments when done.\n//! - If the host stores or returns an argument, it must retain or transfer ownership explicitly.\n//!\n//! Import this file from the platform host and implement the listed hosted symbols\n//! with the exact natural C ABI signatures shown below.\n\n"
+	"//! Roc Platform ABI\n//!\n//! This file defines Zig declarations for the direct symbol ABI used by a Roc platform.\n//! It is automatically generated by the Roc glue generator.\n//!\n//! Hosted argument ownership:\n//! - Roc transfers ownership of refcounted arguments to the hosted function.\n//! - The hosted function must release owned refcounted arguments when done, using\n//!   the release call named in each hosted symbol's doc comment below.\n//! - Releasing a container releases its elements only when the container's own\n//!   count reaches zero, which is what compiled Roc code does when it drops one\n//!   it owns. Releasing the elements unconditionally double-frees them whenever\n//!   the Roc caller still holds the container.\n//! - If the host stores or returns an argument, it must retain or transfer ownership explicitly.\n//!\n//! Import this file from the platform host and implement the listed hosted symbols\n//! with the exact natural C ABI signatures shown below.\n\n"
 
 ## Import section
 generate_imports : Str
@@ -1992,9 +2080,12 @@ generate_args_struct = |func, type_table, duplicate_tag_names, preferred_names| 
 		SingleRecordArg(record) => {
 			fields64 = zig_record_fields_decl(type_table, duplicate_tag_names, preferred_names, record.fields, Pointer64)
 			fields32 = zig_record_fields_decl(type_table, duplicate_tag_names, preferred_names, record.fields, Pointer32)
+			# This struct is the hosted function's parameter type, so the host
+			# releases its owned refcounted fields through these methods.
+			methods = generate_record_refcount_methods(type_table, duplicate_tag_names, preferred_names, record.fields)
 
 			doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
-			zig_record_struct_decl(doc, "${struct_name}Args", fields64, fields32, "", "", record.layout)
+			zig_record_struct_decl(doc, "${struct_name}Args", fields64, fields32, methods, methods, record.layout)
 		}
 		PositionalArgs(arg_type_ids) => {
 			var $positional_fields = ""
@@ -2091,14 +2182,63 @@ generate_hosted_symbol_externs = |hosted_functions, type_table, duplicate_tag_na
 	for func in hosted_functions {
 		params = direct_hosted_param_list(type_table, duplicate_tag_names, preferred_names, func)
 		ret_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, func.ret_type_id)
+		ownership = hosted_ownership_doc_zig(type_table, duplicate_tag_names, preferred_names, func)
 
 		$result = Str.concat(
 			$result,
-			"/// Hosted symbol for ${func.name}\n/// Roc signature: ${func.type_str}\npub extern fn ${func.ffi_symbol}(${params}) callconv(.c) ${ret_zig};\n\n",
+			"/// Hosted symbol for ${func.name}\n/// Roc signature: ${func.type_str}\n${ownership}pub extern fn ${func.ffi_symbol}(${params}) callconv(.c) ${ret_zig};\n\n",
 		)
 	}
 
 	$result
+}
+
+## Document how the host must settle ownership of one hosted function's owned
+## arguments and result, naming the exact release call for each argument.
+##
+## A host author reads this at the signature, which is where the ownership rule
+## has to be legible: for a container the release is the generated helper, not
+## the container's own shallow `decref`.
+hosted_ownership_doc_zig : TypeTable, List(Str), TypeNamePlan.PreferredNames, HostedFunctionInfo -> Str
+hosted_ownership_doc_zig = |type_table, duplicate_tag_names, preferred_names, func| {
+	arg_shape = ArgShape.from_table(type_table)
+	use_args_wrapper = arg_shape.single_arg_is_anonymous_record(func.arg_type_ids)
+
+	var $arg_lines = ""
+	var $idx = 0
+
+	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
+		arg_name = "arg${U64.to_str($idx)}"
+		stmt = if use_args_wrapper {
+			if is_type_refcounted(type_table, arg_type_id) {
+				"${arg_name}.decref(roc_host);"
+			} else {
+				""
+			}
+		} else {
+			Str.trim(decref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, arg_type_id, arg_name))
+		}
+
+		if stmt != "" {
+			$arg_lines = Str.concat($arg_lines, "///     ${stmt}\n")
+		}
+
+		$idx = $idx + 1
+	}
+
+	arg_doc = if $arg_lines == "" {
+		""
+	} else {
+		"/// Owned arguments. Release each exactly once before returning, unless it is\n/// moved into storage or into the result:\n${$arg_lines}"
+	}
+
+	ret_doc = if is_type_refcounted(type_table, func.ret_type_id) {
+		"/// The result is owned by Roc: return exactly one owned reference.\n"
+	} else {
+		""
+	}
+
+	Str.concat(arg_doc, ret_doc)
 }
 
 # =============================================================================

@@ -10112,12 +10112,24 @@ The host may read, store, return, or release an owned argument. It must account
 for that ownership explicitly:
 
 ```text
-read and discard: decref the argument when done
+read and discard: release the argument when done
 store past return: move the argument ownership into storage, or incref a stored
-                   copy and then decref the call argument
+                   copy and then release the call argument
 return the same value: move the argument ownership into the return slot, or
-                       incref/decref so exactly one returned ownership remains
+                       incref/release so exactly one returned ownership remains
 ```
+
+Releasing an owned argument means the same operation compiled Roc code performs
+when it drops a value it owns, which for a container is not a decrement of the
+container's own count alone. A retain of a container is shallow—sharing a
+`List(T)` never touches item counts—so the matching release drops the items
+only when the container's own count reaches zero. A release that drops the
+items unconditionally frees them twice whenever the Roc caller still holds the
+container, and a release that never drops them leaks every item.
+Generated glue must therefore give the host a named release for every type
+reachable from a hosted or provided signature whose release is more than a
+single count decrement, and must name that release at the hosted signature: the
+container's own `decref` is a primitive, not a release, and must say so.
 
 The compiler must not infer different ownership behavior from hosted function
 names, return types, or body absence. Hosted-argument ownership is an ABI rule,

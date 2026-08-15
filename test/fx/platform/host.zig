@@ -554,6 +554,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
 // Use the actual RocStr from builtins instead of defining our own
 const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
 
 /// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
@@ -1362,6 +1363,35 @@ fn hostedHostResetBoxedDropReport() callconv(.c) void {
     boxed_host_drop_counts = .{};
 }
 
+/// Hosted function: Host.sum_str_bytes! (): List(Str) => U64.
+///
+/// Coverage for a hosted argument that is a container whose elements are
+/// refcounted. The argument is owned, so the host releases exactly one
+/// ownership unit of the whole value before returning. For a `List(Str)` that
+/// release is `roc_builtins_list_decref_str`: it drops the element strings
+/// only when the list's own count reaches zero, which is the same operation
+/// compiled Roc code performs when it drops a `List(Str)` it owns.
+fn hostedHostSumStrBytes(list: RocList) callconv(.c) u64 {
+    const ops = g_roc_ops.?;
+
+    var total: u64 = 0;
+    if (list.bytes) |bytes| {
+        const elements: [*]const RocStr = @ptrCast(@alignCast(bytes));
+        for (elements[0..list.length]) |element| {
+            total += element.len();
+        }
+    }
+
+    builtins.dev_wrappers.roc_builtins_list_decref_str(
+        list.bytes,
+        list.length,
+        list.capacity_or_alloc_ptr,
+        ops,
+    );
+
+    return total;
+}
+
 // The platform's hosted functions, exported under their header symbols, plus
 // the fixed runtime symbols every symbol-ABI host defines.
 comptime {
@@ -1380,6 +1410,7 @@ comptime {
     @export(&hostedHostBoxedTransition, .{ .name = "roc_host_boxed_transition", .visibility = .hidden });
     @export(&hostedHostStoreBoxed, .{ .name = "roc_host_store_boxed", .visibility = .hidden });
     @export(&hostedHostStoredBoxedCall, .{ .name = "roc_host_stored_boxed_call", .visibility = .hidden });
+    @export(&hostedHostSumStrBytes, .{ .name = "roc_host_sum_str_bytes", .visibility = .hidden });
     @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });

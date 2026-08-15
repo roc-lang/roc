@@ -1,3 +1,4 @@
+#![no_std]
 #![allow(improper_ctypes)]
 #![allow(improper_ctypes_definitions)]
 
@@ -5,6 +6,12 @@
 mod abi;
 
 use core::ffi::c_void;
+use core::panic::PanicInfo;
+
+#[panic_handler]
+fn panic(_info: &PanicInfo<'_>) -> ! {
+    core::arch::wasm32::unreachable()
+}
 
 const WASM_PAGE_SIZE: usize = 65_536;
 

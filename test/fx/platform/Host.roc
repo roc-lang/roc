@@ -57,4 +57,9 @@ Host :: {
 
     ## Call the boxed function previously stored by store_boxed!.
     stored_boxed_call! : I64 => I64
+
+    ## Total the UTF-8 byte lengths of a list of strings. The host owns the
+    ## list argument and releases exactly one ownership unit of it, elements
+    ## included, before returning.
+    sum_str_bytes! : List(Str) => U64
 }
