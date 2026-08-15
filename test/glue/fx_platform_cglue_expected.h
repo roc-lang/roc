@@ -6,8 +6,12 @@
  *
  * Hosted argument ownership:
  * Roc transfers ownership of refcounted arguments to the hosted function.
- * The hosted function must decref owned refcounted arguments when done,
+ * The hosted function must release owned refcounted arguments when done,
  * or retain/transfer ownership explicitly when storing or returning them.
+ * Releasing a container releases its elements only when the container's own
+ * count reaches zero, which is what compiled Roc code does when it drops one
+ * it owns. Releasing the elements unconditionally double-frees them whenever
+ * the Roc caller still holds the container.
  */
 
 #ifndef ROC_PLATFORM_ABI_H
@@ -327,7 +331,7 @@ typedef void (*HostedFn)(void);
 
 // Hosted Function Count
 
-#define HOSTED_FUNCTION_COUNT 19
+#define HOSTED_FUNCTION_COUNT 20
 
 
 #define HOSTED_IDX_BUILDER_PRINT_VALUE 0
@@ -345,10 +349,11 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_HOST_ROUNDTRIP_BOXED 12
 #define HOSTED_IDX_HOST_STORE_BOXED 13
 #define HOSTED_IDX_HOST_STORED_BOXED_CALL 14
-#define HOSTED_IDX_PADDED_CHECK 15
-#define HOSTED_IDX_STDERR_LINE 16
-#define HOSTED_IDX_STDIN_LINE 17
-#define HOSTED_IDX_STDOUT_LINE 18
+#define HOSTED_IDX_HOST_SUM_STR_BYTES 15
+#define HOSTED_IDX_PADDED_CHECK 16
+#define HOSTED_IDX_STDERR_LINE 17
+#define HOSTED_IDX_STDIN_LINE 18
+#define HOSTED_IDX_STDOUT_LINE 19
 
 // Argument Structures
 
@@ -486,6 +491,15 @@ typedef struct {
 } HostStoredBoxedCallArgs;
 
 /**
+ * Arguments for Host.sum_str_bytes!
+ * Roc signature: List(Str) => U64
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    RocList arg0;
+} HostSumStrBytesArgs;
+
+/**
  * Arguments for Padded.check!
  * Roc signature: Padded => Str
  * Refcounted fields are owned by the hosted function.
@@ -574,6 +588,9 @@ extern void roc_host_store_boxed(RocErasedCallable arg0);
 /* Host.stored_boxed_call!: I64 => I64 */
 extern int64_t roc_host_stored_boxed_call(int64_t arg0);
 
+/* Host.sum_str_bytes!: List(Str) => U64 */
+extern uint64_t roc_host_sum_str_bytes(RocList arg0);
+
 /* Padded.check!: Padded => Str */
 extern RocStr roc_padded_check(Padded arg0);
 
@@ -615,10 +632,11 @@ typedef struct {
     HostedFn host_roundtrip_boxed_bang;  /* index 12, C name: host_roundtrip_boxed */
     HostedFn host_store_boxed_bang;  /* index 13, C name: host_store_boxed */
     HostedFn host_stored_boxed_call_bang;  /* index 14, C name: host_stored_boxed_call */
-    HostedFn padded_check_bang;  /* index 15, C name: padded_check */
-    HostedFn stderr_line_bang;  /* index 16, C name: stderr_line */
-    HostedFn stdin_line_bang;  /* index 17, C name: stdin_line */
-    HostedFn stdout_line_bang;  /* index 18, C name: stdout_line */
+    HostedFn host_sum_str_bytes_bang;  /* index 15, C name: host_sum_str_bytes */
+    HostedFn padded_check_bang;  /* index 16, C name: padded_check */
+    HostedFn stderr_line_bang;  /* index 17, C name: stderr_line */
+    HostedFn stdin_line_bang;  /* index 18, C name: stdin_line */
+    HostedFn stdout_line_bang;  /* index 19, C name: stdout_line */
 } HostedFunctions;
 
 
