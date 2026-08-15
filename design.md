@@ -1391,13 +1391,17 @@ calling ordinary union or writing a raw redirect.
 
 An already-erroneous operand cannot overwrite a solved type or a flex carrying
 constraints. Encountering `.err` against either terminates the current
-unification successfully for diagnostic recovery, before any enclosing
-structure is merged. An unconstrained flex placeholder may adopt `.err`; this
-is how an erroneous expression explicitly fills its owning binding or
-annotation slot without contaminating an independently constrained producer.
-Checker sites that own a reported error use `markErroneous` to poison the owning
-solved class directly. No successful ordinary unification propagates an
-existing `.err` into a type that already carries information.
+unification with `suppressed_by_error` for diagnostic recovery, before any
+enclosing structure is merged. This outcome means no additional mismatch
+diagnostic is needed; it does not prove that the requested relation was
+established. `unified` is the only outcome that provides that proof. An
+unconstrained flex placeholder may adopt `.err`; this is a real merge and
+therefore returns `unified`. This is how an erroneous expression explicitly
+fills its owning binding or annotation slot without contaminating an
+independently constrained producer. Checker sites that own a reported error use
+`markErroneous` to poison the owning solved class directly. No successful
+ordinary unification propagates an existing `.err` into a type that already
+carries information.
 
 A relation an expression merely consults is not a relation it may destroy. A
 call checks its callee and its arguments, and a field access checks the record
@@ -1410,17 +1414,23 @@ cascades into unrelated uses of that producer nor leaves an `.err` on a binding
 whose value post-check lowering must still instantiate.
 
 Because `.err` no longer merges, it also no longer relates the operands unified
-against it. A checker site that relies on one variable to carry a relation
-between several others has to supply that relation itself once the carrier is
-erroneous. `match` is the one such site: every branch pattern describes the same
-scrutinee value, and that mutual consistency normally travels through the
-scrutinee's variable. When the scrutinee is already erroneous, the patterns
-unify against a shared fresh variable instead, so a disagreement between two
-patterns is still reported at the pattern that disagrees rather than surfacing
-later as an unexplained branch-body mismatch. The scrutinee's own error is not
-re-reported, the patterns are never related back to it, and the first
-disagreement poisons the shared variable so later patterns short-circuit exactly
-as they do when the scrutinee carries the relation.
+against it. A checker site that only needs diagnostic recovery may accept both
+`unified` and `suppressed_by_error`. A site that uses the relation as evidence
+for a speculative commit, a shared representative, dispatch success, or other
+published metadata whose validity depends on the whole requested relation must
+require `unified`; `suppressed_by_error` cannot authorize that action. Evidence
+for a child relation that completed before suppression remains independently
+valid. A site that relies on one variable to carry a relation between several
+others has to supply that relation itself once the carrier is erroneous.
+`match` is one such site: every branch pattern describes the same scrutinee
+value, and that mutual consistency normally travels through the scrutinee's
+variable. When the scrutinee is already erroneous, the patterns unify against a
+shared fresh variable instead, so a disagreement between two patterns is still
+reported at the pattern that disagrees rather than surfacing later as an
+unexplained branch-body mismatch. The scrutinee's own error is not re-reported,
+the patterns are never related back to it, and the first disagreement poisons
+the shared variable so later patterns short-circuit exactly as they do when the
+scrutinee carries the relation.
 
 ## Type Alias Invariant
 
