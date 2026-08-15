@@ -16770,33 +16770,9 @@ pub const SpecializationCallConsumerSource = enum(u8) {
 /// Runtime identity operation assigned to a call slot.
 pub const SpecializationCallSlotKind = enum(u8) {
     identity,
-    generated_nominal,
-};
-
-/// How a generated-capable public nominal occurrence obtains its atomic exact
-/// identity at this call edge. Ordinary calls accept only an identity supplied
-/// by a completed value producer. Compiler-authored representation operations
-/// may construct the content-addressed identity directly from the slot's exact
-/// public arguments before lowering a callback that mentions it.
-pub const SpecializationGeneratedSlotSource = enum(u8) {
-    /// A completed value edge supplies the already-constructed atomic identity.
-    producer,
-    /// A generated interface slot constructs the identity after its exact
-    /// public argument producer has completed.
-    exact_arguments,
-    /// One `iter_from_step` callback-interface occurrence shares the explicit
-    /// forward item cell owned by that operation's recursive reservation.
-    recursive_iterator_interface,
-    /// The concrete `iter_from_step` operation constructs the identity from
-    /// its exact step callable at the operation boundary.
-    iterator_operands,
-};
-
-/// Explicit source operation for a generated nominal's public argument.
-pub const SpecializationGeneratedArgumentSource = enum(u8) {
-    exact_selection,
-    checked_substitution,
-    concrete_checked,
+    /// A row remainder is one atomic value supplied by a completed runtime
+    /// edge. Lowering must never construct it from its checked recipe.
+    row_remainder,
 };
 
 /// One checker-authored call substitution slot and all of its exact
@@ -16806,19 +16782,8 @@ pub const SpecializationCallSlot = struct {
     checked: CheckedTypeId,
     kind: SpecializationCallSlotKind,
     /// The selected producer is also consumed atomically as specialization
-    /// identity. This is orthogonal to `kind`: a generated nominal may still
-    /// need its normal construction policy while serving as an exact
-    /// dispatcher edge.
+    /// identity.
     exact_identity: bool,
-    generated_source: SpecializationGeneratedSlotSource,
-    /// Checker-authored operation for producing a generated iterator's exact
-    /// item node. This removes any post-check probing or choice between a
-    /// selected identity, a compound substitution, and a concrete base.
-    generated_argument_source: SpecializationGeneratedArgumentSource,
-    /// For `checked_substitution`, the exact child edge whose completed
-    /// subtree is the generated nominal's public argument. Checking publishes
-    /// the edge once; lowering never searches the call shape for it.
-    generated_argument_selection_edge: u32 = no_specialization_selection_edge_parent,
     occurrences: artifact_serialize.Span,
     /// Exact ordinary ancestors whose output can change when this slot is
     /// selected. The checker publishes this once; lowering reads it directly
@@ -16829,14 +16794,7 @@ pub const SpecializationCallSlot = struct {
     /// are represented by their own leaf dependencies, so this span is a flat
     /// producer-input list rather than a graph to traverse during lowering.
     construction_dependencies: artifact_serialize.Span = .{},
-    /// Exact source slot for an identity-preserving compiler operation. For
-    /// example, every `rest` returned by `Iter.next` is the exact iterator
-    /// argument, not a newly generated public `Iter(item)` occurrence.
-    operation_source: CheckedTypeId = no_specialization_operation_source,
 };
-
-/// Sentinel for a slot with no identity-preserving operation source.
-pub const no_specialization_operation_source: CheckedTypeId = @enumFromInt(std.math.maxInt(u32));
 
 /// Dense index of an interned checker-authored call shape.
 pub const SpecializationCallShapeId = enum(u32) { _ };
@@ -19441,12 +19399,6 @@ fn collectSpecializationIdentitySlotsInner(
     if (seen.found_existing) return;
 
     const payload = checked_types.store.payload(root);
-    if (checkedTypeIsGeneratedNominal(payload)) {
-        try slots.append(allocator, .{
-            .checked = root,
-            .concrete_source = no_specialization_concrete_source,
-        });
-    }
     switch (payload) {
         .flex, .rigid => try slots.append(allocator, .{
             .checked = root,
@@ -19457,6 +19409,7 @@ fn collectSpecializationIdentitySlotsInner(
             try collectSpecializationIdentitySlotsInner(allocator, checked_types, alias.backing, visited, slots);
         },
         .nominal => |nominal| {
+            if (checkedTypeIsGeneratedNominal(payload)) return;
             for (nominal.args) |arg| try collectSpecializationIdentitySlotsInner(allocator, checked_types, arg, visited, slots);
         },
         .function => |function| {
@@ -19502,26 +19455,6 @@ fn checkedTypeIsGeneratedNominal(payload: CheckedTypePayload) bool {
     };
 }
 
-fn checkedTypeCanGenerateFromExactArguments(payload: CheckedTypePayload) bool {
-    if (payload != .nominal) return false;
-    const builtin_nominal = payload.nominal.builtin orelse return false;
-    return builtinCanGenerateFromExactArguments(builtin_nominal);
-}
-
-fn builtinCanGenerateFromExactArguments(builtin_nominal: CheckedBuiltinNominal) bool {
-    return switch (builtinRuntimeEncoding(builtin_nominal)) {
-        .iterator, .field => true,
-        .parse_tag_union_spec, .fields, .primitive, .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => false,
-    };
-}
-
-test "generated iterators and field handles consume exact produced arguments" {
-    try std.testing.expect(builtinCanGenerateFromExactArguments(.iter));
-    try std.testing.expect(builtinCanGenerateFromExactArguments(.field));
-    try std.testing.expect(!builtinCanGenerateFromExactArguments(.fields));
-    try std.testing.expect(!builtinCanGenerateFromExactArguments(.parse_tag_union_spec));
-}
-
 /// Compile one checked callable into the exact occurrence lists consumed by
 /// Monotype. Each occurrence names only its checked identity and direct
 /// function edge; exact values publish the identity-to-node selection.
@@ -19552,10 +19485,9 @@ fn compileSpecializationCallShape(
     var selection_edges = std.ArrayList(SpecializationSelectionEdge).empty;
     defer selection_edges.deinit(allocator);
 
-    // Non-generated exact roots have no identity-bearing child that can create
-    // their slot during the occurrence walk. Generated roots are deliberately
-    // not seeded here: their public argument dependencies must be emitted
-    // before their own construction slot.
+    // Ordinary exact roots have no identity-bearing child that can create
+    // their slot during the occurrence walk. Generated nominals are positional
+    // values, not checked-ID substitutions, and are never seeded here.
     for (exact_identity_roots) |exact_root| {
         const payload = checked_types.store.payload(exact_root);
         if (checkedTypeIsGeneratedNominal(payload)) continue;
@@ -19641,20 +19573,22 @@ fn compileSpecializationCallShape(
             break :blk index;
         };
         // Dispatch target selection depends on the dispatcher's exact runtime
-        // type even when that checked type has no polymorphic leaves. Publish
-        // the complete dispatcher edge as one explicit request input. Append
-        // it after the ordinary occurrence walk so a generated dispatcher
-        // keeps its construction kind while gaining exact identity.
-        try appendSpecializationCallOccurrence(
-            allocator,
-            dispatcher,
-            null,
-            true,
-            selection_edge,
-            selection_edge,
-            true,
-            &builds,
-        );
+        // type even when that checked type has no polymorphic leaves. Ordinary
+        // exact roots are substitutions. A generated nominal instead arrives
+        // as the exact positional dispatcher value and is never keyed by its
+        // public CheckedTypeId.
+        if (!checkedTypeIsGeneratedNominal(checked_types.store.payload(dispatcher))) {
+            try appendSpecializationCallOccurrence(
+                allocator,
+                dispatcher,
+                null,
+                true,
+                selection_edge,
+                selection_edge,
+                true,
+                &builds,
+            );
+        }
     }
     return try finishSpecializationSelectionEdgeShape(
         allocator,
@@ -19750,7 +19684,7 @@ fn compileSpecializationRecordShape(
 fn finishSpecializationSelectionEdgeShape(
     allocator: Allocator,
     checked_types: *const CheckedTypePublication,
-    concrete_sources: *SpecializationConcreteSourceIndex,
+    _: *SpecializationConcreteSourceIndex,
     exact_identity_roots: []const CheckedTypeId,
     builds: *std.ArrayList(SpecializationCallSlotBuild),
     selection_edges: *const std.ArrayList(SpecializationSelectionEdge),
@@ -19760,11 +19694,15 @@ fn finishSpecializationSelectionEdgeShape(
     root_edges_out: *std.ArrayList(u32),
 ) Allocator.Error!SpecializationCallShape {
     for (exact_identity_roots) |exact_root| {
+        if (checkedTypeIsGeneratedNominal(checked_types.store.payload(exact_root))) continue;
         for (builds.items) |*build| {
             if (build.checked != exact_root) continue;
             build.exact_identity = true;
             break;
-        } else checkedArtifactInvariant("exact target identity had no callable selection_edge", .{});
+        } else checkedArtifactInvariant(
+            "exact target identity {} ({s}) had no callable selection_edge",
+            .{ @intFromEnum(exact_root), @tagName(checked_types.store.payload(exact_root)) },
+        );
     }
 
     // Atomic leaves must be available before an exact ordinary compound is
@@ -19774,16 +19712,16 @@ fn finishSpecializationSelectionEdgeShape(
     defer ordered_builds.deinit(allocator);
     for (builds.items) |*build| {
         const payload = checked_types.store.payload(build.checked);
-        const exact_compound = build.exact_identity and
-            !checkedTypePayloadIsIdentity(payload) and
-            !checkedTypeIsGeneratedNominal(payload);
+        const exact_compound = build.kind == .identity and
+            build.exact_identity and
+            !checkedTypePayloadIsIdentity(payload);
         if (!exact_compound) try ordered_builds.append(allocator, build);
     }
     for (builds.items) |*build| {
         const payload = checked_types.store.payload(build.checked);
-        const exact_compound = build.exact_identity and
-            !checkedTypePayloadIsIdentity(payload) and
-            !checkedTypeIsGeneratedNominal(payload);
+        const exact_compound = build.kind == .identity and
+            build.exact_identity and
+            !checkedTypePayloadIsIdentity(payload);
         if (exact_compound) try ordered_builds.append(allocator, build);
     }
 
@@ -19791,71 +19729,10 @@ fn finishSpecializationSelectionEdgeShape(
     for (ordered_builds.items) |build| {
         const occurrence_start: u32 = @intCast(occurrences_out.items.len);
         try occurrences_out.appendSlice(allocator, build.occurrences.items);
-        var has_produced_value_position = false;
-        for (build.occurrences.items) |occurrence| {
-            if (occurrence.production == .producer) {
-                has_produced_value_position = true;
-            }
-        }
-        const generated_source: SpecializationGeneratedSlotSource = if (build.kind == .generated_nominal and
-            has_produced_value_position and
-            checkedTypeCanGenerateFromExactArguments(checked_types.store.payload(build.checked)))
-            .exact_arguments
-        else
-            .producer;
-        var generated_argument_source: SpecializationGeneratedArgumentSource = .exact_selection;
-        var generated_argument_selection_edge: u32 = no_specialization_selection_edge_parent;
-        if (generated_source == .exact_arguments) {
-            const nominal = checked_types.store.payload(build.checked).nominal;
-            if (nominal.args.len != 1) {
-                checkedArtifactInvariant("exact-argument generated specialization slot had a non-unary public type", .{});
-            }
-            if (try concrete_sources.isConcrete(nominal.args[0])) {
-                generated_argument_source = .concrete_checked;
-            } else switch (checked_types.store.payload(nominal.args[0])) {
-                .flex, .rigid => generated_argument_source = .exact_selection,
-                .nominal => |item_nominal| if (checkedTypeIsGeneratedNominal(.{ .nominal = item_nominal })) {
-                    generated_argument_source = .exact_selection;
-                } else {
-                    generated_argument_source = .checked_substitution;
-                },
-                .alias, .record_unbound, .record, .tuple, .function, .tag_union => generated_argument_source = .checked_substitution,
-                .pending => checkedArtifactInvariant("generated iterator item source was unfinished", .{}),
-                .err => checkedArtifactInvariant("generated iterator item source contained a diagnostic error", .{}),
-                .empty_record, .empty_tag_union => generated_argument_source = .concrete_checked,
-            }
-            if (generated_argument_source == .checked_substitution) {
-                occurrence_loop: for (build.occurrences.items) |occurrence| {
-                    for (selection_edges.items, 0..) |selection_edge, selection_edge_index| {
-                        if (selection_edge.parent == occurrence.selection_edge and
-                            selection_edge.step == .nominal_argument and
-                            selection_edge.index == 0 and
-                            selection_edge.checked == nominal.args[0])
-                        {
-                            generated_argument_selection_edge = @intCast(selection_edge_index);
-                            break :occurrence_loop;
-                        }
-                    }
-                }
-                if (generated_argument_selection_edge == no_specialization_selection_edge_parent) {
-                    checkedArtifactInvariant("exact-argument generated slot had no declared public-argument edge", .{});
-                }
-            }
-        }
         try slots_out.append(allocator, .{
             .checked = build.checked,
             .kind = build.kind,
             .exact_identity = build.exact_identity,
-            // A generated-capable nominal is constructed only at a value-
-            // producing edge: the call result or a requested callback result.
-            // Plain argument slots belong to the values that supplied them
-            // and can never trigger construction.
-            // If an exact argument/result/target occurrence already supplied
-            // the slot, Monotype selects that producer before consulting this
-            // construction policy.
-            .generated_source = generated_source,
-            .generated_argument_source = generated_argument_source,
-            .generated_argument_selection_edge = generated_argument_selection_edge,
             .occurrences = .{
                 .start = occurrence_start,
                 .len = @intCast(build.occurrences.items.len),
@@ -19922,152 +19799,6 @@ fn finishSpecializationSelectionEdgeShape(
         },
         .result_root = result_root,
     };
-}
-
-fn specializationSlotHasRoot(
-    slot: SpecializationCallSlot,
-    step: SpecializationSelectionEdgeStep,
-    index: u32,
-    occurrences: []const SpecializationOccurrence,
-    selection_edges: []const SpecializationSelectionEdge,
-) bool {
-    for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
-        const root = selection_edges[occurrence.root_selection_edge];
-        if (root.step == step and root.index == index) return true;
-    }
-    return false;
-}
-
-fn specializationSlotIsExactRoot(
-    slot: SpecializationCallSlot,
-    step: SpecializationSelectionEdgeStep,
-    index: u32,
-    occurrences: []const SpecializationOccurrence,
-    selection_edges: []const SpecializationSelectionEdge,
-) bool {
-    for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
-        if (occurrence.selection_edge != occurrence.root_selection_edge) continue;
-        const root = selection_edges[occurrence.root_selection_edge];
-        if (root.step == step and root.index == index) return true;
-    }
-    return false;
-}
-
-fn sameGeneratedNominalDeclarationAndArguments(
-    checked_types: *const CheckedTypePublication,
-    source: CheckedTypeId,
-    destination: CheckedTypeId,
-) bool {
-    const source_nominal = checked_types.store.payload(source).nominal;
-    const destination_nominal = checked_types.store.payload(destination).nominal;
-    if (source_nominal.name != destination_nominal.name or
-        source_nominal.origin_module != destination_nominal.origin_module or
-        !checkedArtifactKeyEql(source_nominal.owner_module, destination_nominal.owner_module) or
-        source_nominal.source_decl != destination_nominal.source_decl or
-        source_nominal.builtin != destination_nominal.builtin or
-        source_nominal.args.len != destination_nominal.args.len)
-    {
-        return false;
-    }
-    const checked_view = checked_types.store.view();
-    for (source_nominal.args, destination_nominal.args) |source_arg, destination_arg| {
-        if (!std.meta.eql(
-            checked_view.rootKey(source_arg),
-            checked_view.rootKey(destination_arg),
-        )) return false;
-    }
-    return true;
-}
-
-/// Publish the direct identity edges owned by iterator runtime operations.
-/// `iter_from_step` constructs the one shared generated identity and its
-/// recursive callback interface; `Iter.next` returns the identity of its exact
-/// iterator input. Public wrappers carry their body's produced identity through
-/// ordinary positional value cells.
-fn publishIteratorOperationSources(
-    checked_types: *const CheckedTypePublication,
-    procedure: ?IteratorProcedureId,
-    shape: SpecializationCallShape,
-    slots: []SpecializationCallSlot,
-    occurrences: []const SpecializationOccurrence,
-    selection_edges: []const SpecializationSelectionEdge,
-) void {
-    const shape_slots = slots[shape.slots.start .. shape.slots.start + shape.slots.len];
-    const iterator_procedure = procedure orelse return;
-    if (iterator_procedure.constructsGeneratedIdentity()) {
-        var found_result = false;
-        for (shape_slots) |*slot| {
-            if (slot.kind != .generated_nominal or
-                !specializationSlotIsExactRoot(slot.*, .result, 0, occurrences, selection_edges)) continue;
-            slot.generated_source = .iterator_operands;
-            found_result = true;
-        }
-        if (!found_result) {
-            checkedArtifactInvariant("iterator producer had no generated result identity", .{});
-        }
-    }
-    if (iterator_procedure == .iter_from_step) {
-        const result: CheckedTypeId = for (shape_slots) |slot| {
-            if (slot.kind == .generated_nominal and
-                specializationSlotIsExactRoot(slot, .result, 0, occurrences, selection_edges)) break slot.checked;
-        } else checkedArtifactInvariant("iter_from_step had no generated result identity", .{});
-        for (shape_slots) |*slot| {
-            if (slot.kind != .generated_nominal or slot.checked == result) continue;
-            var has_argument_producer = false;
-            var has_argument_consumer = false;
-            for (occurrences[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
-                if (selection_edges[occurrence.root_selection_edge].step != .argument) continue;
-                switch (occurrence.production) {
-                    .producer => has_argument_producer = true,
-                    .consumer => has_argument_consumer = true,
-                }
-            }
-            if (!has_argument_producer and !has_argument_consumer) continue;
-            if (!sameGeneratedNominalDeclarationAndArguments(checked_types, result, slot.checked)) {
-                checkedArtifactInvariant("iter_from_step recursive iterator used a different public identity", .{});
-            }
-            // A generated iterator produced by the callback reserves the same
-            // declaration-plus-item construction as the outer result. The
-            // callback must complete that item cell before Monotype stamps the
-            // shared identity.
-            if (has_argument_producer) {
-                slot.generated_source = .recursive_iterator_interface;
-            }
-            // Every consumer occurrence inside that callback interface
-            // consumes the outer result's reserved identity. Publish that flat
-            // edge explicitly so Monotype installs the reservation in the
-            // callback request without inspecting either type graph.
-            if (has_argument_consumer) slot.operation_source = result;
-        }
-    }
-    if (iterator_procedure != .iter_next) return;
-    const source: CheckedTypeId = for (shape_slots) |slot| {
-        if (slot.kind == .generated_nominal and specializationSlotIsExactRoot(
-            slot,
-            .argument,
-            0,
-            occurrences,
-            selection_edges,
-        )) break slot.checked;
-    } else checkedArtifactInvariant("Iter.next callable had no generated iterator argument slot", .{});
-
-    var found_rest = false;
-    for (shape_slots) |*slot| {
-        if (slot.kind != .generated_nominal or
-            !specializationSlotHasRoot(slot.*, .result, 0, occurrences, selection_edges)) continue;
-        if (slot.checked == source) {
-            found_rest = true;
-            continue;
-        }
-        if (!sameGeneratedNominalDeclarationAndArguments(checked_types, source, slot.checked)) {
-            continue;
-        }
-        slot.operation_source = source;
-        found_rest = true;
-    }
-    if (!found_rest) {
-        checkedArtifactInvariant("Iter.next result had no rest identity matching its exact iterator input", .{});
-    }
 }
 
 const SpecializationMaterializationPair = struct {
@@ -20173,7 +19904,7 @@ fn publishSpecializationSlotMaterializations(
         defer slot_ids.deinit();
         for (shape_slots) |*slot| try slot_ids.put(slot.checked, slot);
         for (shape_slots) |*slot| {
-            if (!slot.exact_identity or checkedTypeIsGeneratedNominal(checked_types.store.payload(slot.checked))) continue;
+            if (!slot.exact_identity) continue;
             const dependency_start: u32 = @intCast(materialization_nodes.items.len);
             var low: usize = 0;
             var high = pairs.items.len;
@@ -20195,8 +19926,7 @@ fn publishSpecializationSlotMaterializations(
                 const dependency_slot = slot_ids.get(dependency) orelse continue;
                 const dependency_payload = checked_types.store.payload(dependency);
                 const dependency_is_exact_ordinary_compound = dependency_slot.exact_identity and
-                    !checkedTypePayloadIsIdentity(dependency_payload) and
-                    !checkedTypeIsGeneratedNominal(dependency_payload);
+                    !checkedTypePayloadIsIdentity(dependency_payload);
                 if (!dependency_is_exact_ordinary_compound) {
                     try materialization_nodes.append(allocator, dependency);
                 }
@@ -20350,14 +20080,6 @@ fn publishSpecializationCallShape(
         root_edges,
     );
     compiled.source_callable = key.callable;
-    publishIteratorOperationSources(
-        checked_types,
-        key.iterator_procedure,
-        compiled,
-        slots.items,
-        occurrences.items,
-        selection_edges.items[compiled.selection_edges.start .. compiled.selection_edges.start + compiled.selection_edges.len],
-    );
     try shapes.append(allocator, compiled);
     try by_key.put(key, shape);
     return shape;
@@ -21657,7 +21379,6 @@ fn appendSpecializationTargetRelation(
             try concrete_sources.isConcrete(source),
             source_edge,
             checkedTypePayloadIsIdentity(source_payload),
-            checkedTypeIsGeneratedNominal(source_payload),
         ),
         .source_edge = source_edge,
     });
@@ -21667,10 +21388,9 @@ fn specializationTargetSourceKind(
     is_concrete: bool,
     source_edge: SpecializationTargetSourceEdge,
     is_identity: bool,
-    is_generated_nominal: bool,
 ) SpecializationTargetSource {
     if (is_concrete) return .concrete_checked;
-    if (source_edge == .output and !is_identity and !is_generated_nominal) {
+    if (source_edge == .output and !is_identity) {
         return .checked_substitution;
     }
     return .exact_selection;
@@ -21728,14 +21448,16 @@ fn appendSpecializationTargetRelationBuild(
                 allocator,
                 if (whole_root_is_exact) .exact_source_argument else .target_construction,
             );
-            for (local_relations.items) |relation| try appendSpecializationTargetRelation(
-                allocator,
-                concrete_sources,
-                &build,
-                relation.source,
-                relation.dependent,
-                .input,
-            );
+            if (!whole_root_is_exact) {
+                for (local_relations.items) |relation| try appendSpecializationTargetRelation(
+                    allocator,
+                    concrete_sources,
+                    &build,
+                    relation.source,
+                    relation.dependent,
+                    .input,
+                );
+            }
         }
         local_relations.clearRetainingCapacity();
         active.clearRetainingCapacity();
@@ -21790,21 +21512,23 @@ fn appendSpecializationTargetRelationBuild(
                 allocator,
                 if (whole_root_is_exact) .exact_source_argument else .target_construction,
             );
-            for (local_relations.items) |relation| {
-                const dependent = importedCheckedTypeForPublishedEndpoint(
-                    &projector,
-                    &checked_types.store,
-                    imported,
-                    relation.dependent,
-                ) orelse checkedArtifactInvariant("projected specialization target input lost its target endpoint", .{});
-                try appendSpecializationTargetRelation(
-                    allocator,
-                    concrete_sources,
-                    &build,
-                    relation.source,
-                    dependent,
-                    .input,
-                );
+            if (!whole_root_is_exact) {
+                for (local_relations.items) |relation| {
+                    const dependent = importedCheckedTypeForPublishedEndpoint(
+                        &projector,
+                        &checked_types.store,
+                        imported,
+                        relation.dependent,
+                    ) orelse checkedArtifactInvariant("projected specialization target input lost its target endpoint", .{});
+                    try appendSpecializationTargetRelation(
+                        allocator,
+                        concrete_sources,
+                        &build,
+                        relation.source,
+                        dependent,
+                        .input,
+                    );
+                }
             }
         }
         local_relations.clearRetainingCapacity();
@@ -22936,7 +22660,13 @@ fn appendSpecializationCallOccurrence(
     var build: *SpecializationCallSlotBuild = for (builds.items) |*candidate| {
         if (candidate.checked == checked_ty) {
             if (maybe_kind) |kind| if (candidate.kind != kind) {
-                checkedArtifactInvariant("one checked call identity was published with incompatible slot kinds", .{});
+                if ((candidate.kind == .identity and kind == .row_remainder) or
+                    (candidate.kind == .row_remainder and kind == .identity))
+                {
+                    candidate.kind = .row_remainder;
+                } else {
+                    checkedArtifactInvariant("one checked call identity was published with incompatible slot kinds", .{});
+                }
             };
             break candidate;
         }
@@ -22954,6 +22684,42 @@ fn appendSpecializationCallOccurrence(
         .root_selection_edge = root_selection_edge,
         .production = if (produced) .producer else .consumer,
     });
+}
+
+/// Publish one row remainder as an atomic exact selection. A checked row
+/// extension is one representation slot: a runtime argument can close it to
+/// empty or supply an arbitrary record/tag row, and a result consuming that
+/// extension must receive the same exact node. Descending into the checked
+/// recipe would lose the empty-vs-nonempty row identity and would project
+/// fields or tags that an exact runtime remainder need not contain.
+fn appendSpecializationRowRemainderOccurrence(
+    allocator: Allocator,
+    checked_ty: CheckedTypeId,
+    parent_selection_edge: u32,
+    root_selection_edge: u32,
+    step: SpecializationSelectionEdgeStep,
+    produced: bool,
+    selection_edges: *std.ArrayList(SpecializationSelectionEdge),
+    builds: *std.ArrayList(SpecializationCallSlotBuild),
+) Allocator.Error!void {
+    const selection_edge: u32 = @intCast(selection_edges.items.len);
+    try selection_edges.append(allocator, .{
+        .checked = checked_ty,
+        .parent = parent_selection_edge,
+        .index = 0,
+        .payload_index = 0,
+        .step = step,
+    });
+    try appendSpecializationCallOccurrence(
+        allocator,
+        checked_ty,
+        .row_remainder,
+        true,
+        selection_edge,
+        root_selection_edge,
+        produced and selection_edges.items[root_selection_edge].step != .result,
+        builds,
+    );
 }
 
 fn collectSpecializationCallOccurrences(
@@ -22998,18 +22764,12 @@ fn collectSpecializationCallOccurrences(
         => checkedArtifactInvariant("specialization selection edge root was not a call edge", .{}),
     }
     const payload = checked_types.store.payload(root);
-    const generated_nominal = checkedTypeIsGeneratedNominal(payload);
-    const ordinary_nominal = payload == .nominal and !generated_nominal;
     // Every explicit call edge is retained even when it has no identity slot
     // below it. The shared shape publishes direct root IDs by arity; lowering
     // must never search descendants or invent a missing root.
     const required_root = selection_edge.parent == no_specialization_selection_edge_parent;
     var has_output = false;
-    // A nominal's definition and exact public arguments form one identity.
-    // Publish the nominal slot after walking those argument dependencies, so
-    // Monotype never records a shell whose children are still producer-owned
-    // forward cells. Generated nominals already use the same post-order rule.
-    if (checkedTypePayloadIsIdentity(payload) and !ordinary_nominal) {
+    if (checkedTypePayloadIsIdentity(payload)) {
         try appendSpecializationCallOccurrence(
             allocator,
             root,
@@ -23022,7 +22782,7 @@ fn collectSpecializationCallOccurrences(
         );
         has_output = true;
     }
-    if (!checkedTypePayloadIsIdentity(payload) and !generated_nominal) {
+    if (!checkedTypePayloadIsIdentity(payload) and !checkedTypeIsGeneratedNominal(payload)) {
         for (builds.items) |build| {
             if (build.checked != root or !build.exact_identity) continue;
             try appendSpecializationCallOccurrence(
@@ -23041,9 +22801,6 @@ fn collectSpecializationCallOccurrences(
     }
     const seen = try active.getOrPut(root);
     if (seen.found_existing) {
-        if (generated_nominal) {
-            checkedArtifactInvariant("content-addressed generated nominal construction contained a cycle", .{});
-        }
         if (!has_output and !required_root) selection_edges.shrinkRetainingCapacity(selection_edge_start);
         return if (has_output or required_root) selection_edge_index else null;
     }
@@ -23067,17 +22824,23 @@ fn collectSpecializationCallOccurrences(
             }, produced, active, selection_edges, builds)) != null or has_output;
         },
         .nominal => |nominal| {
-            // A nominal is atomic once encountered. Only its explicitly
-            // declared public arguments are legal outgoing selection_edge edges;
-            // generated backing is never traversed.
-            for (nominal.args, 0..) |arg, index| {
-                has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, arg, .{
-                    .checked = arg,
-                    .parent = selection_edge_index,
-                    .index = @intCast(index),
-                    .payload_index = 0,
-                    .step = if (nominal.builtin == .try_) .try_argument else .nominal_argument,
-                }, produced, active, selection_edges, builds)) != null or has_output;
+            // A generated nominal is one atomic producer-authored runtime
+            // identity. Its public checked arguments describe the source
+            // program's type, not independently selectable runtime children.
+            // Only the operation that creates the generated identity may read
+            // its explicit positional ingredients.
+            if (!checkedTypeIsGeneratedNominal(payload)) {
+                // An ordinary nominal exposes only its declared public
+                // arguments; nominal backing is never traversed.
+                for (nominal.args, 0..) |arg, index| {
+                    has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, arg, .{
+                        .checked = arg,
+                        .parent = selection_edge_index,
+                        .index = @intCast(index),
+                        .payload_index = 0,
+                        .step = if (nominal.builtin == .try_) .try_argument else .nominal_argument,
+                    }, produced, active, selection_edges, builds)) != null or has_output;
+                }
             }
         },
         .function => |function| {
@@ -23121,13 +22884,19 @@ fn collectSpecializationCallOccurrences(
                 }, produced, active, selection_edges, builds)) != null or has_output;
             }
             if (parts.ext) |ext| {
-                has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, ext, .{
-                    .checked = ext,
-                    .parent = selection_edge_index,
-                    .index = 0,
-                    .payload_index = 0,
-                    .step = .record_remainder,
-                }, false, active, selection_edges, builds)) != null or has_output;
+                if (checked_types.store.payload(ext) != .empty_record) {
+                    try appendSpecializationRowRemainderOccurrence(
+                        allocator,
+                        ext,
+                        selection_edge_index,
+                        root_selection_edge_index,
+                        .record_remainder,
+                        produced,
+                        selection_edges,
+                        builds,
+                    );
+                    has_output = true;
+                }
             }
         },
         .tag_union => |tag_union| {
@@ -23142,32 +22911,22 @@ fn collectSpecializationCallOccurrences(
                     }, produced, active, selection_edges, builds)) != null or has_output;
                 }
             }
-            has_output = (try collectSpecializationCallOccurrences(allocator, checked_types, tag_union.ext, .{
-                .checked = tag_union.ext,
-                .parent = selection_edge_index,
-                .index = 0,
-                .payload_index = 0,
-                .step = .tag_remainder,
-            }, false, active, selection_edges, builds)) != null or has_output;
+            if (checked_types.store.payload(tag_union.ext) != .empty_tag_union) {
+                try appendSpecializationRowRemainderOccurrence(
+                    allocator,
+                    tag_union.ext,
+                    selection_edge_index,
+                    root_selection_edge_index,
+                    .tag_remainder,
+                    produced,
+                    selection_edges,
+                    builds,
+                );
+                has_output = true;
+            }
         },
         .pending => checkedArtifactInvariant("call specialization occurrence reached an unfinished checked type", .{}),
         .err, .empty_record, .empty_tag_union => {},
-    }
-    // Nominal identity depends only on its explicit public arguments. Append
-    // its slot after visiting those arguments so Monotype can construct each
-    // ordinary or generated identity in one forward pass.
-    if (ordinary_nominal or generated_nominal) {
-        try appendSpecializationCallOccurrence(
-            allocator,
-            root,
-            @as(?SpecializationCallSlotKind, if (generated_nominal) .generated_nominal else .identity),
-            false,
-            selection_edge_index,
-            root_selection_edge_index,
-            produced,
-            builds,
-        );
-        has_output = true;
     }
     if (!has_output and !required_root) selection_edges.shrinkRetainingCapacity(selection_edge_start);
     return if (has_output or required_root) selection_edge_index else null;
@@ -28417,19 +28176,13 @@ fn collectSpecializationIdentityRelationsInner(
         return true;
     }
 
-    // A generated nominal is one atomic runtime identity, but its declared
-    // type arguments remain explicit inputs to that identity. Publish both
-    // facts: the exact generated root flows as one node, and each checked
-    // argument identity flows independently. Monotype consumes only these
-    // flat edges; it never opens the generated runtime node to rediscover its
-    // public arguments.
+    // Generated nominal identity is produced and carried by runtime value
+    // positions, never by a CheckedTypeId substitution. Relate only the
+    // public arguments that remain genuine solver identities. The complete
+    // generated value flows through the positional argument/result edge.
     if (checkedTypeIsGeneratedNominal(source_payload) or
         checkedTypeIsGeneratedNominal(dependent_payload))
     {
-        for (out.items) |existing| {
-            if (existing.source == source and existing.dependent == dependent) break;
-        } else try out.append(allocator, .{ .source = source, .dependent = dependent });
-
         if (source_payload != .nominal or dependent_payload != .nominal) return false;
         const source_nominal = source_payload.nominal;
         const dependent_nominal = dependent_payload.nominal;
@@ -28442,7 +28195,6 @@ fn collectSpecializationIdentityRelationsInner(
         {
             return false;
         }
-        var whole_root_is_exact = true;
         for (source_nominal.args, dependent_nominal.args) |source_arg, dependent_arg| {
             if (!try collectSpecializationIdentityRelationsInner(
                 allocator,
@@ -28453,9 +28205,9 @@ fn collectSpecializationIdentityRelationsInner(
                 active,
                 source_substitutions,
                 dependent_substitutions,
-            )) whole_root_is_exact = false;
+            )) return false;
         }
-        return whole_root_is_exact;
+        return true;
     }
 
     if (source_payload == .nominal) {
@@ -39285,23 +39037,19 @@ fn testIndexId(comptime Id: type, index: usize) Id {
 test "target source kind distinguishes exact values from ordinary output requests" {
     try std.testing.expectEqual(
         SpecializationTargetSource.concrete_checked,
-        specializationTargetSourceKind(true, .output, false, false),
+        specializationTargetSourceKind(true, .output, false),
     );
     try std.testing.expectEqual(
         SpecializationTargetSource.exact_selection,
-        specializationTargetSourceKind(false, .input, false, false),
+        specializationTargetSourceKind(false, .input, false),
     );
     try std.testing.expectEqual(
         SpecializationTargetSource.checked_substitution,
-        specializationTargetSourceKind(false, .output, false, false),
+        specializationTargetSourceKind(false, .output, false),
     );
     try std.testing.expectEqual(
         SpecializationTargetSource.exact_selection,
-        specializationTargetSourceKind(false, .output, true, false),
-    );
-    try std.testing.expectEqual(
-        SpecializationTargetSource.exact_selection,
-        specializationTargetSourceKind(false, .output, false, true),
+        specializationTargetSourceKind(false, .output, true),
     );
 }
 
@@ -39353,135 +39101,6 @@ test "selection root sources distinguish fixed declarations from runtime edges" 
         SpecializationSelectionEdgeRootSource.runtime_edge,
         try specializationSelectionEdgeRootSource(&publication, &concrete_sources, contextual),
     );
-}
-
-test "Iter.next publishes input identity for every returned rest iterator" {
-    const allocator = std.testing.allocator;
-    var names = canonical.CanonicalNameStore.init(allocator);
-    defer names.deinit();
-    var publication = CheckedTypePublication{ .store = .{} };
-    defer publication.deinit(allocator);
-
-    const item = try publication.store.reserveSyntheticTypeRoot(
-        allocator,
-        testCanonicalTypeKey(93),
-        true,
-    );
-    try publication.store.fillSyntheticTypeRoot(allocator, item, .{ .flex = .{} });
-    const module_identity = try names.internModuleIdentity(&([_]u8{0x94} ** 32));
-    const type_name = try names.internTypeName("Iter");
-    var iter_roots: [3]CheckedTypeId = undefined;
-    for (&iter_roots) |*root| {
-        const args = try allocator.alloc(CheckedTypeId, 1);
-        args[0] = item;
-        root.* = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .{ .nominal = .{
-            .name = type_name,
-            .origin_module = module_identity,
-            .owner_module = testCheckedModuleKey(94),
-            .source_decl = 7,
-            .builtin = .iter,
-            .is_opaque = true,
-            .representation = .{ .builtin = .iter },
-            .args = args,
-        } });
-    }
-
-    const occurrences = [_]SpecializationOccurrence{
-        .{ .checked = iter_roots[0], .selection_edge = 0, .root_selection_edge = 0, .production = .producer },
-        .{ .checked = iter_roots[1], .selection_edge = 1, .root_selection_edge = 1, .production = .producer },
-        .{ .checked = iter_roots[2], .selection_edge = 1, .root_selection_edge = 1, .production = .consumer },
-    };
-    const selection_edges = [_]SpecializationSelectionEdge{
-        .{ .checked = iter_roots[0], .parent = no_specialization_selection_edge_parent, .index = 0, .payload_index = 0, .step = .argument },
-        .{ .checked = iter_roots[1], .parent = no_specialization_selection_edge_parent, .index = 0, .payload_index = 0, .step = .result },
-    };
-    var slots = [_]SpecializationCallSlot{
-        .{ .checked = iter_roots[0], .kind = .generated_nominal, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 0, .len = 1 } },
-        .{ .checked = iter_roots[1], .kind = .generated_nominal, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 1, .len = 1 } },
-        .{ .checked = iter_roots[2], .kind = .generated_nominal, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 2, .len = 1 } },
-    };
-    const shape = SpecializationCallShape{
-        .slots = .{ .start = 0, .len = slots.len },
-        .selection_edges = .{ .start = 0, .len = selection_edges.len },
-    };
-
-    publishIteratorOperationSources(
-        &publication,
-        .iter_next,
-        shape,
-        &slots,
-        &occurrences,
-        &selection_edges,
-    );
-
-    try std.testing.expectEqual(no_specialization_operation_source, slots[0].operation_source);
-    try std.testing.expectEqual(iter_roots[0], slots[1].operation_source);
-    try std.testing.expectEqual(iter_roots[0], slots[2].operation_source);
-}
-
-test "iter_from_step reserves the iterator produced by its callback result" {
-    const allocator = std.testing.allocator;
-    var names = canonical.CanonicalNameStore.init(allocator);
-    defer names.deinit();
-    var publication = CheckedTypePublication{ .store = .{} };
-    defer publication.deinit(allocator);
-
-    const item = try publication.store.reserveSyntheticTypeRoot(
-        allocator,
-        testCanonicalTypeKey(95),
-        true,
-    );
-    try publication.store.fillSyntheticTypeRoot(allocator, item, .{ .flex = .{} });
-    const module_identity = try names.internModuleIdentity(&([_]u8{0x96} ** 32));
-    const type_name = try names.internTypeName("Iter");
-    var iter_roots: [3]CheckedTypeId = undefined;
-    for (&iter_roots) |*root| {
-        const args = try allocator.alloc(CheckedTypeId, 1);
-        args[0] = item;
-        root.* = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .{ .nominal = .{
-            .name = type_name,
-            .origin_module = module_identity,
-            .owner_module = testCheckedModuleKey(96),
-            .source_decl = 7,
-            .builtin = .iter,
-            .is_opaque = true,
-            .representation = .{ .builtin = .iter },
-            .args = args,
-        } });
-    }
-
-    const occurrences = [_]SpecializationOccurrence{
-        .{ .checked = iter_roots[0], .selection_edge = 0, .root_selection_edge = 0, .production = .producer },
-        .{ .checked = iter_roots[1], .selection_edge = 1, .root_selection_edge = 1, .production = .producer },
-        .{ .checked = iter_roots[2], .selection_edge = 2, .root_selection_edge = 2, .production = .consumer },
-    };
-    const selection_edges = [_]SpecializationSelectionEdge{
-        .{ .checked = iter_roots[0], .parent = no_specialization_selection_edge_parent, .index = 0, .payload_index = 0, .step = .result },
-        .{ .checked = iter_roots[1], .parent = no_specialization_selection_edge_parent, .index = 1, .payload_index = 0, .step = .argument },
-        .{ .checked = iter_roots[2], .parent = no_specialization_selection_edge_parent, .index = 1, .payload_index = 0, .step = .argument },
-    };
-    var slots = [_]SpecializationCallSlot{
-        .{ .checked = iter_roots[0], .kind = .generated_nominal, .exact_identity = false, .generated_source = .exact_arguments, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 0, .len = 1 } },
-        .{ .checked = iter_roots[1], .kind = .generated_nominal, .exact_identity = false, .generated_source = .exact_arguments, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 1, .len = 1 } },
-        .{ .checked = iter_roots[2], .kind = .generated_nominal, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 2, .len = 1 } },
-    };
-    const shape = SpecializationCallShape{
-        .slots = .{ .start = 0, .len = slots.len },
-        .selection_edges = .{ .start = 0, .len = selection_edges.len },
-    };
-
-    publishIteratorOperationSources(
-        &publication,
-        .iter_from_step,
-        shape,
-        &slots,
-        &occurrences,
-        &selection_edges,
-    );
-
-    try std.testing.expectEqual(SpecializationGeneratedSlotSource.iterator_operands, slots[0].generated_source);
-    try std.testing.expectEqual(SpecializationGeneratedSlotSource.recursive_iterator_interface, slots[1].generated_source);
-    try std.testing.expectEqual(iter_roots[0], slots[2].operation_source);
 }
 
 test "target source roots exclude explicit concrete checked sources" {
@@ -39536,9 +39155,9 @@ test "record specialization schedule preserves bound cycles as enclosing inputs"
         .{ .checked = c, .selection_edge = 2, .root_selection_edge = 2, .production = .producer },
     };
     const slots = [_]SpecializationCallSlot{
-        .{ .checked = a, .kind = .identity, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 0, .len = 1 } },
-        .{ .checked = b, .kind = .identity, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 1, .len = 1 } },
-        .{ .checked = c, .kind = .identity, .exact_identity = false, .generated_source = .producer, .generated_argument_source = .exact_selection, .occurrences = .{ .start = 2, .len = 1 } },
+        .{ .checked = a, .kind = .identity, .exact_identity = false, .occurrences = .{ .start = 0, .len = 1 } },
+        .{ .checked = b, .kind = .identity, .exact_identity = false, .occurrences = .{ .start = 1, .len = 1 } },
+        .{ .checked = c, .kind = .identity, .exact_identity = false, .occurrences = .{ .start = 2, .len = 1 } },
     };
     var bindings = [_]SpecializationCallConsumerBinding{
         .{ .source = b, .consumer = a, .source_kind = .exact_selection },
@@ -39590,8 +39209,6 @@ test "record specialization schedule reuses an equal checked identity from a pro
         .checked = identity,
         .kind = .identity,
         .exact_identity = false,
-        .generated_source = .producer,
-        .generated_argument_source = .exact_selection,
         .occurrences = .{ .start = 0, .len = 2 },
     }};
     var spans = [_]artifact_serialize.Span{ .{}, .{} };
@@ -39766,6 +39383,102 @@ test "record specialization shape publishes only an explicitly requested exact c
         try std.testing.expectEqual(SpecializationOccurrenceProduction.producer, occurrence.production);
     }
     try std.testing.expect(found_compound);
+}
+
+test "call specialization publishes row remainders as atomic exact slots" {
+    const allocator = std.testing.allocator;
+
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var publication = CheckedTypePublication{ .store = .{} };
+    defer publication.deinit(allocator);
+
+    const frame_ty = try publication.store.reserveSyntheticTypeRoot(
+        allocator,
+        testCanonicalTypeKey(62),
+        true,
+    );
+    try publication.store.fillSyntheticTypeRoot(allocator, frame_ty, .{ .flex = .{} });
+    const remainder_field_ty = try publication.store.reserveSyntheticTypeRoot(
+        allocator,
+        testCanonicalTypeKey(63),
+        true,
+    );
+    try publication.store.fillSyntheticTypeRoot(allocator, remainder_field_ty, .{ .flex = .{} });
+    const empty_row = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .empty_record);
+    const remainder_fields = try allocator.alloc(CheckedRecordField, 1);
+    remainder_fields[0] = .{
+        .name = try names.internRecordFieldLabel("last_generated"),
+        .ty = remainder_field_ty,
+    };
+    const remainder = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .{ .record = .{
+        .fields = remainder_fields,
+        .ext = empty_row,
+    } });
+    const outer_fields = try allocator.alloc(CheckedRecordField, 1);
+    outer_fields[0] = .{
+        .name = try names.internRecordFieldLabel("frame_count"),
+        .ty = frame_ty,
+    };
+    const outer = try publication.store.appendSyntheticPayloadRoot(allocator, &names, .{ .record = .{
+        .fields = outer_fields,
+        .ext = remainder,
+    } });
+    const callable = try publication.store.appendSyntheticFunctionRoot(
+        allocator,
+        .pure,
+        &.{outer},
+        outer,
+    );
+
+    var concrete_sources = try SpecializationConcreteSourceIndex.init(allocator, &publication);
+    defer concrete_sources.deinit();
+    var slots = std.ArrayList(SpecializationCallSlot).empty;
+    defer slots.deinit(allocator);
+    var occurrences = std.ArrayList(SpecializationOccurrence).empty;
+    defer occurrences.deinit(allocator);
+    var selection_edges = std.ArrayList(SpecializationSelectionEdge).empty;
+    defer selection_edges.deinit(allocator);
+    var root_edges = std.ArrayList(u32).empty;
+    defer root_edges.deinit(allocator);
+
+    const shape = try compileSpecializationCallShape(
+        allocator,
+        &publication,
+        &concrete_sources,
+        callable,
+        null,
+        &.{},
+        &slots,
+        &occurrences,
+        &selection_edges,
+        &root_edges,
+    );
+
+    var found_remainder = false;
+    for (slots.items[shape.slots.start .. shape.slots.start + shape.slots.len]) |slot| {
+        try std.testing.expect(slot.checked != remainder_field_ty);
+        if (slot.checked != remainder) continue;
+        found_remainder = true;
+        try std.testing.expectEqual(SpecializationCallSlotKind.row_remainder, slot.kind);
+        try std.testing.expect(slot.exact_identity);
+        try std.testing.expectEqual(@as(u32, 2), slot.occurrences.len);
+        for (occurrences.items[slot.occurrences.start .. slot.occurrences.start + slot.occurrences.len]) |occurrence| {
+            try std.testing.expectEqual(
+                SpecializationSelectionEdgeStep.record_remainder,
+                selection_edges.items[shape.selection_edges.start + occurrence.selection_edge].step,
+            );
+            const root = selection_edges.items[shape.selection_edges.start + occurrence.root_selection_edge];
+            try std.testing.expectEqual(
+                if (root.step == .argument)
+                    SpecializationOccurrenceProduction.producer
+                else
+                    SpecializationOccurrenceProduction.consumer,
+                occurrence.production,
+            );
+        }
+    }
+    try std.testing.expect(found_remainder);
 }
 
 test "local procedure uses carry exact producer-recorded dispatch scope ownership" {

@@ -3446,6 +3446,13 @@ inputs. Runtime values themselves are not type-identity inputs. A tuple, record,
 tag payload, list, box, function result, local, pattern binder, and capture use
 the exact produced types of their children directly; they do not retain a
 second checked-public Monotype graph and reconcile it with the produced graph.
+A call, binding, storage edge, or control-flow edge carries that returned
+`NodeId` unchanged. Consumers never re-intern, normalize, flatten, snapshot, or
+copy a produced node before recording it as specialization input. A produced
+compound may legitimately contain producer-owned forward child cells; copying
+its currently visible row would freeze a stale partial structure when those
+children complete. All ordinary interning therefore occurs at the constructor
+that creates the compound, while later edges preserve its stable root.
 A procedure value's produced type includes the exact callable ABI selected by
 its body. Storing that value in a compound result therefore carries the exact
 argument and result cells through the compound just like any other child value;
@@ -4004,6 +4011,29 @@ cells or shells. The checker-designated seed for the dependency component is
 the only occurrence that may publish request authority. Otherwise the slot is
 constructed once from its explicit flat inputs. Only a completed runtime
 producer may replace that request with its exact output atomically.
+The checker also marks every selection path as producer or consumer. A
+completed result publishes only its producer paths. Consumer paths—function
+argument positions and open row remainders, for example—are contextual input
+and may be read only from an explicit request destination. Lowering never
+projects a consumer path from a produced result: the producer may legitimately
+close an open remainder or otherwise omit structure that belongs only to the
+request.
+Record and tag-union remainder nodes are themselves atomic exact selection
+slots. A runtime argument produces the complete remainder node—empty, open, or
+closed—and every result or operand that reuses that checked remainder consumes
+the same node. Selection planning does not descend into the remainder's checked
+recipe, and the generic compound-construction loop cannot construct a remainder
+slot from that recipe. Doing so would erase the remainder's empty-versus-nonempty identity and
+could request a field or tag that the exact runtime remainder does not contain.
+When a selected procedure declaration accepts an entire source argument
+unchanged, checking records `exact_source_argument` and publishes no
+caller-child-to-target-child identity relations for that argument. Lowering
+hands the exact argument to the declaration atomically, then applies the
+declaration's own precompiled selection paths to that argument once in the
+target namespace. Equivalent checked rows may use different extension
+decompositions, so extracting caller-side descendants and translating their
+checked IDs would duplicate the target traversal and would illegally open an
+atomic caller remainder.
 Two different exact values for the same checked slot must select the same exact
 type at that call boundary; they are never resolved by last-write-wins
 substitution or a later whole-type merge.

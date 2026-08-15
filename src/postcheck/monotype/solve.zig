@@ -454,9 +454,9 @@ pub const InstGraph = struct {
     /// Generated nominals keyed by the final content digest assigned by their
     /// producer. Identity, arguments, and backing are complete before entry.
     generated_nominal_intern: std.HashMap(names.TypeDigest, NodeId, GeneratedNominalInternContext, 80),
-    /// Interned graph node for each completed nominal identity. A nominal's
-    /// definition and exact argument nodes determine its type; the backing is
-    /// implementation data owned by that identity, not another type axis.
+    /// Interned graph node for each completed ordinary nominal identity. A
+    /// generated-private nominal is categorically absent: its producer-owned
+    /// content digest is registered only in `generated_nominal_intern`.
     named_nodes_by_identity_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
     /// Interned compound nodes keyed only by their immediate exact children.
     /// Producers therefore share an already-built type without traversing any
@@ -475,12 +475,12 @@ pub const InstGraph = struct {
     /// result directly.
     checked_base_produced_equivalents: collections.DenseMap(NodeId, NodeId),
     /// Fast producer lookup by the already-completed dense item node. Buckets
-    /// distinguish declarations without re-hashing the item type graph.
+    /// contain only stamped identities and distinguish declarations without
+    /// re-hashing the item type graph.
     generated_iterators_by_item: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
-    /// Original item-index key for the small set of recursive reservations
-    /// whose item is still a forward cell. Completion removes that exact old
-    /// bucket entry before indexing the finished atomic identity.
-    recursive_generated_iterator_item_keys: collections.DenseMap(NodeId, NodeId),
+    /// Producer-local iterator reservations that have not yet received their
+    /// final item and content digest. They are absent from every interner.
+    unfinished_generated_iterator_reservations: usize,
     /// Permanent roots recorded by the producer so sealing can commit each
     /// completed nominal to the cross-specialization TypeId interner.
     generated_nominal_nodes: std.ArrayList(NodeId),
@@ -549,7 +549,7 @@ pub const InstGraph = struct {
             .record_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
             .checked_base_produced_equivalents = collections.DenseMap(NodeId, NodeId).init(allocator),
             .generated_iterators_by_item = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
-            .recursive_generated_iterator_item_keys = collections.DenseMap(NodeId, NodeId).init(allocator),
+            .unfinished_generated_iterator_reservations = 0,
             .generated_nominal_nodes = .empty,
             .request_checked_sources = .empty,
             .function_result_relations = .empty,
@@ -583,7 +583,6 @@ pub const InstGraph = struct {
         var generated_item_buckets = self.generated_iterators_by_item.valueIterator();
         while (generated_item_buckets.next()) |bucket| bucket.deinit(allocator);
         self.generated_iterators_by_item.deinit();
-        self.recursive_generated_iterator_item_keys.deinit();
         self.generated_nominal_intern.deinit();
         var named_identity_buckets = self.named_nodes_by_identity_hash.valueIterator();
         while (named_identity_buckets.next()) |bucket| bucket.deinit(allocator);
@@ -1038,11 +1037,10 @@ pub const InstGraph = struct {
                 if (existing_named.args.len != 1) {
                     Common.invariant("generated iterator item index contained a mismatched item arity");
                 }
-                return try self.finishGeneratedIteratorReservation(
-                    existing,
-                    public_def,
-                    item_root,
-                );
+                const digest = existing_named.def.generated orelse
+                    Common.invariant("generated iterator item index contained an unstamped reservation");
+                self.countDiagnostic("generated_identity_intern_hits");
+                return .{ .existing = existing, .digest = digest };
             }
         }
         const digest = try self.generatedIteratorInternDigest(public_def, item_root);
@@ -1069,6 +1067,10 @@ pub const InstGraph = struct {
             public_def,
             item_node,
         );
+        if (self.unfinished_generated_iterator_reservations == 0) {
+            Common.invariant("recursive generated iterator completion had no producer-owned reservation");
+        }
+        self.unfinished_generated_iterator_reservations -= 1;
         return completed.existing orelse
             Common.invariant("recursive generated iterator completion produced no atomic identity");
     }
@@ -1101,7 +1103,6 @@ pub const InstGraph = struct {
         if (self.find(existing_named.args[0]) != item_root) {
             Common.invariant("generated iterator reservation completed from a different item cell");
         }
-        self.removeRecursiveGeneratedIteratorItemIndex(existing);
         const digest = try self.generatedIteratorInternDigest(public_def, item_root);
         if (self.generated_nominal_intern.get(digest)) |raw_interned| {
             const interned = self.find(raw_interned);
@@ -1124,9 +1125,9 @@ pub const InstGraph = struct {
 
     /// Reserve one recursive generated iterator around an exact forward item
     /// cell without hashing or defaulting that cell. The producer that owns
-    /// the cell completes it before the producer stamps the final content
-    /// address. Repeated reservations for the same declaration and cell return
-    /// the same construction node.
+    /// the cell is the reservation's sole owner until it stamps the final
+    /// content address. An unstamped reservation is never globally interned or
+    /// reused by another producer.
     pub fn reserveRecursiveGeneratedIterator(
         self: *InstGraph,
         public_def: Type.TypeDef,
@@ -1135,26 +1136,14 @@ pub const InstGraph = struct {
         comptime fill: fn (@TypeOf(context), NodeId) Allocator.Error!InstNode,
     ) Allocator.Error!NodeId {
         self.requireRelationProduction();
-        const item_root = self.find(item_node);
-        if (self.generated_iterators_by_item.getPtr(item_root)) |bucket| {
-            for (bucket.items) |raw_existing| {
-                const existing = self.find(raw_existing);
-                const existing_named = switch (self.content(existing)) {
-                    .named => |named| named,
-                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator item index contained a non-named node"),
-                };
-                if (!sameTypeDef(public_def, existing_named.def)) continue;
-                if (existing_named.args.len != 1 or self.find(existing_named.args[0]) != item_root) {
-                    Common.invariant("recursive generated iterator item index contained a mismatched item");
-                }
-                self.countDiagnostic("generated_identity_intern_hits");
-                return existing;
-            }
-        }
-
         const reserved = try self.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
         const node_content = try fill(context, reserved);
-        if (!isGeneratedPrivateRootContent(node_content) or node_content.named.def.generated != null) {
+        if (!isGeneratedPrivateRootContent(node_content) or
+            node_content.named.def.generated != null or
+            !sameTypeDef(node_content.named.def, public_def) or
+            node_content.named.args.len != 1 or
+            self.find(node_content.named.args[0]) != self.find(item_node))
+        {
             Common.invariant("recursive iterator reservation did not produce one unstamped private nominal");
         }
         try self.setContent(reserved, node_content);
@@ -1164,8 +1153,7 @@ pub const InstGraph = struct {
         {
             Common.invariant("recursive iterator reservation collided with an ordinary named identity");
         }
-        try self.indexGeneratedIteratorByItem(reserved);
-        try self.recursive_generated_iterator_item_keys.putNoClobber(reserved, item_root);
+        self.unfinished_generated_iterator_reservations += 1;
         self.countDiagnostic("generated_identity_intern_misses");
         return reserved;
     }
@@ -1259,24 +1247,6 @@ pub const InstGraph = struct {
             if (self.find(existing) == node) return;
         }
         try item_bucket.value_ptr.append(self.allocator, node);
-    }
-
-    fn removeRecursiveGeneratedIteratorItemIndex(self: *InstGraph, reservation: NodeId) void {
-        const indexed_item = self.recursive_generated_iterator_item_keys.fetchRemove(reservation) orelse
-            Common.invariant("unstamped recursive iterator reservation had no original item index");
-        const bucket = self.generated_iterators_by_item.getPtr(indexed_item.value) orelse
-            Common.invariant("recursive iterator reservation lost its original item bucket");
-        for (bucket.items, 0..) |candidate, index| {
-            if (candidate != reservation) continue;
-            _ = bucket.swapRemove(index);
-            if (bucket.items.len == 0) {
-                var removed = self.generated_iterators_by_item.fetchRemove(indexed_item.value) orelse
-                    Common.invariant("empty recursive iterator item bucket disappeared during removal");
-                removed.value.deinit(self.allocator);
-            }
-            return;
-        }
-        Common.invariant("recursive iterator reservation was absent from its original item bucket");
     }
 
     fn generatedIteratorInternDigest(
@@ -1446,7 +1416,7 @@ pub const InstGraph = struct {
     pub fn freezeRelations(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
         try self.finalizeUndeterminedFieldKinds();
-        if (self.recursive_generated_iterator_item_keys.count() != 0) {
+        if (self.unfinished_generated_iterator_reservations != 0) {
             Common.invariant("recursive generated iterator producer reached relation freeze before callback completion");
         }
         self.relation_state = .frozen;
@@ -2223,7 +2193,9 @@ pub const InstGraph = struct {
             .box => |element| try self.newProducedBox(element),
             .tuple => |items| try self.newProducedTuple(items),
             .func => |function| try self.newProducedFunction(function.args, function.ret),
-            .named => |named| if (try self.internNamedArguments(named)) |interned|
+            .named => |named| if (isGeneratedPrivateRootContent(.{ .named = named }))
+                node
+            else if (try self.internNamedArguments(named)) |interned|
                 try self.newNode(.{ .named = interned })
             else
                 node,
@@ -2232,6 +2204,9 @@ pub const InstGraph = struct {
     }
 
     fn internNamedArguments(self: *InstGraph, named: InstNamed) Allocator.Error!?InstNamed {
+        // Generated-private arguments are part of the producer-authored digest
+        // input. They are never normalized into the ordinary nominal interner.
+        if (isGeneratedPrivateRootContent(.{ .named = named })) return null;
         var interned_args: ?[]NodeId = null;
         for (named.args, 0..) |arg, index| {
             const interned = try self.internImmediateChild(arg);
@@ -2278,6 +2253,7 @@ pub const InstGraph = struct {
     }
 
     fn existingNamedIdentity(self: *InstGraph, named: InstNamed) ?NodeId {
+        if (isGeneratedPrivateRootContent(.{ .named = named })) return null;
         const bucket = self.named_nodes_by_identity_hash.get(self.namedIdentityHash(named)) orelse return null;
         for (bucket.items) |candidate| {
             const root = self.find(candidate);
@@ -2290,6 +2266,7 @@ pub const InstGraph = struct {
     }
 
     fn registerNamedIdentity(self: *InstGraph, raw_node: NodeId, named: InstNamed) Allocator.Error!void {
+        if (isGeneratedPrivateRootContent(.{ .named = named })) return;
         const node = self.find(raw_node);
         const bucket = try self.named_nodes_by_identity_hash.getOrPut(self.namedIdentityHash(named));
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
@@ -2301,7 +2278,10 @@ pub const InstGraph = struct {
 
     pub fn newNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
         self.requireRelationProduction();
-        if (node_content == .named and self.checked_base_construction_depth == 0) {
+        if (node_content == .named and
+            !isGeneratedPrivateRootContent(node_content) and
+            self.checked_base_construction_depth == 0)
+        {
             if (try self.internNamedArguments(node_content.named)) |interned| {
                 return try self.newNode(.{ .named = interned });
             }
@@ -3437,7 +3417,7 @@ pub const InstGraph = struct {
         {
             Common.invariant("exact lowering attempted to rewrite an immutable checked base node");
         }
-        if (new_content == .named) {
+        if (new_content == .named and !isGeneratedPrivateRootContent(new_content)) {
             if (try self.internNamedArguments(new_content.named)) |interned| {
                 return try self.setContent(root, .{ .named = interned });
             }
@@ -6317,14 +6297,29 @@ test "recursive generated iterator reservation completes at its producer boundar
         },
         Context.fill,
     );
-    try std.testing.expectEqual(@as(usize, 1), graph.recursive_generated_iterator_item_keys.count());
-    try std.testing.expect(graph.generated_iterators_by_item.contains(item_cell));
+    const second_reservation = try graph.reserveRecursiveGeneratedIterator(
+        def,
+        item_cell,
+        Context{
+            .graph = graph,
+            .item = item_cell,
+            .backing = backing,
+            .def = def,
+        },
+        Context.fill,
+    );
+    try std.testing.expect(reservation != second_reservation);
+    try std.testing.expectEqual(@as(usize, 2), graph.unfinished_generated_iterator_reservations);
+    try std.testing.expect(!graph.generated_iterators_by_item.contains(item_cell));
 
     try graph.completeProducedSelection(item_cell, exact_item);
     const completed = try graph.completeRecursiveGeneratedIterator(reservation, def, exact_item);
     try std.testing.expect(graph.sameClass(reservation, completed));
     try std.testing.expect(graph.content(completed).named.def.generated != null);
-    try std.testing.expectEqual(@as(usize, 0), graph.recursive_generated_iterator_item_keys.count());
+    try std.testing.expectEqual(@as(usize, 1), graph.unfinished_generated_iterator_reservations);
+    const second_completed = try graph.completeRecursiveGeneratedIterator(second_reservation, def, exact_item);
+    try std.testing.expect(graph.sameClass(completed, second_completed));
+    try std.testing.expectEqual(@as(usize, 0), graph.unfinished_generated_iterator_reservations);
     try std.testing.expect(!graph.generated_iterators_by_item.contains(item_cell));
     try std.testing.expect(graph.generated_iterators_by_item.contains(exact_item));
 

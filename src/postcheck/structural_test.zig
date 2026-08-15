@@ -495,7 +495,7 @@ test "Monotype lowering carries exact produced types without containment scans" 
     const call_selection = sourceSliceBetween(
         lower_source,
         "fn refineDirectSelectionsForCall(",
-        "fn applyCallOperationSources(",
+        "fn applyCallConsumerBindingsToSelections(",
     );
     try expectContains(call_selection, "This occurrence is the exact edge that checking named.");
     try expectContains(call_selection, "try self.recordCallSelection(selections, .{");
@@ -549,29 +549,9 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectNotContains(generated_iterator_builder, "addRecursiveNode(");
     try expectNotContains(generated_iterator_builder, "registerGeneratedIteratorAtDigest(");
 
-    const generated_call_identity = sourceSliceBetween(
-        lower_source,
-        "fn generatedNominalFromSelectedArguments(",
-        "fn exactSelectionForChecked(",
-    );
-    try expectContains(generated_call_identity, "slot.generated_argument_source");
-    try expectContains(generated_call_identity, ".exact_selection => self.exactSelectionForChecked(");
-    try expectContains(generated_call_identity, ".checked_substitution => blk:");
-    try expectContains(generated_call_identity, "slot.generated_argument_selection_edge");
-    try expectContains(generated_call_identity, "selection_edge.checked != nominal.args[0]");
-    try expectNotContains(generated_call_identity, "for (plan.selection_edges");
-    try expectNotContains(generated_call_identity, "specializationSlotOccurrences(slot)");
-    try expectContains(generated_call_identity, "self.materializeCheckedCallNode(");
-    try expectContains(generated_call_identity, ".request_occurrence,");
-    try expectNotContains(generated_call_identity, ".produced_occurrence,");
-    try expectContains(generated_call_identity, ".concrete_checked => .{");
-    try expectContains(generated_call_identity, ".produced = try self.persistentConcreteCheckedNode(nominal.args[0])");
-    try expectContains(generated_call_identity, "construction_mode == .completed_arguments and public_argument.authority != .produced");
-    try expectContains(generated_call_identity, "generatedIteratorNominalNode(");
-    try expectContains(generated_call_identity, "generatedFieldNominalNode(");
-    try expectNotContains(generated_call_identity, "instNominalBackingNode(");
-    try expectNotContains(generated_call_identity, "generatedIteratorNode(public_node");
-    try expectNotContains(generated_call_identity, "instantiateProducedOccurrenceWithSelections(");
+    try expectNotContains(lower_source, "fn generatedNominalFromSelectedArguments(");
+    try expectNotContains(lower_source, "slot.generated_source");
+    try expectNotContains(lower_source, "slot.operation_source");
 
     const root_edge = sourceSliceBetween(
         lower_source,
@@ -612,16 +592,6 @@ test "Monotype lowering carries exact produced types without containment scans" 
     try expectContains(nominal_backing, "self.direct_checked_selections = &.{};");
     try expectContains(nominal_backing, "self.direct_selection_slots = &.{};");
     try expectContains(nominal_backing, "self.direct_materialization_nodes = &.{};");
-
-    const generated_call_slots = sourceSliceBetween(
-        lower_source,
-        "// Checking stores generated slots after every generated dependency.",
-        "// Result-context identities may themselves be supplied by an operand",
-    );
-    try expectContains(generated_call_slots, "if (existing.authority == .produced) continue;");
-    try expectContains(generated_call_slots, "generatedNominalFromSelectedArguments(\n                plan,\n                slot,\n                selections.items,");
-    try expectContains(generated_call_slots, ".completed_arguments,");
-    try expectNotContains(generated_call_slots, "instantiateProducedOccurrenceWithSelections(slot.checked");
 
     const generated_nominal_lookup = sourceSliceBetween(
         solve_source,
@@ -708,21 +678,24 @@ test "Monotype lowering carries exact produced types without containment scans" 
 
     const iterator_producer_selection = sourceSliceBetween(
         lower_source,
-        "fn applyIteratorProducerToSelectionSpan(",
-        "fn lowerCallAtNode(",
+        "fn beginIterFromStepOperation(",
+        "fn iterFromStepCallbackRequest(",
     );
-    try expectContains(iterator_producer_selection, "if (procedure != .iter_from_step) return null;");
-    try expectContains(iterator_producer_selection, "selected.authority != .produced");
-    try expectContains(iterator_producer_selection, "if (available.len != 2 or !available[1]) return forward_reservations;");
-    try expectContains(iterator_producer_selection, "completeRecursiveGeneratedIterator(");
+    try expectContains(iterator_producer_selection, "const item_selection = directSelectionForSlot(selections,");
+    try expectContains(iterator_producer_selection, "try self.graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() })");
+    try expectContains(iterator_producer_selection, "try self.generatedIteratorNominalNode(");
+    try expectContains(iterator_producer_selection, "try self.reserveGeneratedIteratorNominalNode(");
+    try expectNotContains(iterator_producer_selection, "plan.slots");
 
     const recursive_iterator_reservation = sourceSliceBetween(
         lower_source,
-        "fn applyIterFromStepForwardReservations(",
-        "fn replaceMutableCallSelections(",
+        "fn iterFromStepCallbackRequest(",
+        "fn lowerCallAtNode(",
     );
-    try expectContains(recursive_iterator_reservation, ".recursive_iterator_interface");
-    try expectNotContains(recursive_iterator_reservation, ".exact_arguments");
+    try expectContains(recursive_iterator_reservation, "backing.node,");
+    try expectContains(recursive_iterator_reservation, "fn finishIterFromStepOperation(");
+    try expectContains(recursive_iterator_reservation, "completeRecursiveGeneratedIterator(");
+    try expectNotContains(recursive_iterator_reservation, "plan.slots");
     try expectNotContains(lower_source, "iterator_result_request");
     try expectNotContains(lower_source, "request_directed");
     try expectNotContains(solve_source, "pending_generated_iterator_nodes");
@@ -774,8 +747,10 @@ test "checked calls share one interned shape and have no whole-value plans" {
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_root_edges"));
     try std.testing.expect(@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_call_materialization_nodes"));
     try std.testing.expect(!@hasField(CheckedArtifact.CheckedProcedureTemplateTable, "specialization_value_plans_by_type"));
-    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_source"));
-    try std.testing.expect(@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_selection_edge"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallSlot, "generated_source"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_source"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallSlot, "generated_argument_selection_edge"));
+    try std.testing.expect(!@hasField(CheckedArtifact.SpecializationCallSlot, "operation_source"));
 
     const lower_source = @embedFile("monotype/lower.zig");
     try expectContains(lower_source, "plan.argument_roots[index]");
@@ -1000,6 +975,17 @@ test "generated identities are atomic and reserve before backing work" {
     const sha_lookup = std.mem.find(u8, generated_lookup, "generatedIteratorInternDigest(public_def, item_root)") orelse
         return error.TestExpectedEqual;
     try std.testing.expect(dense_lookup < sha_lookup);
+    try expectContains(generated_lookup, "generated iterator item index contained an unstamped reservation");
+    try expectNotContains(generated_lookup, "indexGeneratedIteratorByItem(reserved)");
+
+    const ordinary_nominal_interner = sourceSliceBetween(
+        solve_source,
+        "fn internNamedArguments(",
+        "pub fn newNode(",
+    );
+    try expectContains(ordinary_nominal_interner, "if (isGeneratedPrivateRootContent(.{ .named = named })) return null");
+    try expectContains(ordinary_nominal_interner, "fn existingNamedIdentity(");
+    try expectContains(ordinary_nominal_interner, "fn registerNamedIdentity(");
 
     const reservation = sourceSliceBetween(
         solve_source,
@@ -1014,13 +1000,13 @@ test "generated identities are atomic and reserve before backing work" {
 
     const generated_call_slot = sourceSliceBetween(
         lower_source,
-        "fn generatedNominalFromSelectedArguments(",
-        "fn exactSelectionForChecked(",
+        "fn beginIterFromStepOperation(",
+        "fn iterFromStepCallbackRequest(",
     );
     const produced_lookup = std.mem.find(
         u8,
         generated_call_slot,
-        ".recursive_interface => if (public_argument.authority == .produced)",
+        "const item_is_produced = exact_item != null",
     ) orelse return error.TestExpectedEqual;
     const request_reservation = std.mem.find(
         u8,
@@ -1535,7 +1521,7 @@ test "Monotype call requests retain defaults in explicit forward cells" {
     const completed_request = sourceSliceBetween(
         lower_source,
         "fn materializeCallSelectionSpan(",
-        "fn applyIterFromStepForwardReservations(",
+        "const IterFromStepOperation = struct",
     );
     try expectContains(completed_request, "materializeExactCheckedCallNode(");
     try expectContains(completed_request, ".request,");
@@ -1544,18 +1530,21 @@ test "Monotype call requests retain defaults in explicit forward cells" {
     const representation_selection = sourceSliceBetween(
         lower_source,
         "fn callRepresentationSelection(",
-        "fn generatedNominalFromSelectedArguments(",
+        "fn checkedSelectionsForCallConsumer(",
     );
     try expectContains(representation_selection, "completePendingProducedNode(self, selection.node)");
+    try expectContains(representation_selection, ".node = produced");
     try expectContains(representation_selection, ".checked_variable, .row_extension, .construction_placeholder =>");
     try expectContains(representation_selection, ".producer_placeholder => try self.callArgumentSelection(");
+    try expectNotContains(representation_selection, "internProducedIdentity");
 
     const selection = sourceSliceBetween(
         lower_source,
         "fn recordCallSelection(",
         "fn recordActiveCheckedSelection(",
     );
-    try expectContains(selection, "internProducedIdentity(candidate.produced)");
+    try expectContains(selection, "candidate.produced = self.graph.rootNode(candidate.produced)");
+    try expectNotContains(selection, "internProducedIdentity");
 
     const active_selection = sourceSliceBetween(
         lower_source,
@@ -1564,6 +1553,7 @@ test "Monotype call requests retain defaults in explicit forward cells" {
     );
     try expectNotContains(active_selection, "internProduced");
     try expectNotContains(lower_source, "internProducedNode(");
+    try expectNotContains(lower_source, "internProducedIdentity(");
 }
 
 test "Monotype callable requests keep explicit independent body result authority" {
@@ -2344,7 +2334,11 @@ test "Monotype encoding intrinsics consume producer-owned identity and result to
     try expectContains(intrinsic_call, "intrinsic.requestResultSource()");
     try expectContains(intrinsic_call, "const request_ret = callable.args[index]");
     try expectContains(intrinsic_call, "rebaseAuthoredFunctionRequest(self.graph, callable_node, callable.args, request_ret)");
-    try expectContains(intrinsic_call, "const produced_ret = try self.generatedIteratorNode(callable.ret, item_node)");
+    try expectContains(intrinsic_call, "const produced_ret = try self.generatedFieldNamesIteratorResultNode(");
+    try expectContains(intrinsic_call, "fn generatedFieldNamesIteratorResultNode(");
+    try expectContains(intrinsic_call, "const shape = fields.args[0]");
+    try expectContains(intrinsic_call, "try self.generatedFieldNominalNode(");
+    try expectContains(intrinsic_call, "return try self.generatedIteratorNominalNode(");
     try expectContains(intrinsic_call, "self.finalTypeForNode(callable.ret)");
     try expectNotContains(intrinsic_call, "generatedFieldNamesBackingValueFieldNames");
 
@@ -2362,7 +2356,7 @@ test "Monotype evidence chains retain checker-recorded lexical scope topology" {
     const dispatcher_selection = sourceSliceBetween(
         lower_source,
         "fn evidenceDispatcherSelection(",
-        "fn recordEvidenceDispatcherSelection(",
+        "fn evidenceParamDispatcherSelection(",
     );
     try expectNotContains(lower_source, "recursiveNestedEvidenceChainEql");
     try expectNotContains(lower_source, "evidence_frame_root_counts");
@@ -2401,7 +2395,17 @@ test "Monotype generated-private call requests retain separate request nodes" {
     const call_selection = sourceSliceBetween(
         lower_source,
         "fn refineDirectSelectionsForCall(",
-        "fn applyCallOperationSources(",
+        "fn applyCallConsumerBindingsToSelections(",
+    );
+    const target_request = sourceSliceBetween(
+        lower_source,
+        "fn scopedTargetFunctionRequest(",
+        "fn draftFnSlotTypeNode(",
+    );
+    const occurrence_source = sourceSliceBetween(
+        lower_source,
+        "fn callOccurrenceHasNewExactSource(",
+        "fn callArgumentUsesCheckedSeed(",
     );
 
     try expectContains(full_request, "directSelectionsForCall(");
@@ -2419,7 +2423,12 @@ test "Monotype generated-private call requests retain separate request nodes" {
     try expectNotContains(lower_source, "instantiateIteratorPlanCallNodeFromCaller");
     try expectContains(call_selection, "const request_seed = occurrence_root.step == .argument");
     try expectContains(call_selection, "self.callArgumentUsesCheckedSeed(plan, occurrence_root.index)");
-    try expectContains(call_selection, "slot.exact_identity and\n                    candidate.authority == .request and\n                    !request_seed");
+    try expectContains(call_selection, "const exact_interface_argument = occurrence_root.step == .argument");
+    try expectContains(call_selection, "slot.exact_identity and\n                    candidate.authority == .request and\n                    !request_seed and\n                    !exact_interface_argument");
+    try expectContains(occurrence_source, ".result => result_authority == .request");
+    try expectContains(target_request, "@memset(available_source_arguments, true)");
+    try expectContains(target_request, "self.directSelectionsForCall(");
+    try expectContains(target_request, ".exact_callable_interface");
 }
 
 test "Monotype lowering never reconciles complete runtime type graphs" {
