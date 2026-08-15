@@ -1273,6 +1273,7 @@ pub const BoxyRuntime = struct {
         if (source == target) return true;
         if (source.payload_layout != target.payload_layout or
             source.contains_refcounted != target.contains_refcounted or
+            source.presence_slot_present_discriminant != target.presence_slot_present_discriminant or
             source.inspect_opaque != target.inspect_opaque)
         {
             return false;
@@ -1469,13 +1470,20 @@ pub const BoxyRuntime = struct {
                     const payload_start = self.runtime_boxy_tag_payload_descs.items.len;
                     try self.runtime_boxy_tag_payload_descs.appendNTimes(self.scratch, undefined, target_payloads.len);
                     for (target_payloads, 0..) |target_payload, payload_index| {
-                        var target_child = try hooks.resolveDescRef(target_payload.desc);
-                        var source_child: ?*const LirProgram.BoxyTypeDesc = null;
+                        const wraps_presence_payload = source.presence_slot_present_discriminant == null and
+                            target.presence_slot_present_discriminant == target_variant.discriminant and
+                            target_payload.payload_index == 0;
+                        var target_child = if (wraps_presence_payload)
+                            source
+                        else
+                            try hooks.resolveDescRef(target_payload.desc);
+                        var source_child: ?*const LirProgram.BoxyTypeDesc = if (wraps_presence_payload) source else null;
                         for (source_payloads) |source_payload| {
                             if (source_payload.payload_index != target_payload.payload_index) continue;
                             source_child = try hooks.resolveDescRef(source_payload.desc);
                             break;
                         }
+                        if (wraps_presence_payload) changed.* = true;
                         if (source_child == null) {
                             if (source_variant) |variant| {
                                 const source_payload_layout = if (variant.payload_count == 1 and target_payload.payload_index == 0)
@@ -1578,6 +1586,7 @@ pub const BoxyRuntime = struct {
         target.* = .{
             .payload_layout = source.payload_layout,
             .contains_refcounted = source.contains_refcounted,
+            .presence_slot_present_discriminant = source.presence_slot_present_discriminant,
             .debug_checked_type = source.debug_checked_type,
         };
         const runtime_id = try self.appendRuntimeBoxyTypeDesc(target);
@@ -3267,6 +3276,14 @@ pub const BoxyRuntime = struct {
             @as(u16, 0)
         else
             self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
+        if (source_desc.presence_slot_present_discriminant) |present_discriminant| {
+            if (source_discriminant != present_discriminant) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: a missing optional slot reached a required-field boundary",
+                    .{},
+                );
+            }
+        }
         if (self.boxyTagExtDiscriminant(source_desc)) |ext_discriminant| {
             if (source_discriminant == ext_discriminant) {
                 const ext_desc = try self.resolveBoxyTagExtDesc(hooks, source_desc);
@@ -3339,6 +3356,17 @@ pub const BoxyRuntime = struct {
                 value,
                 actual_layout,
                 resolved_source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+
+        if (target_desc.presence_slot_present_discriminant != null) {
+            return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                try self.makeRuntimeConcreteDesc(actual_layout),
                 target_desc,
                 expected_layout,
             );
@@ -4113,6 +4141,33 @@ pub const BoxyRuntime = struct {
 
         const actual_is_tag = actual_layout_val.tag == .tag_union;
         const expected_is_tag = expected_layout_val.tag == .tag_union;
+        const source_is_presence_slot = source_desc.presence_slot_present_discriminant != null;
+        const target_is_presence_slot = target_desc.presence_slot_present_discriminant != null;
+        if (target_is_presence_slot and !source_is_presence_slot) {
+            // The target descriptor explicitly selects the canonical worker
+            // slot, so adapt an inline required value to its Present arm.
+            return try self.materializeBoxyPayloadIntoPresenceSlot(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
+        if (source_is_presence_slot and !target_is_presence_slot) {
+            // A non-presence target explicitly selects the inline required
+            // payload, independent of whether layout interning made its bytes
+            // coincide with another tag representation.
+            return try self.materializeBoxyTagPayloadToNonTagLayoutWithTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
         if (actual_is_tag and expected_is_tag and target_desc.tag_variants.len != 0) {
             return try self.materializeBoxyTagPayloadToLayoutWithTargetDesc(
                 hooks,
@@ -4183,6 +4238,64 @@ pub const BoxyRuntime = struct {
         }
 
         return try self.materializeBoxyPayloadToLayout(hooks, value, actual_layout, source_desc, expected_layout);
+    }
+
+    fn materializeBoxyPayloadIntoPresenceSlot(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        target_desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const present_discriminant = target_desc.presence_slot_present_discriminant orelse {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot materialization lacked an explicit Present discriminant",
+                .{},
+            );
+        };
+        const target_variant = self.requireBoxyTagVariantByDiscriminant(target_desc, present_discriminant);
+        if (target_variant.payload_count != 1) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot Present variant had {d} payloads instead of one",
+                .{target_variant.payload_count},
+            );
+        }
+
+        const target = try self.allocTagValue(hooks, expected_layout);
+        if (self.helper.sizeOf(target.base_layout) > 0) {
+            self.helper.writeTagDiscriminant(target.base, target.base_layout, present_discriminant);
+        } else if (present_discriminant != 0) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot materialization wrote nonzero discriminant {d} into zero-sized layout {d}",
+                .{ present_discriminant, @intFromEnum(target.base_layout) },
+            );
+        }
+
+        const payload_layout = self.requireBoxyTagPayloadLayout(target.base_layout, present_discriminant);
+        const payload_size = self.helper.sizeOf(payload_layout);
+        if (payload_size == 0) return target.outer;
+
+        const materialized_payload = if (self.findBoxyPayloadDesc(target_variant, 0)) |payload_desc_ref| blk: {
+            const payload_desc = try hooks.resolveDescRef(payload_desc_ref);
+            break :blk try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                hooks,
+                value,
+                actual_layout,
+                source_desc,
+                payload_desc,
+                payload_layout,
+            );
+        } else try self.materializeBoxyPayloadToLayout(
+            hooks,
+            value,
+            actual_layout,
+            source_desc,
+            payload_layout,
+        );
+        try self.writeVariantPayloadValue(hooks, target.base, payload_layout, materialized_payload, payload_layout);
+        return target.outer;
     }
 
     fn materializeZstBoxyTagPayloadToLayoutWithTargetDesc(
@@ -4334,6 +4447,14 @@ pub const BoxyRuntime = struct {
             @as(u16, 0)
         else
             self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
+        if (source_desc.presence_slot_present_discriminant) |present_discriminant| {
+            if (source_discriminant != present_discriminant) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: a missing optional slot reached a required-field boundary",
+                    .{},
+                );
+            }
+        }
         if (self.boxyTagExtDiscriminant(source_desc)) |ext_discriminant| {
             if (source_discriminant == ext_discriminant) {
                 const ext_desc = try self.resolveBoxyTagExtDesc(hooks, source_desc);

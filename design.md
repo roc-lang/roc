@@ -4501,11 +4501,22 @@ complete):
   Required and defaulted children use their inline representation; optional
   children use a memoized `[#Missing, #Present(payload)]` representation and
   carry an explicit descriptor requirement because the payload may be erased
-  through the containing record. Boxy record construction uses that same child
-  kind to wrap supplied optional fields, emit missing optional slots, restore
-  omitted defaults, and copy unmentioned update slots. Its `.?` lowering
-  consumes the checked access segment modes and constructs the promised flat
-  `Try` result. It does not infer field kinds from layouts or reserved labels.
+  through the containing record. A still-undetermined scheme-interior kind
+  preserves its checked kind-variable identity and uses that same canonical
+  presence-slot representation: one non-specialized worker can therefore
+  serve both required and optional instantiations without cloning its body.
+  The slot descriptor records the `#Present` discriminant explicitly. Worker
+  boundaries use that metadata to wrap an inline required value in `#Present`
+  or unwrap a `#Present` slot for an inline required result; optional callers
+  pass the slot through unchanged. Thus required instantiations pay only the
+  explicit boundary conversion needed by a shared representation, while
+  specialized lowering remains free to use its resolved zero-cost inline
+  representation. Boxy record construction uses the same child kind to wrap
+  supplied optional or still-undetermined fields, emit missing optional slots,
+  restore omitted defaults, and copy unmentioned update slots. Its `.?`
+  lowering consumes the checked access segment modes and constructs the
+  promised flat `Try` result. It does not infer field kinds from layouts,
+  variant shapes, or reserved labels.
 - Construction (`lowerRecordExpr`): graph-owned construction consumes the
   resolved field-kind cell. Construction from an already-sealed Monotype
   consumes the target `Type.Field`'s explicit resolved metadata
@@ -4604,8 +4615,11 @@ legitimately join a `?:` annotation later—which is also why the sweep
 never runs at per-def generalization boundaries. Consequently the read
 boundaries' still-flex arms (TypeWriter rendering, `copyCheckedRecordFields`
 CheckedModule output, the `writeFieldPresenceForKey` type-digest writer) now cover scheme
-interiors, which every reader treats required-equivalent; monomorphic
-literal-minted kinds reach them already committed.
+interiors. Source-facing readers render and digest that state as
+required-equivalent, while representation strategies must either resolve it
+per instantiation or preserve it explicitly: Boxy planning uses the canonical
+presence-slot representation described above. Monomorphic literal-minted kinds
+reach these readers already committed.
 
 Deferred (explicitly not yet implemented):
 
@@ -5299,6 +5313,8 @@ the operations needed for a value representation:
 - the explicit nested drop/incref/free/copy plan for payload bytes
 - the concrete LIR layout for known concrete payloads
 - descriptor references for nested dynamic payload positions
+- an optional explicit `#Present` discriminant when the described value uses
+  the checker-defined field-presence slot convention
 - optional structural operation entries such as equality and hashing
 - an optional planned `to_inspect` method slot for a nominal identity that can
   reach the generic `Str.inspect` intrinsic; this narrow method entry preserves
@@ -5308,7 +5324,9 @@ The exact field order and encoding of `TypeDesc` is LIR-owned static data.
 Every descriptor has an explicit id in the lowered program. Backends and the
 interpreter consume descriptor ids or descriptor-pointer locals through LIR
 statements; they do not synthesize descriptors from type names, layout shapes,
-or object symbols.
+or object symbols. In particular, Boxy adapters wrap and unwrap generalized
+field-presence slots only from the explicit presence-slot discriminant; tag
+names and tag-union shapes are never used to recover that semantic.
 
 Descriptors are never stored inside ordinary Roc values. A value of type
 variable `a` is a one-word box pointer, not `{ data, desc }`. A record field,

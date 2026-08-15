@@ -2642,6 +2642,7 @@ const ProcedureBuilder = struct {
             .field_names = try self.staticFieldNamesForRep(identity_worker),
             .inspect_opaque = self.repInspectsOpaque(identity_worker),
             .inspect_method = try self.staticInspectMethodForRep(identity_source orelse identity_worker),
+            .presence_slot_present_discriminant = worker_rep.presence_slot_present_discriminant,
             .debug_checked_type = worker_rep.source_type.ty,
         };
         self.result.boxy_type_descs.items[@intFromEnum(desc_id)] = completed_desc;
@@ -3442,6 +3443,7 @@ const ProcedureBuilder = struct {
             .field_names = try self.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.repInspectsOpaque(rep_id),
             .inspect_method = try self.staticInspectMethodForRep(rep_id),
+            .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
         self.result.boxy_type_descs.items[@intFromEnum(desc_id)] = completed_desc;
@@ -21374,7 +21376,7 @@ const ProcBodyBuilder = struct {
                         descriptor_fields[layout_index] = .{
                             .local = local,
                             .target_rep = child.rep,
-                            .source_rep = if (child.record_field_kind == .optional)
+                            .source_rep = if (child.record_field_kind.tag == .optional or child.record_field_kind.tag == .undetermined)
                                 child.rep
                             else
                                 self.exprTagPayloadStorageRep(local, child.rep, self.repForType(expr.ty)),
@@ -21384,7 +21386,7 @@ const ProcBodyBuilder = struct {
                         }
                         source_field_locals[source_index] = local;
                         source_field_target_reps[source_index] = child.rep;
-                        source_field_kinds[source_index] = child.record_field_kind;
+                        source_field_kinds[source_index] = child.record_field_kind.tag;
                         field_sources[layout_index] = .expr;
                     } else if (extension) |ext| {
                         const local = try self.addFrameLocal(field_layout);
@@ -21405,7 +21407,7 @@ const ProcBodyBuilder = struct {
                             .field_view = rep_field_view,
                             .label = label,
                         } };
-                    } else switch (child.record_field_kind) {
+                    } else switch (child.record_field_kind.tag) {
                         .optional => {
                             const local = try self.addFrameLocal(field_layout);
                             field_locals[layout_index] = local;
@@ -21501,7 +21503,7 @@ const ProcBodyBuilder = struct {
             const target_local = source_field_locals[source_index].?;
             const target_rep = source_field_target_reps[source_index] orelse
                 boxyLowerInvariant("record expression field target rep was not recorded");
-            continuation = if (source_field_kinds[source_index] == .optional)
+            continuation = if (source_field_kinds[source_index] == .optional or source_field_kinds[source_index] == .undetermined)
                 try self.lowerOptionalSlotPresentInto(target_local, target_rep, expr_fields[source_index].value, continuation)
             else
                 try self.lowerExprIntoTagPayloadStorage(target_local, target_rep, expr_fields[source_index].value, continuation);
@@ -26482,6 +26484,7 @@ const ProcBodyBuilder = struct {
 
         const initial = try self.descriptorMaterializationForKnownRep(rep_id);
         const desc_local = try self.addFrameLocal(.opaque_ptr);
+        try self.recordDescriptorLocalTemplate(desc_local, initial);
         if (self.parent.layoutNeedsNestedBoxyDesc(self.parent.result.store.getLocal(value).layout_idx)) {
             self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
         }
@@ -26867,6 +26870,7 @@ const ProcBodyBuilder = struct {
             .field_names = try self.parent.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
             .inspect_method = try self.parent.staticInspectMethodForRep(rep_id),
+            .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
         self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)] = completed_desc;
@@ -36360,7 +36364,7 @@ const ProcBodyBuilder = struct {
                             .record_rep = record_rep_id,
                             .field_idx = index,
                             .field_rep = child.rep,
-                            .field_kind = child.record_field_kind,
+                            .field_kind = child.record_field_kind.tag,
                         };
                     }
                     index += 1;
