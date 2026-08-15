@@ -612,6 +612,34 @@ generate_roc_list_generic =
 	\\            }
 	\\        }
 	\\
+	\\        /// Recursively release this list and its elements.
+	\\        ///
+	\\        /// The reference-count decrement claims the final reference atomically
+	\\        /// before reading any elements, so concurrent releases cannot skip or
+	\\        /// duplicate element teardown.
+	\\        pub fn deinit(self: Self, roc_host: *RocHost) void {
+	\\            const ItemRelease = if (elements_refcounted) rocReleasePolicy(T) else RocNoopRelease(T);
+	\\            self.deinitWith(ItemRelease, roc_host);
+	\\        }
+	\\
+	\\        /// Recursively release with an explicit compiler-generated item policy.
+	\\        pub fn deinitWith(self: Self, comptime ItemRelease: type, roc_host: *RocHost) void {
+	\\            const alloc_ptr = self.getAllocationPtr() orelse return;
+	\\            const data_addr = @intFromPtr(alloc_ptr);
+	\\            const rc: *isize = @ptrFromInt(data_addr - @sizeOf(isize));
+	\\            if (rc.* == 0) return; // REFCOUNT_STATIC_DATA—elements are in read-only memory
+	\\            const prev = @atomicRmw(isize, rc, .Sub, 1, .acq_rel);
+	\\            if (prev == 1) {
+	\\                if (elements_refcounted) {
+	\\                    for (self.allocationItems()) |item| {
+	\\                        ItemRelease.release(item, roc_host);
+	\\                    }
+	\\                }
+	\\                const base: *anyopaque = @ptrFromInt(data_addr - header_bytes);
+	\\                roc_host.roc_dealloc(roc_host, base, alloc_align);
+	\\            }
+	\\        }
+	\\
 	\\        /// Increment the reference count by `amount`.
 	\\        pub fn incref(self: Self, amount: isize) void {
 	\\            const alloc_ptr = self.getAllocationPtr() orelse return;
@@ -633,6 +661,70 @@ generate_roc_list_generic =
 	\\            const alloc_ptr = self.getAllocationPtr() orelse return false;
 	\\            const rc: *const isize = @ptrFromInt(@intFromPtr(alloc_ptr) - @sizeOf(isize));
 	\\            return rc.* == 1;
+	\\        }
+	\\    };
+	\\}
+	\\
+
+generate_zig_release_support : Str
+generate_zig_release_support =
+	\\pub fn RocNoopRelease(comptime T: type) type {
+	\\    return struct {
+	\\        pub fn release(value: T, roc_host: *RocHost) void {
+	\\            _ = value;
+	\\            _ = roc_host;
+	\\        }
+	\\    };
+	\\}
+	\\
+	\\/// A zero-runtime-storage release policy for one Roc string.
+	\\pub const RocStrRelease = struct {
+	\\    pub fn release(value: RocStr, roc_host: *RocHost) void {
+	\\        value.decref(roc_host);
+	\\    }
+	\\};
+	\\
+	\\/// Compose a list release policy from its item release policy.
+	\\pub fn RocListRelease(comptime ListType: type, comptime ItemRelease: type) type {
+	\\    return struct {
+	\\        pub fn release(value: ListType, roc_host: *RocHost) void {
+	\\            value.deinitWith(ItemRelease, roc_host);
+	\\        }
+	\\    };
+	\\}
+	\\
+	\\/// Release only a list spine whose elements contain no Roc references.
+	\\pub fn RocListSpineRelease(comptime ListType: type) type {
+	\\    return struct {
+	\\        pub fn release(value: ListType, roc_host: *RocHost) void {
+	\\            value.decref(roc_host);
+	\\        }
+	\\    };
+	\\}
+	\\
+	\\pub const RocErasedCallableRelease = struct {
+	\\    pub fn release(value: RocErasedCallable, roc_host: *RocHost) void {
+	\\        decrefErasedCallable(value, roc_host);
+	\\    }
+	\\};
+	\\
+	\\pub fn RocBoxRelease(comptime ValueType: type, comptime PayloadType: type, comptime PayloadRelease: type) type {
+	\\    return struct {
+	\\        fn releasePayload(data_ptr: ?*anyopaque, roc_host: *RocHost) callconv(.c) void {
+	\\            const payload: *PayloadType = @ptrCast(@alignCast(data_ptr orelse return));
+	\\            PayloadRelease.release(payload.*, roc_host);
+	\\        }
+	\\
+	\\        pub fn release(value: ValueType, roc_host: *RocHost) void {
+	\\            decrefBoxWith(@ptrCast(value), @alignOf(PayloadType), true, &releasePayload, roc_host);
+	\\        }
+	\\    };
+	\\}
+	\\
+	\\pub fn RocBoxSpineRelease(comptime ValueType: type, comptime PayloadType: type) type {
+	\\    return struct {
+	\\        pub fn release(value: ValueType, roc_host: *RocHost) void {
+	\\            decrefBoxWith(@ptrCast(value), @alignOf(PayloadType), false, null, roc_host);
 	\\        }
 	\\    };
 	\\}
@@ -1014,6 +1106,67 @@ indent_lines = |text, prefix| {
 box_payload_decref_name : U64 -> Str
 box_payload_decref_name = |inner_id| "decrefBoxPayloadType${U64.to_str(inner_id)}"
 
+release_policy_for_type_id : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
+release_policy_for_type_id = |type_table, duplicate_tag_names, preferred_names, type_id| {
+	if !is_type_refcounted(type_table, type_id) {
+		return ""
+	}
+
+	type_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, type_id)
+	match type_table.get(type_id) {
+		RocStr => "RocStrRelease"
+		RocList(elem_id) =>
+			if is_type_refcounted(type_table, elem_id) {
+				elem_policy = release_policy_for_type_id(type_table, duplicate_tag_names, preferred_names, elem_id)
+				if elem_policy == "" {
+					""
+				} else {
+					"RocListRelease(${type_zig}, ${elem_policy})"
+				}
+			} else {
+				"RocListSpineRelease(${type_zig})"
+			}
+		RocBox(inner_id) =>
+			match type_table.get(inner_id) {
+				RocFunction(_) => "RocErasedCallableRelease"
+				RocUnknown(_) => ""
+				_ => {
+					inner_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, inner_id)
+					if inner_zig == "*anyopaque" {
+						""
+					} else if is_type_refcounted(type_table, inner_id) {
+						inner_policy = release_policy_for_type_id(type_table, duplicate_tag_names, preferred_names, inner_id)
+						if inner_policy == "" {
+							""
+						} else {
+							"RocBoxRelease(${type_zig}, ${inner_zig}, ${inner_policy})"
+						}
+					} else {
+						"RocBoxSpineRelease(${type_zig}, ${inner_zig})"
+					}
+				}
+			}
+		RocRecord(rec) =>
+			if rec.name == "" {
+				""
+			} else {
+				"${name_to_struct_name(rec.name)}Release"
+			}
+		RocTagUnion(tu) =>
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => release_policy_for_type_id(type_table, duplicate_tag_names, preferred_names, payload_id)
+				SingleNoPayload => ""
+				NotSingleVariant =>
+					if tu.name == "" {
+						""
+					} else {
+						"${tag_union_struct_name(preferred_names, duplicate_tag_names, type_id, tu)}Release"
+					}
+			}
+		_ => ""
+	}
+}
+
 decref_stmt_for_type_id : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 decref_stmt_for_type_id = |type_table, duplicate_tag_names, preferred_names, type_id, expr| {
 	type_repr = type_table.get(type_id)
@@ -1026,11 +1179,11 @@ decref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 		RocStr => "    ${expr}.decref(roc_host);\n"
 		RocList(elem_id) => {
 			if is_type_refcounted(type_table, elem_id) {
-				elem_stmt = decref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, elem_id, "item")
-				if elem_stmt == "" {
+				elem_policy = release_policy_for_type_id(type_table, duplicate_tag_names, preferred_names, elem_id)
+				if elem_policy == "" {
 					"    comptime { @compileError(\"missing decref helper for refcounted list element type id ${U64.to_str(elem_id)}\"); }\n"
 				} else {
-					"    {\n        const list = ${expr};\n        if (list.hasOneRef()) {\n            for (list.allocationItems()) |item| {\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        list.decref(roc_host);\n    }\n"
+					"    ${expr}.deinitWith(${elem_policy}, roc_host);\n"
 				}
 			} else {
 				"    ${expr}.decref(roc_host);\n"
@@ -1276,7 +1429,13 @@ generate_tag_union_refcount_helpers = |type_table, duplicate_tag_names, preferre
 		"    _ = amount;\n"
 	}
 
-	"fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${decref_unused}    switch (value.tag) {\n${$decref_branches}    }\n}\n\nfn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${incref_unused}    switch (value.tag) {\n${$incref_branches}    }\n}\n\n"
+	"fn decref${struct_name}(value: ${struct_name}, roc_host: *RocHost) void {\n${decref_unused}    switch (value.tag) {\n${$decref_branches}    }\n}\n\nfn incref${struct_name}(value: ${struct_name}, amount: isize) void {\n${incref_unused}    switch (value.tag) {\n${$incref_branches}    }\n}\n\npub const ${struct_name}Release = struct {\n    pub fn release(value: ${struct_name}, roc_host: *RocHost) void {\n        value.decref(roc_host);\n    }\n};\n\n"
+}
+
+generate_record_release_policy : RecordRepr -> Str
+generate_record_release_policy = |rec| {
+	struct_name = name_to_struct_name(rec.name)
+	"pub const ${struct_name}Release = struct {\n    pub fn release(value: ${struct_name}, roc_host: *RocHost) void {\n        value.decref(roc_host);\n    }\n};\n\n"
 }
 
 generate_box_payload_decref_helpers : TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
@@ -1319,6 +1478,14 @@ generate_refcount_helpers = |type_table, duplicate_tag_names, preferred_names| {
 
 	for type_info in type_table_entries(type_table) {
 		match type_info.repr {
+			RocRecord(rec) =>
+				if rec.name != "" {
+					struct_name = name_to_struct_name(rec.name)
+					if !(List.contains($seen_names, struct_name)) {
+						$seen_names = $seen_names.append(struct_name)
+						$helpers = Str.concat($helpers, generate_record_release_policy(rec))
+					}
+				}
 			RocTagUnion(tu) =>
 				if List.len(tu.tags) >= 2 and tu.name != "" and !List.all(tu.tags, |tag| List.is_empty(tag.payload)) {
 					struct_name = tag_union_struct_name(preferred_names, duplicate_tag_names, $type_id, tu)
@@ -1340,6 +1507,29 @@ generate_refcount_helpers = |type_table, duplicate_tag_names, preferred_names| {
 	} else {
 		"// Generated Refcount Helpers\n\n${all_helpers}"
 	}
+}
+
+generate_release_policy_registry : TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
+generate_release_policy_registry = |type_table, duplicate_tag_names, preferred_names| {
+	var $branches = "    if (T == RocStr) return RocStrRelease;\n"
+	var $seen_types = ["RocStr"]
+	var $type_id = 0
+
+	for _type_info in type_table_entries(type_table) {
+		if is_type_refcounted(type_table, $type_id) {
+			policy = release_policy_for_type_id(type_table, duplicate_tag_names, preferred_names, $type_id)
+			if policy != "" {
+				type_zig = type_id_to_zig(type_table, duplicate_tag_names, preferred_names, $type_id)
+				if !(List.contains($seen_types, type_zig)) {
+					$seen_types = $seen_types.append(type_zig)
+					$branches = Str.concat($branches, "    if (T == ${type_zig}) return ${policy};\n")
+				}
+			}
+		}
+		$type_id = $type_id + 1
+	}
+
+	"\nfn rocReleasePolicy(comptime T: type) type {\n${$branches}    @compileError(\"generated glue has no recursive release policy for \" ++ @typeName(T));\n}\n\n"
 }
 
 ## ZigGlue must keep distinct concrete types for generic Roc types such as
@@ -1542,6 +1732,8 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat("\n")
 		.concat(generate_roc_list_generic)
 		.concat("\n")
+		.concat(generate_zig_release_support)
+		.concat("\n")
 		.concat(generate_roc_io)
 		.concat("\n")
 		.concat(generate_roc_env)
@@ -1552,6 +1744,7 @@ generate_zig_file = |hosted_functions, type_table, provides_list| {
 		.concat(generate_all_args_structs(hosted_functions, type_table, duplicate_tag_names, preferred_names))
 		.concat(generate_platform_type_aliases_zig(hosted_functions, provides_list, type_table, duplicate_tag_names, preferred_names))
 		.concat(generate_refcount_helpers(type_table, duplicate_tag_names, preferred_names))
+		.concat(generate_release_policy_registry(type_table, duplicate_tag_names, preferred_names))
 		.concat("\n")
 		.concat(generate_runtime_symbol_externs)
 		.concat("\n")
