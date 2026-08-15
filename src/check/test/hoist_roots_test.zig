@@ -756,17 +756,28 @@ test "hoist roots publish top-level destructure binders used by executable roots
         \\s = { req: 7, other: 1 }
         \\{ req, .. } = s
         \\(a, b) = (1, 2)
-        \\main = req
+        \\ops : { scale : U64 -> U64, other : U64 }
+        \\ops = { scale: |x| x * 2, other: 0 }
+        \\{ scale, .. } = ops
+        \\main = scale(21)
     , &.{"main"});
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
-    try std.testing.expectEqual(@as(usize, 3), roots.len);
+    try std.testing.expectEqual(@as(usize, 4), roots.len);
+    var data_constant_count: usize = 0;
+    var callable_binding_count: usize = 0;
     for (roots) |root| {
         try expectPatternExtractionRoot(root);
         try std.testing.expect(test_env.checker.selectedHoistedRootIsTopLevel(root));
+        switch (root.value_kind) {
+            .data_constant => data_constant_count += 1,
+            .callable_binding => callable_binding_count += 1,
+        }
     }
+    try std.testing.expectEqual(@as(usize, 3), data_constant_count);
+    try std.testing.expectEqual(@as(usize, 1), callable_binding_count);
 }
 
 test "hoist roots selected for single-branch match tuple binders" {
