@@ -920,6 +920,13 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .table = .{
+            .columns = AST.TableColumn.Span{ .span = rand_span(random) },
+            .rows = AST.TableRow.Span{ .span = rand_span(random) },
+            .region = rand_region(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .@"break" = .{ .region = rand_region(random) },
     });
     try expressions.append(gpa, AST.Expr{

@@ -282,6 +282,7 @@ const ExprParentKind = enum(u16) {
     expr_for_body = 0x247c,
     expr_lambda_body = 0xdca0,
     type_record_field_default = 0x61f2,
+    expr_table_cell = 0xa81c,
 };
 
 const PatternParentKind = enum(u16) {
@@ -312,6 +313,7 @@ const TypeParentKind = enum(u16) {
     type_tag_union_item = 0x4fa1,
     type_fn_arg = 0x670c,
     type_fn_ret = 0xb2f6,
+    expr_table_column_type = 0x5e3d,
 };
 
 const WhereParentKind = enum(u16) {
@@ -646,6 +648,80 @@ fn addTypeDeclStatement(
 fn tokenText(self: *const Parser, token: Token.Idx) []const u8 {
     const region = self.tok_buf.resolve(token);
     return self.tok_buf.env.source[region.start.offset..region.end.offset];
+}
+
+fn newlineBeforeCurrent(self: *Parser) bool {
+    if (self.pos == 0) return false;
+    const prev_end = self.tok_buf.resolve(self.pos - 1).end.offset;
+    const curr_start = self.tok_buf.resolve(self.pos).start.offset;
+    if (prev_end >= curr_start) return false;
+    const between = self.tok_buf.env.source[prev_end..curr_start];
+    return std.mem.indexOfScalar(u8, between, '\n') != null or std.mem.indexOfScalar(u8, between, '\r') != null;
+}
+
+fn recoverTableCloseCurly(self: *Parser) void {
+    var depth: u32 = 1;
+    while (self.peek() != .EndOfFile) {
+        switch (self.peek()) {
+            .OpenCurly => {
+                depth += 1;
+                self.advance();
+            },
+            .CloseCurly => {
+                self.advance();
+                if (depth == 1) return;
+                depth -= 1;
+            },
+            else => self.advance(),
+        }
+    }
+}
+
+fn tokenRegion(pos: Token.Idx) AST.TokenizedRegion {
+    return .{ .start = pos, .end = pos + 1 };
+}
+
+fn abortTable(
+    self: *Parser,
+    start: Token.Idx,
+    tag: AST.Diagnostic.Tag,
+    diagnostic: AST.TokenizedRegion,
+    columns_scratch_top: u32,
+    rows_scratch_top: u32,
+    row_expr_scratch_top: ?u32,
+    in_body: bool,
+) std.mem.Allocator.Error!AST.Expr.Idx {
+    self.store.clearScratchTableColumnsFrom(columns_scratch_top);
+    self.store.clearScratchTableRowsFrom(rows_scratch_top);
+    if (row_expr_scratch_top) |top| {
+        self.store.clearScratchExprsFrom(top);
+    }
+    const diagnostic_region = if (diagnostic.end > diagnostic.start)
+        diagnostic
+    else
+        tokenRegion(diagnostic.start);
+    try self.pushDiagnostic(tag, diagnostic_region);
+    if (in_body) {
+        self.recoverTableCloseCurly();
+    } else {
+        while (self.peek() != .EndOfFile and self.peek() != .OpenCurly) {
+            self.advance();
+        }
+        if (self.peek() == .OpenCurly) {
+            self.advance();
+            self.recoverTableCloseCurly();
+        }
+    }
+    return try self.store.addMalformed(AST.Expr.Idx, tag, .{ .start = start, .end = self.pos });
+}
+
+fn tableColumnNameIsDuplicate(self: *Parser, name: Token.Idx, columns_scratch_top: u32) bool {
+    const items = self.store.scratch_table_columns.items.items[columns_scratch_top..];
+    for (items) |col_idx| {
+        const col = self.store.getTableColumn(col_idx);
+        if (self.tokenIdentsEqual(col.name, name)) return true;
+    }
+    return false;
 }
 
 /// Intern the source module target selected by import parsing, excluding nested
@@ -2574,6 +2650,34 @@ const ExprAfterExprState = struct {
     min_bp: u8,
 };
 
+const ExprTableState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    columns_scratch_top: u32,
+    rows_scratch_top: u32,
+    columns: AST.TableColumn.Span,
+    row_start: Token.Idx,
+    row_expr_scratch_top: u32,
+};
+
+const ExprTableColumnTypeState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    columns_scratch_top: u32,
+    rows_scratch_top: u32,
+    name: Token.Idx,
+    column_start: Token.Idx,
+};
+
+const ExprTableCellState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    columns: AST.TableColumn.Span,
+    rows_scratch_top: u32,
+    row_start: Token.Idx,
+    row_expr_scratch_top: u32,
+};
+
 const ExprIfAfterThenState = struct {
     start: Token.Idx,
     min_bp: u8,
@@ -2696,6 +2800,8 @@ const OpenSyntaxStack = struct {
     type_tag_union_item: std.ArrayList(TypeTagUnionItemState) = .empty,
     type_fn_arg: std.ArrayList(TypeFnArgsState) = .empty,
     type_fn_ret: std.ArrayList(TypeFnAfterRetState) = .empty,
+    expr_table_cell: std.ArrayList(ExprTableCellState) = .empty,
+    expr_table_column_type: std.ArrayList(ExprTableColumnTypeState) = .empty,
 
     fn deinit(self: *OpenSyntaxStack, allocator: std.mem.Allocator) void {
         inline for (std.meta.fields(OpenSyntaxStack)) |field| {
@@ -3160,6 +3266,8 @@ fn runExprStatementKernel(
         record_fields_next,
         record_finish,
         match_branch_next,
+        table_columns_next,
+        table_row_next,
         block_next,
         block_finish,
         pattern_root_next,
@@ -3203,6 +3311,7 @@ fn runExprStatementKernel(
     var expr_record_state: ExprRecordState = undefined;
     const expr_lambda_body_stack = &expr_scratch.lambda_body;
     var expr_match_branch_state: ExprMatchBranchState = undefined;
+    var expr_table_state: ExprTableState = undefined;
     const expr_blocks = &expr_scratch.blocks;
     var last_expr: ?AST.Expr.Idx = null;
     var pattern_root_state = PatternRootState{
@@ -3385,6 +3494,22 @@ fn runExprStatementKernel(
             } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
                 if (tok == .LowerIdent or tok == .NamedUnderscore) {
                     const start = self.pos;
+                    if (tok == .LowerIdent and
+                        std.mem.eql(u8, self.tokenText(start), "table") and
+                        (self.peekNext() == .LowerIdent or self.peekNext() == .OpenCurly))
+                    {
+                        self.advance();
+                        expr_table_state = .{
+                            .start = start,
+                            .min_bp = expr_state.min_bp,
+                            .columns_scratch_top = self.store.scratchTableColumnTop(),
+                            .rows_scratch_top = self.store.scratchTableRowTop(),
+                            .columns = .{ .span = .{ .start = 0, .len = 0 } },
+                            .row_start = start,
+                            .row_expr_scratch_top = 0,
+                        };
+                        continue :expr_kernel .table_columns_next;
+                    }
                     self.advance();
                     const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
                     const expr = try self.store.addExpr(.{ .ident = .{
@@ -4001,6 +4126,122 @@ fn runExprStatementKernel(
                         }
                         continue :expr_kernel .collection_next;
                     },
+                    .expr_table_cell => {
+                        const state = open_syntax.popExprPayload(.expr_table_cell, ExprTableCellState);
+                        last_expr = null;
+                        try self.store.addScratchExpr(completed);
+                        expr_table_state = .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .columns_scratch_top = 0,
+                            .rows_scratch_top = state.rows_scratch_top,
+                            .columns = state.columns,
+                            .row_start = state.row_start,
+                            .row_expr_scratch_top = state.row_expr_scratch_top,
+                        };
+
+                        const finish_row = struct {
+                            fn run(parser: *Parser, table: *ExprTableState) std.mem.Allocator.Error!union(enum) { ok, abort: AST.Expr.Idx } {
+                                const items = try parser.store.exprSpanFrom(table.row_expr_scratch_top);
+                                if (items.span.len != table.columns.span.len) {
+                                    return .{ .abort = try parser.abortTable(
+                                        table.start,
+                                        .table_row_width_mismatch,
+                                        .{ .start = table.row_start, .end = parser.pos },
+                                        parser.store.scratchTableColumnTop(),
+                                        table.rows_scratch_top,
+                                        table.row_expr_scratch_top,
+                                        true,
+                                    ) };
+                                }
+                                const row = try parser.store.addTableRow(.{
+                                    .items = items,
+                                    .region = .{ .start = table.row_start, .end = parser.pos },
+                                });
+                                try parser.store.addScratchTableRow(row);
+                                return .ok;
+                            }
+                        };
+
+                        if (self.peek() == .CloseCurly) {
+                            switch (try finish_row.run(self, &expr_table_state)) {
+                                .abort => |expr| {
+                                    expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                                    continue :expr_kernel .suffix;
+                                },
+                                .ok => {},
+                            }
+                            self.advance();
+                            const rows = try self.store.tableRowSpanFrom(expr_table_state.rows_scratch_top);
+                            const expr = try self.store.addExpr(.{ .table = .{
+                                .columns = expr_table_state.columns,
+                                .rows = rows,
+                                .region = .{ .start = expr_table_state.start, .end = self.pos },
+                            } });
+                            self.store.setCollectionLayout(expr, if (rows.span.len > 0) .expanded else .compact);
+                            expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        }
+
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            if (self.peek() == .CloseCurly or self.newlineBeforeCurrent()) {
+                                switch (try finish_row.run(self, &expr_table_state)) {
+                                    .abort => |expr| {
+                                        expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                                        continue :expr_kernel .suffix;
+                                    },
+                                    .ok => {},
+                                }
+                                if (self.peek() == .CloseCurly) {
+                                    self.advance();
+                                    const rows = try self.store.tableRowSpanFrom(expr_table_state.rows_scratch_top);
+                                    const expr = try self.store.addExpr(.{ .table = .{
+                                        .columns = expr_table_state.columns,
+                                        .rows = rows,
+                                        .region = .{ .start = expr_table_state.start, .end = self.pos },
+                                    } });
+                                    self.store.setCollectionLayout(expr, if (rows.span.len > 0) .expanded else .compact);
+                                    expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                                    continue :expr_kernel .suffix;
+                                }
+                                continue :expr_kernel .table_row_next;
+                            }
+                            try open_syntax.pushExpr(open_allocator, .expr_table_cell, ExprTableCellState, .{
+                                .start = expr_table_state.start,
+                                .min_bp = expr_table_state.min_bp,
+                                .columns = expr_table_state.columns,
+                                .rows_scratch_top = expr_table_state.rows_scratch_top,
+                                .row_start = expr_table_state.row_start,
+                                .row_expr_scratch_top = expr_table_state.row_expr_scratch_top,
+                            });
+                            expr_state = .{ .start = self.pos, .min_bp = 0 };
+                            continue :expr_kernel .prefix;
+                        }
+
+                        if (self.newlineBeforeCurrent()) {
+                            switch (try finish_row.run(self, &expr_table_state)) {
+                                .abort => |expr| {
+                                    expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                                    continue :expr_kernel .suffix;
+                                },
+                                .ok => {},
+                            }
+                            continue :expr_kernel .table_row_next;
+                        }
+
+                        const expr = try self.abortTable(
+                            expr_table_state.start,
+                            .table_row_expected_separator,
+                            tokenRegion(self.pos),
+                            self.store.scratchTableColumnTop(),
+                            expr_table_state.rows_scratch_top,
+                            expr_table_state.row_expr_scratch_top,
+                            true,
+                        );
+                        expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
+                    },
                     .expr_binary_rhs => {
                         open_syntax.popExprMarker(.expr_binary_rhs);
                         const state = expr_binary_rhs_stack.leave();
@@ -4557,6 +4798,126 @@ fn runExprStatementKernel(
                 expr_state = .{ .start = self.pos, .min_bp = 0 };
                 continue :expr_kernel .prefix;
             }
+        },
+        .table_columns_next => {
+            if (self.peek() == .OpenCurly) {
+                const column_count = self.store.scratchTableColumnTop() - expr_table_state.columns_scratch_top;
+                if (column_count == 0) {
+                    const expr = try self.abortTable(
+                        expr_table_state.start,
+                        .table_expected_column_name,
+                        tokenRegion(self.pos),
+                        expr_table_state.columns_scratch_top,
+                        expr_table_state.rows_scratch_top,
+                        null,
+                        false,
+                    );
+                    expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+                expr_table_state.columns = try self.store.tableColumnSpanFrom(expr_table_state.columns_scratch_top);
+                self.advance();
+                expr_table_state.rows_scratch_top = self.store.scratchTableRowTop();
+                continue :expr_kernel .table_row_next;
+            }
+            if (self.peek() == .EndOfFile or self.peek() != .LowerIdent) {
+                const tag: AST.Diagnostic.Tag = if (self.peek() == .EndOfFile or self.peek() != .LowerIdent)
+                    if (self.store.scratchTableColumnTop() == expr_table_state.columns_scratch_top)
+                        .table_expected_column_name
+                    else
+                        .table_expected_open_curly
+                else
+                    .table_expected_column_name;
+                const expr = try self.abortTable(
+                    expr_table_state.start,
+                    tag,
+                    tokenRegion(self.pos),
+                    expr_table_state.columns_scratch_top,
+                    expr_table_state.rows_scratch_top,
+                    null,
+                    false,
+                );
+                expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                continue :expr_kernel .suffix;
+            }
+            const name = self.pos;
+            const column_start = self.pos;
+            if (self.tableColumnNameIsDuplicate(name, expr_table_state.columns_scratch_top)) {
+                const expr = try self.abortTable(
+                    expr_table_state.start,
+                    .table_duplicate_column,
+                    tokenRegion(name),
+                    expr_table_state.columns_scratch_top,
+                    expr_table_state.rows_scratch_top,
+                    null,
+                    false,
+                );
+                expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                continue :expr_kernel .suffix;
+            }
+            self.advance();
+            if (self.peek() == .OpColon) {
+                self.advance();
+                try open_syntax.pushType(open_allocator, .expr_table_column_type, ExprTableColumnTypeState, .{
+                    .start = expr_table_state.start,
+                    .min_bp = expr_table_state.min_bp,
+                    .columns_scratch_top = expr_table_state.columns_scratch_top,
+                    .rows_scratch_top = expr_table_state.rows_scratch_top,
+                    .name = name,
+                    .column_start = column_start,
+                });
+                type_args = .looking_for_type_arg;
+                continue :expr_kernel .type_prefix;
+            }
+            const column = try self.store.addTableColumn(.{
+                .name = name,
+                .ty = null,
+                .region = .{ .start = column_start, .end = self.pos },
+            });
+            try self.store.addScratchTableColumn(column);
+            if (self.peek() == .Comma) {
+                self.advance();
+            }
+            continue :expr_kernel .table_columns_next;
+        },
+        .table_row_next => {
+            if (self.peek() == .CloseCurly) {
+                self.advance();
+                const rows = try self.store.tableRowSpanFrom(expr_table_state.rows_scratch_top);
+                const expr = try self.store.addExpr(.{ .table = .{
+                    .columns = expr_table_state.columns,
+                    .rows = rows,
+                    .region = .{ .start = expr_table_state.start, .end = self.pos },
+                } });
+                self.store.setCollectionLayout(expr, if (rows.span.len > 0) .expanded else .compact);
+                expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                continue :expr_kernel .suffix;
+            }
+            if (self.peek() == .EndOfFile) {
+                const expr = try self.abortTable(
+                    expr_table_state.start,
+                    .table_expected_close_curly,
+                    tokenRegion(self.pos),
+                    expr_table_state.columns_scratch_top,
+                    expr_table_state.rows_scratch_top,
+                    null,
+                    true,
+                );
+                expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                continue :expr_kernel .suffix;
+            }
+            expr_table_state.row_start = self.pos;
+            expr_table_state.row_expr_scratch_top = self.store.scratchExprTop();
+            try open_syntax.pushExpr(open_allocator, .expr_table_cell, ExprTableCellState, .{
+                .start = expr_table_state.start,
+                .min_bp = expr_table_state.min_bp,
+                .columns = expr_table_state.columns,
+                .rows_scratch_top = expr_table_state.rows_scratch_top,
+                .row_start = expr_table_state.row_start,
+                .row_expr_scratch_top = expr_table_state.row_expr_scratch_top,
+            });
+            expr_state = .{ .start = self.pos, .min_bp = 0 };
+            continue :expr_kernel .prefix;
         },
         .string_next => {
             const string_tag = self.peek();
@@ -5140,6 +5501,42 @@ fn runExprStatementKernel(
                             .effectful = state.effectful,
                         } });
                         continue :expr_kernel .type_complete;
+                    },
+                    .expr_table_column_type => {
+                        const state = open_syntax.popTypePayload(.expr_table_column_type, ExprTableColumnTypeState);
+                        last_type_anno = null;
+                        if (self.tableColumnNameIsDuplicate(state.name, state.columns_scratch_top)) {
+                            const expr = try self.abortTable(
+                                state.start,
+                                .table_duplicate_column,
+                                tokenRegion(state.name),
+                                state.columns_scratch_top,
+                                state.rows_scratch_top,
+                                null,
+                                false,
+                            );
+                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                            continue :expr_kernel .suffix;
+                        }
+                        const column = try self.store.addTableColumn(.{
+                            .name = state.name,
+                            .ty = completed,
+                            .region = .{ .start = state.column_start, .end = self.pos },
+                        });
+                        try self.store.addScratchTableColumn(column);
+                        expr_table_state = .{
+                            .start = state.start,
+                            .min_bp = state.min_bp,
+                            .columns_scratch_top = state.columns_scratch_top,
+                            .rows_scratch_top = state.rows_scratch_top,
+                            .columns = .{ .span = .{ .start = 0, .len = 0 } },
+                            .row_start = state.start,
+                            .row_expr_scratch_top = 0,
+                        };
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                        }
+                        continue :expr_kernel .table_columns_next;
                     },
                     .where_clause_alias => {
                         const state = open_syntax.popTypePayload(.where_clause_alias, WhereClauseAliasState);

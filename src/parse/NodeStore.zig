@@ -117,6 +117,7 @@ const ExprNodeTag = enum {
     block,
     ellipsis,
     for_expr,
+    table,
     break_expr,
     return_expr,
     malformed,
@@ -177,6 +178,8 @@ scratch_pattern_string_parts: base.Scratch(AST.PatternStringPart.Idx),
 scratch_record_fields: base.Scratch(AST.RecordField.Idx),
 scratch_pattern_record_fields: base.Scratch(AST.PatternRecordField.Idx),
 scratch_match_branches: base.Scratch(AST.MatchBranch.Idx),
+scratch_table_columns: base.Scratch(AST.TableColumn.Idx),
+scratch_table_rows: base.Scratch(AST.TableRow.Idx),
 scratch_type_annos: base.Scratch(AST.TypeAnno.Idx),
 scratch_anno_record_fields: base.Scratch(AST.AnnoRecordField.Idx),
 scratch_exposed_items: base.Scratch(AST.ExposedItem.Idx),
@@ -325,6 +328,10 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     errdefer scratch_pattern_record_fields.deinit();
     var scratch_match_branches = try base.Scratch(AST.MatchBranch.Idx).init(gpa);
     errdefer scratch_match_branches.deinit();
+    var scratch_table_columns = try base.Scratch(AST.TableColumn.Idx).init(gpa);
+    errdefer scratch_table_columns.deinit();
+    var scratch_table_rows = try base.Scratch(AST.TableRow.Idx).init(gpa);
+    errdefer scratch_table_rows.deinit();
     var scratch_type_annos = try base.Scratch(AST.TypeAnno.Idx).init(gpa);
     errdefer scratch_type_annos.deinit();
     var scratch_anno_record_fields = try base.Scratch(AST.AnnoRecordField.Idx).init(gpa);
@@ -368,6 +375,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch_record_fields = scratch_record_fields,
         .scratch_pattern_record_fields = scratch_pattern_record_fields,
         .scratch_match_branches = scratch_match_branches,
+        .scratch_table_columns = scratch_table_columns,
+        .scratch_table_rows = scratch_table_rows,
         .scratch_type_annos = scratch_type_annos,
         .scratch_anno_record_fields = scratch_anno_record_fields,
         .scratch_exposed_items = scratch_exposed_items,
@@ -415,6 +424,8 @@ pub fn deinit(store: *NodeStore) void {
     store.scratch_record_fields.deinit();
     store.scratch_pattern_record_fields.deinit();
     store.scratch_match_branches.deinit();
+    store.scratch_table_columns.deinit();
+    store.scratch_table_rows.deinit();
     store.scratch_type_annos.deinit();
     store.scratch_anno_record_fields.deinit();
     store.scratch_exposed_items.deinit();
@@ -443,6 +454,8 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_record_fields.clearFrom(0);
     store.scratch_pattern_record_fields.clearFrom(0);
     store.scratch_match_branches.clearFrom(0);
+    store.scratch_table_columns.clearFrom(0);
+    store.scratch_table_rows.clearFrom(0);
     store.scratch_type_annos.clearFrom(0);
     store.scratch_anno_record_fields.clearFrom(0);
     store.scratch_exposed_items.clearFrom(0);
@@ -474,6 +487,8 @@ pub fn debugTo(store: *NodeStore, writer: *std.Io.Writer) error{WriteFailed}!voi
     try writer.print("Scratch record fields: {any}\n", .{store.scratch_record_fields.items});
     try writer.print("Scratch pattern record fields: {any}\n", .{store.scratch_pattern_record_fields.items});
     try writer.print("Scratch match branches: {any}\n", .{store.scratch_match_branches.items});
+    try writer.print("Scratch table columns: {any}\n", .{store.scratch_table_columns.items});
+    try writer.print("Scratch table rows: {any}\n", .{store.scratch_table_rows.items});
     try writer.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
     try writer.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
     try writer.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
@@ -1294,6 +1309,17 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = @intFromEnum(f.expr);
             node.data.rhs = @intFromEnum(f.body);
         },
+        .table => |t| {
+            node.tag = .table;
+            node.region = t.region;
+            // Store [columns.span.start, columns.span.len, rows.span.start, rows.span.len]
+            const data_start = @as(u32, @intCast(store.extra_data.items.len));
+            try store.extra_data.append(store.gpa, t.columns.span.start);
+            try store.extra_data.append(store.gpa, t.columns.span.len);
+            try store.extra_data.append(store.gpa, t.rows.span.start);
+            try store.extra_data.append(store.gpa, t.rows.span.len);
+            node.data.lhs = data_start;
+        },
         .@"break" => |b| {
             node.tag = .break_expr;
             node.region = b.region;
@@ -1375,6 +1401,36 @@ pub fn addMatchBranch(store: *NodeStore, branch: AST.MatchBranch) std.mem.Alloca
             .rhs = @intFromEnum(branch.body),
         },
         .region = branch.region,
+    };
+
+    const nid = try store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+pub fn addTableColumn(store: *NodeStore, column: AST.TableColumn) std.mem.Allocator.Error!AST.TableColumn.Idx {
+    const node = Node{
+        .tag = .table_column,
+        .main_token = column.name,
+        .data = .{
+            .lhs = try packOptionalIndex(column.ty),
+            .rhs = 0,
+        },
+        .region = column.region,
+    };
+
+    const nid = try store.nodes.append(store.gpa, node);
+    return @enumFromInt(@intFromEnum(nid));
+}
+
+pub fn addTableRow(store: *NodeStore, row: AST.TableRow) std.mem.Allocator.Error!AST.TableRow.Idx {
+    const node = Node{
+        .tag = .table_row,
+        .main_token = 0,
+        .data = .{
+            .lhs = row.items.span.start,
+            .rhs = row.items.span.len,
+        },
+        .region = row.region,
     };
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2564,6 +2620,20 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
+        .table => {
+            const extra = node.data.lhs;
+            return .{ .table = .{
+                .columns = .{ .span = .{
+                    .start = store.extra_data.items[extra],
+                    .len = store.extra_data.items[extra + 1],
+                } },
+                .rows = .{ .span = .{
+                    .start = store.extra_data.items[extra + 2],
+                    .len = store.extra_data.items[extra + 3],
+                } },
+                .region = node.region,
+            } };
+        },
         .break_expr => {
             return .{ .@"break" = .{
                 .region = node.region,
@@ -2662,6 +2732,26 @@ pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.M
         .pattern = @enumFromInt(node.data.lhs),
         .body = @enumFromInt(node.data.rhs),
         .guard = unpackOptionalIndex(AST.Expr.Idx, node.main_token),
+    };
+}
+
+pub fn getTableColumn(store: *const NodeStore, column_idx: AST.TableColumn.Idx) AST.TableColumn {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(column_idx)));
+    return .{
+        .name = node.main_token,
+        .ty = unpackOptionalIndex(AST.TypeAnno.Idx, node.data.lhs),
+        .region = node.region,
+    };
+}
+
+pub fn getTableRow(store: *const NodeStore, row_idx: AST.TableRow.Idx) AST.TableRow {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(row_idx)));
+    return .{
+        .items = .{ .span = .{
+            .start = node.data.lhs,
+            .len = node.data.rhs,
+        } },
+        .region = node.region,
     };
 }
 
@@ -3174,6 +3264,62 @@ pub fn clearScratchMatchBranchesFrom(store: *NodeStore, start: u32) void {
 /// all items in the span.
 pub fn matchBranchSlice(store: *const NodeStore, span: AST.MatchBranch.Span) []AST.MatchBranch.Idx {
     return store.sliceFromSpan(AST.MatchBranch.Idx, span.span);
+}
+
+pub fn scratchTableColumnTop(store: *NodeStore) u32 {
+    return store.scratch_table_columns.top();
+}
+
+pub fn addScratchTableColumn(store: *NodeStore, idx: AST.TableColumn.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_table_columns.append(idx);
+}
+
+pub fn tableColumnSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.TableColumn.Span {
+    const end = store.scratch_table_columns.top();
+    defer store.scratch_table_columns.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_table_columns.items.items[i]));
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+pub fn clearScratchTableColumnsFrom(store: *NodeStore, start: u32) void {
+    store.scratch_table_columns.clearFrom(start);
+}
+
+pub fn tableColumnSlice(store: *const NodeStore, span: AST.TableColumn.Span) []AST.TableColumn.Idx {
+    return store.sliceFromSpan(AST.TableColumn.Idx, span.span);
+}
+
+pub fn scratchTableRowTop(store: *NodeStore) u32 {
+    return store.scratch_table_rows.top();
+}
+
+pub fn addScratchTableRow(store: *NodeStore, idx: AST.TableRow.Idx) std.mem.Allocator.Error!void {
+    try store.scratch_table_rows.append(idx);
+}
+
+pub fn tableRowSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.TableRow.Span {
+    const end = store.scratch_table_rows.top();
+    defer store.scratch_table_rows.clearFrom(start);
+    var i = @as(usize, @intCast(start));
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    while (i < end) {
+        try store.extra_data.append(store.gpa, @intFromEnum(store.scratch_table_rows.items.items[i]));
+        i += 1;
+    }
+    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+}
+
+pub fn clearScratchTableRowsFrom(store: *NodeStore, start: u32) void {
+    store.scratch_table_rows.clearFrom(start);
+}
+
+pub fn tableRowSlice(store: *const NodeStore, span: AST.TableRow.Span) []AST.TableRow.Idx {
+    return store.sliceFromSpan(AST.TableRow.Idx, span.span);
 }
 
 /// Returns the start position for a new Span of typeAnnoIdxs in scratch

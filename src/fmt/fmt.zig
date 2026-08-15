@@ -1743,6 +1743,7 @@ const Formatter = struct {
                     .@"break",
                     .@"return",
                     .block,
+                    .table,
                     .for_expr,
                     .malformed,
                     => {
@@ -2130,6 +2131,51 @@ const Formatter = struct {
             .block => |b| {
                 try fmt.formatBlock(b);
             },
+            .table => |t| {
+                const columns = fmt.ast.store.tableColumnSlice(t.columns);
+                const rows = fmt.ast.store.tableRowSlice(t.rows);
+                const table_multiline = rows.len > 0 or fmt.ast.store.getCollectionLayout(ei) == .expanded or fmt.regionHasInteriorComment(t.region);
+
+                try fmt.pushAll("table");
+                for (columns, 0..) |column_idx, i| {
+                    const column = fmt.ast.store.getTableColumn(column_idx);
+                    if (i == 0) {
+                        try fmt.push(' ');
+                    } else {
+                        try fmt.pushAll(", ");
+                    }
+                    try fmt.pushTokenText(column.name);
+                    if (column.ty) |ty| {
+                        try fmt.pushAll(" : ");
+                        try fmt.formatTypeAnnoDiscard(ty);
+                    }
+                }
+
+                if (table_multiline) {
+                    try fmt.pushAll(" {");
+                    fmt.curr_indent += 1;
+                    try fmt.flushCommentsAfterDiscard(t.region.start);
+                    for (rows) |row_idx| {
+                        const row = fmt.ast.store.getTableRow(row_idx);
+                        const items = fmt.ast.store.exprSlice(row.items);
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
+                        for (items, 0..) |item_idx, i| {
+                            if (i > 0) {
+                                try fmt.pushAll(", ");
+                            }
+                            try fmt.formatExprDiscard(item_idx);
+                        }
+                        try fmt.push(',');
+                    }
+                    fmt.curr_indent -= 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                    try fmt.push('}');
+                } else {
+                    try fmt.pushAll(" {}");
+                }
+            },
             .for_expr => |f| {
                 try fmt.pushAll("for ");
                 try fmt.formatPatternDiscard(f.patt);
@@ -2272,6 +2318,7 @@ const Formatter = struct {
                     .@"break",
                     .@"return",
                     .block,
+                    .table,
                     .for_expr,
                     .malformed,
                     => {
@@ -3851,6 +3898,7 @@ const Formatter = struct {
             .nominal_record,
             .ellipsis,
             .block,
+            .table,
             .for_expr,
             .@"break",
             .@"return",
@@ -3872,7 +3920,7 @@ const Formatter = struct {
         const expr_tag = std.meta.activeTag(expr);
         const owns_collection = expr_tag == .list or expr_tag == .tuple or expr_tag == .record or
             expr_tag == .record_builder or expr_tag == .apply or expr_tag == .method_call or
-            expr_tag == .nominal_apply or expr_tag == .lambda;
+            expr_tag == .nominal_apply or expr_tag == .lambda or expr_tag == .table;
         if (owns_collection and fmt.regionHasInteriorComment(expr.to_tokenized_region())) return true;
 
         return switch (expr) {
@@ -3919,6 +3967,8 @@ const Formatter = struct {
             .crash => |c| fmt.groupedExprWillBeMultiline(c.expr),
             .@"return" => |r| fmt.groupedExprWillBeMultiline(r.expr),
             .for_expr => |f| fmt.groupedExprWillBeMultiline(f.expr) or fmt.groupedExprWillBeMultiline(f.body),
+            .table => |t| fmt.ast.store.tableRowSlice(t.rows).len > 0 or
+                fmt.ast.store.getCollectionLayout(expr_idx) == .expanded,
             .int,
             .frac,
             .typed_int,
@@ -3951,7 +4001,7 @@ const Formatter = struct {
             const expr_tag = std.meta.activeTag(expr);
             const owns_collection = expr_tag == .list or expr_tag == .tuple or expr_tag == .record or
                 expr_tag == .record_builder or expr_tag == .apply or expr_tag == .method_call or
-                expr_tag == .nominal_apply or expr_tag == .lambda;
+                expr_tag == .nominal_apply or expr_tag == .lambda or expr_tag == .table;
             if (owns_collection and fmt.regionHasInteriorComment(expr.to_tokenized_region())) return true;
             if (!owns_collection and fmt.ast.regionIsMultiline(expr.to_tokenized_region())) {
                 return true;
@@ -4075,6 +4125,10 @@ const Formatter = struct {
                     }
 
                     return fmt.nodeWillBeMultiline(AST.Expr.Idx, f.body);
+                },
+                .table => |t| {
+                    return fmt.ast.store.tableRowSlice(t.rows).len > 0 or
+                        fmt.ast.store.getCollectionLayout(item) == .expanded;
                 },
                 .int,
                 .frac,

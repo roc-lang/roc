@@ -7424,6 +7424,153 @@ pub fn canonicalizeExpr(
     return self.runExprKernel(ast_expr_idx);
 }
 
+fn desugarTableLiteral(
+    self: *Self,
+    table: @FieldType(AST.Expr, "table"),
+    region: Region,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    const columns = self.parse_ir.store.tableColumnSlice(table.columns);
+    const rows = self.parse_ir.store.tableRowSlice(table.rows);
+    if (columns.len == 0) {
+        return try self.canonicalizedMalformedExpr(Diagnostic{ .expr_not_canonicalized = .{ .region = region } });
+    }
+
+    const seen_top = self.scratch_seen_record_fields.top();
+    defer self.scratch_seen_record_fields.clearFrom(seen_top);
+    for (columns) |column_idx| {
+        const column = self.parse_ir.store.getTableColumn(column_idx);
+        const name = self.parse_ir.tokens.resolveIdentifier(column.name) orelse {
+            return try self.canonicalizedMalformedExpr(Diagnostic{ .expr_not_canonicalized = .{ .region = region } });
+        };
+        const name_region = self.parse_ir.tokens.resolve(column.name);
+        for (self.scratch_seen_record_fields.sliceFromStart(seen_top)) |seen_field| {
+            if (name.eql(seen_field.ident)) {
+                return try self.canonicalizedMalformedExpr(Diagnostic{ .expr_not_canonicalized = .{ .region = region } });
+            }
+        }
+        try self.scratch_seen_record_fields.append(SeenRecordField{
+            .ident = name,
+            .region = name_region,
+        });
+    }
+
+    const items_top = self.parse_ir.store.scratchExprTop();
+    for (rows) |row_idx| {
+        const row = self.parse_ir.store.getTableRow(row_idx);
+        const cells = self.parse_ir.store.exprSlice(row.items);
+        if (cells.len != columns.len) {
+            self.parse_ir.store.clearScratchExprsFrom(items_top);
+            return try self.canonicalizedMalformedExpr(Diagnostic{ .expr_not_canonicalized = .{ .region = region } });
+        }
+
+        const fields_top = self.parse_ir.store.scratchRecordFieldTop();
+        for (columns, cells) |column_idx, cell| {
+            const column = self.parse_ir.store.getTableColumn(column_idx);
+            const field = try self.parse_ir.store.addRecordField(.{
+                .name = column.name,
+                .value = cell,
+                .region = row.region,
+            });
+            try self.parse_ir.store.addScratchRecordField(field);
+        }
+        const fields = try self.parse_ir.store.recordFieldSpanFrom(fields_top);
+        const record = try self.parse_ir.store.addExpr(.{ .record = .{
+            .fields = fields,
+            .ext = null,
+            .region = row.region,
+        } });
+        try self.parse_ir.store.addScratchExpr(record);
+    }
+
+    const items = try self.parse_ir.store.exprSpanFrom(items_top);
+    const list_ast = try self.parse_ir.store.addExpr(.{ .list = .{
+        .items = items,
+        .region = table.region,
+    } });
+    const list_can = (try self.canonicalizeExpr(list_ast)) orelse {
+        return try self.canonicalizedMalformedExpr(Diagnostic{ .expr_not_canonicalized = .{ .region = region } });
+    };
+    return try self.wrapTableWithColumnTypes(list_can, table.columns, region);
+}
+
+fn wrapTableWithColumnTypes(
+    self: *Self,
+    list_expr: CanonicalizedExpr,
+    columns: AST.TableColumn.Span,
+    region: Region,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    const column_slice = self.parse_ir.store.tableColumnSlice(columns);
+    var any_typed = false;
+    for (column_slice) |column_idx| {
+        if (self.parse_ir.store.getTableColumn(column_idx).ty != null) {
+            any_typed = true;
+            break;
+        }
+    }
+    if (!any_typed) return list_expr;
+
+    try self.scopeEnter(self.env.gpa, false);
+    defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
+
+    const fields_top = self.env.store.scratchAnnoRecordFieldTop();
+    for (column_slice) |column_idx| {
+        const column = self.parse_ir.store.getTableColumn(column_idx);
+        const name = self.parse_ir.tokens.resolveIdentifier(column.name) orelse {
+            self.env.store.clearScratchAnnoRecordFieldsFrom(fields_top);
+            return try self.canonicalizedMalformedExpr(Diagnostic{ .expr_not_canonicalized = .{ .region = region } });
+        };
+        const field_ty = if (column.ty) |ty|
+            try self.canonicalizeTypeAnno(ty, .local_anno)
+        else
+            try self.env.addTypeAnno(.{ .underscore = {} }, region);
+        const field_cir = try self.env.addAnnoRecordField(.{
+            .name = name,
+            .ty = field_ty,
+            .is_optional = false,
+        }, region);
+        try self.env.store.addScratchAnnoRecordField(field_cir);
+    }
+    const record_fields = try self.env.store.annoRecordFieldSpanFrom(fields_top);
+    const record_anno = try self.env.addTypeAnno(.{ .record = .{
+        .fields = record_fields,
+        .ext = null,
+    } }, region);
+
+    const args_top = self.env.store.scratchTypeAnnoTop();
+    try self.env.store.addScratchTypeAnno(record_anno);
+    const args = try self.env.store.typeAnnoSpanFrom(args_top);
+    const list_anno = try self.env.addTypeAnno(.{ .apply = .{
+        .name = self.env.idents.list,
+        .base = .{ .builtin = .list },
+        .args = args,
+    } }, region);
+
+    const annotation_idx = try self.createAnnotationFromTypeAnno(list_anno, null, region);
+    const ident = try self.generateClosureTagName(null);
+    const pattern_idx = try self.env.addPattern(.{ .assign = .{ .ident = ident } }, region);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, ident, pattern_idx, false, true);
+
+    const stmts_top = self.env.store.scratchTop("statements");
+    const decl_stmt = try self.env.addStatement(Statement{ .s_decl = .{
+        .pattern = pattern_idx,
+        .expr = list_expr.idx,
+        .anno = annotation_idx,
+    } }, region);
+    try self.env.store.addScratchStatement(decl_stmt);
+    const stmts = try self.env.store.statementSpanFrom(stmts_top);
+
+    const lookup = try self.canonicalizedLocalLookup(pattern_idx, region);
+    const block = try self.env.addExpr(CIR.Expr{ .e_block = .{
+        .stmts = stmts,
+        .final_expr = lookup.idx,
+    } }, region);
+
+    return CanonicalizedExpr{
+        .idx = block,
+        .free_vars = list_expr.free_vars,
+    };
+}
+
 fn canonicalizedMalformedExpr(self: *Self, diagnostic: Diagnostic) std.mem.Allocator.Error!CanonicalizedExpr {
     return CanonicalizedExpr{
         .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
@@ -10612,6 +10759,11 @@ fn runExprKernel(
                     else
                         try self.env.addExpr(Expr{ .e_break = .{} }, region);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = break_expr, .free_vars = DataSpan.empty() });
+                },
+                .table => |e| {
+                    const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+                    const can_expr = try self.desugarTableLiteral(e, region);
+                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, can_expr);
                 },
                 .list => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
