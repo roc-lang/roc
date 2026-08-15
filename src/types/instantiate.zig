@@ -248,6 +248,11 @@ pub const Instantiator = struct {
     current_rank: Rank,
     rigid_behavior: RigidBehavior,
     rank_behavior: RankBehavior = .respect_rank,
+    /// A rank-1 scheme can contain quantified leaves below monomorphic
+    /// structural nodes. While instantiating such a scheme, copy that complete
+    /// structural spine so the walk reaches every generalized descendant;
+    /// monomorphic flex/rigid leaves remain shared.
+    copy_scheme_structure: bool = false,
 
     /// Controls whether to respect rank when deciding what to instantiate
     pub const RankBehavior = enum {
@@ -297,6 +302,21 @@ pub const Instantiator = struct {
         initial_var: Var,
     ) std.mem.Allocator.Error!Var {
         return self.instantiateVarHelp(initial_var, false);
+    }
+
+    /// Instantiate a binding that the checker explicitly classified as a
+    /// rank-1 type scheme. A scheme may be partially generalized: its
+    /// structural root can be monomorphic while descendants are quantified.
+    /// Force-copying the root enters that structure so the ordinary rank-aware
+    /// walk can freshen exactly those generalized descendants.
+    pub fn instantiateTypeScheme(
+        self: *Self,
+        initial_var: Var,
+    ) std.mem.Allocator.Error!Var {
+        const previous = self.copy_scheme_structure;
+        self.copy_scheme_structure = true;
+        defer self.copy_scheme_structure = previous;
+        return self.instantiateVarHelp(initial_var, true);
     }
 
     fn instantiateVarHelp(
@@ -368,10 +388,19 @@ pub const Instantiator = struct {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
 
-        // Non-generalized variables should _not_ be instantiated (unless configured to ignore rank)
+        // Ordinary instantiation shares every non-generalized var. A binding
+        // explicitly classified as a scheme instead copies non-generalized
+        // structural nodes so generalized leaves at arbitrary depth remain
+        // reachable, while preserving the identity of monomorphic leaves.
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
-            try machine.value_stack.append(self.store.gpa, resolved_var);
-            return true;
+            const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
+                .alias, .structure => true,
+                .flex, .rigid, .field_presence, .err => false,
+            };
+            if (!copy_structure) {
+                try machine.value_stack.append(self.store.gpa, resolved_var);
+                return true;
+            }
         }
 
         // Check if we've already instantiated this variable

@@ -104,6 +104,7 @@ const core = @import("lir_core");
 const layout_mod = @import("layout");
 const rc_effect_rules = base.rc_effect_rules;
 const arc_sig = @import("arc_sig.zig");
+const arc_dismantle = @import("arc_dismantle.zig");
 const arc_solve = @import("arc_solve.zig");
 const debug_print = @import("debug_print.zig");
 
@@ -1050,8 +1051,9 @@ const ValueInfo = struct {
     /// unit-less consume or release of this value may claim the container's
     /// stored unit for that field instead of failing (a field take).
     payload_source: ValueId = no_value,
-    /// Original field index of the read, valid when `payload_source` is set.
-    payload_field: u16 = 0,
+    /// Aggregate projection read from `payload_source`, encoded by
+    /// `arc_dismantle.encodeProjection`.
+    payload_projection: u64 = arc_dismantle.no_projection,
 };
 
 /// One forked ownership state along a control-flow path.
@@ -1241,8 +1243,8 @@ const LocalSummary = struct {
     /// container local the read's later claim would target, or `no_dense`.
     /// Set identically on every member of the alias set.
     payload_source: u32 = no_dense,
-    /// Original field index of the read, valid with `payload_source`.
-    payload_field: u16 = 0,
+    /// Aggregate projection read from `payload_source`.
+    payload_projection: u64 = arc_dismantle.no_projection,
 };
 
 const LocalClass = enum(u8) {
@@ -1608,25 +1610,83 @@ const Certifier = struct {
         try state.addBalance(value, -1);
     }
 
-    /// Attempts to spend the container's stored unit for the field this
-    /// value was read from. The container must still hold its own unit
-    /// unconditionally, and each field's stored unit can be claimed once.
-    /// The container's balance stays at one—later borrowed reads of its
-    /// remaining bytes are still legitimate—and a claim set covering every
-    /// refcounted field marks the unit spent (`claimsSpendUnit`) rather than
-    /// releasable.
+    /// Attempts to spend the container's stored unit for the field this value
+    /// was read from. A unit-less container may itself claim a complete
+    /// projection from its parent, which certifies nested ownership-place
+    /// transfers without flattening their runtime representation. Each stored
+    /// unit can be claimed once; complete claim sets mark the corresponding
+    /// unit spent (`claimsSpendUnit`) rather than releasable.
     fn tryClaim(self: *Certifier, state: *State, value: ValueId) Allocator.Error!bool {
+        const seen = try self.valueWalkScratch();
+        return try self.tryClaimSeen(state, value, seen);
+    }
+
+    fn tryClaimSeen(
+        self: *Certifier,
+        state: *State,
+        value: ValueId,
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+    ) Allocator.Error!bool {
         if (value >= self.values.items.len) return false;
+        const value_index: usize = @intCast(value);
+        if (seen.isSet(value_index)) return false;
+        seen.set(value_index);
+        defer seen.unset(value_index);
+
         const info = self.values.items[value];
         if (info.payload_source == no_value) return false;
-        if (info.payload_field >= 64) return false;
         const container = info.payload_source;
-        if (state.balanceOf(container) < 1) return false;
-        if (state.conditionalConditionOf(container) != null) return false;
-        const bit = @as(u64, 1) << @intCast(info.payload_field);
+        if (info.payload_projection == arc_dismantle.no_projection) return false;
+        const container_origin = self.values.items[container].origin;
+        const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
+        const bit: u64 = switch (container_layout.tag) {
+            .struct_ => blk: {
+                const field_idx: u16 = @intCast(info.payload_projection & 0xffff);
+                if (field_idx >= 64) return false;
+                break :blk @as(u64, 1) << @intCast(field_idx);
+            },
+            .tag_union => blk: {
+                if (!arc_dismantle.projectionOwnsAllRc(
+                    self.store,
+                    self.layouts,
+                    container_origin,
+                    info.origin,
+                    info.payload_projection,
+                )) return false;
+                break :blk 1;
+            },
+            .scalar,
+            .box,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .closure,
+            .erased_callable,
+            .zst,
+            .ptr,
+            => return false,
+        };
         const existing = state.claimsOf(container);
         if (existing & bit != 0) return false;
+        if (!try self.ensureClaimContainerUnit(state, container, seen)) return false;
         try state.setClaims(container, existing | bit);
+        return true;
+    }
+
+    /// Makes a nested projection container's unit explicit in the certifier's
+    /// state by claiming that complete container from its own parent. This is
+    /// bookkeeping only: the parent claim and child balance are the two sides
+    /// of the same single runtime ownership unit.
+    fn ensureClaimContainerUnit(
+        self: *Certifier,
+        state: *State,
+        container: ValueId,
+        seen: *std.bit_set.DynamicBitSetUnmanaged,
+    ) Allocator.Error!bool {
+        if (state.balanceOf(container) >= 1) return true;
+        if (state.conditionalConditionOf(container) != null) return false;
+        if (!try self.tryClaimSeen(state, container, seen)) return false;
+        try state.addBalance(container, 1);
         return true;
     }
 
@@ -1648,16 +1708,33 @@ const Certifier = struct {
         if (value >= self.values.items.len) return null;
         const origin = self.values.items[value].origin;
         const origin_layout = self.layouts.getLayout(self.store.getLocal(origin).layout_idx);
-        if (origin_layout.tag != .struct_) return null;
-        const info = self.layouts.getStructInfo(origin_layout);
-        var mask: u64 = 0;
-        for (0..info.fields.len) |i| {
-            const field = info.fields.get(@intCast(i));
-            if (field.index >= 64) return null;
-            if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
-            mask |= @as(u64, 1) << @intCast(field.index);
-        }
-        return mask;
+        return switch (origin_layout.tag) {
+            .struct_ => blk: {
+                const info = self.layouts.getStructInfo(origin_layout);
+                var mask: u64 = 0;
+                for (0..info.fields.len) |i| {
+                    const field = info.fields.get(@intCast(i));
+                    if (field.index >= 64) return null;
+                    if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
+                    mask |= @as(u64, 1) << @intCast(field.index);
+                }
+                break :blk mask;
+            },
+            // A tag path can claim the unit only through a projection that
+            // owns every refcounted byte of the proven active payload. One
+            // such claim therefore spends the tag's whole unit.
+            .tag_union => 1,
+            .scalar,
+            .box,
+            .box_of_zst,
+            .list,
+            .list_of_zst,
+            .closure,
+            .erased_callable,
+            .zst,
+            .ptr,
+            => null,
+        };
     }
 
     /// Aggregate consumption: one unit moves into the holder. The emitted
@@ -1782,7 +1859,7 @@ const Certifier = struct {
                         .condition = no_dense,
                         .condition_mask = 0,
                     };
-                    self.addPayloadOriginToSummary(state, value, &summary);
+                    self.addPayloadOriginToSummary(value, &summary);
                 }
                 summary.abi_live = self.values.items[value].always_live;
             }
@@ -1792,18 +1869,19 @@ const Certifier = struct {
         return self.summary_scratch.items;
     }
 
-    /// Carries a borrowed field-read value's claim target across a state
-    /// quotient: the container's dense representative and the field index,
-    /// when the container is still bound in this state. Requires
-    /// `repr_scratch` to hold the current summary's value representatives.
-    fn addPayloadOriginToSummary(self: *Certifier, state: *const State, value: ValueId, summary: *LocalSummary) void {
+    /// Carries a borrowed projection value's claim target across a state
+    /// quotient: the container's dense representative and the projection,
+    /// when the container is still bound in this state. Unit-less nested
+    /// containers are retained here so their chain can ultimately reach an
+    /// owned root. Requires `repr_scratch` to hold the current summary's value
+    /// representatives.
+    fn addPayloadOriginToSummary(self: *Certifier, value: ValueId, summary: *LocalSummary) void {
         if (value >= self.values.items.len) return;
         const info = self.values.items[value];
         if (info.payload_source == no_value) return;
-        if (state.balanceOf(info.payload_source) < 1) return;
         const source_repr = self.repr_scratch.get(info.payload_source) orelse return;
         summary.payload_source = source_repr;
-        summary.payload_field = info.payload_field;
+        summary.payload_projection = info.payload_projection;
     }
 
     /// Collects every normalized value that anchors a borrowed value in a join
@@ -1912,7 +1990,7 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.condition_mask));
             hasher.update(std.mem.asBytes(&entry.claims));
             hasher.update(std.mem.asBytes(&entry.payload_source));
-            hasher.update(std.mem.asBytes(&entry.payload_field));
+            hasher.update(std.mem.asBytes(&entry.payload_projection));
         }
         return hasher.final();
     }
@@ -1975,17 +2053,21 @@ const Certifier = struct {
                 }
                 try lenders.append(self.allocator, lender);
             }
-            const value = try self.bindFresh(&state, local, 0, lenders.items);
-            // Restore the claim target of a field-read value: the container's
-            // rebuilt value, resolved through its dense representative.
-            if (entry.payload_source != no_dense and entry.payload_source < self.proc_locals.items.len) {
-                const container = state.valueAtDense(entry.payload_source);
-                if (container != no_value) {
-                    const info = &self.values.items[value];
-                    info.payload_source = container;
-                    info.payload_field = entry.payload_field;
-                }
-            }
+            _ = try self.bindFresh(&state, local, 0, lenders.items);
+        }
+        // Restore projection chains only after every representative has been
+        // rebuilt. A nested container's representative may sort after its
+        // child, so restoring during the construction loop would make the
+        // result depend on local numbering.
+        for (summary, 0..) |entry, dense| {
+            if (entry.class != .borrowed or entry.repr != dense) continue;
+            if (entry.payload_source == no_dense or entry.payload_source >= self.proc_locals.items.len) continue;
+            const value = state.valueAtDense(dense);
+            const container = state.valueAtDense(entry.payload_source);
+            if (value == no_value or container == no_value) continue;
+            const info = &self.values.items[value];
+            info.payload_source = container;
+            info.payload_projection = entry.payload_projection;
         }
         for (summary, 0..) |entry, dense| {
             if (entry.class != .borrowed or entry.repr == dense) continue;
@@ -2067,7 +2149,7 @@ const Certifier = struct {
                 .conditional_owned => if (ga.condition != sb.condition or ga.condition_mask != sb.condition_mask) return false,
                 .borrowed => if (!std.mem.eql(u32, ga.lender_reprs, sb.lender_reprs) or
                     ga.payload_source != sb.payload_source or
-                    ga.payload_field != sb.payload_field) return false,
+                    ga.payload_projection != sb.payload_projection) return false,
             }
         }
         return true;
@@ -3277,6 +3359,36 @@ const Certifier = struct {
         record: *const JoinRecord,
         join_id: LIR.JoinPointId,
     ) CertifyError![]const LocalSummary {
+        // A relevant join value can be the only carrier of storage selected
+        // from an aggregate that is not itself relevant after this edge. Move
+        // that stored unit into the join value before quotienting. When the
+        // root is independently relevant this remains an ordinary borrow;
+        // `tryClaim` declines a read whose exact claim is unavailable or
+        // conditionally present.
+        for (0..self.proc_locals.items.len) |dense| {
+            if (!record.relevant.isSet(dense)) continue;
+            const value = state.valueAtDense(dense);
+            if (value == no_value or state.balanceOf(value) != 0) continue;
+            if (self.values.items[value].payload_source == no_value) continue;
+
+            var root = value;
+            while (self.values.items[root].payload_source != no_value) {
+                root = self.values.items[root].payload_source;
+                if (state.balanceOf(root) > 0) break;
+            }
+
+            var root_independently_relevant = false;
+            for (0..self.proc_locals.items.len) |candidate_dense| {
+                if (!record.relevant.isSet(candidate_dense)) continue;
+                if (state.valueAtDense(candidate_dense) == root) {
+                    root_independently_relevant = true;
+                    break;
+                }
+            }
+            if (root_independently_relevant) continue;
+            if (try self.tryClaim(state, value)) try state.addBalance(value, 1);
+        }
+
         // Settle deferred takes before quotienting: a field-read value driven
         // negative by an aggregate move claims its container's stored unit
         // here, so the claim crosses the join on the container instead of a
@@ -3299,6 +3411,19 @@ const Certifier = struct {
                 const value = state.valueAtDense(dense);
                 if (value == no_value) continue;
                 if (state.balanceOf(value) > 0) continue;
+                const info = self.values.items[value];
+                if (info.payload_source != no_value) {
+                    // Preserve each immediate link of a nested projection
+                    // chain, not only its ultimate ownership lender.
+                    for (0..self.proc_locals.items.len) |candidate_dense| {
+                        if (state.valueAtDense(candidate_dense) != info.payload_source) continue;
+                        if (!self.relevant_scratch.isSet(candidate_dense)) {
+                            self.relevant_scratch.set(candidate_dense);
+                            changed = true;
+                        }
+                        break;
+                    }
+                }
                 if (!try self.collectBorrowSummaryAnchorValues(state, value, &anchor_values)) continue;
                 for (anchor_values.items) |anchor| {
                     // Find a carrier local for the anchor value.
@@ -3373,7 +3498,7 @@ const Certifier = struct {
                                 .condition = no_dense,
                                 .condition_mask = 0,
                             };
-                            self.addPayloadOriginToSummary(state, value, &summary);
+                            self.addPayloadOriginToSummary(value, &summary);
                         }
                         summary.abi_live = self.values.items[value].always_live;
                     }
@@ -3530,9 +3655,24 @@ const Certifier = struct {
                             }
                         },
                         .discriminant => |op| _ = try self.requireLive(&state, op.source),
-                        .field => |op| try self.bindPayloadRead(&state, assign.target, op.source, op.field_idx),
-                        .tag_payload => |op| try self.bindPayloadRead(&state, assign.target, op.source, null),
-                        .tag_payload_struct => |op| try self.bindPayloadRead(&state, assign.target, op.source, null),
+                        .field => |op| try self.bindPayloadRead(
+                            &state,
+                            assign.target,
+                            op.source,
+                            arc_dismantle.encodeProjection(assign.op).?,
+                        ),
+                        .tag_payload => |op| try self.bindPayloadRead(
+                            &state,
+                            assign.target,
+                            op.source,
+                            arc_dismantle.encodeProjection(assign.op).?,
+                        ),
+                        .tag_payload_struct => |op| try self.bindPayloadRead(
+                            &state,
+                            assign.target,
+                            op.source,
+                            arc_dismantle.encodeProjection(assign.op).?,
+                        ),
                         .list_reinterpret => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                         .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                     }
@@ -3981,18 +4121,16 @@ const Certifier = struct {
         }
     }
 
-    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, field_idx: ?u16) CertifyError!void {
+    fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: u64) CertifyError!void {
         const source_value = try self.requireLive(state, source);
         if (!self.isRc(target)) return;
         const value = if (source_value == no_value)
             try self.bindBorrowedFromImplicitLive(state, target)
         else
             try self.bindFresh(state, target, 0, &.{source_value});
-        if (field_idx) |field| {
-            const info = &self.values.items[value];
-            info.payload_source = source_value;
-            info.payload_field = field;
-        }
+        const info = &self.values.items[value];
+        info.payload_source = source_value;
+        info.payload_projection = projection;
     }
 
     fn bindSameValue(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId) CertifyError!void {
@@ -5887,6 +6025,24 @@ fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, fiel
     } });
 }
 
+fn tagPayloadStructReadStmt(
+    f: *CertifyTest,
+    target: LIR.LocalId,
+    source: LIR.LocalId,
+    variant_index: u16,
+    next: LIR.CFStmtId,
+) Allocator.Error!LIR.CFStmtId {
+    return try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = target,
+        .op = .{ .tag_payload_struct = .{
+            .source = source,
+            .variant_index = variant_index,
+            .tag_discriminant = variant_index,
+        } },
+        .next = next,
+    } });
+}
+
 test "certify accepts a fully dismantled record via field takes" {
     // Both refcounted fields of a dying owned pair are read without retains
     // and released; each release claims the pair's stored unit for its
@@ -5985,4 +6141,98 @@ test "certify accepts a take consumed by an owned call argument" {
     const body = try fieldReadStmt(&f, taken, pair, 0, read_residual);
     _ = try f.addProc(&.{pair}, body, .i64);
     try f.certify();
+}
+
+test "certify accepts moving an active tag variant's complete RC payload" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_str,
+    });
+
+    const callee_arg = try f.local(f.pair_str);
+    const callee_result = try f.local(.i64);
+    const callee_ret = try f.ret(callee_result);
+    const callee_result_assign = try f.assignI64(callee_result, callee_ret);
+    const callee_release = try f.decrefStmt(callee_arg, f.pair_str, callee_result_assign);
+    const callee = try f.addProc(&.{callee_arg}, callee_release, .i64);
+
+    const tag = try f.local(tag_pair);
+    const payload = try f.local(f.pair_str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.store.addLocalSpan(&.{payload}),
+        .next = ret,
+    } });
+    const body = try tagPayloadStructReadStmt(&f, payload, tag, 1, call);
+    _ = try f.addProc(&.{tag}, body, .i64);
+    try f.certify();
+}
+
+test "certify carries a complete tag payload's unit through a join cell" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_str,
+    });
+
+    const tag = try f.local(tag_pair);
+    const payload = try f.local(f.pair_str);
+    const join_payload = try f.local(f.pair_str);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_payload = try f.decrefStmt(join_payload, f.pair_str, result_assign);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const set_payload = try f.store.addCFStmt(.{ .set_local = .{
+        .target = join_payload,
+        .value = payload,
+        .mode = .initialize_join_param,
+        .next = jump,
+    } });
+    const payload_read = try tagPayloadStructReadStmt(&f, payload, tag, 1, set_payload);
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.store.addLocalSpan(&.{join_payload}),
+        .body = release_payload,
+        .remainder = payload_read,
+    } });
+    _ = try f.addProc(&.{tag}, join_stmt, .i64);
+    try f.certify();
+}
+
+test "certify rejects moving only part of an active tag payload" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const tag_pair = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_str,
+    });
+
+    const tag = try f.local(tag_pair);
+    const partial = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_partial = try f.decrefStmt(partial, .str, result_assign);
+    const body = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = partial,
+        .op = .{ .tag_payload = .{
+            .source = tag,
+            .payload_idx = 0,
+            .variant_index = 1,
+            .tag_discriminant = 1,
+        } },
+        .next = release_partial,
+    } });
+    _ = try f.addProc(&.{tag}, body, .i64);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "without an ownership unit") != null);
 }

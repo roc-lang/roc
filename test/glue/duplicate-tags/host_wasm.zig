@@ -28,14 +28,27 @@ fn allocRaw(length: usize, alignment: usize) ?*anyopaque {
         fail("invalid allocation alignment");
         return null;
     }
-    if (heap_cursor == 0) heap_cursor = @wasmMemorySize(0) * wasm_page_size;
-    const ptr = (heap_cursor + alignment - 1) & ~(alignment - 1);
-    const end = ptr + length;
-    if (end < ptr) {
+    if (heap_cursor == 0) {
+        const heap_start = @mulWithOverflow(@wasmMemorySize(0), wasm_page_size);
+        if (heap_start[1] != 0) {
+            fail("wasm memory exhausted");
+            return null;
+        }
+        heap_cursor = heap_start[0];
+    }
+    const aligned = @addWithOverflow(heap_cursor, alignment - 1);
+    if (aligned[1] != 0) {
+        fail("allocation alignment overflow");
+        return null;
+    }
+    const ptr = aligned[0] & ~(alignment - 1);
+    const end_result = @addWithOverflow(ptr, length);
+    if (end_result[1] != 0) {
         fail("allocation overflow");
         return null;
     }
-    const required_pages = (end + wasm_page_size - 1) / wasm_page_size;
+    const end = end_result[0];
+    const required_pages = wasmPagesForBytes(end);
     const current_pages = @wasmMemorySize(0);
     if (required_pages > current_pages and @wasmMemoryGrow(0, required_pages - current_pages) == -1) {
         fail("memory grow failed");
@@ -44,6 +57,17 @@ fn allocRaw(length: usize, alignment: usize) ?*anyopaque {
     heap_cursor = end;
     alloc_count += 1;
     return @ptrFromInt(ptr);
+}
+
+fn wasmPagesForBytes(byte_count: usize) usize {
+    return byte_count / wasm_page_size + @intFromBool(byte_count % wasm_page_size != 0);
+}
+
+comptime {
+    const max_usize = ~@as(usize, 0);
+    if (wasmPagesForBytes(max_usize) != max_usize / wasm_page_size + 1) {
+        @compileError("wasm page rounding must handle the usize limit");
+    }
 }
 
 fn deallocRaw(ptr: ?*anyopaque, _: usize, _: usize) void {
