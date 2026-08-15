@@ -2917,7 +2917,7 @@ const Pass = struct {
         const base_type = self.program.types.get(base_ty);
         if (base_type != .named) return null;
         const base_named = base_type.named;
-        if (base_named.def.iterator_representation != .minted) return null;
+        if (base_named.def.generated == null) return null;
         const topology = base_named.def.iterator_topology orelse return null;
         const backing = base_named.backing orelse return null;
         if (backing.authority != .generated_private) return null;
@@ -3413,6 +3413,10 @@ const Pass = struct {
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
                 .args = (try self.cloneExprSpanFresh(call.args, renames)) orelse return null,
+                .produced_type_source = if (call.produced_type_source) |source|
+                    (try self.cloneExprFresh(source, renames)) orelse return null
+                else
+                    null,
             } },
             .call_proc => |call| .{ .call_proc = .{
                 .callee = call.callee,
@@ -5773,6 +5777,10 @@ const Cloner = struct {
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
                 .args = try self.cloneExprSpan(call.args),
+                .produced_type_source = if (call.produced_type_source) |source|
+                    try self.cloneExpr(source)
+                else
+                    null,
             } },
             .field_access => |field| return try self.cloneFieldAccess(expr.ty, field),
             .tuple_access => |access| return try self.cloneTupleAccess(expr.ty, access),

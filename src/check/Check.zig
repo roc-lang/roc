@@ -16948,7 +16948,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             const lhs_var = ModuleEnv.varFrom(eq.lhs);
             const rhs_var = ModuleEnv.varFrom(eq.rhs);
-            _ = try self.unify(lhs_var, rhs_var, env);
+            const operand_result = try self.unify(lhs_var, rhs_var, env);
+            if (operand_result.isOk()) {
+                try self.closeAbsentConstructedPayloadVars(eq.lhs, lhs_var);
+                try self.closeAbsentConstructedPayloadVars(eq.rhs, rhs_var);
+            }
             _ = try self.unify(try self.freshBool(env, expr_region), expr_var, env);
         },
         .e_structural_hash => |h| {
@@ -20658,6 +20662,22 @@ fn rewriteDerivedIsEqMethodCallAsStructuralEq(
     }
 
     return true;
+}
+
+/// Apply the declared absent-constructor payload-closing rule at the point
+/// where checked dispatch has proved that an `is_eq` call is structural.
+/// The operands already belong to one solved equality relation, so a default
+/// established by either constructed value belongs to their shared type.
+fn closeAbsentStructuralEqPayloads(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+) Allocator.Error!void {
+    const expr_idx = constraintIntroExpr(constraint) orelse return;
+    const expr = self.cir.store.getExpr(expr_idx);
+    if (expr != .e_structural_eq) return;
+    const eq = expr.e_structural_eq;
+    try self.closeAbsentConstructedPayloadVars(eq.lhs, ModuleEnv.varFrom(eq.lhs));
+    try self.closeAbsentConstructedPayloadVars(eq.rhs, ModuleEnv.varFrom(eq.rhs));
 }
 
 /// Rewrite a derived `to_hash` method call into an explicit structural-hash node.
@@ -26055,13 +26075,13 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
 
                     // Unwrap the constraint type
                     if (constraint_fn_resolved.unwrapFunc() == null) {
-                        _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                        _ = try self.unifyOwnedRelation(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
                                 .dispatcher_name = nominal_type.ident.ident_idx,
                                 .method_name = constraint.fn_name,
                             },
-                        });
+                        }, .exact);
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
                         continue;
@@ -26076,7 +26096,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     };
                     const fn_result = fn_result: {
                         if (self.probe_depth != 0 or !self.varIsConflictedDefaultLiteral(deferred_constraint.var_)) {
-                            break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
+                            break :fn_result try self.unifyOwnedRelation(method_var, constraint.fn_var, env, fn_ctx, .exact);
                         }
                         // This receiver's type is the documented head default,
                         // committed while its method constraints were still
@@ -26414,25 +26434,25 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     )) orelse continue;
 
                     if (constraint_fn_resolved.unwrapFunc() == null) {
-                        _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                        _ = try self.unifyOwnedRelation(method_var, constraint.fn_var, env, .{
                             .method_type = .{
                                 .constraint_var = constraint.fn_var,
                                 .dispatcher_name = alias.ident.ident_idx,
                                 .method_name = constraint.fn_name,
                             },
-                        });
+                        }, .exact);
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
                         continue;
                     }
 
-                    const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                    const fn_result = try self.unifyOwnedRelation(method_var, constraint.fn_var, env, .{
                         .method_type = .{
                             .constraint_var = deferred_constraint.var_,
                             .dispatcher_name = alias.ident.ident_idx,
                             .method_name = constraint.fn_name,
                         },
-                    });
+                    }, .exact);
                     if (fn_result.isProblem()) {
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
@@ -29607,6 +29627,8 @@ fn satisfyDerivedIsEqConstraint(
     _ = try self.unify(try self.freshBool(env, region), resolved_func.ret, env);
     if (!self.rewriteDerivedIsEqMethodCallAsStructuralEq(constraint)) {
         try self.markStaticDispatchRejected(constraint);
+    } else {
+        try self.closeAbsentStructuralEqPayloads(constraint);
     }
 }
 

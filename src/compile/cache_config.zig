@@ -144,7 +144,9 @@ pub const Constants = struct {
     /// 59: Range syntax produces Builtin.Num.Range values, range dispatch uses
     ///     `_to` methods, and stored ranges mint iterator representations while
     ///     numeric range hooks explicitly delegate to that representation.
-    pub const CACHE_VERSION = 59;
+    /// 60: Exact checked call and dispatch artifacts preserve producer-owned
+    ///     Monotype identities alongside the stored Range representation.
+    pub const CACHE_VERSION = 60;
 };
 
 /// Configuration for the Roc cache system.

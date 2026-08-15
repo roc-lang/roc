@@ -146,6 +146,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
         .defs = source.defs.items,
         .local_tys = source.local_tys.items,
         .expr_tys = source.expr_tys.items,
+        .expr_is_uninhabited = source.expr_is_uninhabited.items,
         .pat_tys = source.pat_tys.items,
         .fn_tys = source.fn_tys.items,
         .layout_requests = source.layout_requests.items,

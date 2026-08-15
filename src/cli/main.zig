@@ -15845,6 +15845,7 @@ fn finishPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.Chec
     reporter.endWithBreakdownSequential(&postCheckLoweringBreakdown(snapshot));
     reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype graph identity", &monotypeGraphIdentityCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
 }
 
@@ -15869,6 +15870,7 @@ fn recordPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.Chec
     );
     reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype graph identity", &monotypeGraphIdentityCounters(snapshot.monotype_diagnostics));
     reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
 }
 
@@ -15899,7 +15901,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [17]progress.Counter {
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [18]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -15917,37 +15919,40 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Exact type checks", .count = counters.exact_type_checks },
         .{ .name = "Nominal backing reuses", .count = counters.nominal_backing_reuses },
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
+        .{ .name = "Generated backing instantiations", .count = counters.generated_nominal_backing_instantiations },
         .{ .name = "Missing evidence", .count = counters.evidence_missing },
         .{ .name = "Total specialization misses", .count = counters.template_misses +| counters.nested_misses },
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [7]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
         .{ .name = "Nodes created", .count = graph.nodes_created },
         .{ .name = "Unification requests", .count = graph.unify_requests },
         .{ .name = "Union classes joined", .count = graph.class_unions },
-        .{ .name = "Active type requests", .count = graph.active_type_requests },
-        .{ .name = "Imported active type hits", .count = graph.active_type_imported_hits },
-        .{ .name = "Active snapshot hits", .count = graph.active_snapshot_cache_hits },
-        .{ .name = "Active snapshot misses", .count = graph.active_snapshot_cache_misses },
-        .{ .name = "Snapshot nodes materialized", .count = graph.active_snapshot_nodes_materialized },
-        .{ .name = "Snapshot invalidation requests", .count = graph.active_snapshot_invalidations },
-        .{ .name = "Snapshot entries invalidated", .count = graph.active_snapshot_entries_invalidated },
         .{ .name = "Monotype import requests", .count = graph.mono_import_requests },
         .{ .name = "Monotype import hits", .count = graph.mono_import_hits },
         .{ .name = "Monotype import misses", .count = graph.mono_import_misses },
-        .{ .name = "Generated-private scans", .count = graph.generated_private_scans },
-        .{ .name = "Generated-private cache hits", .count = graph.generated_private_cache_hits },
-        .{ .name = "Generated-private nodes visited", .count = graph.generated_private_nodes_visited },
-        .{ .name = "Finished-Monotype scans", .count = graph.finished_mono_scans },
-        .{ .name = "Finished-Monotype nodes visited", .count = graph.finished_mono_nodes_visited },
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]progress.Counter {
+fn monotypeGraphIdentityCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [8]progress.Counter {
+    const graph = diagnostics.graph;
+    return .{
+        .{ .name = "Generated identity input nodes hashed", .count = graph.generated_identity_input_nodes_hashed },
+        .{ .name = "Generated identity intern hits", .count = graph.generated_identity_intern_hits },
+        .{ .name = "Generated identity intern misses", .count = graph.generated_identity_intern_misses },
+        .{ .name = "Generated type-store hits", .count = graph.generated_type_store_hits },
+        .{ .name = "Generated type-store misses", .count = graph.generated_type_store_misses },
+        .{ .name = "Permanent inhabitedness requests", .count = graph.permanent_inhabitedness_requests },
+        .{ .name = "Permanent inhabitedness hits", .count = graph.permanent_inhabitedness_hits },
+        .{ .name = "Closed-empty finalization requests", .count = graph.closed_empty_finalization_requests },
+    };
+}
+
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [31]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
@@ -15963,14 +15968,24 @@ fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]p
         .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
         .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
         .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
-        .{ .name = "Lowered template bodies discarded", .count = body.lowered_template_bodies_discarded },
-        .{ .name = "Lowered nested bodies discarded", .count = body.lowered_nested_bodies_discarded },
+        .{ .name = "Discarded with lexical owner", .count = body.discarded_with_lexical_owner },
+        .{ .name = "Discarded as draft duplicate", .count = body.discarded_as_draft_duplicate },
+        .{ .name = "Discarded as committed duplicate", .count = body.discarded_as_committed_duplicate },
         .{ .name = "Expression relations", .count = body.expr_relation_requests },
         .{ .name = "Argument spans prepared", .count = body.argument_spans_prepared },
         .{ .name = "Arguments prepared", .count = body.arguments_prepared },
         .{ .name = "Nested callable checks", .count = body.nested_callable_checks },
         .{ .name = "Nested lambdas prepared", .count = body.nested_lambdas_prepared },
         .{ .name = "Nested closures prepared", .count = body.nested_closures_prepared },
+        .{ .name = "Substituted checked node misses", .count = body.substituted_checked_node_misses },
+        .{ .name = "Declaration checked node misses", .count = body.declaration_checked_node_misses },
+        .{ .name = "Recursive checked node reservations", .count = body.recursive_checked_node_reservations },
+        .{ .name = "Call selection refinements", .count = body.call_selection_refinements },
+        .{ .name = "Call selection entries recorded", .count = body.call_selection_entries_recorded },
+        .{ .name = "Call selection non-slot entries", .count = body.call_selection_non_slot_entries },
+        .{ .name = "Call selection slot visits", .count = body.call_selection_slot_visits },
+        .{ .name = "Call selection binding visits", .count = body.call_selection_binding_visits },
+        .{ .name = "Call selection occurrences evaluated", .count = body.call_selection_occurrences_evaluated },
     };
 }
 
@@ -16032,12 +16047,15 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     diagnostics.specialization.template_requests = 101;
     diagnostics.specialization.nested_misses = 102;
     diagnostics.graph.nodes_created = 201;
-    diagnostics.graph.generated_private_nodes_visited = 202;
+    diagnostics.graph.generated_identity_input_nodes_hashed = 204;
     diagnostics.body.instantiation_scopes_created = 303;
     diagnostics.body.checked_node_cache_hits = 301;
     diagnostics.body.deferred_template_reuses = 305;
     diagnostics.body.cross_root_template_reuses = 306;
     diagnostics.body.nested_closures_prepared = 302;
+    diagnostics.body.substituted_checked_node_misses = 307;
+    diagnostics.body.declaration_checked_node_misses = 308;
+    diagnostics.body.recursive_checked_node_reservations = 309;
 
     const specialization = monotypeSpecializationCounters(diagnostics);
     try std.testing.expectEqualStrings("Template requests", specialization[0].name);
@@ -16048,8 +16066,9 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     const graph = monotypeGraphCounters(diagnostics);
     try std.testing.expectEqualStrings("Nodes created", graph[1].name);
     try std.testing.expectEqual(@as(u64, 201), graph[1].count);
-    try std.testing.expectEqualStrings("Generated-private nodes visited", graph[16].name);
-    try std.testing.expectEqual(@as(u64, 202), graph[16].count);
+    const graph_identity = monotypeGraphIdentityCounters(diagnostics);
+    try std.testing.expectEqualStrings("Generated identity input nodes hashed", graph_identity[0].name);
+    try std.testing.expectEqual(@as(u64, 204), graph_identity[0].count);
 
     const body = monotypeBodyCounters(diagnostics);
     try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);
@@ -16062,6 +16081,12 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 305), body[11].count);
     try std.testing.expectEqualStrings("Nested closures prepared", body[20].name);
     try std.testing.expectEqual(@as(u64, 302), body[20].count);
+    try std.testing.expectEqualStrings("Substituted checked node misses", body[21].name);
+    try std.testing.expectEqual(@as(u64, 307), body[21].count);
+    try std.testing.expectEqualStrings("Declaration checked node misses", body[22].name);
+    try std.testing.expectEqual(@as(u64, 308), body[22].count);
+    try std.testing.expectEqualStrings("Recursive checked node reservations", body[23].name);
+    try std.testing.expectEqual(@as(u64, 309), body[23].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {

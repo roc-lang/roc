@@ -41,6 +41,7 @@ const Shape = struct {
     is_lt: usize = 0,
     is_gt: usize = 0,
     switches: usize = 0,
+    unchecked_reads: usize = 0,
 };
 
 var counted: Shape = .{};
@@ -51,10 +52,12 @@ fn countDecodeShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
     const buf = try gpa.alloc(u8, 1 << 22);
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
+        const proc_id: lir.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "decode")) continue;
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, proc_id, &writer);
         const text = writer.buffered();
-        if (std.mem.count(u8, text, "num_from_le_bytes_unchecked") == 0) continue;
         if (std.c.getenv("RANGE_PROVE_DUMP") != null) {
             std.debug.print("\n===== decode proc =====\n{s}\n", .{text});
         }
@@ -65,6 +68,7 @@ fn countDecodeShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
             .is_lt = std.mem.count(u8, text, "num_is_lt("),
             .is_gt = std.mem.count(u8, text, "num_is_gt("),
             .switches = std.mem.count(u8, text, "switch "),
+            .unchecked_reads = std.mem.count(u8, text, "num_from_le_bytes_unchecked"),
         };
         return;
     }
@@ -73,7 +77,7 @@ fn countDecodeShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
 test "a 16-byte margin guard proves away the read's bounds test and the advance's checks" {
     try harness.expectLirInspectionWithOptions(
         fastloopApp("16"),
-        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        .{ .inline_mode = .wrappers, .proc_debug_names = true, .prove_ranges = true },
         countDecodeShape,
     );
     try std.testing.expect(counted.found_decode_proc);
@@ -89,12 +93,13 @@ test "a 16-byte margin guard proves away the read's bounds test and the advance'
     // Only the loop's own margin switch survives; the bounds-test switch and
     // the `?? 0` fallback switch folded to their safe arms.
     try std.testing.expectEqual(@as(usize, 1), counted.switches);
+    try std.testing.expectEqual(@as(usize, 1), counted.unchecked_reads);
 }
 
 test "a margin too small for the read keeps every bounds check" {
     try harness.expectLirInspectionWithOptions(
         fastloopApp("4"),
-        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        .{ .inline_mode = .wrappers, .proc_debug_names = true, .prove_ranges = true },
         countDecodeShape,
     );
     try std.testing.expect(counted.found_decode_proc);
@@ -112,12 +117,13 @@ test "a margin too small for the read keeps every bounds check" {
     // and at least seven, which covers the masked subtrahend.
     try std.testing.expectEqual(@as(usize, 1), counted.plus_checked);
     try std.testing.expectEqual(@as(usize, 0), counted.minus_checked);
+    try std.testing.expectEqual(@as(usize, 1), counted.unchecked_reads);
 }
 
 test "the pass leaves the shape untouched when disabled" {
     try harness.expectLirInspectionWithOptions(
         fastloopApp("16"),
-        .{ .inline_mode = .wrappers },
+        .{ .inline_mode = .wrappers, .proc_debug_names = true },
         countDecodeShape,
     );
     try std.testing.expect(counted.found_decode_proc);
@@ -126,6 +132,7 @@ test "the pass leaves the shape untouched when disabled" {
     try std.testing.expectEqual(@as(usize, 1), counted.is_lt);
     try std.testing.expectEqual(@as(usize, 1), counted.is_gt);
     try std.testing.expectEqual(@as(usize, 3), counted.switches);
+    try std.testing.expectEqual(@as(usize, 1), counted.unchecked_reads);
 }
 
 // Mirrors the real decode loop's structure: a conjunction in the loop
@@ -165,13 +172,14 @@ const merge_fastloop_app =
 test "scratch: conjunction and post-merge refill both prove" {
     try harness.expectLirInspectionWithOptions(
         merge_fastloop_app,
-        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        .{ .inline_mode = .wrappers, .proc_debug_names = true, .prove_ranges = true },
         countDecodeShape,
     );
     try std.testing.expect(counted.found_decode_proc);
     try std.testing.expectEqual(@as(usize, 0), counted.is_lt);
     try std.testing.expectEqual(@as(usize, 0), counted.is_gt);
     try std.testing.expectEqual(@as(usize, 0), counted.minus_checked);
+    try std.testing.expectEqual(@as(usize, 2), counted.unchecked_reads);
 }
 
 // The real decode fastloop from roc-deflate's Inflate.roc, structurally
@@ -296,7 +304,7 @@ const real_fastloop_app =
 test "the deflate fastloop proves every refill guard" {
     try harness.expectLirInspectionWithOptions(
         real_fastloop_app,
-        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        .{ .inline_mode = .wrappers, .proc_debug_names = true, .prove_ranges = true },
         countRealShape,
     );
     try std.testing.expect(counted.found_decode_proc);
@@ -304,6 +312,7 @@ test "the deflate fastloop proves every refill guard" {
     // validation, which tests decoded data and must stay. Every refill
     // bounds test proved against the 24-byte margin.
     try std.testing.expectEqual(@as(usize, 1), counted.is_gt);
+    try std.testing.expectEqual(@as(usize, 4), counted.unchecked_reads);
 }
 
 fn countRealShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
@@ -312,10 +321,12 @@ fn countRealShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     const buf = try gpa.alloc(u8, 1 << 22);
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
+        const proc_id: lir.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "inflate_block")) continue;
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, proc_id, &writer);
         const text = writer.buffered();
-        if (std.mem.count(u8, text, "num_from_le_bytes_unchecked") < 3) continue;
         if (std.c.getenv("RANGE_PROVE_DUMP") != null) {
             std.debug.print("\n===== real fastloop proc =====\n{s}\n", .{text});
         }
@@ -326,6 +337,7 @@ fn countRealShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
             .is_lt = std.mem.count(u8, text, "num_is_lt("),
             .is_gt = std.mem.count(u8, text, "num_is_gt("),
             .switches = std.mem.count(u8, text, "switch "),
+            .unchecked_reads = std.mem.count(u8, text, "num_from_le_bytes_unchecked"),
         };
         return;
     }

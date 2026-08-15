@@ -1,12 +1,12 @@
 //! Per-specialization type solver for Monotype lowering.
 //!
 //! Checked types instantiate into union-find nodes with explicit row
-//! extension links; constraints unify nodes order-independently; Monotypes
-//! use immutable read-only snapshots of fully resolved nodes when Type-shaped
-//! inspection is required. Cross-specialization edges import finished Monotypes as
-//! snapshots, so a specialization that needs more than its requested type is
-//! a unification conflict rather than a silent rewrite of another
-//! specialization's final type.
+//! extension links and constraints unify nodes order-independently. Producing
+//! graphs never expose TypeId views: lowering consumes exact nodes until one
+//! final materialization after relation freeze. Cross-specialization edges
+//! copy finished Monotypes into closed graph structure, so a specialization
+//! that needs more than its requested type conflicts instead of rewriting
+//! another specialization's final type.
 
 const std = @import("std");
 const check = @import("check");
@@ -77,13 +77,13 @@ const FieldKindNode = struct {
     parent: FieldKindId,
     rank: u8 = 0,
     resolved: ?ResolvedFieldKind = null,
-    cells: ?FieldKindCells = null,
 };
 
 /// The exact cells whose representation is selected by one generalized field
 /// kind. Producers register these when they instantiate the field; relation
 /// freeze consumes them if no earlier specialization evidence selected a kind.
 const FieldKindCells = struct {
+    kind: FieldKindId,
     slot: NodeId,
     value: NodeId,
 };
@@ -110,7 +110,13 @@ pub const InstField = struct {
 pub const InstVariableOrigin = enum(u8) {
     checked_variable,
     row_extension,
-    placeholder,
+    /// Recursive forward cell owned and filled by one type-construction
+    /// traversal. Consumers may retain it as explicit request authority.
+    construction_placeholder,
+    /// Exact output cell owned by a value producer. Consumers must use that
+    /// producer's separately registered representation request until it
+    /// completes the output.
+    producer_placeholder,
 };
 
 /// Defaulting evidence carried by an unresolved instantiation-graph node until
@@ -119,6 +125,11 @@ pub const InstVariable = struct {
     origin: InstVariableOrigin,
     numeric_default_phase: ?checked.NumericDefaultPhase = null,
     row_default: ?checked.RowDefault = null,
+    specialization_default: ?checked.SpecializationDefault = null,
+    /// Stable checked identity for a polymorphic substitution slot. This is
+    /// absent on graph-only variables created by tests and compiler-owned
+    /// structural work.
+    checked_key: ?[32]u8 = null,
 
     pub fn checkedVariable(
         numeric_default_phase: ?checked.NumericDefaultPhase,
@@ -131,6 +142,21 @@ pub const InstVariable = struct {
         };
     }
 
+    pub fn checkedVariableAtKey(
+        numeric_default_phase: ?checked.NumericDefaultPhase,
+        row_default: ?checked.RowDefault,
+        specialization_default: ?checked.SpecializationDefault,
+        checked_key: [32]u8,
+    ) InstVariable {
+        return .{
+            .origin = .checked_variable,
+            .numeric_default_phase = numeric_default_phase,
+            .row_default = row_default,
+            .specialization_default = specialization_default,
+            .checked_key = checked_key,
+        };
+    }
+
     pub fn row(default: checked.RowDefault) InstVariable {
         return .{
             .origin = .row_extension,
@@ -138,8 +164,12 @@ pub const InstVariable = struct {
         };
     }
 
-    pub fn placeholder() InstVariable {
-        return .{ .origin = .placeholder };
+    pub fn constructionPlaceholder() InstVariable {
+        return .{ .origin = .construction_placeholder };
+    }
+
+    pub fn producerPlaceholder() InstVariable {
+        return .{ .origin = .producer_placeholder };
     }
 };
 
@@ -157,29 +187,17 @@ pub const InstDeclaredField = union(enum(u8)) {
 };
 
 /// Named (alias/nominal/opaque) instantiation-graph node.
-const InstNamed = struct {
+pub const InstNamed = struct {
     named_type: Type.NamedType,
     def: Type.TypeDef,
     kind: Type.NamedKind,
     builtin_owner: ?static_dispatch.BuiltinOwner,
     args: []NodeId,
     backing: ?InstBacking,
-    /// Graph-owned provenance for an iterator representation minted while
-    /// relations are still being produced. Its durable `generated` digest is
-    /// computed only when this graph is sealed, from the final component
-    /// types. Imported finished Monotypes have this null and already carry
-    /// their producer digest in `def.generated`.
-    generated_iterator: ?InstGeneratedIterator = null,
     /// Declared field order for a nominal/opaque record backing (empty
     /// otherwise). Padding field types are graph nodes so sealing maps them to
     /// immutable type ids with the rest of the named type.
     declared_order: []const InstDeclaredField = &.{},
-};
-
-/// Graph-owned data for a private iterator representation before sealing.
-pub const InstGeneratedIterator = struct {
-    callable_evidence: ?names.TypeDigest,
-    public_source: InstIteratorPublicSource,
 };
 
 /// Exact checked public iterator definition refined by a generated iterator.
@@ -194,6 +212,12 @@ pub const InstIteratorPublicSource = struct {
 
 /// Content of an instantiation-graph node. Rows carry explicit extension
 /// links; `redirect` is the union-find edge.
+const InstFunction = struct {
+    args: []NodeId,
+    ret: NodeId,
+};
+
+/// One node in the exact Monotype construction graph.
 pub const InstNode = union(enum) {
     redirect: NodeId,
     unresolved: InstVariable,
@@ -201,14 +225,8 @@ pub const InstNode = union(enum) {
     list: NodeId,
     box: NodeId,
     tuple: []NodeId,
-    func: struct {
-        args: []NodeId,
-        ret: NodeId,
-    },
-    tag_union: struct {
-        tags: []InstTag,
-        ext: NodeId,
-    },
+    func: InstFunction,
+    tag_union: InstTagUnion,
     record: struct {
         fields: []InstField,
         ext: NodeId,
@@ -220,6 +238,11 @@ pub const InstNode = union(enum) {
     zst,
 };
 
+const InstTagUnion = struct {
+    tags: []InstTag,
+    ext: NodeId,
+};
+
 /// Graph-native function shape. These nodes remain live until their owning
 /// specialization graph is sealed.
 pub const FunctionNodes = struct {
@@ -227,13 +250,14 @@ pub const FunctionNodes = struct {
     ret: NodeId,
 };
 
-/// Immutable alpha-normalized bytes for one open function interface, scoped to
-/// the producing instantiation graph. The digest selects lookup candidates;
-/// exact bytes remain the collision authority after body relations mutate the
-/// live request nodes.
-pub const OpenFunctionInterfaceShape = struct {
-    digest: names.TypeDigest,
-    bytes: []const u8,
+/// Input authority for lowering a function body. An exact destination is
+/// supplied by an enclosing storage or control-flow boundary and guides the
+/// body's contextual producers. A produced result has no destination yet.
+/// In both cases the function value owns a separate forward result cell that
+/// the body completes with the exact node it returns.
+pub const FunctionResultRelation = enum(u8) {
+    exact_destination,
+    produced,
 };
 
 /// Deterministic operation counts for diagnosing Monotype graph workloads.
@@ -243,24 +267,17 @@ pub const GraphDiagnostics = struct {
     nodes_created: u64 = 0,
     unify_requests: u64 = 0,
     class_unions: u64 = 0,
-    active_type_requests: u64 = 0,
-    active_type_imported_hits: u64 = 0,
-    active_snapshot_cache_hits: u64 = 0,
-    active_snapshot_cache_misses: u64 = 0,
-    active_snapshot_nodes_materialized: u64 = 0,
-    active_snapshot_invalidations: u64 = 0,
-    active_snapshot_entries_invalidated: u64 = 0,
     mono_import_requests: u64 = 0,
     mono_import_hits: u64 = 0,
     mono_import_misses: u64 = 0,
-    iterator_interface_scans: u64 = 0,
-    iterator_interface_cache_hits: u64 = 0,
-    iterator_interface_nodes_visited: u64 = 0,
-    generated_private_scans: u64 = 0,
-    generated_private_cache_hits: u64 = 0,
-    generated_private_nodes_visited: u64 = 0,
-    finished_mono_scans: u64 = 0,
-    finished_mono_nodes_visited: u64 = 0,
+    generated_identity_input_nodes_hashed: u64 = 0,
+    generated_identity_intern_hits: u64 = 0,
+    generated_identity_intern_misses: u64 = 0,
+    generated_type_store_hits: u64 = 0,
+    generated_type_store_misses: u64 = 0,
+    permanent_inhabitedness_requests: u64 = 0,
+    permanent_inhabitedness_hits: u64 = 0,
+    closed_empty_finalization_requests: u64 = 0,
 };
 
 /// Graph-native named-type cells.
@@ -289,10 +306,68 @@ pub const TagRowNodes = struct {
     tags: []const InstTag,
 };
 
+/// Graph-native tag row used while constructing an exact produced value.
+pub const TagConstructionRow = struct {
+    /// Exact structural backing beneath any explicit nominal constructor.
+    root: NodeId,
+    tags: []const InstTag,
+    ext: NodeId,
+};
+
 const NodePair = struct {
     left: NodeId,
     right: NodeId,
 };
+
+/// Stable identity of one node in an immutable checked-type base. Checked type
+/// ids are dense only within one CheckedModule, so the module identity is an
+/// inseparable part of every specialization-substitution key.
+pub const CheckedBaseKey = struct {
+    module_bytes: [32]u8,
+    checked: checked.CheckedTypeId,
+};
+
+/// Whether a call slot contains request input or a completed value node.
+pub const DirectRequestSelectionAuthority = enum(u8) {
+    /// Context used to lower a value before its exact result exists. The
+    /// value's producer replaces this seed when it completes.
+    request,
+    /// Exact node returned by a runtime value edge or constructed from an
+    /// immutable substitution-free checked recipe.
+    produced,
+};
+
+/// One checker-recorded call slot and its current exact node. Producer
+/// selections are single-assignment; a producer may replace only an earlier
+/// request seed for the same slot.
+pub const DirectRequestSelection = struct {
+    base: CheckedBaseKey,
+    produced: NodeId,
+    authority: DirectRequestSelectionAuthority = .produced,
+};
+
+const DirectRequestSelectionSpan = struct {
+    start: u32,
+    len: u32,
+
+    const uninitialized_len = std.math.maxInt(u32);
+    const uninitialized: DirectRequestSelectionSpan = .{ .start = 0, .len = uninitialized_len };
+
+    fn isInitialized(self: DirectRequestSelectionSpan) bool {
+        return self.len != uninitialized_len;
+    }
+};
+
+/// Result of hashing one complete generated-nominal construction request.
+/// A vacant result carries the digest into registration so a cache miss never
+/// hashes the same inputs twice.
+pub const GeneratedNominalLookup = struct {
+    existing: ?NodeId,
+    digest: names.TypeDigest,
+};
+
+/// Generated nominal lookup used by iterator construction.
+pub const GeneratedIteratorLookup = GeneratedNominalLookup;
 
 const RelationStamp = struct {
     left: NodeId,
@@ -301,71 +376,24 @@ const RelationStamp = struct {
     right_version: u32,
 };
 
-const NominalBackingDeclaration = struct {
-    module_bytes: [32]u8,
-    declaration_id: u32,
+/// Result of reserving one ordinary nominal identity before evaluating its
+/// deterministic declaration backing.
+pub const OrdinaryNamedReservation = union(enum) {
+    existing: NodeId,
+    vacant: struct {
+        named: NodeId,
+        backing: NodeId,
+    },
 };
 
-const NominalBackingCacheContext = struct {
-    pub fn hash(_: NominalBackingCacheContext, key: NominalBackingDeclaration) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(&key.module_bytes);
-        var declaration_id = std.mem.nativeToLittle(u32, key.declaration_id);
-        hasher.update(std.mem.asBytes(&declaration_id));
-        return hasher.final();
+const GeneratedNominalInternContext = struct {
+    pub fn hash(_: @This(), key: names.TypeDigest) u64 {
+        return std.hash.Wyhash.hash(0, &key.bytes);
     }
 
-    pub fn eql(_: NominalBackingCacheContext, left: NominalBackingDeclaration, right: NominalBackingDeclaration) bool {
-        return std.mem.eql(u8, left.module_bytes[0..], right.module_bytes[0..]) and
-            left.declaration_id == right.declaration_id;
+    pub fn eql(_: @This(), left: names.TypeDigest, right: names.TypeDigest) bool {
+        return std.mem.eql(u8, &left.bytes, &right.bytes);
     }
-};
-
-/// One instantiated backing of a declaration. Argument identity follows the
-/// union-find classes rather than raw node ids, which can redirect as producer
-/// evidence is applied.
-const NominalBackingInstance = struct {
-    args: []NodeId,
-    node: NodeId,
-};
-
-const ContainmentDependency = struct {
-    node: NodeId,
-    root: NodeId,
-    version: u32,
-};
-
-/// One containment query's memoized answer for one graph root, with the exact
-/// nodes that answer depends on. Each query keeps its own dependency list: the
-/// two queries stop descending at different nodes, so sharing one list would
-/// make each answer's validity scan cover the other's nodes and let a version
-/// bump on nodes only one query visited invalidate both.
-const ContainmentQueryCache = struct {
-    valid: bool = false,
-    result: bool = false,
-    dependencies: std.ArrayList(ContainmentDependency) = .empty,
-};
-
-const ContainmentCacheEntry = struct {
-    generated_private: ContainmentQueryCache = .{},
-    iterator_interface: ContainmentQueryCache = .{},
-
-    fn forQuery(self: *ContainmentCacheEntry, comptime query: ContainmentQuery) *ContainmentQueryCache {
-        return switch (query) {
-            .generated_private => &self.generated_private,
-            .iterator_interface => &self.iterator_interface,
-        };
-    }
-
-    fn deinit(self: *ContainmentCacheEntry, allocator: Allocator) void {
-        self.generated_private.dependencies.deinit(allocator);
-        self.iterator_interface.dependencies.deinit(allocator);
-    }
-};
-
-const ContainmentQuery = enum {
-    generated_private,
-    iterator_interface,
 };
 
 const RelationState = enum {
@@ -373,115 +401,120 @@ const RelationState = enum {
     frozen,
 };
 
-const GeneratedIteratorDepthRule = union(enum) {
-    fixed: u8,
-    children: struct {
-        count: usize,
-        increment: u8,
-    },
-};
-
-const GeneratedIteratorDepthFrame = struct {
-    node: NodeId,
-    next_child: usize,
-    child_count: usize,
-    max_child_depth: u8,
-    increment: u8,
+const InternedCompoundByAuthority = struct {
+    checked_base: ?NodeId = null,
+    produced: ?NodeId = null,
 };
 
 /// Per-specialization type solver. Checked types instantiate into union-find
 /// nodes with explicit row extension links; constraints unify nodes
-/// order-independently. Type-shaped inspection receives immutable snapshots of
-/// resolved graph nodes, invalidated rather than rewritten when relations
-/// change. Cross-specialization edges import final Monotypes as closed
-/// structure, so a specialization that tries to exceed its requested type is a
-/// unification conflict, not a silent divergence.
+/// order-independently. Type-shaped inspection stays graph-native until final
+/// sealing. Cross-specialization edges import final Monotypes as closed
+/// structure, so a specialization that tries to exceed its requested type is
+/// a unification conflict, not a silent divergence.
 pub const InstGraph = struct {
     allocator: Allocator,
     relation_state: RelationState,
     types: *Type.Store,
-    name_store: *const names.NameStore,
+    name_store: *names.NameStore,
     diagnostics: ?*GraphDiagnostics,
     arena_impl: std.heap.ArenaAllocator,
     nodes: std.ArrayList(InstNode),
     field_kinds: std.ArrayList(FieldKindNode),
+    field_kind_cells: std.ArrayList(FieldKindCells),
+    /// Ordinary primitive types are atomic identities. Reusing one node per
+    /// primitive keeps independently encountered exact values identical
+    /// without hashing or comparing any enclosing type graph.
+    primitive_nodes: [std.meta.fields(Type.Primitive).len]?NodeId,
+    empty_tag_union_node: ?NodeId,
+    empty_record_node: ?NodeId,
+    zst_node: ?NodeId,
+    /// Compound interning keeps immutable checked construction recipes separate
+    /// from exact produced values. They may have the same immediate node shape,
+    /// but only the latter is runtime identity.
+    tag_unions_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
+    checked_base_nodes: std.ArrayList(bool),
+    checked_base_construction_depth: usize,
     versions: std.ArrayList(u32),
-    /// Intrusive chain of permanent node ids in each live union class. Draft
-    /// request lookup indexes an open function under one permanent interface
-    /// node and probes the current class members, so later unions never stale
-    /// the key. Roots own the head/tail; every node owns one next link.
-    class_member_next: std.ArrayList(?NodeId),
-    class_member_head: std.ArrayList(NodeId),
-    class_member_tail: std.ArrayList(NodeId),
     processed_relations: std.AutoHashMap(RelationStamp, void),
-    /// Immutable Type-shaped snapshots by permanent node id. Old snapshots
-    /// retain their original provenance while `find` resolves that node to its
-    /// current class root; unions therefore never move or reindex snapshots.
-    node_snapshots: collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)),
-    /// Latest immutable snapshot for a root. Any relation mutation clears this
-    /// cache; a subsequent inspection materializes a fresh snapshot.
-    current_snapshots: collections.DenseMap(NodeId, Type.TypeId),
-    /// Relation mutations only mark the snapshot cache stale. The next read
-    /// performs one exact global invalidation, coalescing mutation bursts that
-    /// do not inspect an intermediate graph state.
-    current_snapshots_dirty: bool,
-    /// Reverse active-snapshot links, also the import memo: a Monotype already
-    /// connected to this graph reuses its node instead of being copied.
-    linked_type_nodes: collections.DenseMap(Type.TypeId, NodeId),
-    /// Exact immutable Monotype snapshot imported at each permanent node.
-    /// Unlike `node_snapshots`, these are producer-owned representation
-    /// witnesses. Keeping the direct node association lets consumers of an
-    /// imported request use the exact finished TypeId rather than reconstructing
-    /// an equivalent public shape.
-    imported_monos: collections.DenseMap(NodeId, Type.TypeId),
+    /// One-way memo for finished immutable Monotypes imported from outside
+    /// this graph. Graph evidence may relate the copied nodes, but can never
+    /// rewrite the source Monotype.
+    imported_type_nodes: collections.DenseMap(Type.TypeId, NodeId),
     /// Current extension root for each row root. This is the authority for
     /// maintaining `row_parents`; stale extension edges are removed when row
     /// content changes.
     row_exts: std.ArrayList(?NodeId),
     /// Row nodes by the extension node they currently chain through.
     row_parents: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
-    /// Declaration-backed nominal backings already instantiated in this graph,
-    /// bucketed by source declaration. Entries compare argument union-find
-    /// classes, so a backing instance keeps one identity after evidence merges
-    /// or redirects its original argument nodes.
-    nominal_backings: std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80),
-    /// Exact source function node from which each generated-private request
-    /// function was constructed. A generic source interface may itself carry
-    /// upstream generated-private arguments; retaining that producer node is
-    /// what lets the callee instantiate those relations without reconstruction.
-    request_source_interfaces: std.ArrayList(?NodeId),
-    /// Minted iterator roots whose relation graph proved that retaining the
-    /// minted tier would create a recursive component identity. The raw node
-    /// remains valid across later unions; finalization resolves it to the live
-    /// class and constructs the single forced-dynamic fixed point.
-    forced_dynamic_iterator_roots: std.ArrayList(NodeId),
-    /// Permanent value-slot nodes that differ from the corresponding source
-    /// slot on an explicit recursive edge. Function recursion and loop
-    /// feedback both append here; a later minted join touching one of these
-    /// slots proves that recursion grows the representation rather than merely
-    /// recurring over a fixed iterator.
-    recursive_argument_slots: std.ArrayList(NodeId),
-    /// Shared allocation-free scratch and cache for exact structural
-    /// containment. The two queries share one conservative dependency list,
-    /// while each walk can stop as soon as its requested property is found.
-    containment_pending: std.ArrayList(NodeId),
-    containment_visit_epochs: std.ArrayList(u32),
-    containment_visit_epoch: u32,
-    containment_cache: collections.DenseMap(NodeId, ContainmentCacheEntry),
+    /// Roots already proven unable to finalize as uninhabited. This entry is
+    /// monotone: only permanent inhabited content can produce it. A root that
+    /// later redirects is looked up by its new root and therefore recomputed.
+    permanently_inhabited_nodes: collections.DenseMap(NodeId, void),
+    /// Generated nominals keyed by the final content digest assigned by their
+    /// producer. Identity, arguments, and backing are complete before entry.
+    generated_nominal_intern: std.HashMap(names.TypeDigest, NodeId, GeneratedNominalInternContext, 80),
+    /// Interned graph node for each completed ordinary nominal identity. A
+    /// generated-private nominal is categorically absent: its producer-owned
+    /// content digest is registered only in `generated_nominal_intern`.
+    named_nodes_by_identity_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
+    /// Interned compound nodes keyed only by their immediate exact children.
+    /// Producers therefore share an already-built type without traversing any
+    /// descendant graph.
+    list_nodes_by_element: collections.DenseMap(NodeId, InternedCompoundByAuthority),
+    box_nodes_by_element: collections.DenseMap(NodeId, InternedCompoundByAuthority),
+    tuple_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
+    /// Completed function values keyed by their exact immediate argument and
+    /// result nodes. Open requests remain distinct until their producer fills
+    /// the result edge; completion interns the one finished shape once.
+    function_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
+    record_nodes_by_shape_hash: std.AutoHashMap(u64, std.ArrayList(NodeId)),
+    /// Produced equivalent of an immutable checked structural recipe. A
+    /// concrete recipe is converted bottom-up only when an exact producer
+    /// actually stores it as a child; subsequent producers reuse this dense
+    /// result directly.
+    checked_base_produced_equivalents: collections.DenseMap(NodeId, NodeId),
+    /// Fast producer lookup by the already-completed dense item node. Buckets
+    /// contain only stamped identities and distinguish declarations without
+    /// re-hashing the item type graph.
+    generated_iterators_by_item: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
+    /// Producer-local iterator reservations that have not yet received their
+    /// final item and content digest. They are absent from every interner.
+    unfinished_generated_iterator_reservations: usize,
+    /// Permanent roots recorded by the producer so sealing can commit each
+    /// completed nominal to the cross-specialization TypeId interner.
+    generated_nominal_nodes: std.ArrayList(NodeId),
+    /// Exact checked source function node from which a distinct produced
+    /// function request was constructed. This is explicit substitution input;
+    /// consumers read this field instead of deriving it from the produced
+    /// function's type shape.
+    request_checked_sources: std.ArrayList(?NodeId),
+    /// Explicit result authority for function requests. This is a dense
+    /// NodeId column because request identity is graph-local and every node
+    /// already has a stable dense ordinal.
+    function_result_relations: std.ArrayList(?FunctionResultRelation),
+    /// Explicit positional authority for every argument of a function
+    /// request. This cannot be keyed by checked type: two positions with the
+    /// same checked type can carry different exact runtime callable sets.
+    function_argument_authority_spans: std.ArrayList(DirectRequestSelectionSpan),
+    function_argument_authorities: std.ArrayList(DirectRequestSelectionAuthority),
+    /// Immutable flat substitutions selected by the checker's selection-edge
+    /// program for each function request.
+    direct_request_selection_spans: std.ArrayList(DirectRequestSelectionSpan),
+    direct_request_selections: std.ArrayList(DirectRequestSelection),
     /// Scratch epoch marks for `compactRowParents`, indexed by node id. A
     /// slot carrying the current epoch means its class root is already kept
     /// in the list being compacted.
     row_parent_seen_epochs: std.ArrayList(u64),
     row_parent_seen_epoch: u64,
-    /// Pools for the visited sets the graph's walks create per query. Fresh
-    /// maps re-allocate and re-zero sparse chunks across the node/type ID
-    /// domains on every walk; pooled maps keep their chunks.
+    /// Pool for the visited sets the graph's remaining exact walks create per
+    /// query. Fresh maps re-allocate and re-zero sparse chunks across the node
+    /// ID domain on every walk; pooled maps keep their chunks.
     node_set_pool: collections.DenseMapPool(NodeId, void),
-    type_set_pool: collections.DenseMapPool(Type.TypeId, void),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
-        name_store: *const names.NameStore,
+        name_store: *names.NameStore,
     ) Allocator.Error!*InstGraph {
         const graph = try allocator.create(InstGraph);
         graph.* = .{
@@ -493,30 +526,40 @@ pub const InstGraph = struct {
             .arena_impl = std.heap.ArenaAllocator.init(allocator),
             .nodes = .empty,
             .field_kinds = .empty,
+            .field_kind_cells = .empty,
+            .primitive_nodes = @splat(null),
+            .empty_tag_union_node = null,
+            .empty_record_node = null,
+            .zst_node = null,
+            .tag_unions_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
+            .checked_base_nodes = .empty,
+            .checked_base_construction_depth = 0,
             .versions = .empty,
-            .class_member_next = .empty,
-            .class_member_head = .empty,
-            .class_member_tail = .empty,
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
-            .node_snapshots = collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
-            .current_snapshots = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
-            .current_snapshots_dirty = false,
-            .linked_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
-            .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
+            .imported_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .row_exts = .empty,
             .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
-            .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
-            .request_source_interfaces = .empty,
-            .forced_dynamic_iterator_roots = .empty,
-            .recursive_argument_slots = .empty,
-            .containment_pending = .empty,
-            .containment_visit_epochs = .empty,
-            .containment_visit_epoch = 0,
-            .containment_cache = collections.DenseMap(NodeId, ContainmentCacheEntry).init(allocator),
+            .permanently_inhabited_nodes = collections.DenseMap(NodeId, void).init(allocator),
+            .generated_nominal_intern = std.HashMap(names.TypeDigest, NodeId, GeneratedNominalInternContext, 80).init(allocator),
+            .named_nodes_by_identity_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
+            .list_nodes_by_element = collections.DenseMap(NodeId, InternedCompoundByAuthority).init(allocator),
+            .box_nodes_by_element = collections.DenseMap(NodeId, InternedCompoundByAuthority).init(allocator),
+            .tuple_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
+            .function_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
+            .record_nodes_by_shape_hash = std.AutoHashMap(u64, std.ArrayList(NodeId)).init(allocator),
+            .checked_base_produced_equivalents = collections.DenseMap(NodeId, NodeId).init(allocator),
+            .generated_iterators_by_item = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
+            .unfinished_generated_iterator_reservations = 0,
+            .generated_nominal_nodes = .empty,
+            .request_checked_sources = .empty,
+            .function_result_relations = .empty,
+            .function_argument_authority_spans = .empty,
+            .function_argument_authorities = .empty,
+            .direct_request_selection_spans = .empty,
+            .direct_request_selections = .empty,
             .row_parent_seen_epochs = .empty,
             .row_parent_seen_epoch = 0,
             .node_set_pool = collections.DenseMapPool(NodeId, void).init(allocator),
-            .type_set_pool = collections.DenseMapPool(Type.TypeId, void).init(allocator),
         };
         return graph;
     }
@@ -531,52 +574,52 @@ pub const InstGraph = struct {
         }
     }
 
-    fn countDiagnosticBy(self: *InstGraph, comptime field: []const u8, amount: usize) void {
-        if (self.diagnostics) |diagnostics| {
-            @field(diagnostics, field) += @intCast(amount);
-        }
-    }
-
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
-        var views = self.node_snapshots.valueIterator();
-        while (views.next()) |list| {
-            list.deinit(allocator);
-        }
-        self.node_snapshots.deinit();
-        self.current_snapshots.deinit();
         var parents = self.row_parents.valueIterator();
         while (parents.next()) |list| {
             list.deinit(allocator);
         }
-        var backing_buckets = self.nominal_backings.valueIterator();
-        while (backing_buckets.next()) |bucket| {
-            bucket.deinit(allocator);
-        }
-        self.nominal_backings.deinit();
-        self.request_source_interfaces.deinit(allocator);
-        self.forced_dynamic_iterator_roots.deinit(allocator);
-        self.recursive_argument_slots.deinit(allocator);
-        self.containment_pending.deinit(allocator);
-        self.containment_visit_epochs.deinit(allocator);
+        var generated_item_buckets = self.generated_iterators_by_item.valueIterator();
+        while (generated_item_buckets.next()) |bucket| bucket.deinit(allocator);
+        self.generated_iterators_by_item.deinit();
+        self.generated_nominal_intern.deinit();
+        var named_identity_buckets = self.named_nodes_by_identity_hash.valueIterator();
+        while (named_identity_buckets.next()) |bucket| bucket.deinit(allocator);
+        self.named_nodes_by_identity_hash.deinit();
+        self.list_nodes_by_element.deinit();
+        self.box_nodes_by_element.deinit();
+        var tuple_shape_buckets = self.tuple_nodes_by_shape_hash.valueIterator();
+        while (tuple_shape_buckets.next()) |bucket| bucket.deinit(allocator);
+        self.tuple_nodes_by_shape_hash.deinit();
+        var function_shape_buckets = self.function_nodes_by_shape_hash.valueIterator();
+        while (function_shape_buckets.next()) |bucket| bucket.deinit(allocator);
+        self.function_nodes_by_shape_hash.deinit();
+        var record_shape_buckets = self.record_nodes_by_shape_hash.valueIterator();
+        while (record_shape_buckets.next()) |bucket| bucket.deinit(allocator);
+        self.record_nodes_by_shape_hash.deinit();
+        self.checked_base_produced_equivalents.deinit();
+        self.generated_nominal_nodes.deinit(allocator);
+        self.direct_request_selections.deinit(allocator);
+        self.direct_request_selection_spans.deinit(allocator);
+        self.request_checked_sources.deinit(allocator);
+        self.function_result_relations.deinit(allocator);
+        self.function_argument_authority_spans.deinit(allocator);
+        self.function_argument_authorities.deinit(allocator);
         self.row_parent_seen_epochs.deinit(allocator);
         self.node_set_pool.deinit();
-        self.type_set_pool.deinit();
-        var containment_entries = self.containment_cache.valueIterator();
-        while (containment_entries.next()) |entry| {
-            entry.deinit(allocator);
-        }
-        self.containment_cache.deinit();
         self.row_parents.deinit();
+        self.permanently_inhabited_nodes.deinit();
         self.row_exts.deinit(allocator);
-        self.imported_monos.deinit();
-        self.linked_type_nodes.deinit();
+        self.imported_type_nodes.deinit();
         self.processed_relations.deinit();
-        self.class_member_tail.deinit(allocator);
-        self.class_member_head.deinit(allocator);
-        self.class_member_next.deinit(allocator);
+        var tag_union_buckets = self.tag_unions_by_shape_hash.valueIterator();
+        while (tag_union_buckets.next()) |bucket| bucket.deinit(allocator);
+        self.tag_unions_by_shape_hash.deinit();
         self.versions.deinit(allocator);
+        self.checked_base_nodes.deinit(allocator);
         self.nodes.deinit(allocator);
+        self.field_kind_cells.deinit(allocator);
         self.field_kinds.deinit(allocator);
         self.arena_impl.deinit();
         allocator.destroy(self);
@@ -597,14 +640,14 @@ pub const InstGraph = struct {
         raw: FieldKindId,
         slot: NodeId,
         value: NodeId,
-    ) void {
+    ) Allocator.Error!void {
         self.requireRelationProduction();
         const root = self.findFieldKind(raw);
-        const node = &self.field_kinds.items[@intFromEnum(root)];
-        if (node.cells != null) {
-            Common.invariant("instantiation field kind registered its representation cells more than once");
-        }
-        node.cells = .{ .slot = slot, .value = value };
+        try self.field_kind_cells.append(self.allocator, .{
+            .kind = root,
+            .slot = slot,
+            .value = value,
+        });
     }
 
     fn findFieldKind(self: *InstGraph, raw: FieldKindId) FieldKindId {
@@ -657,18 +700,12 @@ pub const InstGraph = struct {
         var right = self.findFieldKind(right_raw);
         if (left == right) return left;
         if (self.field_kinds.items[@intFromEnum(left)].rank < self.field_kinds.items[@intFromEnum(right)].rank) {
-            const temp = left;
-            left = right;
-            right = temp;
+            std.mem.swap(FieldKindId, &left, &right);
         }
         const right_state = self.field_kinds.items[@intFromEnum(right)].resolved;
-        const right_cells = self.field_kinds.items[@intFromEnum(right)].cells;
         self.field_kinds.items[@intFromEnum(right)].parent = left;
         if (self.field_kinds.items[@intFromEnum(left)].rank == self.field_kinds.items[@intFromEnum(right)].rank) {
             self.field_kinds.items[@intFromEnum(left)].rank += 1;
-        }
-        if (self.field_kinds.items[@intFromEnum(left)].cells == null) {
-            self.field_kinds.items[@intFromEnum(left)].cells = right_cells;
         }
         if (right_state) |resolved| self.constrainUndeterminedFieldKind(left, resolved);
         return self.findFieldKind(left);
@@ -740,82 +777,576 @@ pub const InstGraph = struct {
         }
     }
 
-    /// Apply the explicit field-presence relation between two matched record
-    /// fields without otherwise joining their rows. Deferred template
-    /// interface replay uses this alongside the separate source-value and
-    /// runtime-slot constructor relations.
-    pub fn relateRecordFieldKind(
-        self: *InstGraph,
-        left: InstField,
-        right: InstField,
-    ) void {
+    pub fn relateRecordFieldKind(self: *InstGraph, left: InstField, right: InstField) void {
         self.requireRelationProduction();
         _ = self.unifyFieldKinds(left.kind, left.default, right.kind, right.default);
     }
 
-    pub fn registerRequestSourceInterface(
+    fn registerRequestCheckedSource(
         self: *InstGraph,
         request_fn: NodeId,
         source_fn: NodeId,
     ) Allocator.Error!void {
         self.requireRelationProduction();
-        if (!try self.containsGeneratedPrivate(request_fn)) {
-            Common.invariant("registered private request interface contained no generated-private evidence");
-        }
-        const entry = &self.request_source_interfaces.items[@intFromEnum(request_fn)];
+        const entry = &self.request_checked_sources.items[@intFromEnum(request_fn)];
         if (entry.*) |existing| {
             if (self.find(existing) != self.find(source_fn)) {
-                Common.invariant("generated-private request was registered with two source interfaces");
+                Common.invariant("exact function request was registered with two checked sources");
             }
         } else {
             entry.* = source_fn;
         }
     }
 
-    pub fn requestSourceInterface(self: *InstGraph, request_fn: NodeId) ?NodeId {
-        const source_fn = self.request_source_interfaces.items[@intFromEnum(request_fn)] orelse return null;
+    /// Register the complete specialization meaning of one function request
+    /// at the construction site that owns it. A checked source, positional
+    /// authorities, result authority, and flat selection edges are one
+    /// indivisible protocol; later code must never infer an omitted member
+    /// from the function graph.
+    pub fn registerSpecializationRequest(
+        self: *InstGraph,
+        request_fn: NodeId,
+        checked_source: NodeId,
+        argument_authorities: []const DirectRequestSelectionAuthority,
+        result_relation: FunctionResultRelation,
+        selections: []const DirectRequestSelection,
+    ) Allocator.Error!void {
+        const function = try self.functionNodes(request_fn);
+        if (argument_authorities.len != function.args.len) {
+            Common.invariant("specialization request argument-authority vector had the wrong arity");
+        }
+        try self.registerRequestCheckedSource(request_fn, checked_source);
+        try self.registerFunctionArgumentAuthorities(request_fn, argument_authorities);
+        self.registerFunctionResultRelation(request_fn, result_relation);
+        try self.recordDirectRequestSelections(request_fn, selections);
+    }
+
+    pub fn requestCheckedSource(self: *InstGraph, request_fn: NodeId) ?NodeId {
+        const source_fn = self.request_checked_sources.items[@intFromEnum(request_fn)] orelse return null;
         return self.find(source_fn);
     }
 
-    pub fn findGeneratedIterator(
+    pub fn registerFunctionResultRelation(
         self: *InstGraph,
-        public_node: NodeId,
-        kind: Type.IteratorKind,
-        components: []const NodeId,
-        callable_evidence: ?names.TypeDigest,
-    ) ?NodeId {
-        const public_named = switch (self.content(public_node)) {
-            .named => |named| named,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
-        };
-        if (public_named.args.len == 0) return null;
-        for (self.nodes.items, 0..) |node_content, raw_index| {
-            const candidate = switch (node_content) {
-                .named => |named| named,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
-            };
-            const provenance = candidate.generated_iterator orelse continue;
-            if (candidate.def.iterator_kind != kind or
-                !optionalInstDigestEql(provenance.callable_evidence, callable_evidence) or
-                candidate.kind != public_named.kind or
-                candidate.def.module != public_named.def.module or
-                candidate.def.type_name != public_named.def.type_name or
-                candidate.def.source_decl != public_named.def.source_decl or
-                candidate.args.len != components.len + 1 or
-                self.find(candidate.args[0]) != self.find(public_named.args[0]))
-            {
-                continue;
+        request_fn: NodeId,
+        relation: FunctionResultRelation,
+    ) void {
+        self.requireRelationProduction();
+        const entry = &self.function_result_relations.items[@intFromEnum(request_fn)];
+        if (entry.*) |existing| {
+            if (existing != relation) {
+                Common.invariant("function request was registered with two result authorities");
             }
-            var matches = true;
-            for (components, candidate.args[1..]) |component, stored| {
-                if (self.find(component) != self.find(stored)) {
-                    matches = false;
-                    break;
-                }
-            }
-            if (matches) return self.find(@enumFromInt(@as(u32, @intCast(raw_index))));
+        } else {
+            entry.* = relation;
         }
-        return null;
+    }
+
+    pub fn functionResultRelation(self: *const InstGraph, request_fn: NodeId) ?FunctionResultRelation {
+        return self.function_result_relations.items[@intFromEnum(request_fn)];
+    }
+
+    pub fn functionArgumentAuthorities(
+        self: *const InstGraph,
+        request_fn: NodeId,
+    ) ?[]const DirectRequestSelectionAuthority {
+        const span = self.function_argument_authority_spans.items[@intFromEnum(request_fn)];
+        if (!span.isInitialized()) return null;
+        const start: usize = span.start;
+        return self.function_argument_authorities.items[start .. start + span.len];
+    }
+
+    pub fn registerFunctionArgumentAuthorities(
+        self: *InstGraph,
+        request_fn: NodeId,
+        authorities: []const DirectRequestSelectionAuthority,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        const entry = &self.function_argument_authority_spans.items[@intFromEnum(request_fn)];
+        if (entry.isInitialized()) {
+            const existing = self.functionArgumentAuthorities(request_fn).?;
+            if (!std.mem.eql(DirectRequestSelectionAuthority, existing, authorities)) {
+                Common.invariant("function request was registered with two argument-authority vectors");
+            }
+            return;
+        }
+        const start: u32 = @intCast(self.function_argument_authorities.items.len);
+        try self.function_argument_authorities.appendSlice(self.allocator, authorities);
+        entry.* = .{ .start = start, .len = @intCast(authorities.len) };
+    }
+
+    pub fn registerUniformFunctionArgumentAuthority(
+        self: *InstGraph,
+        request_fn: NodeId,
+        arity: usize,
+        authority: DirectRequestSelectionAuthority,
+    ) Allocator.Error!void {
+        const authorities = try self.arena().alloc(DirectRequestSelectionAuthority, arity);
+        @memset(authorities, authority);
+        return self.registerFunctionArgumentAuthorities(request_fn, authorities);
+    }
+
+    pub fn directRequestSelections(self: *const InstGraph, request_fn: NodeId) []const DirectRequestSelection {
+        const span = self.direct_request_selection_spans.items[@intFromEnum(request_fn)];
+        if (!span.isInitialized()) return &.{};
+        const start: usize = span.start;
+        return self.direct_request_selections.items[start .. start + span.len];
+    }
+
+    pub fn recordDirectRequestSelections(
+        self: *InstGraph,
+        request_fn: NodeId,
+        selections: []const DirectRequestSelection,
+    ) Allocator.Error!void {
+        if (selections.len != 0 and self.direct_request_selections.items.len != 0) {
+            const pool_start = @intFromPtr(self.direct_request_selections.items.ptr);
+            const pool_end = pool_start + self.direct_request_selections.items.len * @sizeOf(DirectRequestSelection);
+            const selection_start = @intFromPtr(selections.ptr);
+            const selection_end = selection_start + selections.len * @sizeOf(DirectRequestSelection);
+            if (selection_start >= pool_start and selection_end <= pool_end) {
+                // Materialized callable nodes share the immutable flat span
+                // owned by the request they came from. Besides avoiding a
+                // redundant copy, this prevents an append reallocation from
+                // invalidating its own source slice.
+                self.direct_request_selection_spans.items[@intFromEnum(request_fn)] = .{
+                    .start = @intCast((selection_start - pool_start) / @sizeOf(DirectRequestSelection)),
+                    .len = @intCast(selections.len),
+                };
+                return;
+            }
+        }
+        const start: u32 = @intCast(self.direct_request_selections.items.len);
+        try self.direct_request_selections.appendSlice(self.allocator, selections);
+        self.direct_request_selection_spans.items[@intFromEnum(request_fn)] = .{
+            .start = start,
+            .len = @intCast(selections.len),
+        };
+    }
+
+    /// Whether two requests carry the same node and authority for every
+    /// checker-recorded identity slot. A request seed and a produced edge are
+    /// not interchangeable even when they currently name the same graph node.
+    /// Callers compare the immutable checked callable base separately.
+    pub fn sameDirectRequestSelections(self: *InstGraph, left_fn: NodeId, right_fn: NodeId) bool {
+        const left = self.directRequestSelections(left_fn);
+        const right = self.directRequestSelections(right_fn);
+        if (left.len != right.len) return false;
+        for (left) |left_selection| {
+            const right_selection = for (right) |candidate| {
+                if (candidate.base.checked == left_selection.base.checked and
+                    std.mem.eql(u8, &candidate.base.module_bytes, &left_selection.base.module_bytes)) break candidate;
+            } else return false;
+            if (left_selection.authority != right_selection.authority) return false;
+            if (!self.sameClass(left_selection.produced, right_selection.produced)) return false;
+        }
+        return true;
+    }
+
+    /// Whether two callable requests have the same complete producer inputs.
+    /// A produced result is output and is therefore excluded; an exact result
+    /// destination is immutable contextual input and participates directly.
+    pub fn sameFunctionRequestInputs(self: *InstGraph, left_fn: NodeId, right_fn: NodeId) Allocator.Error!bool {
+        const left = try self.functionNodes(left_fn);
+        const right = try self.functionNodes(right_fn);
+        const left_result_relation = self.functionResultRelation(left_fn) orelse
+            Common.invariant("function request comparison received a left request without result authority");
+        const right_result_relation = self.functionResultRelation(right_fn) orelse
+            Common.invariant("function request comparison received a right request without result authority");
+        if (left_result_relation != right_result_relation) return false;
+        if (left_result_relation == .exact_destination and
+            !self.sameClass(left.ret, right.ret)) return false;
+        if (left.args.len != right.args.len) return false;
+        for (left.args, right.args) |left_arg, right_arg| {
+            if (!self.sameClass(left_arg, right_arg)) return false;
+        }
+        return self.sameDirectRequestSelections(left_fn, right_fn);
+    }
+
+    /// Resolve the stable result cell held by callers and recursive references
+    /// to the exact node returned by the completed function body. The result
+    /// cell is a producer-owned forward edge, not a checked type and not a
+    /// second graph to compare or merge. The request root remains distinct
+    /// after completion because its checked source and directional edges are
+    /// occurrence-owned protocol, even when another function has the same
+    /// exact type shape.
+    pub fn completeFunctionResult(
+        self: *InstGraph,
+        raw_fn_node: NodeId,
+        produced_ret: NodeId,
+    ) Allocator.Error!void {
+        const fn_node = self.find(raw_fn_node);
+        const function = switch (self.nodes.items[@intFromEnum(fn_node)]) {
+            .func => |function| function,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("function result completion received a non-function node"),
+        };
+        const result_cell = self.find(function.ret);
+        const exact_produced = self.find(produced_ret);
+        if (result_cell != exact_produced) {
+            if (self.nodes.items[@intFromEnum(result_cell)] != .unresolved) {
+                Common.invariant("function result completion reached an already-produced result cell");
+            }
+            try self.setContent(result_cell, .{ .redirect = exact_produced });
+        }
+    }
+
+    /// Resolve one explicit control-flow result cell to the exact node chosen
+    /// from its producer branches. Retaining the producer node identity also
+    /// retains any queued specialization responsible for completing it.
+    pub fn completeProducedSelection(
+        self: *InstGraph,
+        raw_selection: NodeId,
+        raw_produced: NodeId,
+    ) Allocator.Error!void {
+        const selection = self.find(raw_selection);
+        const produced = self.find(raw_produced);
+        if (selection == produced) return;
+        if (self.nodes.items[@intFromEnum(selection)] != .unresolved) {
+            Common.invariant("produced selection completed a non-placeholder cell");
+        }
+        try self.setContent(selection, .{ .redirect = produced });
+    }
+
+    pub fn lookupGeneratedIteratorFromNamed(
+        self: *InstGraph,
+        public_named: InstNamed,
+    ) Allocator.Error!GeneratedIteratorLookup {
+        if (public_named.args.len == 0) {
+            Common.invariant("generated iterator lookup received no public item argument");
+        }
+        return self.lookupGeneratedIterator(public_named.def, public_named.args[0]);
+    }
+
+    /// Resolve the content-addressed identity for the exact iterator nominal
+    /// at the point where that nominal is instantiated. The declaration and
+    /// item node are the complete identity input; no public iterator graph is
+    /// built as an intermediate request.
+    pub fn lookupGeneratedIterator(
+        self: *InstGraph,
+        public_def: Type.TypeDef,
+        item_node: NodeId,
+    ) Allocator.Error!GeneratedIteratorLookup {
+        const item_root = self.find(item_node);
+        if (self.generated_iterators_by_item.getPtr(item_root)) |bucket| {
+            for (bucket.items) |raw_existing| {
+                const existing = self.find(raw_existing);
+                const existing_named = switch (self.content(existing)) {
+                    .named => |named| named,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator item index contained a non-named node"),
+                };
+                if (!sameTypeDef(public_def, existing_named.def)) continue;
+                if (existing_named.args.len != 1) {
+                    Common.invariant("generated iterator item index contained a mismatched item arity");
+                }
+                const digest = existing_named.def.generated orelse
+                    Common.invariant("generated iterator item index contained an unstamped reservation");
+                self.countDiagnostic("generated_identity_intern_hits");
+                return .{ .existing = existing, .digest = digest };
+            }
+        }
+        const digest = try self.generatedIteratorInternDigest(public_def, item_root);
+        if (self.generated_nominal_intern.get(digest)) |node| {
+            self.countDiagnostic("generated_identity_intern_hits");
+            return .{ .existing = self.find(node), .digest = digest };
+        }
+        self.countDiagnostic("generated_identity_intern_misses");
+        return .{ .existing = null, .digest = digest };
+    }
+
+    /// Complete one producer-owned recursive reservation immediately after the
+    /// callback that owns its item cell returns. No graph-wide finalization
+    /// pass is allowed to rediscover or finish this producer operation later.
+    pub fn completeRecursiveGeneratedIterator(
+        self: *InstGraph,
+        reservation: NodeId,
+        public_def: Type.TypeDef,
+        item_node: NodeId,
+    ) Allocator.Error!NodeId {
+        self.requireRelationProduction();
+        const completed = try self.finishGeneratedIteratorReservation(
+            reservation,
+            public_def,
+            item_node,
+        );
+        if (self.unfinished_generated_iterator_reservations == 0) {
+            Common.invariant("recursive generated iterator completion had no producer-owned reservation");
+        }
+        self.unfinished_generated_iterator_reservations -= 1;
+        return completed.existing orelse
+            Common.invariant("recursive generated iterator completion produced no atomic identity");
+    }
+
+    /// Stamp one already-built recursive iterator reservation from its exact
+    /// item cell. The caller names the reservation directly, so completion is
+    /// independent of the item index entry created before a forward cell was
+    /// filled. Equal completed inputs redirect to the earlier content address;
+    /// no backing or enclosing compound is inspected.
+    fn finishGeneratedIteratorReservation(
+        self: *InstGraph,
+        raw_existing: NodeId,
+        public_def: Type.TypeDef,
+        item_node: NodeId,
+    ) Allocator.Error!GeneratedIteratorLookup {
+        const existing = self.find(raw_existing);
+        const existing_named = switch (self.content(existing)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator reservation completion received a non-named node"),
+        };
+        if (!sameTypeDef(public_def, existing_named.def) or existing_named.args.len != 1) {
+            Common.invariant("generated iterator reservation completion received a different declaration or arity");
+        }
+        if (existing_named.def.generated) |digest| {
+            self.countDiagnostic("generated_identity_intern_hits");
+            return .{ .existing = existing, .digest = digest };
+        }
+
+        const item_root = self.find(item_node);
+        if (self.find(existing_named.args[0]) != item_root) {
+            Common.invariant("generated iterator reservation completed from a different item cell");
+        }
+        const digest = try self.generatedIteratorInternDigest(public_def, item_root);
+        if (self.generated_nominal_intern.get(digest)) |raw_interned| {
+            const interned = self.find(raw_interned);
+            if (interned != existing) try self.redirectRoot(interned, existing);
+            self.countDiagnostic("generated_identity_intern_hits");
+            return .{ .existing = interned, .digest = digest };
+        }
+
+        var stamped = existing_named;
+        stamped.def.generated = digest;
+        try self.setContent(existing, .{ .named = stamped });
+        const entry = try self.generated_nominal_intern.getOrPut(digest);
+        if (entry.found_existing) {
+            Common.invariant("generated iterator identity appeared while stamping one reservation");
+        }
+        entry.value_ptr.* = existing;
+        try self.finishGeneratedIteratorAtDigest(existing, digest);
+        return .{ .existing = existing, .digest = digest };
+    }
+
+    /// Reserve one recursive generated iterator around an exact forward item
+    /// cell without hashing or defaulting that cell. The producer that owns
+    /// the cell is the reservation's sole owner until it stamps the final
+    /// content address. An unstamped reservation is never globally interned or
+    /// reused by another producer.
+    pub fn reserveRecursiveGeneratedIterator(
+        self: *InstGraph,
+        public_def: Type.TypeDef,
+        item_node: NodeId,
+        context: anytype,
+        comptime fill: fn (@TypeOf(context), NodeId) Allocator.Error!InstNode,
+    ) Allocator.Error!NodeId {
+        self.requireRelationProduction();
+        const reserved = try self.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
+        const node_content = try fill(context, reserved);
+        if (!isGeneratedPrivateRootContent(node_content) or
+            node_content.named.def.generated != null or
+            !sameTypeDef(node_content.named.def, public_def) or
+            node_content.named.args.len != 1 or
+            self.find(node_content.named.args[0]) != self.find(item_node))
+        {
+            Common.invariant("recursive iterator reservation did not produce one unstamped private nominal");
+        }
+        try self.setContent(reserved, node_content);
+        if (self.find(reserved) != reserved or
+            !isGeneratedPrivateRootContent(self.content(reserved)) or
+            self.content(reserved).named.def.generated != null)
+        {
+            Common.invariant("recursive iterator reservation collided with an ordinary named identity");
+        }
+        self.unfinished_generated_iterator_reservations += 1;
+        self.countDiagnostic("generated_identity_intern_misses");
+        return reserved;
+    }
+
+    /// Reserve, fill, and record one recursive generated iterator nominal.
+    /// Registering the reservation before `fill` lets recursive occurrences
+    /// with the same content identity resolve directly to this atomic node.
+    pub fn addRecursiveGeneratedIterator(
+        self: *InstGraph,
+        digest: names.TypeDigest,
+        context: anytype,
+        comptime fill: fn (@TypeOf(context), NodeId) Allocator.Error!InstNode,
+    ) Allocator.Error!NodeId {
+        self.requireRelationProduction();
+        const reserved = try self.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
+        const entry = try self.generated_nominal_intern.getOrPut(digest);
+        if (entry.found_existing) {
+            Common.invariant("generated iterator was reserved after its identity had already been interned");
+        }
+        entry.value_ptr.* = reserved;
+        try self.setContent(reserved, try fill(context, reserved));
+        try self.finishGeneratedIteratorAtDigest(reserved, digest);
+        return reserved;
+    }
+
+    pub fn registerGeneratedIterator(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
+        self.requireRelationProduction();
+        const node = self.find(raw_node);
+        const named = switch (self.content(node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator interner received a non-named node"),
+        };
+        const digest = named.def.generated orelse
+            Common.invariant("generated iterator reached registration without its producer identity");
+        try self.registerGeneratedIteratorAtDigest(node, digest);
+    }
+
+    /// Register a newly built iterator under the digest already computed by
+    /// its immediately preceding vacant lookup.
+    pub fn registerGeneratedIteratorAtDigest(
+        self: *InstGraph,
+        raw_node: NodeId,
+        digest: names.TypeDigest,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        const node = self.find(raw_node);
+        const named = switch (self.content(node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator interner received a non-named node"),
+        };
+        const stamped = named.def.generated orelse
+            Common.invariant("generated iterator reached registration without its producer identity");
+        if (!std.mem.eql(u8, &stamped.bytes, &digest.bytes)) {
+            Common.invariant("generated iterator registration disagreed with its producer identity");
+        }
+        const entry = try self.generated_nominal_intern.getOrPut(digest);
+        if (entry.found_existing and self.find(entry.value_ptr.*) != node) {
+            Common.invariant("one generated identity was constructed twice in one body");
+        }
+        entry.value_ptr.* = node;
+        try self.finishGeneratedIteratorAtDigest(node, digest);
+    }
+
+    fn finishGeneratedIteratorAtDigest(
+        self: *InstGraph,
+        node: NodeId,
+        digest: names.TypeDigest,
+    ) Allocator.Error!void {
+        const interned = self.generated_nominal_intern.get(digest) orelse
+            Common.invariant("generated iterator completed without an identity reservation");
+        if (self.find(interned) != self.find(node)) {
+            Common.invariant("generated iterator completion disagreed with its identity reservation");
+        }
+        try self.indexGeneratedIteratorByItem(node);
+        try self.registerGeneratedNominalAtDigest(node, digest);
+    }
+
+    fn indexGeneratedIteratorByItem(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
+        const node = self.find(raw_node);
+        const named = switch (self.content(node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator item index received a non-named node"),
+        };
+        if (named.args.len != 1) {
+            Common.invariant("generated iterator registration had an unexpected item arity");
+        }
+        const item_root = self.find(named.args[0]);
+        const item_bucket = try self.generated_iterators_by_item.getOrPut(item_root);
+        if (!item_bucket.found_existing) item_bucket.value_ptr.* = .empty;
+        for (item_bucket.value_ptr.items) |existing| {
+            if (self.find(existing) == node) return;
+        }
+        try item_bucket.value_ptr.append(self.allocator, node);
+    }
+
+    fn generatedIteratorInternDigest(
+        self: *InstGraph,
+        public_def: Type.TypeDef,
+        item_node: NodeId,
+    ) Allocator.Error!names.TypeDigest {
+        var writer = GeneratedIdentityWriter.init(self);
+        defer writer.deinit();
+        // Every iterator producer implements the same runtime interface: one
+        // length value and one zero-argument step closure returning the shared
+        // iterator step protocol. The closure's callable set records which
+        // implementations and captures may inhabit that slot; it does not
+        // change the surrounding iterator's Monotype. Consequently the exact
+        // generated nominal is identified only by that interface's declared
+        // nominal and item type, not by the syntax/operator that produced one
+        // value or by another iterator value stored in its captures.
+        writer.writeBytes("roc.generated_iterator.runtime_interface.v6");
+        writer.writeBytes(self.name_store.moduleIdentityBytes(public_def.module));
+        writer.writeOptionalU32(public_def.source_decl);
+        if (public_def.source_decl == null) {
+            writer.writeBytes(self.name_store.typeNameText(public_def.type_name));
+        }
+        const item_digest = try self.generatedIdentityInputDigest(item_node);
+        writer.writeBytes(&item_digest.bytes);
+        return .{ .bytes = writer.hasher.finalResult() };
+    }
+
+    fn generatedIdentityInputDigest(self: *InstGraph, node: NodeId) Allocator.Error!names.TypeDigest {
+        var writer = GeneratedIdentityWriter.init(self);
+        defer writer.deinit();
+        writer.writeBytes("roc.generated_private.identity_input.v4");
+        try writer.writeNode(node);
+        return .{ .bytes = writer.hasher.finalResult() };
+    }
+
+    /// Identify a non-recursive generated nominal from the complete inputs
+    /// that determine its runtime representation. Generated children are
+    /// atomic digest leaves, so producing a parent never inspects beneath a
+    /// child generated nominal.
+    pub fn lookupGeneratedNominal(
+        self: *InstGraph,
+        source_def: Type.TypeDef,
+        implementation_args: []const NodeId,
+    ) Allocator.Error!GeneratedNominalLookup {
+        const digest: names.TypeDigest = source_def.generated orelse digest: {
+            var public_def = source_def;
+            public_def.generated = null;
+            var writer = GeneratedIdentityWriter.init(self);
+            defer writer.deinit();
+            writer.writeBytes("roc.generated_nominal.runtime_implementation.v3");
+            writer.writeTypeDef(public_def);
+            // The compiler-defined backing recipe is uniquely owned by the
+            // generated declaration. Its exact public arguments are therefore
+            // the complete variable inputs to the runtime implementation.
+            // Lookup happens before the recipe is evaluated, so a hit avoids
+            // constructing or hashing the private backing altogether.
+            try writer.writeNodeSpan(implementation_args);
+            break :digest .{ .bytes = writer.hasher.finalResult() };
+        };
+        if (self.generated_nominal_intern.get(digest)) |existing| {
+            self.countDiagnostic("generated_identity_intern_hits");
+            return .{ .existing = self.find(existing), .digest = digest };
+        }
+        self.countDiagnostic("generated_identity_intern_misses");
+        return .{ .existing = null, .digest = digest };
+    }
+
+    /// Record a completed generated nominal at the identity assigned by its
+    /// producer. This is the only registry used by consumers and sealing.
+    pub fn registerGeneratedNominalAtDigest(
+        self: *InstGraph,
+        raw_node: NodeId,
+        digest: names.TypeDigest,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        const node = self.find(raw_node);
+        const named = switch (self.content(node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated nominal registry received a non-named node"),
+        };
+        const backing = named.backing orelse
+            Common.invariant("generated nominal registry received a nominal without backing");
+        if (backing.authority != .generated_private) {
+            Common.invariant("generated nominal registry received a non-generated backing");
+        }
+        const stamped = named.def.generated orelse
+            Common.invariant("generated nominal reached registration without its producer identity");
+        if (!std.mem.eql(u8, &stamped.bytes, &digest.bytes)) {
+            Common.invariant("generated nominal registration disagreed with its producer identity");
+        }
+        const entry = try self.generated_nominal_intern.getOrPut(digest);
+        if (entry.found_existing and self.find(entry.value_ptr.*) != node) {
+            Common.invariant("one generated identity was constructed twice in one body");
+        }
+        entry.value_ptr.* = node;
+        for (self.generated_nominal_nodes.items) |registered| {
+            if (self.find(registered) == node) return;
+        }
+        try self.generated_nominal_nodes.append(self.allocator, node);
     }
 
     fn acceptsRelationMutation(self: *const InstGraph) bool {
@@ -834,10 +1365,28 @@ pub const InstGraph = struct {
         }
     }
 
-    /// Commit every generalized field kind that received no concrete
-    /// specialization evidence. The field-kind producer recorded the exact
-    /// runtime-slot/source-value pair, so required defaulting relates those
-    /// cells directly without inspecting or reconstructing a row shape.
+    fn optionalFieldSlotNode(self: *InstGraph, value: NodeId) Allocator.Error!NodeId {
+        const missing = try self.name_store.internTagLabel("#Missing");
+        const present = try self.name_store.internTagLabel("#Present");
+        const tags = try self.arena().alloc(InstTag, 2);
+        tags[0] = .{ .name = missing, .checked_name = missing, .payloads = &.{} };
+        tags[1] = .{
+            .name = present,
+            .checked_name = present,
+            .payloads = try self.arena().dupe(NodeId, &.{value}),
+        };
+        return try self.newNode(.{
+            .tag_union = .{
+                .tags = tags,
+                .ext = try self.newNode(.empty_tag_union),
+            },
+        });
+    }
+
+    /// Commit every generalized field kind and complete each occurrence's
+    /// private forward slot from its own exact value node. Kind identity is
+    /// shared; runtime value identity is not. No checked-base node is merged
+    /// and no record graph is traversed.
     fn finalizeUndeterminedFieldKinds(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
         for (0..self.field_kinds.items.len) |raw_index| {
@@ -845,11 +1394,19 @@ pub const InstGraph = struct {
             const root = self.findFieldKind(id);
             if (root != id) continue;
             const node = &self.field_kinds.items[raw_index];
-            if (node.resolved != null) continue;
-            const cells = node.cells orelse
-                Common.invariant("unresolved instantiation field kind had no registered representation cells");
-            node.resolved = .required;
-            try self.unify(cells.slot, cells.value);
+            _ = node.resolved orelse resolved: {
+                node.resolved = .required;
+                break :resolved ResolvedFieldKind.required;
+            };
+        }
+        for (self.field_kind_cells.items) |cells| {
+            const resolved = self.resolvedFieldKind(.{ .undetermined = cells.kind }) orelse
+                Common.invariant("field-kind occurrence remained unresolved after defaulting");
+            const representation = switch (resolved) {
+                .required, .defaulted => cells.value,
+                .optional => try self.optionalFieldSlotNode(cells.value),
+            };
+            try self.completeProducedSelection(cells.slot, representation);
         }
     }
 
@@ -859,523 +1416,15 @@ pub const InstGraph = struct {
     pub fn freezeRelations(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
         try self.finalizeUndeterminedFieldKinds();
+        if (self.unfinished_generated_iterator_reservations != 0) {
+            Common.invariant("recursive generated iterator producer reached relation freeze before callback completion");
+        }
         self.relation_state = .frozen;
     }
 
-    pub const ArgumentClassSnapshot = struct {
-        members: []const NodeId,
-
-        fn contains(self: ArgumentClassSnapshot, node: NodeId) bool {
-            for (self.members) |member| {
-                if (member == node) return true;
-            }
-            return false;
-        }
-    };
-
-    /// Snapshot every permanent member of each ordered argument class before
-    /// a specialization body can add recursive relations. Root choice is not
-    /// stable under union, so recursive growth must compare permanent identity
-    /// against the whole initial class rather than one representative node.
-    pub fn snapshotFunctionArgumentClasses(
-        self: *InstGraph,
-        fn_node: NodeId,
-    ) Allocator.Error![]const ArgumentClassSnapshot {
-        const args = (try self.functionNodes(fn_node)).args;
-        const snapshots = try self.arena().alloc(ArgumentClassSnapshot, args.len);
-        for (args, snapshots) |arg, *snapshot| {
-            var count: usize = 0;
-            var counting = self.classMemberIterator(arg);
-            while (counting.next() != null) count += 1;
-
-            const members = try self.arena().alloc(NodeId, count);
-            var filling = self.classMemberIterator(arg);
-            var index: usize = 0;
-            while (filling.next()) |member| : (index += 1) members[index] = member;
-            snapshot.* = .{ .members = members };
-        }
-        return snapshots;
-    }
-
-    pub fn unifyRecursiveFunctionInterface(
-        self: *InstGraph,
-        active_fn: NodeId,
-        initial_active_arg_classes: []const ArgumentClassSnapshot,
-        recursive_request: NodeId,
-    ) Allocator.Error!void {
-        self.requireRelationProduction();
-        const request = try self.functionNodes(recursive_request);
-        if (initial_active_arg_classes.len != request.args.len) {
-            Common.invariant("recursive function interface changed argument arity");
-        }
-        for (initial_active_arg_classes, request.args) |initial_class, request_arg| {
-            if (!initial_class.contains(request_arg)) {
-                try self.recursive_argument_slots.append(self.allocator, request_arg);
-            }
-        }
-        try self.unify(active_fn, recursive_request);
-    }
-
-    pub fn markRecursiveValueSlot(self: *InstGraph, slot: NodeId) Allocator.Error!void {
-        self.requireRelationProduction();
-        try self.recursive_argument_slots.append(self.allocator, slot);
-    }
-
-    const generated_iterator_mint_depth_limit: u8 = 16;
-    const generated_iterator_forced_depth: u8 = generated_iterator_mint_depth_limit + 1;
-
-    /// Decide every graph-owned iterator representation after relation
-    /// production has supplied its complete component graph, but before any
-    /// durable Monotype is sealed. The exact memoized graph walk follows values
-    /// only: function bodies and named backings cannot store an iterator value
-    /// and therefore do not contribute depth. A value cycle selects the finite
-    /// forced-dynamic fixed point.
-    pub fn finalizeGeneratedIteratorRepresentations(self: *InstGraph) Allocator.Error!void {
-        self.requireRelationProduction();
-
-        const Pending = struct {
-            node: NodeId,
-            depth: u8,
-            force_dynamic: bool,
-        };
-        var pending = std.ArrayList(Pending).empty;
-        defer pending.deinit(self.allocator);
-        var seen = self.node_set_pool.acquire();
-        defer self.node_set_pool.release(&seen);
-        var depths = collections.DenseMap(NodeId, u8).init(self.allocator);
-        defer depths.deinit();
-        var active = self.node_set_pool.acquire();
-        defer self.node_set_pool.release(&active);
-
-        for (self.nodes.items, 0..) |_, raw_index| {
-            const node = self.find(@enumFromInt(@as(u32, @intCast(raw_index))));
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) continue;
-            const named = switch (self.content(node)) {
-                .named => |named| named,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
-            };
-            if (named.generated_iterator == null) continue;
-
-            const depth = try self.generatedIteratorDepth(node, &depths, &active);
-            try pending.append(self.allocator, .{
-                .node = node,
-                .depth = depth,
-                .force_dynamic = self.iteratorRootRequiresForcedDynamic(node),
-            });
-        }
-
-        for (pending.items) |item| {
-            const node = self.find(item.node);
-            var named = switch (self.content(node)) {
-                .named => |named| named,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator representation target stopped being named"),
-            };
-            named.def.generated = null;
-            if (item.force_dynamic or item.depth > generated_iterator_mint_depth_limit) {
-                if (named.args.len == 0) {
-                    Common.invariant("generated iterator representation had no item argument");
-                }
-                if (self.findGeneratedIterator(node, .forced_dynamic, &.{}, null)) |existing| {
-                    if (self.find(existing) != node) {
-                        try self.unify(node, existing);
-                        continue;
-                    }
-                }
-                try self.rewriteGeneratedIteratorAsForcedDynamic(node, named);
-            } else {
-                if (item.depth == 0) {
-                    Common.invariant("minted iterator representation had zero producer depth");
-                }
-                named.def.iterator_representation = .minted;
-                named.def.iterator_depth = item.depth;
-                try self.setContent(node, .{ .named = named });
-            }
-        }
-    }
-
-    fn iteratorRootRequiresForcedDynamic(self: *InstGraph, node: NodeId) bool {
-        const root = self.find(node);
-        for (self.forced_dynamic_iterator_roots.items) |candidate| {
-            if (self.find(candidate) == root) return true;
-        }
-        return false;
-    }
-
-    fn rewriteGeneratedIteratorAsForcedDynamic(
-        self: *InstGraph,
-        node: NodeId,
-        source_named: InstNamed,
-    ) Allocator.Error!void {
-        const provenance = source_named.generated_iterator orelse
-            Common.invariant("forced-dynamic iterator rewrite lacked producer provenance");
-        if (source_named.args.len == 0) {
-            Common.invariant("forced-dynamic iterator rewrite had no item argument");
-        }
-        const topology = source_named.def.iterator_topology orelse
-            Common.invariant("forced-dynamic iterator rewrite lacked producer topology");
-        const item_node = source_named.args[0];
-        const dynamic_args = try self.arena().alloc(NodeId, 1);
-        dynamic_args[0] = item_node;
-        var def = provenance.public_source.def;
-        def.generated = null;
-        def.iterator_representation = .forced_dynamic;
-        def.iterator_kind = .forced_dynamic;
-        def.iterator_depth = 0;
-        def.iterator_topology = topology;
-        try self.setContent(node, .{ .named = .{
-            .named_type = provenance.public_source.named_type,
-            .def = def,
-            .kind = provenance.public_source.kind,
-            .builtin_owner = provenance.public_source.builtin_owner,
-            .args = dynamic_args,
-            .backing = .{
-                .node = try self.forcedDynamicIteratorBackingNode(
-                    provenance.public_source.backing.node,
-                    node,
-                    item_node,
-                    topology,
-                ),
-                .use = provenance.public_source.backing.use,
-                .authority = .generated_private,
-            },
-            .generated_iterator = .{
-                .callable_evidence = null,
-                .public_source = provenance.public_source,
-            },
-            .declared_order = provenance.public_source.declared_order,
-        } });
-    }
-
-    fn forcedDynamicIteratorBackingNode(
-        self: *InstGraph,
-        public_backing: NodeId,
-        self_node: NodeId,
-        item_node: NodeId,
-        topology: Type.IteratorTopology,
-    ) Allocator.Error!NodeId {
-        const public_fields = (try self.recordNodes(public_backing)).fields;
-        const fields = try self.arena().alloc(InstField, public_fields.len);
-        for (public_fields, fields) |field, *out| {
-            out.* = .{
-                .name = field.name,
-                .ty = if (field.name == topology.step_field)
-                    try self.forcedDynamicIteratorStepFunctionNode(field.ty, self_node, item_node, topology)
-                else
-                    field.ty,
-                .value_ty = field.value_ty,
-                .kind = field.kind,
-                .default = field.default,
-            };
-        }
-        return try self.newNode(.{ .record = .{
-            .fields = fields,
-            .ext = try self.newNode(.empty_record),
-        } });
-    }
-
-    fn forcedDynamicIteratorStepFunctionNode(
-        self: *InstGraph,
-        public_step: NodeId,
-        self_node: NodeId,
-        item_node: NodeId,
-        topology: Type.IteratorTopology,
-    ) Allocator.Error!NodeId {
-        const step = try self.functionNodes(public_step);
-        return try self.newNode(.{ .func = .{
-            .args = try self.arena().dupe(NodeId, step.args),
-            .ret = try self.forcedDynamicIteratorStepResultNode(step.ret, self_node, item_node, topology),
-        } });
-    }
-
-    fn forcedDynamicIteratorStepResultNode(
-        self: *InstGraph,
-        public_result: NodeId,
-        self_node: NodeId,
-        item_node: NodeId,
-        topology: Type.IteratorTopology,
-    ) Allocator.Error!NodeId {
-        const public_tags = (try self.tagRowNodes(public_result)).tags;
-        const tags = try self.arena().alloc(InstTag, public_tags.len);
-        for (public_tags, tags) |tag, *out| {
-            const payloads = try self.arena().alloc(NodeId, tag.payloads.len);
-            for (tag.payloads, payloads) |payload, *payload_out| {
-                payload_out.* = try self.forcedDynamicIteratorStepPayloadNode(
-                    tag.name,
-                    payload,
-                    self_node,
-                    item_node,
-                    topology,
-                );
-            }
-            out.* = .{
-                .name = tag.name,
-                .checked_name = tag.checked_name,
-                .payloads = payloads,
-            };
-        }
-        return try self.newNode(.{ .tag_union = .{
-            .tags = tags,
-            .ext = try self.newNode(.empty_tag_union),
-        } });
-    }
-
-    fn forcedDynamicIteratorStepPayloadNode(
-        self: *InstGraph,
-        tag_name: names.TagNameId,
-        public_payload: NodeId,
-        self_node: NodeId,
-        item_node: NodeId,
-        topology: Type.IteratorTopology,
-    ) Allocator.Error!NodeId {
-        if (tag_name != topology.one_tag and tag_name != topology.skip_tag) return public_payload;
-        const public_fields = (try self.recordNodes(public_payload)).fields;
-        const fields = try self.arena().alloc(InstField, public_fields.len);
-        for (public_fields, fields) |field, *out| {
-            out.* = .{
-                .name = field.name,
-                .ty = if (field.name == topology.rest_field)
-                    self_node
-                else if (field.name == topology.item_field)
-                    item_node
-                else
-                    field.ty,
-                .value_ty = field.value_ty,
-                .kind = field.kind,
-                .default = field.default,
-            };
-        }
-        return try self.newNode(.{ .record = .{
-            .fields = fields,
-            .ext = try self.newNode(.empty_record),
-        } });
-    }
-
-    fn generatedIteratorDepth(
-        self: *InstGraph,
-        raw_node: NodeId,
-        depths: *collections.DenseMap(NodeId, u8),
-        active: *collections.DenseMap(NodeId, void),
-    ) Allocator.Error!u8 {
-        const root = self.find(raw_node);
-        if (depths.get(root)) |depth| return depth;
-        if (active.count() != 0) {
-            Common.invariant("generated iterator depth walk retained active nodes between roots");
-        }
-
-        var stack = std.ArrayList(GeneratedIteratorDepthFrame).empty;
-        defer stack.deinit(self.allocator);
-        try self.pushGeneratedIteratorDepthFrame(root, depths, active, &stack);
-
-        while (stack.items.len != 0) {
-            const frame_index = stack.items.len - 1;
-            if (stack.items[frame_index].max_child_depth <= generated_iterator_mint_depth_limit and
-                stack.items[frame_index].next_child < stack.items[frame_index].child_count)
-            {
-                const child_index = stack.items[frame_index].next_child;
-                stack.items[frame_index].next_child += 1;
-                const child = self.find(self.generatedIteratorDepthChild(
-                    stack.items[frame_index].node,
-                    child_index,
-                ));
-                if (depths.get(child)) |depth| {
-                    stack.items[frame_index].max_child_depth = @max(
-                        stack.items[frame_index].max_child_depth,
-                        depth,
-                    );
-                } else if (active.contains(child)) {
-                    stack.items[frame_index].max_child_depth = generated_iterator_forced_depth;
-                } else {
-                    try self.pushGeneratedIteratorDepthFrame(child, depths, active, &stack);
-                }
-                continue;
-            }
-
-            const frame = stack.pop().?;
-            _ = active.remove(frame.node);
-            const depth = if (frame.max_child_depth > generated_iterator_mint_depth_limit or
-                (frame.increment != 0 and frame.max_child_depth >= generated_iterator_mint_depth_limit))
-                generated_iterator_forced_depth
-            else
-                frame.max_child_depth + frame.increment;
-            try depths.put(frame.node, depth);
-            if (stack.items.len == 0) return depth;
-            stack.items[stack.items.len - 1].max_child_depth = @max(
-                stack.items[stack.items.len - 1].max_child_depth,
-                depth,
-            );
-        }
-        unreachable;
-    }
-
-    fn pushGeneratedIteratorDepthFrame(
-        self: *InstGraph,
-        node: NodeId,
-        depths: *collections.DenseMap(NodeId, u8),
-        active: *collections.DenseMap(NodeId, void),
-        stack: *std.ArrayList(GeneratedIteratorDepthFrame),
-    ) Allocator.Error!void {
-        switch (self.generatedIteratorDepthRule(node)) {
-            .fixed => |depth| {
-                try depths.put(node, depth);
-                if (stack.items.len == 0) {
-                    try stack.append(self.allocator, .{
-                        .node = node,
-                        .next_child = 0,
-                        .child_count = 0,
-                        .max_child_depth = depth,
-                        .increment = 0,
-                    });
-                    try active.put(node, {});
-                } else {
-                    stack.items[stack.items.len - 1].max_child_depth = @max(
-                        stack.items[stack.items.len - 1].max_child_depth,
-                        depth,
-                    );
-                }
-            },
-            .children => |children| {
-                try active.put(node, {});
-                try stack.append(self.allocator, .{
-                    .node = node,
-                    .next_child = 0,
-                    .child_count = children.count,
-                    .max_child_depth = 0,
-                    .increment = children.increment,
-                });
-            },
-        }
-    }
-
-    fn generatedIteratorDepthRule(self: *InstGraph, node: NodeId) GeneratedIteratorDepthRule {
-        return switch (self.nodes.items[@intFromEnum(node)]) {
-            .redirect => unreachable,
-            .unresolved => |variable| switch (variable.origin) {
-                .checked_variable, .row_extension => .{ .fixed = 0 },
-                .placeholder => Common.invariant("placeholder reached generated iterator representation finalization"),
-            },
-            .primitive, .empty_tag_union, .empty_record, .erased, .zst, .func => .{ .fixed = 0 },
-            .list, .box => .{ .children = .{ .count = 1, .increment = 0 } },
-            .tuple => |items| .{ .children = .{ .count = items.len, .increment = 0 } },
-            .tag_union => |row| .{ .children = .{
-                .count = 1 + tagPayloadCount(row.tags),
-                .increment = 0,
-            } },
-            .record => |row| .{ .children = .{ .count = 1 + row.fields.len, .increment = 0 } },
-            .named => |named| blk: {
-                if (named.generated_iterator != null) {
-                    if (named.def.iterator_kind == .forced_dynamic) {
-                        break :blk .{ .fixed = generated_iterator_forced_depth };
-                    }
-                    const topology = named.def.iterator_kind.componentTopology() orelse
-                        Common.invariant("generated iterator had no producer kind");
-                    break :blk switch (topology) {
-                        .source_without_components, .source_with_components => .{ .fixed = 1 },
-                        .adapter => adapter: {
-                            if (named.args.len == 0) {
-                                Common.invariant("generated iterator adapter had no item argument");
-                            }
-                            break :adapter .{ .children = .{
-                                .count = named.args.len - 1,
-                                .increment = 1,
-                            } };
-                        },
-                    };
-                }
-                break :blk switch (named.def.iterator_representation) {
-                    .forced_dynamic => .{ .fixed = generated_iterator_forced_depth },
-                    .minted => if (named.def.iterator_depth == 0)
-                        Common.invariant("finished minted iterator had zero producer depth")
-                    else
-                        .{ .fixed = named.def.iterator_depth },
-                    .none => .{ .children = .{ .count = named.args.len, .increment = 0 } },
-                };
-            },
-        };
-    }
-
-    fn generatedIteratorDepthChild(
-        self: *InstGraph,
-        node: NodeId,
-        child_index: usize,
-    ) NodeId {
-        return switch (self.nodes.items[@intFromEnum(node)]) {
-            .list, .box => |child| child,
-            .tuple => |items| items[child_index],
-            .tag_union => |row| if (child_index == 0)
-                row.ext
-            else
-                tagPayloadAt(row.tags, child_index - 1),
-            .record => |row| if (child_index == 0)
-                row.ext
-            else
-                row.fields[child_index - 1].ty,
-            .named => |named| if (named.generated_iterator != null)
-                named.args[child_index + 1]
-            else
-                named.args[child_index],
-            .redirect, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator depth frame had no structural child"),
-        };
-    }
-
-    /// Seal producer identities for graph-owned iterator representations only
-    /// after all type relations and representation decisions have been
-    /// applied. Immutable Type-shaped snapshots of resolved nodes are used
-    /// here; they remain graph-owned and never enter completed Monotype output.
-    /// All digests are computed before any node is stamped, so dependency
-    /// order cannot affect identity.
-    pub fn finalizeGeneratedIteratorIdentities(self: *InstGraph) Allocator.Error!void {
-        self.requireRelationProduction();
-        const Pending = struct { node: NodeId, digest: names.TypeDigest };
-        var pending = std.ArrayList(Pending).empty;
-        defer pending.deinit(self.allocator);
-        var seen = self.node_set_pool.acquire();
-        defer self.node_set_pool.release(&seen);
-
-        for (self.nodes.items, 0..) |_, raw_index| {
-            const node = self.find(@enumFromInt(@as(u32, @intCast(raw_index))));
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) continue;
-            const named = switch (self.content(node)) {
-                .named => |named| named,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
-            };
-            const provenance = named.generated_iterator orelse continue;
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-            if (named.def.iterator_representation == .forced_dynamic) {
-                if (named.args.len != 1) {
-                    Common.invariant("forced-dynamic iterator identity did not have exactly one item argument");
-                }
-                const item = try self.provisionalTypeViewForNode(named.args[0]);
-                const item_digest = self.types.typeDigest(self.name_store, item);
-                hasher.update("roc.generated_iterator.forced_dynamic_identity");
-                hasher.update(&item_digest.bytes);
-            } else {
-                const final = try self.provisionalTypeViewForNode(node);
-                const shape = self.types.typeDigest(self.name_store, final);
-                hasher.update("roc.generated_iterator.final_identity");
-                hasher.update(&shape.bytes);
-                if (provenance.callable_evidence) |evidence| {
-                    hasher.update("callable_evidence");
-                    hasher.update(&evidence.bytes);
-                }
-            }
-            try pending.append(self.allocator, .{
-                .node = node,
-                .digest = .{ .bytes = hasher.finalResult() },
-            });
-        }
-        for (pending.items) |item| {
-            var named = switch (self.content(item.node)) {
-                .named => |named| named,
-                .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator identity target stopped being named"),
-            };
-            named.def.generated = item.digest;
-            try self.setContent(item.node, .{ .named = named });
-        }
-    }
-
     pub fn finalizesAsClosedEmptyTagUnion(self: *InstGraph, raw_node: NodeId) bool {
+        self.requireFrozenRelations();
+        self.countDiagnostic("closed_empty_finalization_requests");
         var node = self.find(raw_node);
         var remaining = self.nodes.items.len;
         while (remaining > 0) : (remaining -= 1) {
@@ -1385,10 +1434,12 @@ pub const InstGraph = struct {
                 .unresolved => |variable| {
                     if (variable.numeric_default_phase != null) return false;
                     if (variable.row_default) |row_default| return row_default == .empty_tag_union;
+                    if (variable.specialization_default) |default| return default == .empty_tag_union;
                     return switch (variable.origin) {
-                        .checked_variable => true,
+                        .checked_variable => Common.invariant("checked variable reached final demand validation without an explicit default"),
                         .row_extension => Common.invariant("row extension reached final demand validation without row default"),
-                        .placeholder => Common.invariant("instantiation placeholder reached final demand validation"),
+                        .construction_placeholder => Common.invariant("instantiation construction placeholder reached final demand validation"),
+                        .producer_placeholder => Common.invariant("instantiation producer placeholder reached final demand validation"),
                     };
                 },
                 .named => |named| {
@@ -1421,9 +1472,17 @@ pub const InstGraph = struct {
     /// named type whose backing has not been recorded) answers `true`
     /// conservatively.
     pub fn mayFinalizeAsUninhabited(self: *InstGraph, raw_node: NodeId) Allocator.Error!bool {
+        self.countDiagnostic("permanent_inhabitedness_requests");
+        const root = self.find(raw_node);
+        if (self.permanently_inhabited_nodes.contains(root)) {
+            self.countDiagnostic("permanent_inhabitedness_hits");
+            return false;
+        }
         var visiting = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&visiting);
-        return try self.mayFinalizeAsUninhabitedInner(self.find(raw_node), &visiting);
+        const may_finalize = try self.mayFinalizeAsUninhabitedInner(root, &visiting);
+        if (!may_finalize) try self.permanently_inhabited_nodes.put(root, {});
+        return may_finalize;
     }
 
     fn mayFinalizeAsUninhabitedInner(
@@ -1508,10 +1567,12 @@ pub const InstGraph = struct {
             .unresolved => |variable| blk: {
                 if (variable.numeric_default_phase != null) break :blk false;
                 if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
+                if (variable.specialization_default) |default| break :blk default == .empty_tag_union;
                 break :blk switch (variable.origin) {
-                    .checked_variable => true,
+                    .checked_variable => Common.invariant("checked variable reached final inhabitance validation without an explicit default"),
                     .row_extension => Common.invariant("row extension reached final inhabitance validation without row default"),
-                    .placeholder => Common.invariant("instantiation placeholder reached final inhabitance validation"),
+                    .construction_placeholder => Common.invariant("instantiation construction placeholder reached final inhabitance validation"),
+                    .producer_placeholder => Common.invariant("instantiation producer placeholder reached final inhabitance validation"),
                 };
             },
             .named => |named| if (named.backing) |backing|
@@ -1558,20 +1619,812 @@ pub const InstGraph = struct {
         };
     }
 
+    fn producedTagUnionHash(self: *InstGraph, tag_union: InstTagUnion) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        var ext = std.mem.nativeToLittle(u32, @intFromEnum(self.find(tag_union.ext)));
+        hasher.update(std.mem.asBytes(&ext));
+        for (tag_union.tags) |tag| {
+            var name = std.mem.nativeToLittle(u32, @intFromEnum(tag.name));
+            hasher.update(std.mem.asBytes(&name));
+            var checked_name = std.mem.nativeToLittle(u32, @intFromEnum(tag.checked_name));
+            hasher.update(std.mem.asBytes(&checked_name));
+            var len = std.mem.nativeToLittle(u32, @intCast(tag.payloads.len));
+            hasher.update(std.mem.asBytes(&len));
+            for (tag.payloads) |payload| {
+                var child = std.mem.nativeToLittle(u32, @intFromEnum(self.find(payload)));
+                hasher.update(std.mem.asBytes(&child));
+            }
+        }
+        return hasher.final();
+    }
+
+    fn producedTagUnionEql(self: *InstGraph, left: InstTagUnion, right: InstTagUnion) bool {
+        if (left.tags.len != right.tags.len or self.find(left.ext) != self.find(right.ext)) return false;
+        for (left.tags, right.tags) |left_tag, right_tag| {
+            if (left_tag.name != right_tag.name or
+                left_tag.checked_name != right_tag.checked_name or
+                left_tag.payloads.len != right_tag.payloads.len) return false;
+            for (left_tag.payloads, right_tag.payloads) |left_payload, right_payload| {
+                if (self.find(left_payload) != self.find(right_payload)) return false;
+            }
+        }
+        return true;
+    }
+
+    fn existingTagUnionShape(self: *InstGraph, tag_union: InstTagUnion) ?NodeId {
+        const bucket = self.tag_unions_by_shape_hash.get(self.producedTagUnionHash(tag_union)) orelse return null;
+        for (bucket.items) |candidate| {
+            const root = self.find(candidate);
+            const candidate_content = self.nodes.items[@intFromEnum(root)];
+            if (self.checked_base_nodes.items[@intFromEnum(root)] == (self.checked_base_construction_depth != 0) and
+                candidate_content == .tag_union and
+                self.producedTagUnionEql(candidate_content.tag_union, tag_union)) return root;
+        }
+        return null;
+    }
+
+    fn registerTagUnionShape(self: *InstGraph, raw_node: NodeId, tag_union: InstTagUnion) Allocator.Error!void {
+        const node = self.find(raw_node);
+        const bucket = try self.tag_unions_by_shape_hash.getOrPut(self.producedTagUnionHash(tag_union));
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        for (bucket.value_ptr.items) |candidate| if (self.find(candidate) == node) return;
+        try bucket.value_ptr.append(self.allocator, node);
+    }
+
+    /// Construct one completed producer-owned tag row. Row chaining is a
+    /// checked construction recipe, not runtime identity: consume the chain,
+    /// sort the variants, and intern the exact immediate children once at
+    /// the producer boundary.
+    pub fn newProducedTagUnion(
+        self: *InstGraph,
+        initial_tags: []const InstTag,
+        raw_ext: NodeId,
+    ) Allocator.Error!NodeId {
+        return try self.newProducedTagUnionInner(initial_tags, raw_ext, true);
+    }
+
+    fn newProducedTagUnionInner(
+        self: *InstGraph,
+        initial_tags: []const InstTag,
+        raw_ext: NodeId,
+        intern_children: bool,
+    ) Allocator.Error!NodeId {
+        var tags = std.ArrayList(InstTag).empty;
+        defer tags.deinit(self.allocator);
+        try tags.appendSlice(self.allocator, initial_tags);
+
+        var ext = self.find(raw_ext);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        while (self.nodes.items[@intFromEnum(ext)] == .tag_union) {
+            const entry = try seen.getOrPut(ext);
+            if (entry.found_existing) {
+                Common.invariant("completed produced tag row contained an extension cycle");
+            }
+            const tail = self.nodes.items[@intFromEnum(ext)].tag_union;
+            try tags.appendSlice(self.allocator, tail.tags);
+            ext = self.find(tail.ext);
+        }
+        switch (self.nodes.items[@intFromEnum(ext)]) {
+            .unresolved, .empty_tag_union => {},
+            .redirect => unreachable,
+            .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => Common.invariant("completed produced tag row had a non-tag extension"),
+            .tag_union => unreachable,
+        }
+        ext = try self.internImmediateChild(ext);
+        std.mem.sort(InstTag, tags.items, self.name_store, instTagLessThan);
+        const interned_tags = try self.arena().dupe(InstTag, tags.items);
+        for (interned_tags) |*tag| {
+            if (!intern_children) continue;
+            var interned_payloads: ?[]NodeId = null;
+            for (tag.payloads, 0..) |payload, index| {
+                const interned = try self.internImmediateChild(payload);
+                if (interned_payloads) |payloads| {
+                    payloads[index] = interned;
+                } else if (self.find(payload) != interned) {
+                    const payloads = try self.arena().alloc(NodeId, tag.payloads.len);
+                    @memcpy(payloads[0..index], tag.payloads[0..index]);
+                    payloads[index] = interned;
+                    interned_payloads = payloads;
+                }
+            }
+            if (interned_payloads) |payloads| tag.payloads = payloads;
+        }
+        return try self.newNode(.{ .tag_union = .{
+            .tags = interned_tags,
+            .ext = ext,
+        } });
+    }
+
+    /// Construct one completed producer-owned record row. Checked row
+    /// extension topology is not runtime identity: consume the chain, sort
+    /// the fields, and intern only the exact immediate field nodes.
+    pub fn newProducedRecord(
+        self: *InstGraph,
+        initial_fields: []const InstField,
+        raw_ext: NodeId,
+    ) Allocator.Error!NodeId {
+        return try self.newProducedRecordInner(initial_fields, raw_ext, true);
+    }
+
+    fn newProducedRecordInner(
+        self: *InstGraph,
+        initial_fields: []const InstField,
+        raw_ext: NodeId,
+        intern_children: bool,
+    ) Allocator.Error!NodeId {
+        var fields = std.ArrayList(InstField).empty;
+        defer fields.deinit(self.allocator);
+        try fields.appendSlice(self.allocator, initial_fields);
+
+        var ext = self.find(raw_ext);
+        var seen = collections.DenseMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        while (self.nodes.items[@intFromEnum(ext)] == .record) {
+            const entry = try seen.getOrPut(ext);
+            if (entry.found_existing) {
+                Common.invariant("completed produced record row contained an extension cycle");
+            }
+            const tail = self.nodes.items[@intFromEnum(ext)].record;
+            try fields.appendSlice(self.allocator, tail.fields);
+            ext = self.find(tail.ext);
+        }
+        switch (self.nodes.items[@intFromEnum(ext)]) {
+            .unresolved, .empty_record => {},
+            .redirect => unreachable,
+            .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => Common.invariant("completed produced record row had a non-record extension"),
+            .record => unreachable,
+        }
+        ext = try self.internImmediateChild(ext);
+        std.mem.sort(InstField, fields.items, self.name_store, instFieldLessThan);
+        const interned_fields = try self.arena().dupe(InstField, fields.items);
+        if (intern_children) {
+            for (interned_fields) |*field| {
+                field.ty = try self.internImmediateChild(field.ty);
+                if (field.value_ty) |value_ty| {
+                    field.value_ty = try self.internImmediateChild(value_ty);
+                }
+            }
+        }
+        return try self.newNode(.{ .record = .{
+            .fields = interned_fields,
+            .ext = ext,
+        } });
+    }
+
+    /// Construct a completed producer-owned list from its one exact immediate
+    /// element node. This consumes only that child; it never walks descendants.
+    pub fn newProducedList(self: *InstGraph, element: NodeId) Allocator.Error!NodeId {
+        return try self.newNode(.{ .list = try self.internImmediateChild(element) });
+    }
+
+    /// Construct a completed producer-owned box from its one exact immediate
+    /// element node. This consumes only that child; it never walks descendants.
+    pub fn newProducedBox(self: *InstGraph, element: NodeId) Allocator.Error!NodeId {
+        return try self.newNode(.{ .box = try self.internImmediateChild(element) });
+    }
+
+    /// Construct a completed producer-owned tuple from exact immediate item
+    /// nodes. Each item is normalized at this boundary and is not traversed.
+    pub fn newProducedTuple(self: *InstGraph, items: []const NodeId) Allocator.Error!NodeId {
+        const interned_items = try self.arena().alloc(NodeId, items.len);
+        for (items, interned_items) |item, *interned| {
+            interned.* = try self.internImmediateChild(item);
+        }
+        return try self.newNode(.{ .tuple = interned_items });
+    }
+
+    fn nodeSpanShapeHash(self: *InstGraph, nodes: []const NodeId) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        var len = std.mem.nativeToLittle(u32, @intCast(nodes.len));
+        hasher.update(std.mem.asBytes(&len));
+        for (nodes) |node| {
+            var child = std.mem.nativeToLittle(u32, @intFromEnum(self.find(node)));
+            hasher.update(std.mem.asBytes(&child));
+        }
+        return hasher.final();
+    }
+
+    fn sameNodeSpanShape(self: *InstGraph, left: []const NodeId, right: []const NodeId) bool {
+        if (left.len != right.len) return false;
+        for (left, right) |left_node, right_node| {
+            if (self.find(left_node) != self.find(right_node)) return false;
+        }
+        return true;
+    }
+
+    fn existingListElement(self: *InstGraph, raw_element: NodeId) ?NodeId {
+        const element = self.find(raw_element);
+        const entry = self.list_nodes_by_element.get(element) orelse return null;
+        const candidate = self.find(if (self.checked_base_construction_depth != 0)
+            entry.checked_base orelse return null
+        else
+            entry.produced orelse return null);
+        const candidate_content = self.nodes.items[@intFromEnum(candidate)];
+        return if (candidate_content == .list and self.find(candidate_content.list) == element) candidate else null;
+    }
+
+    fn existingBoxElement(self: *InstGraph, raw_element: NodeId) ?NodeId {
+        const element = self.find(raw_element);
+        const entry = self.box_nodes_by_element.get(element) orelse return null;
+        const candidate = self.find(if (self.checked_base_construction_depth != 0)
+            entry.checked_base orelse return null
+        else
+            entry.produced orelse return null);
+        const candidate_content = self.nodes.items[@intFromEnum(candidate)];
+        return if (candidate_content == .box and self.find(candidate_content.box) == element) candidate else null;
+    }
+
+    fn registerListElement(self: *InstGraph, raw_element: NodeId, node: NodeId) Allocator.Error!void {
+        const entry = try self.list_nodes_by_element.getOrPut(self.find(raw_element));
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        if (self.checked_base_construction_depth != 0) {
+            entry.value_ptr.checked_base = node;
+        } else {
+            entry.value_ptr.produced = node;
+        }
+    }
+
+    fn registerBoxElement(self: *InstGraph, raw_element: NodeId, node: NodeId) Allocator.Error!void {
+        const entry = try self.box_nodes_by_element.getOrPut(self.find(raw_element));
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        if (self.checked_base_construction_depth != 0) {
+            entry.value_ptr.checked_base = node;
+        } else {
+            entry.value_ptr.produced = node;
+        }
+    }
+
+    fn existingTupleShape(self: *InstGraph, items: []const NodeId) ?NodeId {
+        const bucket = self.tuple_nodes_by_shape_hash.get(self.nodeSpanShapeHash(items)) orelse return null;
+        for (bucket.items) |candidate| {
+            const root = self.find(candidate);
+            const candidate_content = self.nodes.items[@intFromEnum(root)];
+            if (self.checked_base_nodes.items[@intFromEnum(root)] == (self.checked_base_construction_depth != 0) and
+                candidate_content == .tuple and
+                self.sameNodeSpanShape(candidate_content.tuple, items)) return root;
+        }
+        return null;
+    }
+
+    fn registerTupleShape(self: *InstGraph, raw_node: NodeId, items: []const NodeId) Allocator.Error!void {
+        const node = self.find(raw_node);
+        const bucket = try self.tuple_nodes_by_shape_hash.getOrPut(self.nodeSpanShapeHash(items));
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        for (bucket.value_ptr.items) |candidate| if (self.find(candidate) == node) return;
+        try bucket.value_ptr.append(self.allocator, node);
+    }
+
+    fn functionShapeHash(self: *InstGraph, function: InstFunction) u64 {
+        var hasher = std.hash.Wyhash.init(self.nodeSpanShapeHash(function.args));
+        var ret = std.mem.nativeToLittle(u32, @intFromEnum(self.find(function.ret)));
+        hasher.update(std.mem.asBytes(&ret));
+        return hasher.final();
+    }
+
+    fn sameFunctionShape(self: *InstGraph, left: InstFunction, right: InstFunction) bool {
+        return self.sameNodeSpanShape(left.args, right.args) and
+            self.find(left.ret) == self.find(right.ret);
+    }
+
+    fn existingFunctionShape(self: *InstGraph, function: InstFunction) ?NodeId {
+        const bucket = self.function_nodes_by_shape_hash.get(self.functionShapeHash(function)) orelse return null;
+        for (bucket.items) |candidate| {
+            const root = self.find(candidate);
+            const candidate_content = self.nodes.items[@intFromEnum(root)];
+            if (candidate_content == .func and self.sameFunctionShape(candidate_content.func, function)) return root;
+        }
+        return null;
+    }
+
+    fn registerFunctionShape(self: *InstGraph, raw_node: NodeId, function: InstFunction) Allocator.Error!void {
+        const node = self.find(raw_node);
+        const bucket = try self.function_nodes_by_shape_hash.getOrPut(self.functionShapeHash(function));
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        for (bucket.value_ptr.items) |candidate| if (self.find(candidate) == node) return;
+        try bucket.value_ptr.append(self.allocator, node);
+    }
+
+    /// Intern a function only when its producer has completed the exact
+    /// result edge. Open requests retain distinct forward cells; completed
+    /// values with identical immediate children become one runtime type node.
+    fn internCompletedFunction(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+        const node = self.find(raw_node);
+        const function = switch (self.nodes.items[@intFromEnum(node)]) {
+            .func => |function| function,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("completed function interning received a non-function node"),
+        };
+        if (self.existingFunctionShape(function)) |existing| {
+            if (existing != node) {
+                try self.union_(existing, node);
+                return existing;
+            }
+            return node;
+        }
+        try self.registerFunctionShape(node, function);
+        return node;
+    }
+
+    /// Construct and intern one function whose argument and result nodes are
+    /// already exact. Open call requests must continue to use `newNode`
+    /// directly so their forward result cells remain independently owned.
+    pub fn newProducedFunction(
+        self: *InstGraph,
+        args: []const NodeId,
+        ret: NodeId,
+    ) Allocator.Error!NodeId {
+        const stored_args = try self.arena().alloc(NodeId, args.len);
+        for (args, stored_args) |arg, *stored| {
+            stored.* = try self.internImmediateChild(arg);
+        }
+        const node = try self.newNode(.{ .func = .{
+            .args = stored_args,
+            .ret = try self.internImmediateChild(ret),
+        } });
+        return try self.internCompletedFunction(node);
+    }
+
+    fn recordShapeHash(self: *InstGraph, record: InstNode) u64 {
+        const row = record.record;
+        var hasher = std.hash.Wyhash.init(0);
+        var ext = std.mem.nativeToLittle(u32, @intFromEnum(self.find(row.ext)));
+        hasher.update(std.mem.asBytes(&ext));
+        var len = std.mem.nativeToLittle(u32, @intCast(row.fields.len));
+        hasher.update(std.mem.asBytes(&len));
+        for (row.fields) |field| {
+            var name = std.mem.nativeToLittle(u32, @intFromEnum(field.name));
+            hasher.update(std.mem.asBytes(&name));
+            var child = std.mem.nativeToLittle(u32, @intFromEnum(self.find(field.ty)));
+            hasher.update(std.mem.asBytes(&child));
+            hasher.update(&.{@intFromBool(field.value_ty != null)});
+            if (field.value_ty) |value_ty| {
+                var value_child = std.mem.nativeToLittle(u32, @intFromEnum(self.find(value_ty)));
+                hasher.update(std.mem.asBytes(&value_child));
+            }
+            hasher.update(&.{@intFromEnum(std.meta.activeTag(field.kind))});
+            switch (field.kind) {
+                .undetermined => |kind| {
+                    var kind_id = std.mem.nativeToLittle(u32, @intFromEnum(kind));
+                    hasher.update(std.mem.asBytes(&kind_id));
+                },
+                .defaulted => |default| updateFieldDefaultHash(&hasher, default),
+                .sealed, .required, .optional => {},
+            }
+            hasher.update(&.{@intFromBool(field.default != null)});
+            if (field.default) |default| updateFieldDefaultHash(&hasher, default);
+        }
+        return hasher.final();
+    }
+
+    fn sameRecordShape(self: *InstGraph, left: InstNode, right: InstNode) bool {
+        const left_row = left.record;
+        const right_row = right.record;
+        if (left_row.fields.len != right_row.fields.len or self.find(left_row.ext) != self.find(right_row.ext)) return false;
+        for (left_row.fields, right_row.fields) |left_field, right_field| {
+            if (left_field.name != right_field.name or self.find(left_field.ty) != self.find(right_field.ty)) return false;
+            if (left_field.value_ty != null and right_field.value_ty != null) {
+                if (self.find(left_field.value_ty.?) != self.find(right_field.value_ty.?)) return false;
+            } else if (left_field.value_ty != right_field.value_ty) return false;
+            if (!std.meta.eql(left_field.kind, right_field.kind)) return false;
+            if (!instFieldDefaultEql(left_field.default, right_field.default)) return false;
+        }
+        return true;
+    }
+
+    fn existingRecordShape(self: *InstGraph, record: InstNode) ?NodeId {
+        const bucket = self.record_nodes_by_shape_hash.get(self.recordShapeHash(record)) orelse return null;
+        for (bucket.items) |candidate| {
+            const root = self.find(candidate);
+            const candidate_content = self.nodes.items[@intFromEnum(root)];
+            if (self.checked_base_nodes.items[@intFromEnum(root)] == (self.checked_base_construction_depth != 0) and
+                candidate_content == .record and
+                self.sameRecordShape(candidate_content, record)) return root;
+        }
+        return null;
+    }
+
+    fn registerRecordShape(self: *InstGraph, raw_node: NodeId, record: InstNode) Allocator.Error!void {
+        const node = self.find(raw_node);
+        const bucket = try self.record_nodes_by_shape_hash.getOrPut(self.recordShapeHash(record));
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        for (bucket.value_ptr.items) |candidate| if (self.find(candidate) == node) return;
+        try bucket.value_ptr.append(self.allocator, node);
+    }
+
+    /// Materialize only defaults explicitly recorded by checking. Such a
+    /// variable is a concrete immutable recipe at an exact producer boundary;
+    /// a variable without one remains open and may not become a produced
+    /// child.
+    fn explicitInstVariableDefault(variable: InstVariable) ?InstNode {
+        if (variable.numeric_default_phase) |phase| {
+            const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                Common.invariant("checking-finalized numeric variable reached exact producer interning");
+            return switch (target) {
+                .dec => .{ .primitive = .dec },
+                .str => .{ .primitive = .str },
+            };
+        }
+        if (variable.row_default) |row_default| {
+            return switch (row_default) {
+                .empty_record => .empty_record,
+                .empty_tag_union => .empty_tag_union,
+            };
+        }
+        if (variable.specialization_default) |default| {
+            return switch (default) {
+                .empty_tag_union => .empty_tag_union,
+            };
+        }
+        return null;
+    }
+
+    /// Convert one immutable concrete checked recipe into the produced
+    /// interner domain. This follows the recipe once, at the producer that
+    /// actually needs it, and memoizes every structural node by dense ID.
+    /// Nominals and primitives are atomic exact identities; an unresolved
+    /// checked recipe is not concrete and therefore cannot cross this edge.
+    fn producedEquivalentOfCheckedBase(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+        const node = self.find(raw_node);
+        if (!self.checked_base_nodes.items[@intFromEnum(node)]) return node;
+        if (self.checked_base_produced_equivalents.get(node)) |existing| return self.find(existing);
+
+        const produced = switch (self.nodes.items[@intFromEnum(node)]) {
+            .redirect => unreachable,
+            .unresolved => |variable| if (explicitInstVariableDefault(variable)) |default|
+                try self.newNode(default)
+            else
+                Common.invariant("an unresolved checked recipe reached an exact producer child"),
+            .primitive, .empty_tag_union, .empty_record, .erased, .zst => node,
+            .named => |named| if (named.def.generated != null)
+                node
+            else
+                try self.newNode(.{ .named = named }),
+            .list => |element| try self.newProducedList(
+                try self.producedEquivalentOfCheckedBase(element),
+            ),
+            .box => |element| try self.newProducedBox(
+                try self.producedEquivalentOfCheckedBase(element),
+            ),
+            .tuple => |items| blk: {
+                const produced_items = try self.arena().alloc(NodeId, items.len);
+                for (items, produced_items) |item, *produced_item| {
+                    produced_item.* = try self.producedEquivalentOfCheckedBase(item);
+                }
+                break :blk try self.newProducedTuple(produced_items);
+            },
+            .func => |function| blk: {
+                const produced_args = try self.arena().alloc(NodeId, function.args.len);
+                for (function.args, produced_args) |arg, *produced_arg| {
+                    produced_arg.* = try self.producedEquivalentOfCheckedBase(arg);
+                }
+                break :blk try self.newProducedFunction(
+                    produced_args,
+                    try self.producedEquivalentOfCheckedBase(function.ret),
+                );
+            },
+            .record => |record| blk: {
+                const row = try self.flattenRecordRow(node);
+                const produced_fields = try self.arena().dupe(InstField, row.fields);
+                for (produced_fields) |*field| {
+                    field.ty = try self.producedEquivalentOfCheckedBase(field.ty);
+                    if (field.value_ty) |value_ty| {
+                        field.value_ty = try self.producedEquivalentOfCheckedBase(value_ty);
+                    }
+                }
+                _ = record;
+                break :blk try self.newProducedRecord(produced_fields, row.ext);
+            },
+            .tag_union => |tag_union| blk: {
+                const row = try self.flattenTagRow(node);
+                const produced_tags = try self.arena().dupe(InstTag, row.tags);
+                for (produced_tags) |*tag| {
+                    const payloads = try self.arena().alloc(NodeId, tag.payloads.len);
+                    for (tag.payloads, payloads) |payload, *produced_payload| {
+                        produced_payload.* = try self.producedEquivalentOfCheckedBase(payload);
+                    }
+                    tag.payloads = payloads;
+                }
+                _ = tag_union;
+                break :blk try self.newProducedTagUnion(produced_tags, row.ext);
+            },
+        };
+        try self.checked_base_produced_equivalents.put(node, produced);
+        return self.find(produced);
+    }
+
+    /// Return the interned identity node for one already-built immediate
+    /// child. Row extensions and concrete checked recipes are normalized once
+    /// here, when a producer records that child, rather than being
+    /// rediscovered by later call consumers.
+    fn internImmediateChild(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+        var node = self.find(raw_node);
+        var remaining = self.nodes.items.len;
+        while (self.nodes.items[@intFromEnum(node)] == .named and
+            self.nodes.items[@intFromEnum(node)].named.kind == .alias)
+        {
+            if (remaining == 0) Common.invariant("transparent alias chain contained a cycle");
+            remaining -= 1;
+            node = self.find((self.nodes.items[@intFromEnum(node)].named.backing orelse
+                Common.invariant("transparent alias child had no backing")).node);
+        }
+        if (self.nodes.items[@intFromEnum(node)] == .unresolved) {
+            if (explicitInstVariableDefault(self.nodes.items[@intFromEnum(node)].unresolved)) |defaulted| {
+                node = try self.newNode(defaulted);
+            }
+        }
+        if (self.checked_base_construction_depth == 0 and
+            self.checked_base_nodes.items[@intFromEnum(node)])
+        {
+            return try self.producedEquivalentOfCheckedBase(node);
+        }
+        return switch (self.nodes.items[@intFromEnum(node)]) {
+            .tag_union => blk: {
+                const row = try self.flattenTagRow(node);
+                break :blk try self.newProducedTagUnionInner(row.tags, row.ext, false);
+            },
+            .record => blk: {
+                const row = try self.flattenRecordRow(node);
+                break :blk try self.newProducedRecordInner(row.fields, row.ext, false);
+            },
+            .named => |named| blk: {
+                // A nominal may have been reserved before one of its exact
+                // argument cells was selected. Its original interner bucket
+                // is then keyed by the old argument roots. Re-register the
+                // finished identity under its current immediate arguments so
+                // later compound producers consume one interned child.
+                if (self.existingNamedIdentity(named)) |existing| break :blk existing;
+                try self.registerNamedIdentity(node, named);
+                break :blk node;
+            },
+            .redirect => unreachable,
+            .unresolved, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .erased, .zst => node,
+        };
+    }
+
+    /// Intern one exact producer root at the moment it becomes a
+    /// specialization identity. This is the root counterpart of recording an
+    /// immediate produced child: it consumes only transparent aliases and the
+    /// root's row-extension chain, then reuses the existing immediate-shape
+    /// interner. It never traverses through a generated nominal.
+    pub fn internProducedIdentity(self: *InstGraph, raw_node: NodeId) Allocator.Error!NodeId {
+        const node = try self.internImmediateChild(raw_node);
+        return switch (self.nodes.items[@intFromEnum(node)]) {
+            .list => |element| try self.newProducedList(element),
+            .box => |element| try self.newProducedBox(element),
+            .tuple => |items| try self.newProducedTuple(items),
+            .func => |function| try self.newProducedFunction(function.args, function.ret),
+            .named => |named| if (isGeneratedPrivateRootContent(.{ .named = named }))
+                node
+            else if (try self.internNamedArguments(named)) |interned|
+                try self.newNode(.{ .named = interned })
+            else
+                node,
+            .redirect, .unresolved, .primitive, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => node,
+        };
+    }
+
+    fn internNamedArguments(self: *InstGraph, named: InstNamed) Allocator.Error!?InstNamed {
+        // Generated-private arguments are part of the producer-authored digest
+        // input. They are never normalized into the ordinary nominal interner.
+        if (isGeneratedPrivateRootContent(.{ .named = named })) return null;
+        var interned_args: ?[]NodeId = null;
+        for (named.args, 0..) |arg, index| {
+            const interned = try self.internImmediateChild(arg);
+            if (interned_args) |args| {
+                args[index] = interned;
+            } else if (self.find(arg) != interned) {
+                const args = try self.arena().alloc(NodeId, named.args.len);
+                @memcpy(args[0..index], named.args[0..index]);
+                args[index] = interned;
+                interned_args = args;
+            }
+        }
+        if (interned_args) |args| {
+            var interned = named;
+            interned.args = args;
+            return interned;
+        }
+        return null;
+    }
+
+    fn namedIdentityHash(self: *InstGraph, named: InstNamed) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        var module = std.mem.nativeToLittle(u32, @intFromEnum(named.def.module));
+        hasher.update(std.mem.asBytes(&module));
+        var type_name = std.mem.nativeToLittle(u32, @intFromEnum(named.def.type_name));
+        hasher.update(std.mem.asBytes(&type_name));
+        var source_decl = std.mem.nativeToLittle(u32, named.def.source_decl orelse std.math.maxInt(u32));
+        hasher.update(std.mem.asBytes(&source_decl));
+        if (named.def.generated) |generated| hasher.update(&generated.bytes);
+        hasher.update(&.{@intFromBool(named.kind == .alias)});
+        hasher.update(&.{if (named.builtin_owner) |owner| @intFromEnum(owner) else std.math.maxInt(u8)});
+        for (named.args) |arg| {
+            var child = std.mem.nativeToLittle(u32, @intFromEnum(self.find(arg)));
+            hasher.update(std.mem.asBytes(&child));
+        }
+        return hasher.final();
+    }
+
+    fn sameNamedIdentity(self: *InstGraph, left: InstNamed, right: InstNamed) bool {
+        return (left.kind == .alias) == (right.kind == .alias) and
+            std.meta.eql(left.def, right.def) and
+            left.builtin_owner == right.builtin_owner and
+            self.sameNamedArgs(left.args, right.args);
+    }
+
+    fn existingNamedIdentity(self: *InstGraph, named: InstNamed) ?NodeId {
+        if (isGeneratedPrivateRootContent(.{ .named = named })) return null;
+        const bucket = self.named_nodes_by_identity_hash.get(self.namedIdentityHash(named)) orelse return null;
+        for (bucket.items) |candidate| {
+            const root = self.find(candidate);
+            const candidate_content = self.nodes.items[@intFromEnum(root)];
+            if (self.checked_base_nodes.items[@intFromEnum(root)] == (self.checked_base_construction_depth != 0) and
+                candidate_content == .named and
+                self.sameNamedIdentity(candidate_content.named, named)) return root;
+        }
+        return null;
+    }
+
+    fn registerNamedIdentity(self: *InstGraph, raw_node: NodeId, named: InstNamed) Allocator.Error!void {
+        if (isGeneratedPrivateRootContent(.{ .named = named })) return;
+        const node = self.find(raw_node);
+        const bucket = try self.named_nodes_by_identity_hash.getOrPut(self.namedIdentityHash(named));
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        for (bucket.value_ptr.items) |candidate| {
+            if (self.find(candidate) == node) return;
+        }
+        try bucket.value_ptr.append(self.allocator, node);
+    }
+
     pub fn newNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
         self.requireRelationProduction();
+        if (node_content == .named and
+            !isGeneratedPrivateRootContent(node_content) and
+            self.checked_base_construction_depth == 0)
+        {
+            if (try self.internNamedArguments(node_content.named)) |interned| {
+                return try self.newNode(.{ .named = interned });
+            }
+        }
+        switch (node_content) {
+            .primitive => |primitive| if (self.primitive_nodes[@intFromEnum(primitive)]) |existing| return self.find(existing),
+            .empty_tag_union => if (self.empty_tag_union_node) |existing| return self.find(existing),
+            .empty_record => if (self.empty_record_node) |existing| return self.find(existing),
+            .zst => if (self.zst_node) |existing| return self.find(existing),
+            .list => |element| if (self.existingListElement(element)) |existing| return existing,
+            .box => |element| if (self.existingBoxElement(element)) |existing| return existing,
+            .tuple => |items| if (self.existingTupleShape(items)) |existing| return existing,
+            .record => if (self.existingRecordShape(node_content)) |existing| return existing,
+            .named => |named| if (self.existingNamedIdentity(named)) |existing| return existing,
+            .redirect, .unresolved, .func, .tag_union, .erased => {},
+        }
+        const produced_tag_hash: ?u64 = if (node_content == .tag_union)
+            self.producedTagUnionHash(node_content.tag_union)
+        else
+            null;
+        if (produced_tag_hash != null) {
+            if (self.existingTagUnionShape(node_content.tag_union)) |existing| return existing;
+        }
+        const id = try self.appendDistinctNode(node_content);
+        switch (node_content) {
+            .primitive => |primitive| self.primitive_nodes[@intFromEnum(primitive)] = id,
+            .empty_tag_union => self.empty_tag_union_node = id,
+            .empty_record => self.empty_record_node = id,
+            .zst => self.zst_node = id,
+            .list => |element| try self.registerListElement(element, id),
+            .box => |element| try self.registerBoxElement(element, id),
+            .tuple => |items| try self.registerTupleShape(id, items),
+            .record => try self.registerRecordShape(id, node_content),
+            .named => |named| try self.registerNamedIdentity(id, named),
+            .redirect, .unresolved, .func, .tag_union, .erased => {},
+        }
+        if (produced_tag_hash != null) {
+            try self.registerTagUnionShape(id, node_content.tag_union);
+        }
+        return id;
+    }
+
+    /// Allocate an internal graph cell whose distinct identity is required to
+    /// keep a nominal wrapper separate from the structural node it replaces.
+    /// This cell is deliberately absent from the exact-node intern tables.
+    fn appendDistinctNode(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
         const id: NodeId = @enumFromInt(@as(u32, @intCast(self.nodes.items.len)));
         try self.nodes.append(self.allocator, node_content);
+        try self.checked_base_nodes.append(self.allocator, false);
         try self.versions.append(self.allocator, 0);
-        try self.class_member_next.append(self.allocator, null);
-        try self.class_member_head.append(self.allocator, id);
-        try self.class_member_tail.append(self.allocator, id);
-        try self.containment_visit_epochs.append(self.allocator, 0);
         try self.row_exts.append(self.allocator, null);
-        try self.request_source_interfaces.append(self.allocator, null);
+        try self.request_checked_sources.append(self.allocator, null);
+        try self.function_result_relations.append(self.allocator, null);
+        try self.function_argument_authority_spans.append(self.allocator, .uninitialized);
+        try self.direct_request_selection_spans.append(self.allocator, .uninitialized);
         try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
+    }
+
+    pub fn markCheckedBase(self: *InstGraph, raw_node: NodeId) void {
+        self.checked_base_nodes.items[@intFromEnum(self.find(raw_node))] = true;
+    }
+
+    pub fn beginCheckedBaseConstruction(self: *InstGraph) void {
+        self.checked_base_construction_depth += 1;
+    }
+
+    pub fn endCheckedBaseConstruction(self: *InstGraph) void {
+        if (self.checked_base_construction_depth == 0) {
+            Common.invariant("checked base construction scope underflowed");
+        }
+        self.checked_base_construction_depth -= 1;
+    }
+
+    pub fn nodeIsCheckedBase(self: *InstGraph, raw_node: NodeId) bool {
+        return self.checked_base_nodes.items[@intFromEnum(self.find(raw_node))];
+    }
+
+    /// A second checked id may be a transparent reference to an already-built
+    /// immutable base node. Redirect only the new placeholder; never merge the
+    /// existing base into it.
+    pub fn attachCheckedBaseAlias(self: *InstGraph, placeholder: NodeId, checked_base: NodeId) Allocator.Error!void {
+        const base_root = self.find(checked_base);
+        if (!self.checked_base_nodes.items[@intFromEnum(base_root)]) {
+            Common.invariant("checked base alias target was not immutable");
+        }
+        self.checked_base_nodes.items[@intFromEnum(base_root)] = false;
+        defer self.checked_base_nodes.items[@intFromEnum(self.find(base_root))] = true;
+        try self.union_(base_root, placeholder);
+    }
+
+    /// Complete a placeholder reserved by one explicit producer traversal.
+    /// This exists for recursive structural producers whose self-edge is
+    /// encountered before the enclosing node has been built.
+    pub fn completeReservedConstructionNode(
+        self: *InstGraph,
+        reserved: NodeId,
+        raw_content: InstNode,
+    ) Allocator.Error!void {
+        const root = self.find(reserved);
+        const existing = self.nodes.items[@intFromEnum(root)];
+        if (existing != .unresolved or existing.unresolved.origin != .construction_placeholder) {
+            Common.invariant("produced node reservation was completed more than once");
+        }
+        const completed_content = if (raw_content == .named and self.checked_base_construction_depth == 0)
+            if (try self.internNamedArguments(raw_content.named)) |interned|
+                InstNode{ .named = interned }
+            else
+                raw_content
+        else
+            raw_content;
+        const interned: ?NodeId = switch (completed_content) {
+            .primitive => |primitive| if (self.primitive_nodes[@intFromEnum(primitive)]) |node| self.find(node) else null,
+            .empty_tag_union => if (self.empty_tag_union_node) |node| self.find(node) else null,
+            .empty_record => if (self.empty_record_node) |node| self.find(node) else null,
+            .zst => if (self.zst_node) |node| self.find(node) else null,
+            .list => |element| self.existingListElement(element),
+            .box => |element| self.existingBoxElement(element),
+            .tuple => |items| self.existingTupleShape(items),
+            .record => self.existingRecordShape(completed_content),
+            .tag_union => |tag_union| self.existingTagUnionShape(tag_union),
+            .named => |named| self.existingNamedIdentity(named),
+            .redirect, .unresolved, .func, .erased => null,
+        };
+        if (interned) |node| {
+            try self.redirectRoot(node, root);
+            return;
+        }
+        _ = try self.replaceRootContent(root, completed_content);
+        switch (completed_content) {
+            .primitive => |primitive| self.primitive_nodes[@intFromEnum(primitive)] = root,
+            .empty_tag_union => self.empty_tag_union_node = root,
+            .empty_record => self.empty_record_node = root,
+            .zst => self.zst_node = root,
+            .list => |element| try self.registerListElement(element, root),
+            .box => |element| try self.registerBoxElement(element, root),
+            .tuple => |items| try self.registerTupleShape(root, items),
+            .record => try self.registerRecordShape(root, completed_content),
+            .tag_union => |tag_union| try self.registerTagUnionShape(root, tag_union),
+            .named => |named| try self.registerNamedIdentity(root, named),
+            .redirect, .unresolved, .func, .erased => {},
+        }
     }
 
     /// Reserve a graph node before constructing content that recursively
@@ -1582,50 +2435,82 @@ pub const InstGraph = struct {
         context: anytype,
         comptime fill: fn (@TypeOf(context), NodeId) Allocator.Error!InstNode,
     ) Allocator.Error!NodeId {
-        const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+        const reserved = try self.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
         try self.setContent(reserved, try fill(context, reserved));
         return reserved;
     }
 
-    pub fn nominalBackingNode(
+    /// Intern an ordinary nominal from its complete identity before evaluating
+    /// its declaration backing. The declaration plus exact public arguments
+    /// are the identity; the backing is deterministic implementation data.
+    /// Recording the named node first makes recursive occurrences direct
+    /// identity hits and means an ordinary hit performs no backing work.
+    pub fn reserveOrdinaryNamedBacking(
         self: *InstGraph,
-        module_bytes: [32]u8,
-        declaration_id: u32,
-        args: []const NodeId,
-    ) ?NodeId {
-        const bucket = self.nominal_backings.getPtr(.{
-            .module_bytes = module_bytes,
-            .declaration_id = declaration_id,
-        }) orelse return null;
-        instances: for (bucket.items) |*instance| {
-            if (instance.args.len != args.len) continue;
-            for (instance.args, args) |*stored, wanted| {
-                stored.* = self.find(stored.*);
-                if (stored.* != self.find(wanted)) continue :instances;
-            }
-            return instance.node;
+        raw_named: InstNamed,
+        backing_use: Type.BackingUse,
+    ) Allocator.Error!OrdinaryNamedReservation {
+        self.requireRelationProduction();
+        if (raw_named.backing != null) {
+            Common.invariant("ordinary nominal identity reservation received an existing backing");
         }
-        return null;
+        if (raw_named.def.generated != null) {
+            Common.invariant("generated nominal reached ordinary identity reservation");
+        }
+
+        // Exact argument roots are already sufficient identity evidence. Most
+        // requests repeat those roots, so consult the interner before doing
+        // any row normalization. A miss may still need normalization because
+        // two distinct row-extension decompositions can describe the same
+        // public argument.
+        if (self.existingNamedIdentity(raw_named)) |existing| {
+            return .{ .existing = existing };
+        }
+
+        const interned = if (try self.internNamedArguments(raw_named)) |normalized| blk: {
+            if (self.existingNamedIdentity(normalized)) |existing| {
+                return .{ .existing = existing };
+            }
+            break :blk normalized;
+        } else raw_named;
+
+        const backing = try self.appendDistinctNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
+        var completed = interned;
+        completed.backing = .{
+            .node = backing,
+            .use = backing_use,
+            .authority = .checked_public,
+        };
+        // `interned` has already missed the identity table. Record it
+        // directly: routing this vacant reservation through `newNode` would
+        // normalize and query the same identity a second time.
+        const named = try self.appendDistinctNode(.{ .named = completed });
+        try self.registerNamedIdentity(named, completed);
+        return .{ .vacant = .{ .named = named, .backing = backing } };
     }
 
-    pub fn putNominalBackingNode(
+    /// Complete declaration metadata for one newly reserved ordinary nominal.
+    /// Declared field order is deterministic implementation data rather than
+    /// nominal identity, so callers produce it only after an identity miss.
+    pub fn completeOrdinaryNamedDeclaredOrder(
         self: *InstGraph,
-        module_bytes: [32]u8,
-        declaration_id: u32,
-        args: []const NodeId,
-        node: NodeId,
+        raw_named: NodeId,
+        declared_order: []const InstDeclaredField,
     ) Allocator.Error!void {
-        self.requireRelationProduction();
-        const stored_args = try self.arena().alloc(NodeId, args.len);
-        for (stored_args, args) |*stored, arg| {
-            stored.* = self.find(arg);
+        const named_node = self.find(raw_named);
+        const node_content = self.nodes.items[@intFromEnum(named_node)];
+        if (node_content != .named or node_content.named.def.generated != null) {
+            Common.invariant("ordinary nominal declared order completed a non-ordinary named node");
         }
-        const bucket = try self.nominal_backings.getOrPut(.{
-            .module_bytes = module_bytes,
-            .declaration_id = declaration_id,
-        });
-        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-        try bucket.value_ptr.append(self.allocator, .{ .args = stored_args, .node = node });
+        if (node_content.named.backing == null) {
+            Common.invariant("ordinary nominal declared order completed a node without reserved backing");
+        }
+        if (node_content.named.declared_order.len != 0) {
+            Common.invariant("ordinary nominal declared order was completed more than once");
+        }
+        var completed = node_content.named;
+        completed.declared_order = declared_order;
+        _ = try self.replaceRootContent(named_node, .{ .named = completed });
     }
 
     fn registerRowParent(self: *InstGraph, row: NodeId, node_content: InstNode) Allocator.Error!void {
@@ -1768,22 +2653,18 @@ pub const InstGraph = struct {
         return self.find(left) == self.find(right);
     }
 
-    pub const ClassMemberIterator = struct {
-        graph: *const InstGraph,
-        current: ?NodeId,
-
-        pub fn next(self: *ClassMemberIterator) ?NodeId {
-            const member = self.current orelse return null;
-            self.current = self.graph.class_member_next.items[@intFromEnum(member)];
-            return member;
-        }
-    };
-
-    /// Permanent node ids currently joined to the requested node by explicit
-    /// graph relations. Open draft lookup probes these stable aliases directly.
-    pub fn classMemberIterator(self: *InstGraph, node: NodeId) ClassMemberIterator {
-        const root = self.find(node);
-        return .{ .graph = self, .current = self.class_member_head.items[@intFromEnum(root)] };
+    /// Whether two nominal nodes name the same exact identity.
+    /// A nominal's declaration and immediate public argument nodes are its
+    /// identity; backing is deterministic implementation data owned by that
+    /// identity. This comparison is used only when two checker-declared exact
+    /// occurrences meet at one flat specialization slot, so it neither
+    /// searches the graph nor scans an interner bucket.
+    pub fn sameNominalIdentity(self: *InstGraph, left: NodeId, right: NodeId) bool {
+        const left_content = self.content(left);
+        if (left_content != .named) return false;
+        const right_content = self.content(right);
+        if (right_content != .named) return false;
+        return self.sameNamedIdentity(left_content.named, right_content.named);
     }
 
     /// Collision authority for open function-interface lookup buckets.
@@ -1801,58 +2682,22 @@ pub const InstGraph = struct {
         return self.sameClass(left_fn.ret, right_fn.ret);
     }
 
-    /// Alpha-normalized shape of an open function interface. This is a
-    /// graph-local lookup key for unresolved draft requests: concrete
-    /// structure is written directly, while unresolved union-find classes are
-    /// numbered by first occurrence so interface aliasing is preserved without
-    /// depending on fresh node ids. Producer-owned source-interface and
-    /// recursive-representation evidence participate because they can change
-    /// how an otherwise identical open shape finalizes.
-    /// Capture the exact open-interface shape before a callee body can refine
-    /// its live graph nodes. The bytes are graph-arena owned and must not escape
-    /// draft specialization lookup.
-    pub fn openFunctionInterfaceShape(self: *InstGraph, node: NodeId) Allocator.Error!OpenFunctionInterfaceShape {
-        var sizing = OpenFunctionInterfaceShapeWriter.init(self);
-        defer sizing.deinit();
-        try sizing.writeFunctionInterface(node);
-        const digest: names.TypeDigest = .{ .bytes = sizing.hasher.finalResult() };
-
-        const bytes = try self.arena().alloc(u8, sizing.output_len);
-        var writer = OpenFunctionInterfaceShapeWriter.initWithOutput(self, bytes);
-        defer writer.deinit();
-        try writer.writeFunctionInterface(node);
-        if (writer.output_len != bytes.len) {
-            Common.invariant("open function-interface shape changed while being captured");
-        }
-        const written_digest: names.TypeDigest = .{ .bytes = writer.hasher.finalResult() };
-        if (!std.mem.eql(u8, &digest.bytes, &written_digest.bytes)) {
-            Common.invariant("open function-interface shape digest differed from its exact bytes");
-        }
-        return .{ .digest = digest, .bytes = bytes };
+    /// Whether two callable roots carry the same exact immediate runtime
+    /// edges and the same checker-authored substitution span. This is a
+    /// constant-depth recursive-binding key, not a structural graph match.
+    pub fn sameExactFunctionRequest(self: *InstGraph, left: NodeId, right: NodeId) bool {
+        return self.sameFunctionInterface(left, right) and
+            self.sameDirectRequestSelections(left, right);
     }
 
-    /// Whether a live graph type is already closed and can be snapshotted
-    /// without applying any unresolved-variable or row default. Draft
-    /// specialization lookup uses closed snapshots as its direct key; open
-    /// requests remain graph-local until explicit recursive-edge identity or
-    /// final body sealing resolves them.
+    /// Whether a live graph type is closed without applying any unresolved
+    /// variable or row default. Open requests remain graph-local until
+    /// explicit recursive-edge identity or final body sealing resolves them.
     pub fn typeIsResolved(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        return try self.typeIsResolvedInner(root, false);
+        return try self.typeIsResolvedInner(root);
     }
 
-    /// Whether every unresolved part of a specialization request is an
-    /// undetermined field-kind cell. Those cells have the language-defined
-    /// required default at relation freeze, so specialization lookup may take
-    /// a read-only view with that default without mutating the live graph.
-    pub fn typeIsSpecializationDefaultable(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        return try self.typeIsResolvedInner(root, true);
-    }
-
-    fn typeIsResolvedInner(
-        self: *InstGraph,
-        root: NodeId,
-        allow_field_kind_defaults: bool,
-    ) Allocator.Error!bool {
+    fn typeIsResolvedInner(self: *InstGraph, root: NodeId) Allocator.Error!bool {
         var pending = std.ArrayList(NodeId).empty;
         defer pending.deinit(self.allocator);
         var seen = self.node_set_pool.acquire();
@@ -1880,15 +2725,7 @@ pub const InstGraph = struct {
                 .record => |row| {
                     if (!try self.rowExtensionChainResolved(node, .record)) return false;
                     for (row.fields) |field| {
-                        if (field.kind == .undetermined and self.resolvedFieldKind(field.kind) == null) {
-                            if (!allow_field_kind_defaults) return false;
-                            try pending.append(
-                                self.allocator,
-                                field.value_ty orelse
-                                    Common.invariant("undetermined field kind carried no source value cell"),
-                            );
-                            continue;
-                        }
+                        if (field.kind == .undetermined and self.resolvedFieldKind(field.kind) == null) return false;
                         try pending.append(self.allocator, field.ty);
                         if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
                     }
@@ -1907,78 +2744,37 @@ pub const InstGraph = struct {
         return true;
     }
 
-    /// Materialize the checked literal default recorded on an otherwise-open
-    /// instantiation node. Literal lowering calls this only when runtime demand
-    /// reaches an unpinned literal leaf; custom specializations have already
-    /// related the node to their concrete target before that point.
-    pub fn materializeLiteralDefault(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
+    /// Return an exact node for an explicit checker-recorded default on an identity slot.
+    /// Call dependency planning uses this for pathless numeric and open-row
+    /// identities before lowering a contextual consumer. Returns false when
+    /// the node has no checked default; callers must then wait for another
+    /// recorded producer edge.
+    pub fn checkedDefaultNode(self: *InstGraph, raw_node: NodeId) Allocator.Error!?NodeId {
         self.requireRelationProduction();
         const node = self.find(raw_node);
         const node_content = self.nodes.items[@intFromEnum(node)];
-        if (node_content != .unresolved) Common.invariant("literal default materialization received a non-variable node");
+        if (node_content != .unresolved) return node;
         const variable = node_content.unresolved;
-        const phase = variable.numeric_default_phase orelse
-            Common.invariant("unresolved literal leaf had no checked default phase");
-        const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
-            Common.invariant("checking-finalized literal variable reached Monotype unresolved");
-        try self.setContent(node, switch (target) {
-            .dec => .{ .primitive = .dec },
-            .str => .{ .primitive = .str },
-        });
-    }
-
-    /// Whether evidence finalization has explicit producer provenance for every
-    /// node in this live type. Numeric and row defaults are direct closure
-    /// evidence. A plain checked variable is provisionally sealable as the
-    /// language's truly-unconstrained empty union only when the caller proves,
-    /// by comparing after all dependent lowering, that no later relation
-    /// refined it. Row extensions and compiler placeholders require their own
-    /// explicit data and can never use that rule.
-    pub fn typeCanSealFromExplicitEvidence(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        var pending = std.ArrayList(NodeId).empty;
-        defer pending.deinit(self.allocator);
-        var seen = self.node_set_pool.acquire();
-        defer self.node_set_pool.release(&seen);
-        try pending.append(self.allocator, root);
-        while (pending.pop()) |raw_node| {
-            const node = self.find(raw_node);
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) continue;
-            switch (self.nodes.items[@intFromEnum(node)]) {
-                .redirect => unreachable,
-                .unresolved => |variable| {
-                    const numeric_default = if (variable.numeric_default_phase) |phase|
-                        checked.literal_defaulting.defaultTargetForPhase(phase) != null
-                    else
-                        false;
-                    if (!numeric_default and variable.row_default == null and variable.origin != .checked_variable) return false;
-                },
-                .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try pending.append(self.allocator, child),
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
-                .func => |function| {
-                    try pending.appendSlice(self.allocator, function.args);
-                    try pending.append(self.allocator, function.ret);
-                },
-                .tag_union => |row| {
-                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
-                    try pending.append(self.allocator, row.ext);
-                },
-                .record => |row| {
-                    for (row.fields) |field| try pending.append(self.allocator, field.ty);
-                    try pending.append(self.allocator, row.ext);
-                },
-                .named => |named| {
-                    try pending.appendSlice(self.allocator, named.args);
-                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
-                    for (named.declared_order) |declared| switch (declared) {
-                        .named => {},
-                        .padding => |padding| try pending.append(self.allocator, padding),
-                    };
-                },
-            }
+        if (variable.numeric_default_phase) |phase| {
+            const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                Common.invariant("checking-finalized numeric variable reached Monotype unresolved");
+            return try self.newNode(switch (target) {
+                .dec => .{ .primitive = .dec },
+                .str => .{ .primitive = .str },
+            });
         }
-        return true;
+        if (variable.row_default) |row_default| {
+            return try self.newNode(switch (row_default) {
+                .empty_record => .empty_record,
+                .empty_tag_union => .empty_tag_union,
+            });
+        }
+        if (variable.specialization_default) |default| {
+            return try self.newNode(switch (default) {
+                .empty_tag_union => .empty_tag_union,
+            });
+        }
+        return null;
     }
 
     fn rowExtensionChainResolved(self: *InstGraph, raw_root: NodeId, kind: RowKind) Allocator.Error!bool {
@@ -2013,810 +2809,6 @@ pub const InstGraph = struct {
             }
         }
     }
-
-    /// Whether this exact graph type contains the public iterator interface at
-    /// any structural depth. This consumes the checker-authored builtin owner
-    /// carried by each named node; callers do not derive iterator intent from
-    /// a backing shape.
-    ///
-    /// `Type.Store.containsIteratorInterface` answers the same question for
-    /// immutable Monotypes and must stay in step with this walk; see its doc
-    /// comment and the correspondence test at the bottom of this file.
-    pub fn containsIteratorInterface(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        self.countDiagnostic("iterator_interface_scans");
-        return try self.containmentResult(
-            root,
-            .iterator_interface,
-            "iterator_interface_nodes_visited",
-            "iterator_interface_cache_hits",
-        );
-    }
-
-    /// Whether this exact graph type contains compiler-generated private
-    /// opaque evidence at any structural depth.
-    pub fn containsGeneratedPrivate(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        self.countDiagnostic("generated_private_scans");
-        return try self.containmentResult(
-            root,
-            .generated_private,
-            "generated_private_nodes_visited",
-            "generated_private_cache_hits",
-        );
-    }
-
-    fn containmentResult(
-        self: *InstGraph,
-        root: NodeId,
-        comptime query: ContainmentQuery,
-        comptime nodes_visited_field: []const u8,
-        comptime cache_hits_field: []const u8,
-    ) Allocator.Error!bool {
-        const query_root = self.find(root);
-        const cache = try self.containment_cache.getOrPut(query_root);
-        if (!cache.found_existing) cache.value_ptr.* = .{};
-        const entry = cache.value_ptr.forQuery(query);
-        if (entry.valid and !self.containmentQueryCacheValid(entry)) {
-            entry.valid = false;
-            entry.result = false;
-            entry.dependencies.clearRetainingCapacity();
-        }
-        if (entry.valid) {
-            self.countDiagnostic(cache_hits_field);
-            return entry.result;
-        }
-        self.containment_pending.clearRetainingCapacity();
-        defer self.containment_pending.clearRetainingCapacity();
-        if (self.containment_visit_epoch == std.math.maxInt(u32)) {
-            @memset(self.containment_visit_epochs.items, 0);
-            self.containment_visit_epoch = 1;
-        } else {
-            self.containment_visit_epoch += 1;
-        }
-        const visit_epoch = self.containment_visit_epoch;
-
-        try self.containment_pending.append(self.allocator, query_root);
-        while (self.containment_pending.pop()) |raw_node| {
-            const node = self.find(raw_node);
-            const node_index = @intFromEnum(node);
-            if (self.containment_visit_epochs.items[node_index] == visit_epoch) continue;
-            self.containment_visit_epochs.items[node_index] = visit_epoch;
-            try entry.dependencies.append(self.allocator, .{
-                .node = raw_node,
-                .root = node,
-                .version = self.versions.items[node_index],
-            });
-            self.countDiagnostic(nodes_visited_field);
-
-            switch (self.nodes.items[@intFromEnum(node)]) {
-                .redirect => unreachable,
-                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try self.containment_pending.append(self.allocator, child),
-                .tuple => |items| try self.containment_pending.appendSlice(self.allocator, items),
-                .func => |function| {
-                    try self.containment_pending.appendSlice(self.allocator, function.args);
-                    try self.containment_pending.append(self.allocator, function.ret);
-                },
-                .tag_union => |row| {
-                    for (row.tags) |tag| try self.containment_pending.appendSlice(self.allocator, tag.payloads);
-                    try self.containment_pending.append(self.allocator, row.ext);
-                },
-                .record => |row| {
-                    for (row.fields) |field| try self.containment_pending.append(self.allocator, field.ty);
-                    try self.containment_pending.append(self.allocator, row.ext);
-                },
-                .named => |named| {
-                    const found = switch (query) {
-                        .iterator_interface => if (named.builtin_owner) |owner|
-                            static_dispatch.isIteratorOwner(owner)
-                        else
-                            false,
-                        .generated_private => if (named.backing) |backing|
-                            backing.authority == .generated_private
-                        else
-                            false,
-                    };
-                    if (found) {
-                        entry.result = true;
-                        entry.valid = true;
-                        return true;
-                    }
-                    if (named.backing) |backing| {
-                        try self.containment_pending.append(self.allocator, backing.node);
-                    }
-                    try self.containment_pending.appendSlice(self.allocator, named.args);
-                    for (named.declared_order) |declared| switch (declared) {
-                        .named => {},
-                        .padding => |padding| try self.containment_pending.append(self.allocator, padding),
-                    };
-                },
-            }
-        }
-        entry.valid = true;
-        return false;
-    }
-
-    fn containmentQueryCacheValid(
-        self: *InstGraph,
-        entry: *const ContainmentQueryCache,
-    ) bool {
-        for (entry.dependencies.items) |dependency| {
-            if (self.find(dependency.node) != dependency.root or
-                self.versions.items[@intFromEnum(dependency.root)] != dependency.version)
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /// Whether this exact graph type contains a node imported from a finished
-    /// Monotype at any structural depth. Finished snapshots may be related to
-    /// producer evidence, but no enclosing representation-selection operation
-    /// may mutate one of their descendant classes.
-    pub fn containsFinishedMono(self: *InstGraph, root: NodeId) Allocator.Error!bool {
-        self.countDiagnostic("finished_mono_scans");
-        var pending = std.ArrayList(NodeId).empty;
-        defer pending.deinit(self.allocator);
-        var seen = self.node_set_pool.acquire();
-        defer self.node_set_pool.release(&seen);
-        try pending.append(self.allocator, root);
-        while (pending.pop()) |raw_node| {
-            const node = self.find(raw_node);
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) continue;
-            self.countDiagnostic("finished_mono_nodes_visited");
-            var members = self.classMemberIterator(node);
-            while (members.next()) |member| {
-                if (self.imported_monos.contains(member)) return true;
-            }
-            switch (self.nodes.items[@intFromEnum(node)]) {
-                .redirect => unreachable,
-                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-                .list, .box => |child| try pending.append(self.allocator, child),
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
-                .func => |function| {
-                    try pending.appendSlice(self.allocator, function.args);
-                    try pending.append(self.allocator, function.ret);
-                },
-                .tag_union => |row| {
-                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
-                    try pending.append(self.allocator, row.ext);
-                },
-                .record => |row| {
-                    for (row.fields) |field| try pending.append(self.allocator, field.ty);
-                    try pending.append(self.allocator, row.ext);
-                },
-                .named => |named| {
-                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
-                    try pending.appendSlice(self.allocator, named.args);
-                    for (named.declared_order) |declared| switch (declared) {
-                        .named => {},
-                        .padding => |padding| try pending.append(self.allocator, padding),
-                    };
-                },
-            }
-        }
-        return false;
-    }
-
-    /// Relate a checked public interface to a generated private specialization
-    /// without merging a generated-private opaque node or any composite that
-    /// contains it with its public counterpart. Matching composite structure is
-    /// traversed explicitly so both roots keep a path to their respective
-    /// opaque backing at every structural depth.
-    /// `public_node` drives checked relations. A generated-private
-    /// specialization lowers its callable body against `private_node`, which
-    /// also supplies the specialization identity.
-    pub fn relateOpaqueInterface(self: *InstGraph, public_node: NodeId, private_node: NodeId) Allocator.Error!void {
-        self.requireRelationProduction();
-        var pending = std.ArrayList(NodePair).empty;
-        defer pending.deinit(self.allocator);
-        var related = std.AutoHashMap(NodePair, void).init(self.allocator);
-        defer related.deinit();
-        try pending.append(self.allocator, .{ .left = public_node, .right = private_node });
-        while (pending.pop()) |pair| {
-            try self.relateOpaqueInterfacePair(pair.left, pair.right, &pending, &related);
-        }
-    }
-
-    /// Select producer-authored generated-private evidence as the runtime
-    /// representation of a live checked-public draft. This capability exists
-    /// only while the instantiation graph is producing relations; imported
-    /// finished Monotypes can never participate. Ordinary `unify` rejects the
-    /// same public/private edge structurally.
-    pub fn selectGeneratedPrivateRepresentation(
-        self: *InstGraph,
-        public_node: NodeId,
-        private_node: NodeId,
-    ) Allocator.Error!void {
-        self.requireRelationProduction();
-        if (try self.containsGeneratedPrivate(public_node) or !try self.containsGeneratedPrivate(private_node)) {
-            Common.invariant("generated-private representation selection received incorrect public/private direction");
-        }
-        if (try self.containsFinishedMono(public_node) or try self.containsFinishedMono(private_node)) {
-            Common.invariant("finished Monotype reached generated-private representation selection");
-        }
-        try self.unifyRootsTransitively(public_node, private_node, true);
-    }
-
-    fn relateOpaqueInterfacePair(
-        self: *InstGraph,
-        raw_public: NodeId,
-        raw_private: NodeId,
-        pending: *std.ArrayList(NodePair),
-        related: *std.AutoHashMap(NodePair, void),
-    ) Allocator.Error!void {
-        const public_node = self.find(raw_public);
-        const private_node = self.find(raw_private);
-        if (public_node == private_node) return;
-        const pair = NodePair{ .left = public_node, .right = private_node };
-        if (related.contains(pair)) return;
-        try related.put(pair, {});
-
-        const public_content = self.nodes.items[@intFromEnum(public_node)];
-        const private_content = self.nodes.items[@intFromEnum(private_node)];
-        if (isGeneratedPrivateRootContent(public_content) and isGeneratedPrivateRootContent(private_content)) {
-            try self.unify(public_node, private_node);
-            return;
-        }
-        const private_contains_generated = try self.containsGeneratedPrivate(private_node);
-        if (private_content == .named) {
-            const private_named = private_content.named;
-            if (private_named.backing) |backing| {
-                if (backing.authority == .generated_private) {
-                    if (public_content == .unresolved) {
-                        const public_var = public_content.unresolved;
-                        if (private_named.generated_iterator != null) {
-                            try self.materializeGeneratedIteratorPublicInterface(public_node, public_var, private_named);
-                            try self.relateGeneratedOpaquePair(
-                                self.nodes.items[@intFromEnum(self.find(public_node))],
-                                private_named,
-                                pending,
-                            );
-                            return;
-                        }
-                        if (try self.resolvePublicVariableToImportedGeneratedIterator(public_node, public_var, private_node, private_named)) {
-                            return;
-                        }
-                    }
-                    try self.relateGeneratedOpaquePair(public_content, private_named, pending);
-                    return;
-                }
-            }
-        } else if (private_content == .unresolved) {
-            try self.unify(public_node, private_node);
-            return;
-        }
-
-        switch (public_content) {
-            .redirect => unreachable,
-            .unresolved => |public_var| {
-                if (private_contains_generated) {
-                    if (private_content == .named) {
-                        const private_named = private_content.named;
-                        const public_named = try self.materializeNamedRequestPublicInterface(
-                            public_node,
-                            public_var,
-                            private_named,
-                        );
-                        try self.relatePublicNamedOpaquePair(public_named, private_named, pending);
-                        try self.union_(private_node, public_node);
-                        return;
-                    }
-                    if (try self.materializeStructuralRequestPublicInterface(
-                        public_node,
-                        public_var,
-                        private_content,
-                        pending,
-                    )) {
-                        return;
-                    }
-                    Common.invariant("opaque interface relation received unresolved checked structure for generated evidence");
-                }
-                try self.unify(public_node, private_node);
-            },
-            .primitive => |public_primitive| {
-                if (private_content != .primitive) Common.invariant("opaque interface relation received different type structure");
-                if (public_primitive != private_content.primitive) {
-                    Common.invariant("opaque interface relation received different primitive types");
-                }
-            },
-            .list => |public_elem| {
-                if (private_content != .list) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueChild(public_elem, private_content.list, pending);
-            },
-            .box => |public_elem| {
-                if (private_content != .box) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueChild(public_elem, private_content.box, pending);
-            },
-            .tuple => |public_items| {
-                if (private_content != .tuple) Common.invariant("opaque interface relation received different type structure");
-                const private_items = private_content.tuple;
-                if (public_items.len != private_items.len) {
-                    Common.invariant("opaque interface relation received tuples of different arity");
-                }
-                for (public_items, private_items) |public_item, private_item| {
-                    try self.relateOpaqueChild(public_item, private_item, pending);
-                }
-            },
-            .func => |public_fn| {
-                if (private_content != .func) Common.invariant("opaque interface relation received different type structure");
-                const private_fn = private_content.func;
-                if (public_fn.args.len != private_fn.args.len) {
-                    Common.invariant("opaque interface relation received functions of different arity");
-                }
-                for (public_fn.args, private_fn.args) |public_arg, private_arg| {
-                    try self.relateOpaqueChild(public_arg, private_arg, pending);
-                }
-                try self.relateOpaqueChild(public_fn.ret, private_fn.ret, pending);
-            },
-            .tag_union => {
-                if (private_content != .tag_union) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueTagRows(public_node, private_node, pending);
-            },
-            .record => {
-                if (private_content != .record) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueRecordRows(public_node, private_node, pending);
-            },
-            .empty_tag_union => if (private_content != .empty_tag_union)
-                Common.invariant("opaque interface relation received different type structure"),
-            .empty_record => if (private_content != .empty_record)
-                Common.invariant("opaque interface relation received different type structure"),
-            .named => |public_named| {
-                if (private_content != .named) Common.invariant("opaque interface relation received different type structure");
-                try self.relatePublicNamedOpaquePair(public_named, private_content.named, pending);
-            },
-            .erased => |public_digest| {
-                if (private_content != .erased) Common.invariant("opaque interface relation received different type structure");
-                if (!std.mem.eql(u8, public_digest.bytes[0..], private_content.erased.bytes[0..])) {
-                    Common.invariant("opaque interface relation received different erased types");
-                }
-            },
-            .zst => if (private_content != .zst)
-                Common.invariant("opaque interface relation received different type structure"),
-        }
-        if (!private_contains_generated) {
-            try self.union_(public_node, private_node);
-        }
-    }
-
-    /// Relate row-polymorphic tag structure without merging a row that carries
-    /// generated-private evidence into its checked-public counterpart. Labels
-    /// present on only one side are ordinary checker-produced row widening;
-    /// their payloads must not themselves introduce private evidence.
-    fn relateOpaqueTagRows(
-        self: *InstGraph,
-        public_node: NodeId,
-        private_node: NodeId,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!void {
-        const flat_public = try self.flattenTagRow(public_node);
-        const flat_private = try self.flattenTagRow(private_node);
-        var only_public = std.ArrayList(InstTag).empty;
-        defer only_public.deinit(self.allocator);
-        var only_private = std.ArrayList(InstTag).empty;
-        defer only_private.deinit(self.allocator);
-
-        for (flat_public.tags) |public_tag| {
-            const wanted = self.tagLabelText(public_tag.name);
-            var matched: ?InstTag = null;
-            for (flat_private.tags) |private_tag| {
-                if (!Ident.textEql(wanted, self.tagLabelText(private_tag.name))) continue;
-                if (matched != null) Common.invariant("opaque interface relation received duplicate private tag labels");
-                matched = private_tag;
-            }
-            if (matched) |private_tag| {
-                if (public_tag.payloads.len != private_tag.payloads.len) {
-                    Common.invariant("opaque interface relation received one tag at two payload arities");
-                }
-                for (public_tag.payloads, private_tag.payloads) |public_payload, private_payload| {
-                    try self.relateOpaqueChild(public_payload, private_payload, pending);
-                }
-            } else {
-                try only_public.append(self.allocator, public_tag);
-            }
-        }
-        for (flat_private.tags) |private_tag| {
-            const wanted = self.tagLabelText(private_tag.name);
-            var shared = false;
-            for (flat_public.tags) |public_tag| {
-                if (Ident.textEql(wanted, self.tagLabelText(public_tag.name))) {
-                    shared = true;
-                    break;
-                }
-            }
-            if (!shared) {
-                for (private_tag.payloads) |payload| {
-                    if (try self.containsGeneratedPrivate(payload)) {
-                        Common.invariant("opaque interface row widening introduced unmatched generated-private tag payload");
-                    }
-                }
-                try only_private.append(self.allocator, private_tag);
-            }
-        }
-
-        if (self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .tag_union) or
-            self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .tag_union))
-        {
-            Common.invariant("opaque interface relation widened a closed tag union");
-        }
-        if (only_public.items.len == 0 and only_private.items.len == 0) {
-            try self.relateOpaqueChild(flat_public.ext, flat_private.ext, pending);
-        } else if (only_public.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_public.ext, only_private.items, flat_private.ext, pending);
-        } else if (only_private.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_private.ext, only_public.items, flat_public.ext, pending);
-        } else {
-            const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
-            if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
-                var rest = std.ArrayList(InstTag).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_public.items);
-                try rest.appendSlice(self.allocator, only_private.items);
-                try self.writeOrQueueTagRest(flat_public.ext, rest.items, new_ext, pending);
-            } else {
-                try self.writeOrQueueTagRest(flat_public.ext, only_private.items, new_ext, pending);
-                try self.writeOrQueueTagRest(flat_private.ext, only_public.items, new_ext, pending);
-            }
-        }
-    }
-
-    /// Record-row counterpart of `relateOpaqueTagRows`.
-    fn relateOpaqueRecordRows(
-        self: *InstGraph,
-        public_node: NodeId,
-        private_node: NodeId,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!void {
-        const flat_public = try self.flattenRecordRow(public_node);
-        const flat_private = try self.flattenRecordRow(private_node);
-        var only_public = std.ArrayList(InstField).empty;
-        defer only_public.deinit(self.allocator);
-        var only_private = std.ArrayList(InstField).empty;
-        defer only_private.deinit(self.allocator);
-
-        for (flat_public.fields) |public_field| {
-            const wanted = self.fieldLabelText(public_field.name);
-            var matched: ?InstField = null;
-            for (flat_private.fields) |private_field| {
-                if (!Ident.textEql(wanted, self.fieldLabelText(private_field.name))) continue;
-                if (matched != null) Common.invariant("opaque interface relation received duplicate private record labels");
-                matched = private_field;
-            }
-            if (matched) |private_field| {
-                _ = self.unifyFieldKinds(
-                    public_field.kind,
-                    public_field.default,
-                    private_field.kind,
-                    private_field.default,
-                );
-                try self.relateOpaqueChild(
-                    public_field.value_ty orelse public_field.ty,
-                    private_field.value_ty orelse private_field.ty,
-                    pending,
-                );
-                try self.relateOpaqueChild(public_field.ty, private_field.ty, pending);
-            } else {
-                try only_public.append(self.allocator, public_field);
-            }
-        }
-        for (flat_private.fields) |private_field| {
-            const wanted = self.fieldLabelText(private_field.name);
-            var shared = false;
-            for (flat_public.fields) |public_field| {
-                if (Ident.textEql(wanted, self.fieldLabelText(public_field.name))) {
-                    shared = true;
-                    break;
-                }
-            }
-            if (!shared) {
-                if (try self.containsGeneratedPrivate(private_field.ty)) {
-                    Common.invariant("opaque interface row widening introduced unmatched generated-private record field");
-                }
-                try only_private.append(self.allocator, private_field);
-            }
-        }
-
-        if (self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .record) or
-            self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .record))
-        {
-            Common.invariant("opaque interface relation widened a closed record");
-        }
-        if (only_public.items.len == 0 and only_private.items.len == 0) {
-            try self.relateOpaqueChild(flat_public.ext, flat_private.ext, pending);
-        } else if (only_public.items.len == 0) {
-            try self.writeOrQueueRecordRest(flat_public.ext, only_private.items, flat_private.ext, pending);
-        } else if (only_private.items.len == 0) {
-            try self.writeOrQueueRecordRest(flat_private.ext, only_public.items, flat_public.ext, pending);
-        } else {
-            const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
-            if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
-                var rest = std.ArrayList(InstField).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_public.items);
-                try rest.appendSlice(self.allocator, only_private.items);
-                try self.writeOrQueueRecordRest(flat_public.ext, rest.items, new_ext, pending);
-            } else {
-                try self.writeOrQueueRecordRest(flat_public.ext, only_private.items, new_ext, pending);
-                try self.writeOrQueueRecordRest(flat_private.ext, only_public.items, new_ext, pending);
-            }
-        }
-    }
-
-    fn relateOpaqueChild(
-        self: *InstGraph,
-        public_node: NodeId,
-        private_node: NodeId,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!void {
-        if (try self.containsGeneratedPrivate(private_node)) {
-            try pending.append(self.allocator, .{ .left = public_node, .right = private_node });
-        } else {
-            try self.unify(public_node, private_node);
-        }
-    }
-
-    fn relateGeneratedOpaquePair(
-        self: *InstGraph,
-        public_content: InstNode,
-        private_named: InstNamed,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!void {
-        if (public_content != .named) Common.invariant("opaque public interface relation received a non-named public node");
-        const public_named = public_content.named;
-        const iterator_relation = Type.iteratorRelation(public_named, private_named);
-        if (iterator_relation == .public_minted or iterator_relation == .forced_dynamic) {
-            if (public_named.def.iterator_representation != .none or
-                (private_named.def.iterator_representation != .minted and
-                    private_named.def.iterator_representation != .forced_dynamic))
-            {
-                Common.invariant("iterator interface relation did not receive a checked-public/private pair");
-            }
-            const public_backing = public_named.backing orelse
-                Common.invariant("iterator interface relation received a public type without backing");
-            const private_backing = private_named.backing orelse
-                Common.invariant("iterator interface relation received a private type without backing");
-            if (public_backing.authority != .checked_public or private_backing.authority != .generated_private) {
-                Common.invariant("iterator interface relation received incorrect backing authority");
-            }
-            if (public_named.args.len == 0 or private_named.args.len == 0) {
-                Common.invariant("iterator interface relation received no public item argument");
-            }
-            try self.relateOpaqueChild(public_named.args[0], private_named.args[0], pending);
-            return;
-        }
-        if (public_named.kind != .@"opaque" or private_named.kind != .@"opaque" or
-            !std.meta.eql(public_named.def, private_named.def))
-        {
-            Common.invariant("opaque public interface relation received different opaque definitions");
-        }
-        const public_backing = public_named.backing orelse
-            Common.invariant("opaque public interface relation received a public type without backing");
-        const private_backing = private_named.backing orelse
-            Common.invariant("opaque public interface relation received a private type without backing");
-        if (public_backing.authority != .checked_public or private_backing.authority != .generated_private) {
-            Common.invariant("opaque public interface relation received incorrect backing authority");
-        }
-        if (public_named.args.len != private_named.args.len) {
-            Common.invariant("opaque public interface relation received different type-argument arities");
-        }
-        for (public_named.args, private_named.args) |public_arg, private_arg| {
-            try self.relateOpaqueChild(public_arg, private_arg, pending);
-        }
-    }
-
-    fn relatePublicNamedOpaquePair(
-        self: *InstGraph,
-        public_named: InstNamed,
-        private_named: InstNamed,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!void {
-        if (public_named.kind != private_named.kind or
-            !std.meta.eql(public_named.def, private_named.def) or
-            public_named.args.len != private_named.args.len)
-        {
-            Common.invariant("opaque interface relation received different named types");
-        }
-        for (public_named.args, private_named.args) |public_arg, private_arg| {
-            try self.relateOpaqueChild(public_arg, private_arg, pending);
-        }
-        if (public_named.backing) |public_backing| {
-            const private_backing = private_named.backing orelse
-                Common.invariant("opaque interface relation received different named backing presence");
-            if (public_backing.authority != private_backing.authority) {
-                Common.invariant("opaque interface relation received unmatched backing authority");
-            }
-            try self.relateOpaqueChild(public_backing.node, private_backing.node, pending);
-        } else if (private_named.backing != null) {
-            Common.invariant("opaque interface relation received different named backing presence");
-        }
-    }
-
-    fn resolvePublicVariableToImportedGeneratedIterator(
-        self: *InstGraph,
-        public_node: NodeId,
-        public_var: InstVariable,
-        private_node: NodeId,
-        private_named: InstNamed,
-    ) Allocator.Error!bool {
-        if (private_named.generated_iterator != null) return false;
-        if (private_named.def.generated == null) return false;
-        switch (private_named.def.iterator_representation) {
-            .minted, .forced_dynamic => {},
-            .none => return false,
-        }
-        const owner = private_named.builtin_owner orelse return false;
-        if (!static_dispatch.isIteratorOwner(owner)) return false;
-        if (private_named.args.len == 0) {
-            Common.invariant("imported generated iterator relation received no item argument");
-        }
-        if (public_var.numeric_default_phase != null or public_var.row_default != null) {
-            Common.invariant("imported generated iterator relation received a defaultable public variable");
-        }
-        try self.union_(private_node, public_node);
-        return true;
-    }
-
-    fn materializeGeneratedIteratorPublicInterface(
-        self: *InstGraph,
-        public_node: NodeId,
-        public_var: InstVariable,
-        private_named: InstNamed,
-    ) Allocator.Error!void {
-        if (public_var.numeric_default_phase != null or public_var.row_default != null) {
-            Common.invariant("generated iterator interface relation received a defaultable public variable");
-        }
-        if (private_named.args.len == 0) {
-            Common.invariant("generated iterator interface relation received no private item argument");
-        }
-        const generated = private_named.generated_iterator orelse
-            Common.invariant("generated iterator interface relation lacked producer provenance");
-        const public_source = generated.public_source;
-        if (!static_dispatch.isIteratorOwner(public_source.builtin_owner) or
-            public_source.def.iterator_representation != .none or
-            public_source.def.iterator_kind != .none)
-        {
-            Common.invariant("generated iterator interface relation received an invalid public iterator source");
-        }
-        if (public_source.backing.authority != .checked_public) {
-            Common.invariant("generated iterator interface relation received a non-public source backing");
-        }
-
-        const args = try self.arena().alloc(NodeId, 1);
-        args[0] = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-        try self.setContent(public_node, .{ .named = .{
-            .named_type = public_source.named_type,
-            .def = public_source.def,
-            .kind = public_source.kind,
-            .builtin_owner = public_source.builtin_owner,
-            .args = args,
-            .backing = public_source.backing,
-            .generated_iterator = null,
-            .declared_order = public_source.declared_order,
-        } });
-    }
-
-    fn materializeNamedRequestPublicInterface(
-        self: *InstGraph,
-        public_node: NodeId,
-        public_var: InstVariable,
-        private_named: InstNamed,
-    ) Allocator.Error!InstNamed {
-        if (public_var.numeric_default_phase != null or public_var.row_default != null) {
-            Common.invariant("named request interface relation received a defaultable public variable");
-        }
-        if (private_named.generated_iterator != null) {
-            Common.invariant("named request interface relation received generated iterator provenance");
-        }
-        if (private_named.backing) |backing| {
-            if (backing.authority != .checked_public) {
-                Common.invariant("named request interface relation received a private root backing");
-            }
-        }
-
-        const args = try self.arena().dupe(NodeId, private_named.args);
-        try self.setContent(public_node, .{ .named = .{
-            .named_type = private_named.named_type,
-            .def = private_named.def,
-            .kind = private_named.kind,
-            .builtin_owner = private_named.builtin_owner,
-            .args = args,
-            .backing = private_named.backing,
-            .generated_iterator = null,
-            .declared_order = private_named.declared_order,
-        } });
-        return self.nodes.items[@intFromEnum(self.find(public_node))].named;
-    }
-
-    /// A generated-private witness can sit behind a structural container—a
-    /// list literal element, a tuple slot, a record field, a tag payload—while
-    /// the checked request position is still an unstructured variable. The
-    /// public side then adopts the container shape with a fresh checked
-    /// variable in each child slot, and every generated-carrying child keeps
-    /// descending through the opaque relation. Keep the accepted set here
-    /// equal to the structural containers a constructor can mint a witness
-    /// for; private content this relation cannot structure returns false and
-    /// leaves the caller's invariant to report it.
-    fn materializeStructuralRequestPublicInterface(
-        self: *InstGraph,
-        public_node: NodeId,
-        public_var: InstVariable,
-        private_content: InstNode,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!bool {
-        switch (private_content) {
-            .list, .box, .tuple, .record, .tag_union => {},
-            .redirect, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst => return false,
-        }
-        if (public_var.numeric_default_phase != null or public_var.row_default != null) {
-            Common.invariant("structural request interface relation received a defaultable public variable");
-        }
-        switch (private_content) {
-            .list => |private_elem| {
-                const elem = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-                try self.setContent(public_node, .{ .list = elem });
-                try self.relateOpaqueChild(elem, private_elem, pending);
-            },
-            .box => |private_elem| {
-                const elem = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-                try self.setContent(public_node, .{ .box = elem });
-                try self.relateOpaqueChild(elem, private_elem, pending);
-            },
-            .tuple => |private_items| {
-                const items = try self.arena().alloc(NodeId, private_items.len);
-                for (items) |*item| {
-                    item.* = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-                }
-                try self.setContent(public_node, .{ .tuple = items });
-                for (items, private_items) |item, private_item| {
-                    try self.relateOpaqueChild(item, private_item, pending);
-                }
-            },
-            .record => |private_row| {
-                const fields = try self.arena().alloc(InstField, private_row.fields.len);
-                for (fields, private_row.fields) |*field, private_field| {
-                    field.* = .{
-                        .name = private_field.name,
-                        .ty = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }),
-                        .value_ty = private_field.value_ty,
-                        .kind = private_field.kind,
-                        .default = private_field.default,
-                    };
-                }
-                const ext = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-                try self.setContent(public_node, .{ .record = .{ .fields = fields, .ext = ext } });
-                for (fields, private_row.fields) |field, private_field| {
-                    try self.relateOpaqueChild(field.ty, private_field.ty, pending);
-                }
-                try self.relateOpaqueChild(ext, private_row.ext, pending);
-            },
-            .tag_union => |private_row| {
-                const tags = try self.arena().alloc(InstTag, private_row.tags.len);
-                for (tags, private_row.tags) |*tag, private_tag| {
-                    const payloads = try self.arena().alloc(NodeId, private_tag.payloads.len);
-                    for (payloads) |*payload| {
-                        payload.* = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-                    }
-                    tag.* = .{
-                        .name = private_tag.name,
-                        .checked_name = private_tag.checked_name,
-                        .payloads = payloads,
-                    };
-                }
-                const ext = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-                try self.setContent(public_node, .{ .tag_union = .{ .tags = tags, .ext = ext } });
-                for (tags, private_row.tags) |tag, private_tag| {
-                    for (tag.payloads, private_tag.payloads) |payload, private_payload| {
-                        try self.relateOpaqueChild(payload, private_payload, pending);
-                    }
-                }
-                try self.relateOpaqueChild(ext, private_row.ext, pending);
-            },
-            .redirect, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
-        }
-        return true;
-    }
-
     const BackingAccess = enum { inspectable, runtime_layout };
 
     fn backingAllowsAccess(use: Type.BackingUse, access: BackingAccess) bool {
@@ -2829,15 +2821,9 @@ pub const InstGraph = struct {
         comptime noun: []const u8,
         access: BackingAccess,
     ) Allocator.Error!NodeId {
-        var seen = self.node_set_pool.acquire();
-        defer self.node_set_pool.release(&seen);
-
         var node = self.find(raw_node);
-        while (true) {
-            const entry = try seen.getOrPut(node);
-            if (entry.found_existing) {
-                Common.invariant("instantiation " ++ noun ++ " read encountered a recursive named backing");
-            }
+        var remaining = self.nodes.items.len;
+        while (remaining > 0) : (remaining -= 1) {
             const node_content = self.nodes.items[@intFromEnum(node)];
             if (node_content == .named) {
                 const named = node_content.named;
@@ -2851,6 +2837,7 @@ pub const InstGraph = struct {
                 return node;
             }
         }
+        Common.invariant("instantiation " ++ noun ++ " read encountered a recursive named backing");
     }
 
     /// Structural root of a function-shaped request node. Callable request
@@ -2866,30 +2853,6 @@ pub const InstGraph = struct {
         const node_content = self.content(try self.shapeRoot(node, "function", .inspectable));
         if (node_content != .func) Common.invariant("instantiation function read had a non-function node");
         return .{ .args = node_content.func.args, .ret = self.find(node_content.func.ret) };
-    }
-
-    pub const FunctionInterfaceIterator = struct {
-        function: FunctionNodes,
-        index: usize = 0,
-
-        pub fn next(self: *FunctionInterfaceIterator) ?NodeId {
-            if (self.index < self.function.args.len) {
-                defer self.index += 1;
-                return self.function.args[self.index];
-            }
-            if (self.index == self.function.args.len) {
-                self.index += 1;
-                return self.function.ret;
-            }
-            return null;
-        }
-    };
-
-    /// Every permanent cell in a function request's explicit interface.
-    /// Open draft lookup indexes and probes all of these cells so recursive
-    /// requests remain discoverable when any subset of the interface is joined.
-    pub fn functionInterfaceIterator(self: *InstGraph, node: NodeId) Allocator.Error!FunctionInterfaceIterator {
-        return .{ .function = try self.functionNodes(node) };
     }
 
     /// Project tuple item cells without materializing a Monotype.
@@ -2913,6 +2876,14 @@ pub const InstGraph = struct {
         return self.find(node_content.box);
     }
 
+    /// Project a primitive leaf through explicit inspectable backing edges.
+    pub fn primitiveAtNode(self: *InstGraph, node: NodeId) Allocator.Error!?Type.Primitive {
+        return switch (self.content(try self.shapeRoot(node, "primitive", .inspectable))) {
+            .primitive => |primitive| primitive,
+            .redirect, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
+        };
+    }
+
     /// Project one exact tag payload cell from a live tag-union row.
     pub fn tagPayloadNode(
         self: *InstGraph,
@@ -2921,6 +2892,26 @@ pub const InstGraph = struct {
         payload_index: usize,
     ) Allocator.Error!NodeId {
         return self.tagPayloadNodeWithAccess(node, name, payload_index, .inspectable);
+    }
+
+    /// Read the exact payload span for a named tag. A missing result means the
+    /// exact row does not contain that constructor.
+    pub fn tagPayloadNodesOrNull(
+        self: *InstGraph,
+        node: NodeId,
+        name: names.TagNameId,
+    ) Allocator.Error!?[]const NodeId {
+        const structural = try self.shapeRoot(node, "tag payloads", .inspectable);
+        if (self.content(structural) == .empty_tag_union) return null;
+        if (self.content(structural) != .tag_union) {
+            Common.invariant("instantiation tag payload span read had a non-tag-union node");
+        }
+        const row = try self.flattenTagRow(structural);
+        const wanted = self.tagLabelText(name);
+        for (row.tags) |tag| {
+            if (Ident.textEql(wanted, self.tagLabelText(tag.name))) return tag.payloads;
+        }
+        return null;
     }
 
     /// Project one exact tag payload cell for runtime construction.
@@ -2933,40 +2924,17 @@ pub const InstGraph = struct {
         return self.tagPayloadNodeWithAccess(node, name, payload_index, .runtime_layout);
     }
 
-    /// Build an exact value witness for one constructed tag while preserving
-    /// every other checked tag and the row extension. The caller supplies the
-    /// payload representations emitted by the constructor's children.
-    pub fn tagValueNodeWithPayloads(
-        self: *InstGraph,
-        raw_row: NodeId,
-        name: names.TagNameId,
-        payloads: []const NodeId,
-    ) Allocator.Error!NodeId {
-        const structural = try self.shapeRoot(raw_row, "tag value", .runtime_layout);
-        const flat = try self.flattenTagRow(structural);
-        const tags = try self.arena().alloc(InstTag, flat.tags.len);
-        var found = false;
-        for (flat.tags, tags) |tag, *out| {
-            if (tag.name == name) {
-                if (found) Common.invariant("tag value witness found duplicate tag labels");
-                if (tag.payloads.len != payloads.len) {
-                    Common.invariant("tag value witness payload arity differed from its checked tag");
-                }
-                found = true;
-                out.* = .{
-                    .name = tag.name,
-                    .checked_name = tag.checked_name,
-                    .payloads = try self.arena().dupe(NodeId, payloads),
-                };
-            } else {
-                out.* = tag;
-            }
-        }
-        if (!found) Common.invariant("tag value witness did not find its checked tag");
-        return try self.newNode(.{ .tag_union = .{
-            .tags = tags,
-            .ext = self.find(flat.ext),
-        } });
+    /// Project the flattened runtime row used to construct a tag value. The
+    /// returned nodes remain graph-owned exact cells.
+    pub fn tagConstructionRow(self: *InstGraph, raw_row: NodeId) Allocator.Error!TagConstructionRow {
+        const structural = try self.shapeRoot(raw_row, "tag constructor", .runtime_layout);
+        return switch (self.content(structural)) {
+            .tag_union => blk: {
+                const row = try self.flattenTagRow(structural);
+                break :blk .{ .root = structural, .tags = row.tags, .ext = row.ext };
+            },
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("instantiation tag constructor had a non-tag-union runtime backing"),
+        };
     }
 
     /// Read every explicit tag and payload cell when the node is tag-row
@@ -3066,10 +3034,82 @@ pub const InstGraph = struct {
         return self.recordFieldNodeWithAccess(raw_record, name, .inspectable, "record field access");
     }
 
+    /// Return the exact field value cell named by a checker-authored evidence
+    /// path. Generalized and optional fields keep this separate from the
+    /// runtime presence slot returned by `recordFieldNode`.
+    pub fn evidenceRecordFieldValueNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
+        return self.recordFieldValueNodeWithAccess(raw_record, name, .inspectable, "evidence record field value");
+    }
+
     /// Apply one checked required-access judgment to the field-kind cell and
     /// return the inline value slot selected by that judgment.
     pub fn requiredRecordFieldNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
         return self.requiredRecordFieldNodeWithAccess(raw_record, name, .inspectable, "required record field access");
+    }
+
+    /// Select the checked open-row remainder after the checker-recorded
+    /// fields. Row extension topology is intentionally irrelevant: checker
+    /// output names the fields owned by the enclosing row, and this edge
+    /// returns exactly the remaining flattened row.
+    pub fn recordRemainderNode(
+        self: *InstGraph,
+        raw_record: NodeId,
+        excluded: []const names.RecordFieldNameId,
+    ) Allocator.Error!NodeId {
+        const structural = try self.shapeRoot(raw_record, "record remainder", .inspectable);
+        if (self.content(structural) == .empty_record) return structural;
+        if (self.content(structural) != .record) {
+            Common.invariant("instantiation record-remainder edge had a non-record node");
+        }
+        if (excluded.len == 0) return structural;
+
+        const row = try self.flattenRecordRow(structural);
+        var retained = std.ArrayList(InstField).empty;
+        defer retained.deinit(self.allocator);
+        try retained.ensureTotalCapacity(self.allocator, row.fields.len);
+        for (row.fields) |field| {
+            var remove = false;
+            for (excluded) |name| {
+                if (field.name != name) continue;
+                remove = true;
+                break;
+            }
+            if (!remove) retained.appendAssumeCapacity(field);
+        }
+        if (retained.items.len == 0) return self.find(row.ext);
+        return try self.newProducedRecord(retained.items, row.ext);
+    }
+
+    /// Select the checked open-tag-row remainder after the checker-recorded
+    /// tags. The returned node contains only tags not owned by the enclosing
+    /// checked row and preserves the exact produced tail node.
+    pub fn tagRemainderNode(
+        self: *InstGraph,
+        raw_union: NodeId,
+        excluded: []const names.TagNameId,
+    ) Allocator.Error!NodeId {
+        const structural = try self.shapeRoot(raw_union, "tag remainder", .inspectable);
+        if (self.content(structural) == .empty_tag_union) return structural;
+        if (self.content(structural) != .tag_union) {
+            Common.invariant("instantiation tag-remainder edge had a non-tag-union node");
+        }
+        if (excluded.len == 0) return structural;
+
+        const row = try self.flattenTagRow(structural);
+        var retained = std.ArrayList(InstTag).empty;
+        defer retained.deinit(self.allocator);
+        try retained.ensureTotalCapacity(self.allocator, row.tags.len);
+        for (row.tags) |tag| {
+            var remove = false;
+            for (excluded) |name| {
+                if (tag.name != name) continue;
+                remove = true;
+                break;
+            }
+            if (!remove) retained.appendAssumeCapacity(tag);
+        }
+        if (retained.items.len == 0) return self.find(row.ext);
+        return try self.newProducedTagUnion(retained.items, row.ext);
     }
 
     /// Select a private backing field for
@@ -3109,23 +3149,13 @@ pub const InstGraph = struct {
         raw_record: NodeId,
         name: names.RecordFieldNameId,
     ) Allocator.Error!NodeId {
-        const structural = try self.shapeRoot(raw_record, "record constructor", .runtime_layout);
-        if (self.content(structural) != .record) {
-            Common.invariant("instantiation record constructor had a non-record receiver type");
-        }
-        const row = try self.flattenRecordRow(structural);
-        const wanted = self.fieldLabelText(name);
-        for (row.fields) |field| {
-            if (Ident.textEql(wanted, self.fieldLabelText(field.name))) {
-                return self.find(field.value_ty orelse field.ty);
-            }
-        }
-        Common.invariant("instantiation record constructor requested an absent field value");
+        return self.recordFieldValueNodeWithAccess(raw_record, name, .runtime_layout, "record constructor");
     }
 
-    /// Return checker-originated field-kind evidence after specialization has
-    /// resolved any generalized presence variable. Construction consumes this
-    /// instead of re-reading the generalized checked scheme.
+    /// Return the exact field representation already carried by the requested
+    /// record. Live checked fields retain their specialization evidence;
+    /// completed producer fields have consumed that evidence into the stable
+    /// `value_ty`/`default` representation stored on a sealed field.
     pub fn recordConstructionFieldKind(
         self: *InstGraph,
         raw_record: NodeId,
@@ -3146,18 +3176,18 @@ pub const InstGraph = struct {
                     // Optional/defaulted caller evidence, when present, has
                     // already constrained this same identity; otherwise the
                     // construction itself is the explicit required evidence.
-                    // Required means the runtime slot is exactly the source
-                    // value cell, so commit that relation together with the
-                    // kind instead of leaving an unrelated placeholder slot.
+                    // The occurrence's private slot is completed directionally
+                    // from its exact value when field-kind relations freeze.
                     self.constrainUndeterminedFieldKind(id, .required);
-                    try self.unify(
-                        field.ty,
-                        field.value_ty orelse
-                            Common.invariant("undetermined constructor field carried no source value type"),
-                    );
                     return .required;
                 },
-                .sealed, .required, .optional, .defaulted => Common.invariant("record constructor field kind carried no specialization evidence"),
+                .sealed => return if (field.default) |default|
+                    .{ .defaulted = default }
+                else if (field.value_ty != null)
+                    .optional
+                else
+                    .required,
+                .required, .optional, .defaulted => unreachable,
             }
         }
         Common.invariant("instantiation record constructor requested an absent field kind");
@@ -3205,6 +3235,17 @@ pub const InstGraph = struct {
         return self.find((try self.recordFieldWithAccess(raw_record, name, access, noun)).ty);
     }
 
+    fn recordFieldValueNodeWithAccess(
+        self: *InstGraph,
+        raw_record: NodeId,
+        name: names.RecordFieldNameId,
+        access: BackingAccess,
+        comptime noun: []const u8,
+    ) Allocator.Error!NodeId {
+        const field = try self.recordFieldWithAccess(raw_record, name, access, noun);
+        return self.find(field.value_ty orelse field.ty);
+    }
+
     fn recordFieldWithAccess(
         self: *InstGraph,
         raw_record: NodeId,
@@ -3247,9 +3288,7 @@ pub const InstGraph = struct {
                 self.constrainUndeterminedFieldKind(id, .required);
             },
         }
-        const value = field.value_ty orelse field.ty;
-        try self.unify(field.ty, value);
-        return self.find(field.ty);
+        return self.find(field.value_ty orelse field.ty);
     }
 
     fn optionalRecordFieldNodesWithAccess(
@@ -3289,37 +3328,29 @@ pub const InstGraph = struct {
         Common.invariant("instantiation record constructor had a non-record runtime backing");
     }
 
-    /// A relation mutation invalidates every cached Type-shaped snapshot.
-    /// Snapshots may contain the changed node at any structural depth, so
-    /// global invalidation is the exact dependency rule. Mutation bursts are
-    /// coalesced: the next inspection clears the cache once before reading it.
-    /// Observed snapshots remain immutable and valid as historical values.
-    fn invalidateActiveSnapshots(self: *InstGraph, _: NodeId) void {
-        self.countDiagnostic("active_snapshot_invalidations");
-        if (!self.current_snapshots_dirty) {
-            self.countDiagnosticBy("active_snapshot_entries_invalidated", self.current_snapshots.count());
-            self.current_snapshots_dirty = true;
-        }
-    }
-
-    fn refreshActiveSnapshots(self: *InstGraph) void {
-        if (!self.current_snapshots_dirty) return;
-        self.current_snapshots.clearRetainingCapacity();
-        self.current_snapshots_dirty = false;
-    }
-
-    /// Redirect `loser` into `winner`, moving row back references and
-    /// invalidating the current snapshot cache. Immutable snapshot provenance
-    /// remains attached to permanent node ids and resolves through `find`.
+    /// Redirect `loser` into `winner`, moving row back references.
     fn union_(self: *InstGraph, raw_winner: NodeId, raw_loser: NodeId) Allocator.Error!void {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
         if (winner == loser) return;
+        if (self.checked_base_construction_depth == 0 and
+            (self.checked_base_nodes.items[@intFromEnum(winner)] or
+                self.checked_base_nodes.items[@intFromEnum(loser)]))
+        {
+            Common.invariant("exact lowering attempted to merge an immutable checked base node");
+        }
+        try self.redirectRoot(winner, loser);
+    }
+
+    /// Redirect one reserved or related root while preserving every exact row
+    /// back-reference to its interned target.
+    fn redirectRoot(
+        self: *InstGraph,
+        winner: NodeId,
+        loser: NodeId,
+    ) Allocator.Error!void {
+        if (winner == loser) return;
         try self.unregisterRowParent(loser);
-        const winner_tail = self.class_member_tail.items[@intFromEnum(winner)];
-        const loser_head = self.class_member_head.items[@intFromEnum(loser)];
-        self.class_member_next.items[@intFromEnum(winner_tail)] = loser_head;
-        self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
         if (self.row_parents.fetchRemove(loser)) |moved| {
@@ -3332,13 +3363,44 @@ pub const InstGraph = struct {
             moved_list.deinit(self.allocator);
         }
         self.countDiagnostic("class_unions");
-        self.invalidateActiveSnapshots(winner);
+    }
+
+    /// Select a named exact type over an unresolved request cell without ever
+    /// making the named node its own backing. A checked variable can also be
+    /// the declaration-instantiated backing slot of the named node; preserve
+    /// that distinct structural role before redirecting the request root.
+    fn selectNamedOverUnresolved(
+        self: *InstGraph,
+        raw_named: NodeId,
+        raw_unresolved: NodeId,
+    ) Allocator.Error!void {
+        const named_node = self.find(raw_named);
+        const unresolved_node = self.find(raw_unresolved);
+        if (named_node == unresolved_node) return;
+        const named_content = self.nodes.items[@intFromEnum(named_node)];
+        if (named_content != .named) Common.invariant("named selection received a non-named exact node");
+        if (self.nodes.items[@intFromEnum(unresolved_node)] != .unresolved) {
+            Common.invariant("named selection received a resolved request node");
+        }
+        const named = named_content.named;
+        if (named.backing) |backing| {
+            if (self.find(backing.node) == unresolved_node) {
+                const moved = try self.appendDistinctNode(self.nodes.items[@intFromEnum(unresolved_node)]);
+                var rewired = named;
+                rewired.backing = .{
+                    .node = moved,
+                    .use = backing.use,
+                    .authority = backing.authority,
+                };
+                try self.setContent(named_node, .{ .named = rewired });
+            }
+        }
+        try self.union_(named_node, unresolved_node);
     }
 
     /// Replace a root's content with an observationally equivalent compressed
-    /// form without invalidating immutable Type-shaped snapshots. Returns
-    /// whether the stored graph content changed.
-    fn replaceContentWithoutSnapshotInvalidation(self: *InstGraph, raw_root: NodeId, new_content: InstNode) Allocator.Error!bool {
+    /// form. Returns whether the stored graph content changed.
+    fn replaceRootContent(self: *InstGraph, raw_root: NodeId, new_content: InstNode) Allocator.Error!bool {
         const root = self.find(raw_root);
         if (instNodeEql(self.nodes.items[@intFromEnum(root)], new_content)) return false;
         self.nodes.items[@intFromEnum(root)] = new_content;
@@ -3347,112 +3409,173 @@ pub const InstGraph = struct {
         return true;
     }
 
-    /// Replace a root's type content and invalidate every cached snapshot.
-    fn setContent(self: *InstGraph, root: NodeId, new_content: InstNode) Allocator.Error!void {
-        if (!try self.replaceContentWithoutSnapshotInvalidation(root, new_content)) return;
-        self.invalidateActiveSnapshots(root);
+    /// Replace a root's type content.
+    fn setContent(self: *InstGraph, raw_root: NodeId, new_content: InstNode) Allocator.Error!void {
+        const root = self.find(raw_root);
+        if (self.checked_base_construction_depth == 0 and
+            self.checked_base_nodes.items[@intFromEnum(root)])
+        {
+            Common.invariant("exact lowering attempted to rewrite an immutable checked base node");
+        }
+        if (new_content == .named and !isGeneratedPrivateRootContent(new_content)) {
+            if (try self.internNamedArguments(new_content.named)) |interned| {
+                return try self.setContent(root, .{ .named = interned });
+            }
+        }
+        const old_content = self.nodes.items[@intFromEnum(root)];
+        if (old_content == .primitive and
+            self.primitive_nodes[@intFromEnum(old_content.primitive)] == root)
+        {
+            self.primitive_nodes[@intFromEnum(old_content.primitive)] = null;
+        }
+        if (new_content == .primitive) {
+            const primitive = new_content.primitive;
+            if (self.primitive_nodes[@intFromEnum(primitive)]) |raw_existing| {
+                const existing = self.find(raw_existing);
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+            self.primitive_nodes[@intFromEnum(primitive)] = root;
+        }
+        if (new_content == .empty_tag_union) {
+            if (self.empty_tag_union_node) |raw_existing| {
+                const existing = self.find(raw_existing);
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+            self.empty_tag_union_node = root;
+        }
+        if (new_content == .empty_record) {
+            if (self.empty_record_node) |raw_existing| {
+                const existing = self.find(raw_existing);
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+            self.empty_record_node = root;
+        }
+        if (new_content == .zst) {
+            if (self.zst_node) |raw_existing| {
+                const existing = self.find(raw_existing);
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+            self.zst_node = root;
+        }
+        if (new_content == .list) {
+            if (self.existingListElement(new_content.list)) |existing| {
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+        }
+        if (new_content == .box) {
+            if (self.existingBoxElement(new_content.box)) |existing| {
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+        }
+        if (new_content == .tuple) {
+            if (self.existingTupleShape(new_content.tuple)) |existing| {
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+        }
+        if (new_content == .record) {
+            if (self.existingRecordShape(new_content)) |existing| {
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+        }
+        if (new_content == .tag_union) {
+            if (self.existingTagUnionShape(new_content.tag_union)) |existing| {
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+        }
+        if (new_content == .named) {
+            const named = new_content.named;
+            if (self.existingNamedIdentity(named)) |existing| {
+                if (existing != root) {
+                    if (!try self.replaceRootContent(root, .{ .redirect = existing })) return;
+                    return;
+                }
+            }
+        }
+        if (!try self.replaceRootContent(root, new_content)) return;
+        switch (new_content) {
+            .list => |element| try self.registerListElement(element, root),
+            .box => |element| try self.registerBoxElement(element, root),
+            .tuple => |items| try self.registerTupleShape(root, items),
+            .record => try self.registerRecordShape(root, new_content),
+            .tag_union => |tag_union| try self.registerTagUnionShape(root, tag_union),
+            .named => |named| try self.registerNamedIdentity(root, named),
+            .redirect, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => {},
+        }
     }
 
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
-        try self.unifyRootsTransitively(a, b, false);
+        try self.unifyRootsTransitively(a, b);
     }
 
-    /// Join two matching structural request containers after their components
-    /// have already been related with public/private-aware edges. The request
-    /// node remains the class representative so later body lowering continues
-    /// to see the producer-owned representation at the container boundary.
-    pub fn joinRelatedRequestContainer(
-        self: *InstGraph,
-        public_node: NodeId,
-        request_node: NodeId,
-    ) Allocator.Error!void {
-        self.requireRelationProduction();
-        const public_root = self.find(public_node);
-        const request_root = self.find(request_node);
-        if (public_root == request_root) return;
-        const public_content = self.nodes.items[@intFromEnum(public_root)];
-        const request_content = self.nodes.items[@intFromEnum(request_root)];
-        switch (public_content) {
-            .list => {
-                if (request_content != .list) Common.invariant("request container join received different type structure");
-            },
-            .box => {
-                if (request_content != .box) Common.invariant("request container join received different type structure");
-            },
-            .tuple => |public_items| {
-                if (request_content != .tuple) Common.invariant("request container join received different type structure");
-                if (public_items.len != request_content.tuple.len) {
-                    Common.invariant("request container join received tuples of different arity");
-                }
-            },
-            .func => |public_fn| {
-                if (request_content != .func) Common.invariant("request container join received different type structure");
-                if (public_fn.args.len != request_content.func.args.len) {
-                    Common.invariant("request container join received functions of different arity");
-                }
-            },
-            .record => {
-                if (request_content != .record) Common.invariant("request container join received different type structure");
-                const public_row = try self.flattenRecordRow(public_root);
-                const request_row = try self.flattenRecordRow(request_root);
-                if (public_row.fields.len != request_row.fields.len) {
-                    Common.invariant("request container join received records with different field counts");
-                }
-                for (public_row.fields) |public_field| {
-                    const wanted = self.fieldLabelText(public_field.name);
-                    var found = false;
-                    for (request_row.fields) |request_field| {
-                        if (Ident.textEql(wanted, self.fieldLabelText(request_field.name))) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        Common.invariant("request container join received records with different fields");
-                    }
-                }
-            },
-            .tag_union => {
-                if (request_content != .tag_union) Common.invariant("request container join received different type structure");
-                const public_row = try self.flattenTagRow(public_root);
-                const request_row = try self.flattenTagRow(request_root);
-                if (public_row.tags.len != request_row.tags.len) {
-                    Common.invariant("request container join received tag unions with different tag counts");
-                }
-                for (public_row.tags) |public_tag| {
-                    const wanted = self.tagLabelText(public_tag.name);
-                    var found = false;
-                    for (request_row.tags) |request_tag| {
-                        if (Ident.textEql(wanted, self.tagLabelText(request_tag.name)) and
-                            public_tag.payloads.len == request_tag.payloads.len)
-                        {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        Common.invariant("request container join received tag unions with different tags");
-                    }
-                }
-            },
-            .redirect,
-            .unresolved,
-            .primitive,
-            .empty_tag_union,
-            .empty_record,
-            .named,
-            .erased,
-            .zst,
-            => Common.invariant("request container join received a non-container public type"),
+    pub fn generatedIteratorPublicSource(self: *InstGraph, raw_node: NodeId) InstIteratorPublicSource {
+        const named = switch (self.content(raw_node)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("iterator public source requested from a non-named node"),
+        };
+        return generatedIteratorSourceFromNamed(named);
+    }
+
+    fn generatedIteratorSourceFromNamed(named: InstNamed) InstIteratorPublicSource {
+        const backing = named.backing orelse
+            Common.invariant("iterator representation source had no backing");
+        const owner = named.builtin_owner orelse
+            Common.invariant("iterator representation source had no builtin owner");
+        if (!static_dispatch.isIteratorOwner(owner)) {
+            Common.invariant("iterator representation source had a non-iterator owner");
         }
-        try self.union_(request_root, public_root);
+        if (named.def.generated == null and backing.authority != .checked_public) {
+            Common.invariant("public iterator representation source had private backing authority");
+        }
+        if (named.def.generated != null and backing.authority != .generated_private) {
+            Common.invariant("finished iterator representation source had public backing authority");
+        }
+        var public_def = named.def;
+        public_def.generated = null;
+        return .{
+            .named_type = named.named_type,
+            .def = public_def,
+            .kind = named.kind,
+            .builtin_owner = owner,
+            .backing = .{
+                .node = backing.node,
+                .use = backing.use,
+                .authority = .checked_public,
+            },
+            .declared_order = named.declared_order,
+        };
     }
 
     fn unifyRootsTransitively(
         self: *InstGraph,
         a: NodeId,
         b: NodeId,
-        allow_private_selection: bool,
     ) Allocator.Error!void {
         self.requireRelationProduction();
         self.countDiagnostic("unify_requests");
@@ -3462,7 +3585,7 @@ pub const InstGraph = struct {
         defer related.deinit();
         try pending.append(self.allocator, .{ .left = a, .right = b });
         while (pending.pop()) |pair| {
-            try self.unifyRoots(pair.left, pair.right, &pending, &related, allow_private_selection);
+            try self.unifyRoots(pair.left, pair.right, &pending, &related);
         }
     }
 
@@ -3472,7 +3595,6 @@ pub const InstGraph = struct {
         raw_right: NodeId,
         pending: *std.ArrayList(NodePair),
         related: *std.AutoHashMap(NodePair, void),
-        allow_private_selection: bool,
     ) Allocator.Error!void {
         const left = self.find(raw_left);
         const right = self.find(raw_right);
@@ -3486,17 +3608,6 @@ pub const InstGraph = struct {
 
         const left_content = self.nodes.items[@intFromEnum(left)];
         const right_content = self.nodes.items[@intFromEnum(right)];
-        const left_generated_private = left_content == .named and
-            (if (left_content.named.backing) |backing| backing.authority == .generated_private else false);
-        const right_generated_private = right_content == .named and
-            (if (right_content.named.backing) |backing| backing.authority == .generated_private else false);
-        if (left_generated_private != right_generated_private and
-            !allow_private_selection and
-            !self.isIteratorRepresentationTierRelation(left_content, right_content))
-        {
-            Common.invariant("generated-private representation reached ordinary public/private graph unification");
-        }
-
         if (left_content == .redirect) unreachable;
         if (left_content == .unresolved) {
             if (right_content == .unresolved) {
@@ -3504,12 +3615,16 @@ pub const InstGraph = struct {
                 try self.union_(right, left);
             } else if (right_content == .named and right_content.named.kind == .alias) {
                 try self.unifyThroughBacking(right, right_content, left, pending);
+            } else if (right_content == .named) {
+                try self.selectNamedOverUnresolved(right, left);
             } else {
                 try self.union_(right, left);
             }
         } else if (right_content == .unresolved) {
             if (left_content == .named and left_content.named.kind == .alias) {
                 try self.unifyThroughBacking(left, left_content, right, pending);
+            } else if (left_content == .named) {
+                try self.selectNamedOverUnresolved(left, right);
             } else {
                 try self.union_(left, right);
             }
@@ -3542,13 +3657,25 @@ pub const InstGraph = struct {
             .origin = mergeVariableOrigin(a.origin, b.origin),
             .numeric_default_phase = a.numeric_default_phase orelse b.numeric_default_phase,
             .row_default = a.row_default orelse b.row_default,
+            .specialization_default = a.specialization_default orelse b.specialization_default,
+            .checked_key = mergeCheckedVariableKey(a.checked_key, b.checked_key),
         };
     }
 
+    fn mergeCheckedVariableKey(a: ?[32]u8, b: ?[32]u8) ?[32]u8 {
+        if (a == null) return b;
+        if (b == null) return a;
+        if (!std.meta.eql(a.?, b.?)) {
+            Common.invariant("one checked substitution class carried two different stable identities");
+        }
+        return a;
+    }
+
     fn mergeVariableOrigin(a: InstVariableOrigin, b: InstVariableOrigin) InstVariableOrigin {
+        if (a == b) return a;
         if (a == .checked_variable or b == .checked_variable) return .checked_variable;
         if (a == .row_extension or b == .row_extension) return .row_extension;
-        return .placeholder;
+        Common.invariant("exact lowering attempted to merge construction and producer placeholders");
     }
 
     fn unifyConcrete(
@@ -3667,6 +3794,17 @@ pub const InstGraph = struct {
             .named => |left_named| {
                 if (right_content == .named) {
                     const right_named = right_content.named;
+                    const left_generated = isGeneratedPrivateRootContent(left_content);
+                    const right_generated = isGeneratedPrivateRootContent(right_content);
+                    if (left_generated or right_generated) {
+                        if (left_generated and right_generated and
+                            std.meta.eql(left_named.def, right_named.def))
+                        {
+                            try self.union_(left, right);
+                            return;
+                        }
+                        Common.invariant("distinct generated nominal declarations reached ordinary unification");
+                    }
                     if (left_named.kind == .alias) {
                         try self.unifyThroughBacking(left, left_content, right, pending);
                         return;
@@ -3675,99 +3813,6 @@ pub const InstGraph = struct {
                         try self.unifyThroughBacking(right, right_content, left, pending);
                         return;
                     }
-                    switch (self.iteratorRelation(left_named, right_named)) {
-                        .ordinary => {},
-                        .public_minted => {
-                            if (left_named.args.len == 0 or right_named.args.len == 0) {
-                                Common.invariant("minted/public iterator pair reached Monotype instantiation without a public item argument");
-                            }
-                            try pending.append(self.allocator, .{
-                                .left = left_named.args[0],
-                                .right = right_named.args[0],
-                            });
-                            if (left_named.def.iterator_representation == .minted) {
-                                try self.union_(left, right);
-                            } else {
-                                try self.union_(right, left);
-                            }
-                            return;
-                        },
-                        .forced_dynamic => {
-                            if (left_named.args.len == 0 or right_named.args.len == 0) {
-                                Common.invariant("forced-dynamic iterator reached Monotype instantiation without a public item argument");
-                            }
-                            try pending.append(self.allocator, .{
-                                .left = left_named.args[0],
-                                .right = right_named.args[0],
-                            });
-                            if (left_named.def.iterator_representation == .forced_dynamic) {
-                                try self.union_(left, right);
-                            } else {
-                                try self.union_(right, left);
-                            }
-                            return;
-                        },
-                        .minted_join => {
-                            if (left_named.args.len == 0 or right_named.args.len == 0) {
-                                Common.invariant("minted iterator join reached Monotype instantiation without a public item argument");
-                            }
-                            try pending.append(self.allocator, .{
-                                .left = left_named.args[0],
-                                .right = right_named.args[0],
-                            });
-                            if (left_named.backing) |left_backing| {
-                                const right_backing = right_named.backing orelse
-                                    Common.invariant("minted iterator join found backing on only one side");
-                                if (left_backing.use != right_backing.use) {
-                                    Common.invariant("minted iterator join found different backing uses");
-                                }
-                                if (left_backing.authority != right_backing.authority) {
-                                    Common.invariant("minted iterator join found different backing authorities");
-                                }
-                                try pending.append(self.allocator, .{
-                                    .left = left_backing.node,
-                                    .right = right_backing.node,
-                                });
-                            } else if (right_named.backing != null) {
-                                Common.invariant("minted iterator join found backing on only one side");
-                            }
-
-                            for (self.recursive_argument_slots.items) |slot| {
-                                const slot_root = self.find(slot);
-                                if (slot_root == left or slot_root == right) {
-                                    try self.forced_dynamic_iterator_roots.append(self.allocator, left);
-                                }
-                            }
-
-                            // A graph-owned producer still has the public-source
-                            // provenance required to finalize a newly joined
-                            // representation; an imported finished Monotype
-                            // deliberately does not. Preserve that explicit
-                            // authority when only one side owns it. This is
-                            // especially important for recursive joins, whose
-                            // selected root must still be rewritable to the
-                            // forced-dynamic fixed point below.
-                            const left_owns_provenance = left_named.generated_iterator != null;
-                            const right_owns_provenance = right_named.generated_iterator != null;
-                            if (left_owns_provenance != right_owns_provenance) {
-                                if (left_owns_provenance) {
-                                    try self.union_(left, right);
-                                } else {
-                                    try self.union_(right, left);
-                                }
-                            } else if (left_named.builtin_owner) |left_owner| {
-                                // Close recursive `rest` references before the
-                                // backing pair is drained. Otherwise each
-                                // nominal unwrap creates another fresh
-                                // structural node.
-                                if (!static_dispatch.isIteratorOwner(left_owner)) unreachable;
-                                try self.union_(left, right);
-                            } else {
-                                try self.union_(right, left);
-                            }
-                            return;
-                        },
-                    }
                     if (std.meta.eql(left_named.def, right_named.def) and left_named.args.len == right_named.args.len) {
                         for (left_named.args, right_named.args) |left_arg, right_arg| {
                             try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg });
@@ -3775,20 +3820,27 @@ pub const InstGraph = struct {
                         if (left_named.backing) |left_backing| {
                             if (right_named.backing) |right_backing| {
                                 if (left_backing.authority == right_backing.authority) {
-                                    try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
-                                } else {
-                                    const private_is_left = left_backing.authority == .generated_private;
-                                    const private_is_right = right_backing.authority == .generated_private;
-                                    if (private_is_left == private_is_right) {
-                                        Common.invariant("instantiation named backing authorities were incompatible");
+                                    const left_wraps_right = self.find(left_backing.node) == right;
+                                    const right_wraps_left = self.find(right_backing.node) == left;
+                                    if (left_wraps_right and right_wraps_left) {
+                                        Common.invariant("equivalent named nodes formed a two-node backing cycle");
                                     }
-                                    if (private_is_left) {
-                                        try self.union_(left, right);
-                                    } else {
-                                        try self.union_(right, left);
+                                    if (left_wraps_right) {
+                                        // The left node is an extra view of the
+                                        // same nominal around the right node.
+                                        // Compress that wrapper before the
+                                        // right root redirects into the left.
+                                        var compressed = left_named;
+                                        compressed.backing = .{
+                                            .node = right_backing.node,
+                                            .use = left_backing.use,
+                                            .authority = left_backing.authority,
+                                        };
+                                        try self.setContent(left, .{ .named = compressed });
+                                    } else if (!right_wraps_left) {
+                                        try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
                                     }
-                                    return;
-                                }
+                                } else Common.invariant("instantiation named backing authorities were incompatible");
                             } else {
                                 Common.invariant("instantiation named type backing presence differed");
                             }
@@ -3827,49 +3879,6 @@ pub const InstGraph = struct {
         }
     }
 
-    fn isIteratorRepresentationTierRelation(self: *InstGraph, left: InstNode, right: InstNode) bool {
-        if (left != .named or right != .named) return false;
-        const left_named = left.named;
-        const right_named = right.named;
-        return switch (self.iteratorRelation(left_named, right_named)) {
-            .public_minted, .forced_dynamic => true,
-            .ordinary, .minted_join => false,
-        };
-    }
-
-    fn iteratorRelation(self: *InstGraph, left: InstNamed, right: InstNamed) Type.IteratorRelation {
-        const base_relation = Type.iteratorRelation(left, right);
-        if (base_relation != .ordinary) return base_relation;
-        if (left.def.iterator_representation == .forced_dynamic and
-            right.def.iterator_representation == .forced_dynamic and
-            !optionalInstDigestEql(left.def.generated, right.def.generated))
-        {
-            return .forced_dynamic;
-        }
-        if (left.def.iterator_representation != .minted or right.def.iterator_representation != .minted) {
-            return .ordinary;
-        }
-        if (left.kind != right.kind or
-            left.def.module != right.def.module or
-            left.def.type_name != right.def.type_name or
-            left.def.source_decl != right.def.source_decl or
-            !instIteratorOwnerPair(left.builtin_owner, right.builtin_owner))
-        {
-            return .ordinary;
-        }
-        if (left.generated_iterator != null or right.generated_iterator != null) {
-            if (left.generated_iterator == null or right.generated_iterator == null) return .minted_join;
-            if (!optionalInstDigestEql(
-                left.generated_iterator.?.callable_evidence,
-                right.generated_iterator.?.callable_evidence,
-            )) return .minted_join;
-            if (left.def.iterator_kind != right.def.iterator_kind or
-                !self.sameNamedArgs(left.args, right.args)) return .minted_join;
-            return .ordinary;
-        }
-        return Type.iteratorRelation(left, right);
-    }
-
     /// A named type met a structurally different type. Aliases are transparent
     /// downstream, so an alias relates through its backing without merging
     /// roots. A nominal becomes the single node both sides resolve to: the
@@ -3884,6 +3893,9 @@ pub const InstGraph = struct {
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         if (named_content != .named) unreachable;
+        if (isGeneratedPrivateRootContent(named_content)) {
+            Common.invariant("generated nominal declaration reached structural backing unification");
+        }
         const named = named_content.named;
         const declared_backing = named.backing orelse
             Common.invariant("instantiation unified an opaque type without backing against a structural type");
@@ -3918,7 +3930,22 @@ pub const InstGraph = struct {
             try pending.append(self.allocator, .{ .left = backing_node, .right = other });
             return;
         }
-        const moved = try self.newNode(self.nodes.items[@intFromEnum(other)]);
+        // If `other` is this nominal's declared backing, redirecting it first
+        // would make the nominal point to its own union-find class. Preserve a
+        // structural copy as the backing before selecting the nominal root.
+        if (self.find(backing_node) == self.find(other)) {
+            const moved = try self.appendDistinctNode(self.nodes.items[@intFromEnum(other)]);
+            var rewired = named;
+            rewired.backing = .{
+                .node = moved,
+                .use = declared_backing.use,
+                .authority = declared_backing.authority,
+            };
+            try self.setContent(named_node, .{ .named = rewired });
+            try self.union_(named_node, other);
+            return;
+        }
+        const moved = try self.appendDistinctNode(self.nodes.items[@intFromEnum(other)]);
         try self.union_(named_node, other);
         try pending.append(self.allocator, .{ .left = backing_node, .right = moved });
     }
@@ -3982,7 +4009,7 @@ pub const InstGraph = struct {
     }
 
     fn sameNamedInstance(self: *InstGraph, left: InstNamed, right: InstNamed) bool {
-        return left.kind == right.kind and
+        return (left.kind == .alias) == (right.kind == .alias) and
             sameTypeDef(left.def, right.def) and
             left.builtin_owner == right.builtin_owner and
             self.sameNamedArgs(left.args, right.args);
@@ -3998,7 +4025,8 @@ pub const InstGraph = struct {
 
     fn sameTypeDef(left: Type.TypeDef, right: Type.TypeDef) bool {
         return left.module == right.module and
-            left.type_name == right.type_name;
+            left.type_name == right.type_name and
+            left.source_decl == right.source_decl;
     }
 
     const RowKind = enum {
@@ -4069,9 +4097,10 @@ pub const InstGraph = struct {
         ext: NodeId,
     };
 
-    /// Chase a tag row's extension chain and rewrite the root to a single
-    /// flattened row. The returned extension is unresolved (open), an empty tag
-    /// union (closed), or compressed out.
+    /// Read one tag row as a flat list without rewriting its graph-owned root.
+    /// Checked-base nodes are immutable, and produced compounds already store
+    /// their exact immediate children; flattening is therefore an exact row
+    /// read, never a graph mutation.
     fn flattenTagRow(self: *InstGraph, raw_root: NodeId) Allocator.Error!FlatTagRow {
         const root = self.find(raw_root);
         const root_content = self.nodes.items[@intFromEnum(root)];
@@ -4088,10 +4117,6 @@ pub const InstGraph = struct {
         var ext = self.find(row.ext);
         const ext_content = self.nodes.items[@intFromEnum(ext)];
         if (ext_content == .unresolved or ext_content == .empty_tag_union) {
-            if (row.ext != ext) {
-                const flattened: InstNode = .{ .tag_union = .{ .tags = row.tags, .ext = ext } };
-                _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
-            }
             return .{ .tags = row.tags, .ext = ext };
         }
 
@@ -4126,8 +4151,6 @@ pub const InstGraph = struct {
         }
 
         const flat_tags = try self.arena().dupe(InstTag, tags.items);
-        const flattened: InstNode = .{ .tag_union = .{ .tags = flat_tags, .ext = ext } };
-        _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
         return .{ .tags = flat_tags, .ext = ext };
     }
 
@@ -4147,10 +4170,6 @@ pub const InstGraph = struct {
         var ext = self.find(row.ext);
         const ext_content = self.nodes.items[@intFromEnum(ext)];
         if (ext_content == .unresolved or ext_content == .empty_record) {
-            if (row.ext != ext) {
-                const flattened: InstNode = .{ .record = .{ .fields = row.fields, .ext = ext } };
-                _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
-            }
             return .{ .fields = row.fields, .ext = ext };
         }
 
@@ -4185,8 +4204,6 @@ pub const InstGraph = struct {
         }
 
         const flat_fields = try self.arena().dupe(InstField, fields.items);
-        const flattened: InstNode = .{ .record = .{ .fields = flat_fields, .ext = ext } };
-        _ = try self.replaceContentWithoutSnapshotInvalidation(root, flattened);
         return .{ .fields = flat_fields, .ext = ext };
     }
 
@@ -4447,30 +4464,59 @@ pub const InstGraph = struct {
     /// mutation of another specialization's final type.
     pub fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         self.requireRelationProduction();
+        return try self.importMonoInner(ty);
+    }
+
+    fn importMonoInner(
+        self: *InstGraph,
+        ty: Type.TypeId,
+    ) Allocator.Error!NodeId {
         self.countDiagnostic("mono_import_requests");
-        if (self.linked_type_nodes.get(ty)) |existing| {
+        if (self.imported_type_nodes.get(ty)) |existing| {
             self.countDiagnostic("mono_import_hits");
             return self.find(existing);
         }
+        const imported_generated_identity = switch (self.types.get(ty)) {
+            .named => |named| if (named.backing) |backing|
+                if (backing.authority == .generated_private)
+                    named.def.generated orelse
+                        Common.invariant("imported generated-private nominal lacked its producer identity")
+                else
+                    null
+            else
+                null,
+            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .erased, .zst => null,
+        };
+        if (imported_generated_identity) |identity| {
+            if (self.generated_nominal_intern.get(identity)) |existing| {
+                const node = self.find(existing);
+                try self.imported_type_nodes.put(ty, node);
+                self.countDiagnostic("mono_import_hits");
+                return node;
+            }
+        }
         self.countDiagnostic("mono_import_misses");
-        const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+        const node = try self.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
         // One-way memo: every import is a finished Monotype from outside this
-        // graph (ids materialized here hit the memo above), so it enters as a
-        // snapshot. Registering a view would let this specialization's
-        // evidence rewrite another specialization's final type, destabilizing
-        // every digest taken from it.
-        try self.linked_type_nodes.put(ty, node);
-        try self.imported_monos.put(node, ty);
-
+        // graph. This specialization copies its exact structure into graph
+        // nodes and never exposes those mutable nodes as a TypeId view.
+        try self.imported_type_nodes.put(ty, node);
+        if (imported_generated_identity) |identity| {
+            const entry = try self.generated_nominal_intern.getOrPut(identity);
+            if (entry.found_existing) {
+                Common.invariant("generated-private import interning changed during one import");
+            }
+            entry.value_ptr.* = node;
+        }
         const types = self.types;
         const imported: InstNode = switch (types.get(ty)) {
             .primitive => |primitive| .{ .primitive = primitive },
-            .list => |elem| .{ .list = try self.importMono(elem) },
-            .box => |elem| .{ .box = try self.importMono(elem) },
-            .tuple => |items| .{ .tuple = try self.importMonoSlice(types.span(items)) },
+            .list => |elem| .{ .list = try self.importMonoInner(elem) },
+            .box => |elem| .{ .box = try self.importMonoInner(elem) },
+            .tuple => |items| .{ .tuple = try self.importMonoSliceInner(types.span(items)) },
             .func => |func| .{ .func = .{
-                .args = try self.importMonoSlice(types.span(func.args)),
-                .ret = try self.importMono(func.ret),
+                .args = try self.importMonoSliceInner(types.span(func.args)),
+                .ret = try self.importMonoInner(func.ret),
             } },
             .tag_union => |tags| blk: {
                 const span = types.tagSpan(tags);
@@ -4483,7 +4529,7 @@ pub const InstGraph = struct {
                     inst_tags[index] = .{
                         .name = tag.name,
                         .checked_name = tag.checked_name,
-                        .payloads = try self.importMonoSlice(types.span(tag.payloads)),
+                        .payloads = try self.importMonoSliceInner(types.span(tag.payloads)),
                     };
                 }
                 break :blk .{ .tag_union = .{
@@ -4497,16 +4543,13 @@ pub const InstGraph = struct {
                 const inst_fields = try self.arena().alloc(InstField, span.len);
                 for (0..span.len) |index| {
                     const field = GuardedList.at(span, index);
-                    if (field.kind_state == .undetermined) {
-                        Common.invariant("finished Monotype import received a provisional record field");
-                    }
                     const value_ty = if (field.value_ty) |value_ty|
                         try self.importMono(value_ty)
                     else
                         null;
                     inst_fields[index] = .{
                         .name = field.name,
-                        .ty = try self.importMono(field.ty),
+                        .ty = try self.importMonoInner(field.ty),
                         .value_ty = value_ty,
                         .kind = if (value_ty != null)
                             .optional
@@ -4527,155 +4570,39 @@ pub const InstGraph = struct {
                 .def = named.def,
                 .kind = named.kind,
                 .builtin_owner = named.builtin_owner,
-                .args = try self.importMonoSlice(types.span(named.args)),
+                .args = try self.importMonoSliceInner(types.span(named.args)),
                 .backing = if (named.backing) |backing| .{
-                    .node = try self.importMono(backing.ty),
+                    .node = try self.importMonoInner(backing.ty),
                     .use = backing.use,
                     .authority = backing.authority,
                 } else null,
-                .declared_order = try self.importDeclaredFields(named.declared_order),
+                .declared_order = try self.importDeclaredFieldsInner(named.declared_order),
             } },
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,
         };
-        _ = try self.replaceContentWithoutSnapshotInvalidation(node, imported);
-        return node;
+        try self.setContent(node, imported);
+        if (imported == .func) {
+            _ = try self.internCompletedFunction(node);
+        }
+        return self.find(node);
     }
 
-    /// Instantiate one immutable provisional interface-replay view as fresh
-    /// graph cells. Unlike `importMono`, this deliberately creates an
-    /// independent copy on every call: an undetermined field-kind cell remains
-    /// open evidence for the duplicate request and must not become an immutable
-    /// cross-request witness or share later constraints with another duplicate.
-    pub fn instantiateProvisionalTypeView(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
-        self.requireRelationProduction();
-        var imported = collections.DenseMap(Type.TypeId, NodeId).init(self.allocator);
-        defer imported.deinit();
-        return try self.instantiateProvisionalTypeViewInner(ty, &imported);
-    }
-
-    fn instantiateProvisionalTypeViewInner(
-        self: *InstGraph,
-        ty: Type.TypeId,
-        imported: *collections.DenseMap(Type.TypeId, NodeId),
-    ) Allocator.Error!NodeId {
-        if (imported.get(ty)) |existing| return existing;
-
-        const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
-        try imported.put(ty, node);
-        const types = self.types;
-        const imported_node: InstNode = switch (types.get(ty)) {
-            .primitive => |primitive| .{ .primitive = primitive },
-            .list => |elem| .{ .list = try self.instantiateProvisionalTypeViewInner(elem, imported) },
-            .box => |elem| .{ .box = try self.instantiateProvisionalTypeViewInner(elem, imported) },
-            .tuple => |items| .{ .tuple = try self.instantiateProvisionalTypeSlice(types.span(items), imported) },
-            .func => |func| .{ .func = .{
-                .args = try self.instantiateProvisionalTypeSlice(types.span(func.args), imported),
-                .ret = try self.instantiateProvisionalTypeViewInner(func.ret, imported),
-            } },
-            .tag_union => |tags| blk: {
-                const span = types.tagSpan(tags);
-                if (span.len == 0) break :blk .empty_tag_union;
-                const inst_tags = try self.arena().alloc(InstTag, span.len);
-                for (0..span.len) |index| {
-                    const tag = GuardedList.at(span, index);
-                    inst_tags[index] = .{
-                        .name = tag.name,
-                        .checked_name = tag.checked_name,
-                        .payloads = try self.instantiateProvisionalTypeSlice(types.span(tag.payloads), imported),
-                    };
-                }
-                break :blk .{ .tag_union = .{
-                    .tags = inst_tags,
-                    .ext = try self.newNode(.empty_tag_union),
-                } };
-            },
-            .record => |fields| blk: {
-                const span = types.fieldSpan(fields);
-                if (span.len == 0) break :blk .empty_record;
-                const inst_fields = try self.arena().alloc(InstField, span.len);
-                for (0..span.len) |index| {
-                    const field = GuardedList.at(span, index);
-                    inst_fields[index] = switch (field.kind_state) {
-                        .undetermined => undetermined: {
-                            if (field.default != null) {
-                                Common.invariant("provisional undetermined field carried a default identity");
-                            }
-                            const source_ty = field.value_ty orelse
-                                Common.invariant("provisional undetermined field carried no source value type");
-                            const value_node = try self.instantiateProvisionalTypeViewInner(source_ty, imported);
-                            const slot_node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
-                            const kind = try self.newUndeterminedFieldKind();
-                            self.registerUndeterminedFieldKindCells(kind, slot_node, value_node);
-                            break :undetermined .{
-                                .name = field.name,
-                                .ty = slot_node,
-                                .value_ty = value_node,
-                                .kind = .{ .undetermined = kind },
-                                .default = null,
-                            };
-                        },
-                        .resolved => resolved: {
-                            const value_ty = if (field.value_ty) |value_ty|
-                                try self.instantiateProvisionalTypeViewInner(value_ty, imported)
-                            else
-                                null;
-                            break :resolved .{
-                                .name = field.name,
-                                .ty = try self.instantiateProvisionalTypeViewInner(field.ty, imported),
-                                .value_ty = value_ty,
-                                .kind = if (value_ty != null)
-                                    .optional
-                                else if (field.default) |default|
-                                    .{ .defaulted = default }
-                                else
-                                    .required,
-                                .default = field.default,
-                            };
-                        },
-                    };
-                }
-                break :blk .{ .record = .{
-                    .fields = inst_fields,
-                    .ext = try self.newNode(.empty_record),
-                } };
-            },
-            .named => |named| .{ .named = .{
-                .named_type = named.named_type,
-                .def = named.def,
-                .kind = named.kind,
-                .builtin_owner = named.builtin_owner,
-                .args = try self.instantiateProvisionalTypeSlice(types.span(named.args), imported),
-                .backing = if (named.backing) |backing| .{
-                    .node = try self.instantiateProvisionalTypeViewInner(backing.ty, imported),
-                    .use = backing.use,
-                    .authority = backing.authority,
-                } else null,
-                .declared_order = try self.instantiateProvisionalDeclaredFields(named.declared_order, imported),
-            } },
-            .erased => |digest| .{ .erased = digest },
-            .zst => .zst,
-        };
-        _ = try self.replaceContentWithoutSnapshotInvalidation(node, imported_node);
-        return node;
-    }
-
-    fn instantiateProvisionalTypeSlice(
+    fn importMonoSliceInner(
         self: *InstGraph,
         tys: anytype,
-        imported: *collections.DenseMap(Type.TypeId, NodeId),
     ) Allocator.Error![]NodeId {
         const out = try self.arena().alloc(NodeId, tys.len);
         for (0..tys.len) |index| {
-            out[index] = try self.instantiateProvisionalTypeViewInner(GuardedList.at(tys, index), imported);
+            const ty = GuardedList.at(tys, index);
+            out[index] = try self.importMonoInner(ty);
         }
         return out;
     }
 
-    fn instantiateProvisionalDeclaredFields(
+    fn importDeclaredFieldsInner(
         self: *InstGraph,
         span: Type.Span,
-        imported: *collections.DenseMap(Type.TypeId, NodeId),
     ) Allocator.Error![]const InstDeclaredField {
         const fields = self.types.declaredFieldSpan(span);
         if (fields.len == 0) return &.{};
@@ -4684,204 +4611,17 @@ pub const InstGraph = struct {
             const field = GuardedList.at(fields, index);
             out[index] = switch (field) {
                 .named => |name| .{ .named = name },
-                .padding => |padding_ty| .{
-                    .padding = try self.instantiateProvisionalTypeViewInner(padding_ty, imported),
-                },
+                .padding => |ty| .{ .padding = try self.importMonoInner(ty) },
             };
         }
         return out;
     }
 
-    fn importMonoSlice(self: *InstGraph, tys: anytype) Allocator.Error![]NodeId {
-        const out = try self.arena().alloc(NodeId, tys.len);
-        for (0..tys.len) |index| {
-            const ty = GuardedList.at(tys, index);
-            out[index] = try self.importMono(ty);
-        }
-        return out;
-    }
-
-    fn importDeclaredFields(self: *InstGraph, span: Type.Span) Allocator.Error![]const InstDeclaredField {
-        const fields = self.types.declaredFieldSpan(span);
-        if (fields.len == 0) return &.{};
-        const out = try self.arena().alloc(InstDeclaredField, fields.len);
-        for (0..fields.len) |index| {
-            const field = GuardedList.at(fields, index);
-            out[index] = switch (field) {
-                .named => |name| .{ .named = name },
-                .padding => |ty| .{ .padding = try self.importMono(ty) },
-            };
-        }
-        return out;
-    }
-
-    /// Materialize an immutable Monotype-shaped view of a node under the
-    /// relations produced so far, applying defaults to unresolved leaves in
-    /// the view only. The live graph is unchanged. This is collision authority
-    /// for provisional relation-replay memos and finalization probes; the
-    /// returned graph-owned scratch TypeId must not be emitted as output.
-    pub fn provisionalTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        self.requireRelationProduction();
-        if (self.imported_monos.get(node)) |imported| return imported;
-        if (try self.typeIsResolved(node)) return try self.monoFor(node);
-        var snapshot = GraphTypeFinals.initProvisionalSnapshot(self);
-        defer snapshot.deinit();
-        return try snapshot.sealNode(self.find(node));
-    }
-
-    /// Materialize a read-only specialization-key view of a graph type whose
-    /// only open evidence is generalized field presence. Undetermined fields
-    /// take their relation-freeze default (`required`) in this view, while the
-    /// live field-kind cells remain open for subsequent graph relations.
-    pub fn specializationTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        self.requireRelationProduction();
-        if (try self.typeIsResolved(node)) return try self.monoFor(node);
-        if (!try self.typeIsSpecializationDefaultable(node)) {
-            Common.invariant("specialization type view requested for a graph type with non-field-kind unresolved evidence");
-        }
-        var snapshot = GraphTypeFinals.initSpecializationSnapshot(self);
-        defer snapshot.deinit();
-        return try snapshot.sealNode(self.find(node));
-    }
-
-    /// Materialize a read-only Monotype-shaped view of a fully resolved graph
-    /// node. Open rows and unresolved checked variables have no TypeId view:
-    /// callers must continue to use their graph nodes until explicit evidence
-    /// closes them. The returned TypeId is graph-owned scratch state and must
-    /// not be written to completed Monotype output.
-    pub fn activeTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        self.requireRelationProduction();
-        self.countDiagnostic("active_type_requests");
-        if (self.imported_monos.get(node)) |imported| {
-            self.countDiagnostic("active_type_imported_hits");
-            return imported;
-        }
-        if (!try self.typeIsResolved(node)) {
-            Common.invariant("active Monotype TypeId requested for an unresolved instantiation graph node");
-        }
-        return try self.monoFor(node);
-    }
-
-    fn monoFor(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        const root = self.find(node);
-        if (!try self.typeIsResolved(root)) {
-            Common.invariant("immutable Monotype snapshot requested for an unresolved instantiation graph node");
-        }
-        self.refreshActiveSnapshots();
-        if (self.current_snapshots.get(root)) |current| {
-            self.countDiagnostic("active_snapshot_cache_hits");
-            return current;
-        }
-        self.countDiagnostic("active_snapshot_cache_misses");
-
-        var snapshot = GraphTypeFinals.initActiveSnapshot(self);
-        defer snapshot.deinit();
-        const ty = try snapshot.sealNode(root);
-        self.countDiagnosticBy("active_snapshot_nodes_materialized", snapshot.sealed.count());
-
-        var materialized = snapshot.sealed.iterator();
-        while (materialized.next()) |item| {
-            const snapshot_node = self.find(item.key_ptr.*);
-            const snapshot_ty = item.value_ptr.*;
-            const entry = try self.node_snapshots.getOrPut(snapshot_node);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.append(self.allocator, snapshot_ty);
-            try self.linked_type_nodes.put(snapshot_ty, snapshot_node);
-            try self.current_snapshots.put(snapshot_node, snapshot_ty);
-        }
-        return ty;
-    }
-
-    /// Materialize a graph node directly into a final TypeId without first
-    /// exposing or copying an active Type-shaped snapshot.
+    /// Materialize a frozen graph node directly into a final TypeId.
     pub fn sealNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
         var sealer = GraphTypeFinals.init(self);
         defer sealer.deinit();
         return try sealer.sealNode(node);
-    }
-
-    /// Materialize a TypeId into a final copy. If the TypeId is an active
-    /// snapshot, seal its current solved node instead of reusing the snapshot.
-    pub fn sealType(self: *InstGraph, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        var sealer = GraphTypeFinals.init(self);
-        defer sealer.deinit();
-        return try sealer.sealType(ty);
-    }
-
-    pub fn assertTypeHasNoActiveSnapshots(self: *InstGraph, ty: Type.TypeId) Allocator.Error!void {
-        if (try self.typeHasActiveSnapshots(ty)) {
-            Common.invariant("Monotype body draft retained an active type snapshot after sealing");
-        }
-    }
-
-    pub fn typeHasActiveSnapshots(self: *InstGraph, ty: Type.TypeId) Allocator.Error!bool {
-        var seen = self.type_set_pool.acquire();
-        defer self.type_set_pool.release(&seen);
-        return try self.typeContainsActiveSnapshot(ty, &seen);
-    }
-
-    fn typeContainsActiveSnapshot(
-        self: *InstGraph,
-        ty: Type.TypeId,
-        seen: *collections.DenseMap(Type.TypeId, void),
-    ) Allocator.Error!bool {
-        if (self.isActiveSnapshotType(ty)) return true;
-        const seen_entry = try seen.getOrPut(ty);
-        if (seen_entry.found_existing) return false;
-        return switch (self.types.get(ty)) {
-            .primitive, .erased, .zst => false,
-            .list => |elem| try self.typeContainsActiveSnapshot(elem, seen),
-            .box => |elem| try self.typeContainsActiveSnapshot(elem, seen),
-            .tuple => |items| try self.typeSpanContainsActiveSnapshot(items, seen),
-            .func => |func| blk: {
-                if (try self.typeSpanContainsActiveSnapshot(func.args, seen)) break :blk true;
-                break :blk try self.typeContainsActiveSnapshot(func.ret, seen);
-            },
-            .record => |fields| blk: {
-                const field_span = self.types.fieldSpan(fields);
-                for (0..field_span.len) |index| {
-                    const field = GuardedList.at(field_span, index);
-                    if (try self.typeContainsActiveSnapshot(field.ty, seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .tag_union => |tags| blk: {
-                const tag_span = self.types.tagSpan(tags);
-                for (0..tag_span.len) |index| {
-                    const tag = GuardedList.at(tag_span, index);
-                    if (try self.typeSpanContainsActiveSnapshot(tag.payloads, seen)) break :blk true;
-                }
-                break :blk false;
-            },
-            .named => |named| blk: {
-                if (try self.typeSpanContainsActiveSnapshot(named.args, seen)) break :blk true;
-                if (named.backing) |backing| {
-                    if (try self.typeContainsActiveSnapshot(backing.ty, seen)) break :blk true;
-                }
-                const declared_fields = self.types.declaredFieldSpan(named.declared_order);
-                for (0..declared_fields.len) |index| {
-                    const field = GuardedList.at(declared_fields, index);
-                    switch (field) {
-                        .named => {},
-                        .padding => |padding| if (try self.typeContainsActiveSnapshot(padding, seen)) break :blk true,
-                    }
-                }
-                break :blk false;
-            },
-        };
-    }
-
-    fn typeSpanContainsActiveSnapshot(
-        self: *InstGraph,
-        span: Type.Span,
-        seen: *collections.DenseMap(Type.TypeId, void),
-    ) Allocator.Error!bool {
-        const children = self.types.span(span);
-        for (0..children.len) |index| {
-            const child = GuardedList.at(children, index);
-            if (try self.typeContainsActiveSnapshot(child, seen)) return true;
-        }
-        return false;
     }
 
     fn isGeneratedPrivateRootContent(node_content: InstNode) bool {
@@ -4892,91 +4632,64 @@ pub const InstGraph = struct {
             false;
     }
 
-    fn isActiveSnapshotType(self: *InstGraph, ty: Type.TypeId) bool {
-        const raw_node = self.linked_type_nodes.get(ty) orelse return false;
-        const views = self.node_snapshots.get(raw_node) orelse return false;
-        for (views.items) |view| {
-            if (view == ty) return true;
-        }
-        return false;
-    }
-
-    /// Return the current root node for a TypeId that is one of this graph's
-    /// immutable active snapshots. Closed imported TypeIds return null.
-    pub fn activeSnapshotNode(self: *InstGraph, ty: Type.TypeId) ?NodeId {
-        const raw_node = self.linked_type_nodes.get(ty) orelse return null;
-        const views = self.node_snapshots.get(raw_node) orelse return null;
-        for (views.items) |view| {
-            if (view == ty) return self.find(raw_node);
-        }
-        return null;
+    pub fn nodeIsGeneratedNominal(self: *InstGraph, node: NodeId) bool {
+        return isGeneratedPrivateRootContent(self.content(node));
     }
 };
 
 /// Shared finalization state for materializing graph nodes into immutable
 /// Monotype type ids.
 pub const GraphTypeFinals = struct {
-    const Mode = enum {
-        final,
-        active_snapshot,
-        provisional_snapshot,
-        specialization_snapshot,
-    };
-
     graph: *InstGraph,
-    mode: Mode,
     sealed: collections.DenseMap(NodeId, Type.TypeId),
-    sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
+    generated_types_by_identity: ?*std.AutoHashMap(names.TypeDigest, Type.TypeId),
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
         graph.requireFrozenRelations();
-        return initUnchecked(graph, .final);
+        return initUnchecked(graph);
     }
 
-    fn initActiveSnapshot(graph: *InstGraph) GraphTypeFinals {
-        graph.requireRelationProduction();
-        return initUnchecked(graph, .active_snapshot);
+    pub fn initWithGeneratedTypeInterner(
+        graph: *InstGraph,
+        generated_types_by_identity: *std.AutoHashMap(names.TypeDigest, Type.TypeId),
+    ) GraphTypeFinals {
+        graph.requireFrozenRelations();
+        var finals = initUnchecked(graph);
+        finals.generated_types_by_identity = generated_types_by_identity;
+        return finals;
     }
 
-    fn initProvisionalSnapshot(graph: *InstGraph) GraphTypeFinals {
-        graph.requireRelationProduction();
-        return initUnchecked(graph, .provisional_snapshot);
-    }
-
-    fn initSpecializationSnapshot(graph: *InstGraph) GraphTypeFinals {
-        graph.requireRelationProduction();
-        return initUnchecked(graph, .specialization_snapshot);
-    }
-
-    fn initUnchecked(graph: *InstGraph, mode: Mode) GraphTypeFinals {
+    fn initUnchecked(graph: *InstGraph) GraphTypeFinals {
         return .{
             .graph = graph,
-            .mode = mode,
             .sealed = collections.DenseMap(NodeId, Type.TypeId).init(graph.allocator),
-            .sealed_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(graph.allocator),
+            .generated_types_by_identity = null,
         };
     }
 
     pub fn deinit(self: *GraphTypeFinals) void {
-        self.sealed_types.deinit();
         self.sealed.deinit();
-    }
-
-    pub fn sealType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        if (self.graph.linked_type_nodes.get(ty)) |raw_node| {
-            if (self.graph.node_snapshots.get(raw_node)) |views| {
-                for (views.items) |view| {
-                    if (view == ty) return try self.sealNode(raw_node);
-                }
-            }
-        }
-        if (try self.typeHasActiveSnapshots(ty)) return try self.sealStoreType(ty);
-        return ty;
     }
 
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
         const node = self.graph.find(raw_node);
         if (self.sealed.get(node)) |existing| return existing;
+
+        const node_content = self.graph.nodes.items[@intFromEnum(node)];
+        const generated_identity = if (InstGraph.isGeneratedPrivateRootContent(node_content))
+            node_content.named.def.generated orelse
+                Common.invariant("generated-private nominal reached sealing without its producer identity")
+        else
+            null;
+        if (generated_identity) |identity| {
+            if (self.generated_types_by_identity) |interner| {
+                if (interner.get(identity)) |existing| {
+                    try self.sealed.put(node, existing);
+                    self.graph.countDiagnostic("generated_type_store_hits");
+                    return existing;
+                }
+            }
+        }
 
         const Context = struct {
             sealer: *GraphTypeFinals,
@@ -4987,7 +4700,31 @@ pub const GraphTypeFinals = struct {
                 return try context.sealer.sealContent(context.node);
             }
         };
-        return try self.graph.types.addRecursive(Context{ .sealer = self, .node = node }, Context.fill);
+        const sealed = try self.graph.types.addRecursive(Context{ .sealer = self, .node = node }, Context.fill);
+        if (generated_identity) |identity| {
+            if (self.generated_types_by_identity) |interner| {
+                const entry = try interner.getOrPut(identity);
+                if (entry.found_existing) {
+                    Common.invariant("generated Monotype identity raced during single-threaded sealing");
+                }
+                entry.value_ptr.* = sealed;
+                self.graph.countDiagnostic("generated_type_store_misses");
+            }
+        }
+        return sealed;
+    }
+
+    /// Commit every completed producer-owned nominal before nested
+    /// specialization sealing can request the same content identity.
+    pub fn commitGeneratedNominalRoots(self: *GraphTypeFinals) Allocator.Error!void {
+        var seen = collections.DenseMap(NodeId, void).init(self.graph.allocator);
+        defer seen.deinit();
+        for (self.graph.generated_nominal_nodes.items) |registered| {
+            const node = self.graph.find(registered);
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            _ = try self.sealNode(node);
+        }
     }
 
     fn sealContent(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.Content {
@@ -5006,73 +4743,24 @@ pub const GraphTypeFinals = struct {
             .empty_record => .{ .record = Type.Span.empty() },
             .tag_union => .{ .tag_union = try self.sealTagRow(node) },
             .record => .{ .record = try self.sealRecordRow(node) },
-            .named => |named| .{ .named = .{
-                .named_type = named.named_type,
-                .def = named.def,
-                .kind = named.kind,
-                .builtin_owner = named.builtin_owner,
-                .args = try self.sealNodeSpan(named.args),
-                .backing = if (named.backing) |raw_backing| backing: {
-                    const structural = try self.graph.structuralBackingNode(raw_backing.node, named);
-                    break :backing .{
-                        .ty = try self.sealNode(structural.node),
-                        .use = raw_backing.use,
-                        .authority = raw_backing.authority,
-                    };
-                } else null,
-                .declared_order = try self.sealDeclaredFieldSpan(named.declared_order),
-            } },
-            .erased => |digest| .{ .erased = digest },
-            .zst => .zst,
-        };
-    }
-
-    fn typeHasActiveSnapshots(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!bool {
-        var seen = self.graph.type_set_pool.acquire();
-        defer self.graph.type_set_pool.release(&seen);
-        return try self.graph.typeContainsActiveSnapshot(ty, &seen);
-    }
-
-    fn sealStoreType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        if (self.sealed_types.get(ty)) |existing| return existing;
-
-        const Context = struct {
-            sealer: *GraphTypeFinals,
-            ty: Type.TypeId,
-
-            fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
-                try context.sealer.sealed_types.put(context.ty, reserved);
-                return try context.sealer.sealStoreContent(context.ty);
-            }
-        };
-        return try self.graph.types.addRecursive(Context{ .sealer = self, .ty = ty }, Context.fill);
-    }
-
-    fn sealStoreContent(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.Content {
-        return switch (self.graph.types.get(ty)) {
-            .primitive => |primitive| .{ .primitive = primitive },
-            .list => |elem| .{ .list = try self.sealType(elem) },
-            .box => |elem| .{ .box = try self.sealType(elem) },
-            .tuple => |items| .{ .tuple = try self.sealTypeSpan(items) },
-            .func => |func| .{ .func = .{
-                .args = try self.sealTypeSpan(func.args),
-                .ret = try self.sealType(func.ret),
-            } },
-            .tag_union => |tags| .{ .tag_union = try self.sealStoredTagSpan(tags) },
-            .record => |fields| .{ .record = try self.sealStoredFieldSpan(fields) },
-            .named => |named| .{ .named = .{
-                .named_type = named.named_type,
-                .def = named.def,
-                .kind = named.kind,
-                .builtin_owner = named.builtin_owner,
-                .args = try self.sealTypeSpan(named.args),
-                .backing = if (named.backing) |backing| .{
-                    .ty = try self.sealType(backing.ty),
-                    .use = backing.use,
-                    .authority = backing.authority,
-                } else null,
-                .declared_order = try self.sealStoredDeclaredFieldSpan(named.declared_order),
-            } },
+            .named => |named| named_content: {
+                break :named_content .{ .named = .{
+                    .named_type = named.named_type,
+                    .def = named.def,
+                    .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
+                    .args = try self.sealNodeSpan(named.args),
+                    .backing = if (named.backing) |raw_backing| backing: {
+                        const structural = try self.graph.structuralBackingNode(raw_backing.node, named);
+                        break :backing .{
+                            .ty = try self.sealNode(structural.node),
+                            .use = raw_backing.use,
+                            .authority = raw_backing.authority,
+                        };
+                    } else null,
+                    .declared_order = try self.sealDeclaredFieldSpan(named.declared_order),
+                } };
+            },
             .erased => |digest| .{ .erased = digest },
             .zst => .zst,
         };
@@ -5088,16 +4776,6 @@ pub const GraphTypeFinals = struct {
         return try self.graph.types.addSpan(sealed_nodes);
     }
 
-    fn sealTypeSpan(self: *GraphTypeFinals, span: Type.Span) Allocator.Error!Type.Span {
-        const sealed = try GuardedList.dupe(self.graph.allocator, Type.TypeId, self.graph.types.span(span));
-        defer self.graph.allocator.free(sealed);
-        if (sealed.len == 0) return .empty();
-        for (sealed) |*ty| {
-            ty.* = try self.sealType(ty.*);
-        }
-        return try self.graph.types.addSpan(sealed);
-    }
-
     fn sealRecordRow(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.Span {
         const flat = try self.graph.flattenRecordRow(node);
         if (flat.fields.len == 0) return .empty();
@@ -5105,31 +4783,7 @@ pub const GraphTypeFinals = struct {
         defer self.graph.allocator.free(fields);
         for (flat.fields, 0..) |field, index| {
             if (field.kind == .undetermined and self.graph.resolvedFieldKind(field.kind) == null) {
-                const source_node = field.value_ty orelse
-                    Common.invariant("undetermined graph field carried no source value type");
-                const source_ty = try self.sealNode(source_node);
-                fields[index] = switch (self.mode) {
-                    .provisional_snapshot => .{
-                        .name = field.name,
-                        // No runtime slot exists yet. The explicit kind state
-                        // makes this a provisional structural cell, so mirror
-                        // the source type instead of materializing the
-                        // unresolved slot node.
-                        .ty = source_ty,
-                        .value_ty = source_ty,
-                        .kind_state = .undetermined,
-                        .default = null,
-                    },
-                    .specialization_snapshot => .{
-                        .name = field.name,
-                        .ty = source_ty,
-                        .value_ty = null,
-                        .kind_state = .resolved,
-                        .default = null,
-                    },
-                    .final, .active_snapshot => Common.invariant("unresolved record field kind reached Monotype sealing"),
-                };
-                continue;
+                Common.invariant("unresolved record field kind reached Monotype sealing");
             }
             fields[index] = .{
                 .name = field.name,
@@ -5142,20 +4796,8 @@ pub const GraphTypeFinals = struct {
                     try self.sealNode(value_ty)
                 else
                     null,
-                .kind_state = .resolved,
                 .default = field.default,
             };
-        }
-        return try self.graph.types.addRecordFields(self.graph.name_store, fields);
-    }
-
-    fn sealStoredFieldSpan(self: *GraphTypeFinals, span: Type.Span) Allocator.Error!Type.Span {
-        const fields = try GuardedList.dupe(self.graph.allocator, Type.Field, self.graph.types.fieldSpan(span));
-        defer self.graph.allocator.free(fields);
-        if (fields.len == 0) return .empty();
-        for (fields) |*field| {
-            field.ty = try self.sealType(field.ty);
-            if (field.value_ty) |value_ty| field.value_ty = try self.sealType(value_ty);
         }
         return try self.graph.types.addRecordFields(self.graph.name_store, fields);
     }
@@ -5175,16 +4817,6 @@ pub const GraphTypeFinals = struct {
         return try self.graph.types.addTagVariants(self.graph.name_store, tags);
     }
 
-    fn sealStoredTagSpan(self: *GraphTypeFinals, span: Type.Span) Allocator.Error!Type.Span {
-        const tags = try GuardedList.dupe(self.graph.allocator, Type.Tag, self.graph.types.tagSpan(span));
-        defer self.graph.allocator.free(tags);
-        if (tags.len == 0) return .empty();
-        for (tags) |*tag| {
-            tag.payloads = try self.sealTypeSpan(tag.payloads);
-        }
-        return try self.graph.types.addTagVariants(self.graph.name_store, tags);
-    }
-
     fn sealDeclaredFieldSpan(self: *GraphTypeFinals, fields: []const InstDeclaredField) Allocator.Error!Type.Span {
         if (fields.len == 0) return .empty();
         const sealed = try self.graph.allocator.alloc(Type.DeclaredField, fields.len);
@@ -5197,105 +4829,67 @@ pub const GraphTypeFinals = struct {
         }
         return try self.graph.types.addDeclaredFields(sealed);
     }
-
-    fn sealStoredDeclaredFieldSpan(self: *GraphTypeFinals, span: Type.Span) Allocator.Error!Type.Span {
-        const sealed = try GuardedList.dupe(self.graph.allocator, Type.DeclaredField, self.graph.types.declaredFieldSpan(span));
-        defer self.graph.allocator.free(sealed);
-        if (sealed.len == 0) return .empty();
-        for (sealed) |*field| {
-            switch (field.*) {
-                .named => {},
-                .padding => |ty| field.* = .{ .padding = try self.sealType(ty) },
-            }
-        }
-        return try self.graph.types.addDeclaredFields(sealed);
-    }
 };
 
-fn instIteratorOwnerPair(
-    left: ?static_dispatch.BuiltinOwner,
-    right: ?static_dispatch.BuiltinOwner,
-) bool {
-    const owner = left orelse right orelse return false;
-    if (!static_dispatch.isIteratorOwner(owner)) return false;
-    if (left) |left_owner| if (left_owner != owner) return false;
-    if (right) |right_owner| if (right_owner != owner) return false;
-    return true;
-}
-
-fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
-    if (left) |left_digest| {
-        const right_digest = right orelse return false;
-        return std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes);
-    }
-    return right == null;
-}
-
-const OpenFunctionInterfaceShapeWriter = struct {
+/// Writes the content-addressed content identity of a generated producer input.
+/// Generated-private nominals are atomic digest leaves.
+const GeneratedIdentityWriter = struct {
     graph: *InstGraph,
     hasher: std.crypto.hash.sha2.Sha256,
-    unresolved_ids: collections.DenseMap(NodeId, u32),
     visiting: std.ArrayList(NodeId),
-    next_unresolved: u32 = 0,
-    output: ?[]u8 = null,
-    output_len: usize = 0,
 
-    fn init(graph: *InstGraph) OpenFunctionInterfaceShapeWriter {
+    fn init(graph: *InstGraph) GeneratedIdentityWriter {
         return .{
             .graph = graph,
             .hasher = std.crypto.hash.sha2.Sha256.init(.{}),
-            .unresolved_ids = collections.DenseMap(NodeId, u32).init(graph.allocator),
             .visiting = .empty,
         };
     }
 
-    fn initWithOutput(graph: *InstGraph, output: []u8) OpenFunctionInterfaceShapeWriter {
-        var writer = init(graph);
-        writer.output = output;
-        return writer;
-    }
-
-    fn deinit(self: *OpenFunctionInterfaceShapeWriter) void {
+    fn deinit(self: *GeneratedIdentityWriter) void {
         self.visiting.deinit(self.graph.allocator);
-        self.unresolved_ids.deinit();
     }
 
-    fn writeFunctionInterface(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) Allocator.Error!void {
-        self.writeBytes("roc.monotype.open_function_interface_shape.v2");
-        try self.writeFunctionNodes(try self.graph.functionNodes(node));
-        if (self.graph.requestSourceInterface(node)) |source| {
-            self.writeBytes("source-interface");
-            try self.writeFunctionNodes(try self.graph.functionNodes(source));
-        } else {
-            self.writeBytes("no-source-interface");
-        }
-    }
-
-    fn writeFunctionNodes(self: *OpenFunctionInterfaceShapeWriter, function: FunctionNodes) Allocator.Error!void {
-        self.writeU32(@intCast(function.args.len));
-        for (function.args) |arg| try self.writeNode(arg);
-        try self.writeNode(function.ret);
-    }
-
-    fn writeNode(self: *OpenFunctionInterfaceShapeWriter, raw_node: NodeId) Allocator.Error!void {
+    fn writeNode(self: *GeneratedIdentityWriter, raw_node: NodeId) Allocator.Error!void {
+        self.graph.countDiagnostic("generated_identity_input_nodes_hashed");
         const node = self.graph.find(raw_node);
         const content = self.graph.nodes.items[@intFromEnum(node)];
-        self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
-        self.writeU8(if (self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
+        if (InstGraph.isGeneratedPrivateRootContent(content)) {
+            const digest = content.named.def.generated orelse
+                Common.invariant("generated-private identity writer encountered an unstamped nominal");
+            self.writeBytes("generated-private-nominal");
+            self.writeBytes(&digest.bytes);
+            return;
+        }
         if (content == .redirect) unreachable;
         if (content == .unresolved) {
-            const entry = try self.unresolved_ids.getOrPut(node);
-            if (!entry.found_existing) {
-                entry.value_ptr.* = self.next_unresolved;
-                self.next_unresolved += 1;
-                self.writeBytes("unresolved-new");
-                self.writeU32(entry.value_ptr.*);
-                self.writeVariable(content.unresolved);
-            } else {
-                self.writeBytes("unresolved-ref");
-                self.writeU32(entry.value_ptr.*);
-            }
-            return;
+            // This is the final producer boundary for the identity input.
+            // Contextual substitutions have already run; if the checker
+            // deliberately left a leaf polymorphic (for example the item
+            // of an entirely empty iterator), commit its declared language
+            // default at the exact leaf encountered by this hash traversal.
+            // There is no separate probe or graph scan, and the node cannot
+            // be refined after it becomes part of a generated identity.
+            const completed: InstNode = if (content.unresolved.numeric_default_phase) |phase| blk: {
+                const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+                    Common.invariant("checking-finalized numeric variable reached generated identity production");
+                break :blk switch (target) {
+                    .dec => .{ .primitive = .dec },
+                    .str => .{ .primitive = .str },
+                };
+            } else if (content.unresolved.row_default) |row_default| switch (row_default) {
+                .empty_record => .empty_record,
+                .empty_tag_union => .empty_tag_union,
+            } else if (content.unresolved.specialization_default) |default| switch (default) {
+                .empty_tag_union => .empty_tag_union,
+            } else switch (content.unresolved.origin) {
+                .checked_variable => Common.invariant("generated identity input contained a checked variable without an explicit default"),
+                .row_extension => Common.invariant("generated identity input contained a row extension without its checked default"),
+                .construction_placeholder => Common.invariant("generated identity input contained an incomplete construction placeholder"),
+                .producer_placeholder => Common.invariant("generated identity input contained an incomplete producer placeholder"),
+            };
+            try self.graph.setContent(node, completed);
+            return self.writeNode(node);
         }
 
         for (self.visiting.items, 0..) |open_node, position| {
@@ -5365,12 +4959,8 @@ const OpenFunctionInterfaceShapeWriter = struct {
                 self.writeBytes("named");
                 self.writeBytes(&named.named_type.module.bytes);
                 self.writeTypeDef(named.def);
-                self.writeBytes(@tagName(named.kind));
                 self.writeOptionalBuiltinOwner(named.builtin_owner);
                 try self.writeNodeSpan(named.args);
-                try self.writeOptionalBacking(named.backing);
-                try self.writeDeclaredFieldSpan(named.declared_order);
-                try self.writeOptionalGeneratedIterator(named.generated_iterator);
             },
             .erased => |digest| {
                 self.writeBytes("erased");
@@ -5380,98 +4970,23 @@ const OpenFunctionInterfaceShapeWriter = struct {
         }
     }
 
-    fn hasRecursiveValueSlot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) bool {
-        for (self.graph.recursive_argument_slots.items) |slot| {
-            if (self.graph.find(slot) == node) return true;
-        }
-        return false;
-    }
-
-    fn hasForcedDynamicIteratorRoot(self: *OpenFunctionInterfaceShapeWriter, node: NodeId) bool {
-        for (self.graph.forced_dynamic_iterator_roots.items) |root| {
-            if (self.graph.find(root) == node) return true;
-        }
-        return false;
-    }
-
-    fn writeNodeSpan(self: *OpenFunctionInterfaceShapeWriter, nodes: []const NodeId) Allocator.Error!void {
+    fn writeNodeSpan(self: *GeneratedIdentityWriter, nodes: []const NodeId) Allocator.Error!void {
         self.writeU32(@intCast(nodes.len));
         for (nodes) |node| try self.writeNode(node);
     }
 
-    fn writeVariable(self: *OpenFunctionInterfaceShapeWriter, variable: InstVariable) void {
-        self.writeBytes(@tagName(variable.origin));
-        self.writeOptionalNumericDefaultPhase(variable.numeric_default_phase);
-        self.writeOptionalRowDefault(variable.row_default);
-    }
-
-    fn writeTypeDef(self: *OpenFunctionInterfaceShapeWriter, def: Type.TypeDef) void {
+    fn writeTypeDef(self: *GeneratedIdentityWriter, def: Type.TypeDef) void {
         self.writeBytes(self.graph.name_store.moduleIdentityBytes(def.module));
         self.writeOptionalU32(def.source_decl);
         if (def.source_decl == null) {
             self.writeBytes(self.graph.name_store.typeNameText(def.type_name));
         }
         self.writeOptionalDigest(def.generated);
-        self.writeBytes(@tagName(def.iterator_representation));
-        self.writeBytes(@tagName(def.iterator_kind));
-        self.writeU8(def.iterator_depth);
         self.writeOptionalIteratorTopology(def.iterator_topology);
     }
 
-    fn writeOptionalBacking(self: *OpenFunctionInterfaceShapeWriter, backing: ?InstBacking) Allocator.Error!void {
-        if (backing) |actual| {
-            self.writeU8(1);
-            try self.writeBacking(actual);
-        } else {
-            self.writeU8(0);
-        }
-    }
-
-    fn writeBacking(self: *OpenFunctionInterfaceShapeWriter, backing: InstBacking) Allocator.Error!void {
-        self.writeBytes(@tagName(backing.use));
-        self.writeBytes(@tagName(backing.authority));
-        try self.writeNode(backing.node);
-    }
-
-    fn writeDeclaredFieldSpan(
-        self: *OpenFunctionInterfaceShapeWriter,
-        declared_order: []const InstDeclaredField,
-    ) Allocator.Error!void {
-        self.writeU32(@intCast(declared_order.len));
-        for (declared_order) |entry| {
-            switch (entry) {
-                .named => |field_name| {
-                    self.writeBytes("named");
-                    self.writeBytes(self.graph.name_store.recordFieldLabelText(field_name));
-                },
-                .padding => |padding| {
-                    self.writeBytes("padding");
-                    try self.writeNode(padding);
-                },
-            }
-        }
-    }
-
-    fn writeOptionalGeneratedIterator(
-        self: *OpenFunctionInterfaceShapeWriter,
-        generated_iterator: ?InstGeneratedIterator,
-    ) Allocator.Error!void {
-        const generated = generated_iterator orelse {
-            self.writeU8(0);
-            return;
-        };
-        self.writeU8(1);
-        self.writeOptionalDigest(generated.callable_evidence);
-        self.writeBytes(&generated.public_source.named_type.module.bytes);
-        self.writeTypeDef(generated.public_source.def);
-        self.writeBytes(@tagName(generated.public_source.kind));
-        self.writeBytes(@tagName(generated.public_source.builtin_owner));
-        try self.writeBacking(generated.public_source.backing);
-        try self.writeDeclaredFieldSpan(generated.public_source.declared_order);
-    }
-
     fn writeOptionalIteratorTopology(
-        self: *OpenFunctionInterfaceShapeWriter,
+        self: *GeneratedIdentityWriter,
         topology: ?Type.IteratorTopology,
     ) void {
         const value = topology orelse {
@@ -5491,7 +5006,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
     }
 
     fn writeOptionalBuiltinOwner(
-        self: *OpenFunctionInterfaceShapeWriter,
+        self: *GeneratedIdentityWriter,
         owner: ?static_dispatch.BuiltinOwner,
     ) void {
         if (owner) |actual| {
@@ -5502,31 +5017,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
         }
     }
 
-    fn writeOptionalNumericDefaultPhase(
-        self: *OpenFunctionInterfaceShapeWriter,
-        phase: ?checked.NumericDefaultPhase,
-    ) void {
-        if (phase) |actual| {
-            self.writeU8(1);
-            self.writeBytes(@tagName(actual));
-        } else {
-            self.writeU8(0);
-        }
-    }
-
-    fn writeOptionalRowDefault(
-        self: *OpenFunctionInterfaceShapeWriter,
-        row_default: ?checked.RowDefault,
-    ) void {
-        if (row_default) |actual| {
-            self.writeU8(1);
-            self.writeBytes(@tagName(actual));
-        } else {
-            self.writeU8(0);
-        }
-    }
-
-    fn writeOptionalDigest(self: *OpenFunctionInterfaceShapeWriter, digest: ?names.TypeDigest) void {
+    fn writeOptionalDigest(self: *GeneratedIdentityWriter, digest: ?names.TypeDigest) void {
         if (digest) |actual| {
             self.writeU8(1);
             self.writeBytes(&actual.bytes);
@@ -5535,7 +5026,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
         }
     }
 
-    fn writeOptionalU32(self: *OpenFunctionInterfaceShapeWriter, value: ?u32) void {
+    fn writeOptionalU32(self: *GeneratedIdentityWriter, value: ?u32) void {
         if (value) |actual| {
             self.writeU8(1);
             self.writeU32(actual);
@@ -5544,29 +5035,22 @@ const OpenFunctionInterfaceShapeWriter = struct {
         }
     }
 
-    fn writeBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) void {
+    fn writeBytes(self: *GeneratedIdentityWriter, bytes: []const u8) void {
         self.writeU32(@intCast(bytes.len));
         self.writeRawBytes(bytes);
     }
 
-    fn writeU8(self: *OpenFunctionInterfaceShapeWriter, value: u8) void {
+    fn writeU8(self: *GeneratedIdentityWriter, value: u8) void {
         self.writeRawBytes(&.{value});
     }
 
-    fn writeU32(self: *OpenFunctionInterfaceShapeWriter, value: u32) void {
+    fn writeU32(self: *GeneratedIdentityWriter, value: u32) void {
         var little = std.mem.nativeToLittle(u32, value);
         self.writeRawBytes(std.mem.asBytes(&little));
     }
 
-    fn writeRawBytes(self: *OpenFunctionInterfaceShapeWriter, bytes: []const u8) void {
+    fn writeRawBytes(self: *GeneratedIdentityWriter, bytes: []const u8) void {
         self.hasher.update(bytes);
-        if (self.output) |output| {
-            if (self.output_len > output.len or bytes.len > output.len - self.output_len) {
-                Common.invariant("open function-interface shape exceeded its measured byte count");
-            }
-            @memcpy(output[self.output_len..][0..bytes.len], bytes);
-        }
-        self.output_len += bytes.len;
     }
 };
 
@@ -5583,11 +5067,23 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
         .empty_record => return .{ .record = Type.Span.empty() },
         .empty_tag_union => return .{ .tag_union = Type.Span.empty() },
     };
-    return switch (variable.origin) {
-        .checked_variable => .{ .tag_union = Type.Span.empty() },
-        .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),
-        .placeholder => Common.invariant("instantiation placeholder reached Monotype materialization"),
+    if (variable.specialization_default) |default| switch (default) {
+        .empty_tag_union => return .{ .tag_union = Type.Span.empty() },
     };
+    return switch (variable.origin) {
+        .checked_variable => Common.invariant("checked variable reached Monotype materialization without an explicit default"),
+        .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),
+        .construction_placeholder => Common.invariant("instantiation construction placeholder reached Monotype materialization"),
+        .producer_placeholder => Common.invariant("instantiation producer placeholder reached Monotype materialization"),
+    };
+}
+
+fn instTagLessThan(name_store: *const names.NameStore, lhs: InstTag, rhs: InstTag) bool {
+    return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
+}
+
+fn instFieldLessThan(name_store: *const names.NameStore, lhs: InstField, rhs: InstField) bool {
+    return name_store.recordFieldLabelTextLessThan(lhs.name, rhs.name);
 }
 
 /// Orders record fields by label text for layout-stable sorting.
@@ -5598,21 +5094,6 @@ pub fn recordFieldLessThan(name_store: *const names.NameStore, lhs: Type.Field, 
 /// Orders tag union tags by label text for layout-stable sorting.
 pub fn tagLessThan(name_store: *const names.NameStore, lhs: Type.Tag, rhs: Type.Tag) bool {
     return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
-}
-
-fn tagPayloadCount(tags: []const InstTag) usize {
-    var count: usize = 0;
-    for (tags) |tag| count += tag.payloads.len;
-    return count;
-}
-
-fn tagPayloadAt(tags: []const InstTag, raw_index: usize) NodeId {
-    var index = raw_index;
-    for (tags) |tag| {
-        if (index < tag.payloads.len) return tag.payloads[index];
-        index -= tag.payloads.len;
-    }
-    Common.invariant("generated iterator depth tag payload index was out of bounds");
 }
 
 /// Panics with the given message if a sorted field list contains a repeated label.
@@ -5689,6 +5170,13 @@ fn instFieldDefaultEql(left: ?Type.FieldDefault, right: ?Type.FieldDefault) bool
     return left_default.module == right_default.module and left_default.expr_node == right_default.expr_node;
 }
 
+fn updateFieldDefaultHash(hasher: *std.hash.Wyhash, default: Type.FieldDefault) void {
+    var module = std.mem.nativeToLittle(u32, @intFromEnum(default.module));
+    hasher.update(std.mem.asBytes(&module));
+    var expr_node = std.mem.nativeToLittle(u32, default.expr_node);
+    hasher.update(std.mem.asBytes(&expr_node));
+}
+
 fn instNamedEql(left: InstNamed, right: InstNamed) bool {
     return std.meta.eql(left.named_type, right.named_type) and
         std.meta.eql(left.def, right.def) and
@@ -5748,29 +5236,18 @@ test "graph diagnostics count authoritative operations" {
     var diagnostics: GraphDiagnostics = .{};
     graph.setDiagnostics(&diagnostics);
 
-    const boolean = try graph.newNode(.{ .primitive = .bool });
-    _ = try graph.activeTypeViewForNode(boolean);
-    _ = try graph.activeTypeViewForNode(boolean);
-
+    _ = try graph.newNode(.{ .primitive = .bool });
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const str = try graph.newNode(.{ .primitive = .str });
     try graph.unify(unresolved, str);
-    try std.testing.expect(!try graph.containsGeneratedPrivate(boolean));
-    try std.testing.expect(!try graph.containsFinishedMono(boolean));
+    try graph.freezeRelations();
+    try std.testing.expect(!graph.finalizesAsClosedEmptyTagUnion(str));
+    try std.testing.expect(!graph.finalizesAsClosedEmptyTagUnion(unresolved));
 
     try std.testing.expectEqual(@as(u64, 3), diagnostics.nodes_created);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.unify_requests);
     try std.testing.expectEqual(@as(u64, 1), diagnostics.class_unions);
-    try std.testing.expectEqual(@as(u64, 2), diagnostics.active_type_requests);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_cache_hits);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_cache_misses);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_nodes_materialized);
-    try std.testing.expect(diagnostics.active_snapshot_invalidations >= 1);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.active_snapshot_entries_invalidated);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_scans);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.finished_mono_scans);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.finished_mono_nodes_visited);
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.closed_empty_finalization_requests);
 }
 
 test "completed monotype program view does not expose instantiation graph nodes" {
@@ -5778,7 +5255,7 @@ test "completed monotype program view does not expose instantiation graph nodes"
     comptime assertNoNodeId(Ast.ProgramView, "Ast.ProgramView");
 }
 
-test "resolved graph type detection does not default open cells" {
+test "resolved graph type detection does not default explicit open cells" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -5793,17 +5270,10 @@ test "resolved graph type detection does not default open cells" {
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const open_list = try graph.newNode(.{ .list = unresolved });
     try std.testing.expect(!try graph.typeIsResolved(open_list));
-    try std.testing.expect(try graph.typeCanSealFromExplicitEvidence(open_list));
-
-    const unmarked = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    try std.testing.expect(try graph.typeCanSealFromExplicitEvidence(unmarked));
-    const placeholder = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try std.testing.expect(!try graph.typeCanSealFromExplicitEvidence(placeholder));
 
     const str = try graph.newNode(.{ .primitive = .str });
     try graph.unify(unresolved, str);
     try std.testing.expect(try graph.typeIsResolved(open_list));
-    try std.testing.expect(try graph.typeCanSealFromExplicitEvidence(open_list));
 }
 
 test "open draft function interfaces use related graph classes directly" {
@@ -5821,32 +5291,17 @@ test "open draft function interfaces use related graph classes directly" {
     const left = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{arg}), .ret = ret } });
     const right = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{arg}), .ret = ret } });
     try std.testing.expect(graph.sameFunctionInterface(left, right));
-    var interface = try graph.functionInterfaceIterator(left);
-    try std.testing.expectEqual(arg, interface.next().?);
-    try std.testing.expectEqual(ret, interface.next().?);
-    try std.testing.expectEqual(null, interface.next());
 
     const older_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     try graph.unify(arg, older_arg);
-    var aliases = graph.classMemberIterator(arg);
-    var saw_arg = false;
-    var saw_older_arg = false;
-    var alias_count: usize = 0;
-    while (aliases.next()) |alias| {
-        alias_count += 1;
-        saw_arg = saw_arg or alias == arg;
-        saw_older_arg = saw_older_arg or alias == older_arg;
-    }
-    try std.testing.expectEqual(@as(usize, 2), alias_count);
-    try std.testing.expect(saw_arg);
-    try std.testing.expect(saw_older_arg);
+    try std.testing.expect(graph.sameFunctionInterface(left, right));
 
     const other_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const other = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{other_arg}), .ret = ret } });
     try std.testing.expect(!graph.sameFunctionInterface(left, other));
 }
 
-test "open function interface shape snapshot alpha-normalizes variables and survives refinement" {
+test "function request identity distinguishes request seeds from produced edges" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -5856,44 +5311,32 @@ test "open function interface shape snapshot alpha-normalizes variables and surv
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const left_var = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const left = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ left_var, left_var }),
-        .ret = left_var,
-    } });
-    const equivalent_var = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const equivalent = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ equivalent_var, equivalent_var }),
-        .ret = equivalent_var,
-    } });
+    const arg = try graph.newNode(.{ .primitive = .u64 });
+    const ret = try graph.newNode(.{ .primitive = .bool });
+    const left = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{arg}), .ret = ret } });
+    const right = try graph.newNode(.{ .func = .{ .args = try graph.arena().dupe(NodeId, &.{arg}), .ret = ret } });
+    graph.registerFunctionResultRelation(left, .produced);
+    graph.registerFunctionResultRelation(right, .produced);
+    const key = CheckedBaseKey{
+        .module_bytes = [_]u8{0xA5} ** 32,
+        .checked = testCheckedTypeId(7),
+    };
+    try graph.recordDirectRequestSelections(left, &.{.{
+        .base = key,
+        .produced = ret,
+        .authority = .request,
+    }});
+    try graph.recordDirectRequestSelections(right, &.{.{
+        .base = key,
+        .produced = ret,
+        .authority = .produced,
+    }});
 
-    const left_shape = try graph.openFunctionInterfaceShape(left);
-    const equivalent_shape = try graph.openFunctionInterfaceShape(equivalent);
-    try std.testing.expectEqualSlices(u8, &left_shape.digest.bytes, &equivalent_shape.digest.bytes);
-    try std.testing.expectEqualSlices(u8, left_shape.bytes, equivalent_shape.bytes);
-    var exact_bytes_digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(left_shape.bytes, &exact_bytes_digest, .{});
-    try std.testing.expectEqualSlices(u8, &left_shape.digest.bytes, &exact_bytes_digest);
-
-    const distinct_first = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const distinct_second = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const distinct = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ distinct_first, distinct_second }),
-        .ret = distinct_first,
-    } });
-    const distinct_shape = try graph.openFunctionInterfaceShape(distinct);
-    try std.testing.expect(!std.mem.eql(u8, &left_shape.digest.bytes, &distinct_shape.digest.bytes));
-    try std.testing.expect(!std.mem.eql(u8, left_shape.bytes, distinct_shape.bytes));
-
-    const stored_equivalent_bytes = equivalent_shape.bytes;
-    const str = try graph.newNode(.{ .primitive = .str });
-    try graph.unify(equivalent_var, str);
-    const refined_shape = try graph.openFunctionInterfaceShape(equivalent);
-    try std.testing.expect(!std.mem.eql(u8, stored_equivalent_bytes, refined_shape.bytes));
-    try std.testing.expectEqualSlices(u8, left_shape.bytes, stored_equivalent_bytes);
+    try std.testing.expect(!graph.sameDirectRequestSelections(left, right));
+    try std.testing.expect(!try graph.sameFunctionRequestInputs(left, right));
 }
 
-test "open function interface shape preserves defaults and recursive structure" {
+test "completed specialization requests retain distinct occurrence roots" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -5903,119 +5346,82 @@ test "open function interface shape preserves defaults and recursive structure" 
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const ret = try graph.newNode(.{ .primitive = .bool });
-    const record_default = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_record) });
-    const record_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{record_default}),
-        .ret = ret,
-    } });
-    const tag_default = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
-    const tag_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{tag_default}),
-        .ret = ret,
-    } });
-    const record_shape = try graph.openFunctionInterfaceShape(record_fn);
-    const tag_shape = try graph.openFunctionInterfaceShape(tag_fn);
-    try std.testing.expect(!std.mem.eql(u8, record_shape.bytes, tag_shape.bytes));
-
-    const left_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(left_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{left_cycle}) });
-    const left_recursive = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{left_cycle}),
-        .ret = ret,
-    } });
-    const right_cycle = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
-    try graph.setContent(right_cycle, .{ .tuple = try graph.arena().dupe(NodeId, &.{right_cycle}) });
-    const right_recursive = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{right_cycle}),
-        .ret = ret,
-    } });
-    const left_recursive_shape = try graph.openFunctionInterfaceShape(left_recursive);
-    const right_recursive_shape = try graph.openFunctionInterfaceShape(right_recursive);
-    try std.testing.expectEqualSlices(u8, left_recursive_shape.bytes, right_recursive_shape.bytes);
-}
-
-test "open function interface shape includes producer-owned graph evidence" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const ret = try graph.newNode(.{ .primitive = .bool });
-    const left_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const arg = try graph.newNode(.{ .primitive = .u64 });
+    const produced_ret = try graph.newNode(.{ .primitive = .bool });
+    const left_ret = try graph.newNode(.{ .unresolved = InstVariable.producerPlaceholder() });
+    const right_ret = try graph.newNode(.{ .unresolved = InstVariable.producerPlaceholder() });
     const left = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{left_arg}),
-        .ret = ret,
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = left_ret,
     } });
-    const right_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     const right = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{right_arg}),
-        .ret = ret,
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = right_ret,
     } });
-    const initial_left_shape = try graph.openFunctionInterfaceShape(left);
-    const initial_right_shape = try graph.openFunctionInterfaceShape(right);
-    try std.testing.expectEqualSlices(u8, initial_left_shape.bytes, initial_right_shape.bytes);
+    const checked_source = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = produced_ret,
+    } });
+    try graph.registerSpecializationRequest(left, checked_source, &.{.produced}, .produced, &.{});
+    try graph.registerSpecializationRequest(right, checked_source, &.{.produced}, .produced, &.{});
 
-    try graph.markRecursiveValueSlot(left_arg);
-    const recursive_left_shape = try graph.openFunctionInterfaceShape(left);
-    const unmarked_right_shape = try graph.openFunctionInterfaceShape(right);
-    try std.testing.expect(!std.mem.eql(u8, recursive_left_shape.bytes, unmarked_right_shape.bytes));
+    try graph.completeFunctionResult(left, produced_ret);
+    try graph.completeFunctionResult(right, produced_ret);
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xA7} ** 32));
-    const type_name = try name_store.internTypeName("PrivateShape");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1) };
-    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
-    const private_left = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = def,
-        .kind = .@"opaque",
-        .builtin_owner = null,
-        .args = try graph.arena().alloc(NodeId, 0),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .inspectable,
-            .authority = .generated_private,
-        },
-    } });
-    const private_right = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = def,
-        .kind = .@"opaque",
-        .builtin_owner = null,
-        .args = try graph.arena().alloc(NodeId, 0),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .inspectable,
-            .authority = .generated_private,
-        },
-    } });
-    const private_left_request = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{private_left}),
-        .ret = ret,
-    } });
-    const private_right_request = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{private_right}),
-        .ret = ret,
-    } });
-    const source_bool = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{ret}),
-        .ret = ret,
-    } });
-    const source_str_arg = try graph.newNode(.{ .primitive = .str });
-    const source_str = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{source_str_arg}),
-        .ret = ret,
-    } });
-    try graph.registerRequestSourceInterface(private_left_request, source_bool);
-    try graph.registerRequestSourceInterface(private_right_request, source_str);
+    try std.testing.expect(!graph.sameClass(left, right));
+    try std.testing.expect(graph.sameClass((try graph.functionNodes(left)).ret, produced_ret));
+    try std.testing.expect(graph.sameClass((try graph.functionNodes(right)).ret, produced_ret));
+}
 
-    const private_left_shape = try graph.openFunctionInterfaceShape(private_left_request);
-    const private_right_shape = try graph.openFunctionInterfaceShape(private_right_request);
-    try std.testing.expect(!std.mem.eql(u8, private_left_shape.bytes, private_right_shape.bytes));
+test "produced functions with the same exact children share one runtime node" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const arg = try graph.newNode(.{ .primitive = .u64 });
+    const ret = try graph.newNode(.{ .primitive = .bool });
+    const left = try graph.newProducedFunction(&.{arg}, ret);
+    const right = try graph.newProducedFunction(&.{arg}, ret);
+
+    try std.testing.expect(graph.sameClass(left, right));
+}
+
+test "produced identity strips function request protocol before interning" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const arg = try graph.newNode(.{ .primitive = .u64 });
+    const ret = try graph.newNode(.{ .primitive = .bool });
+    const left_request = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = ret,
+    } });
+    const right_request = try graph.newNode(.{ .func = .{
+        .args = try graph.arena().dupe(NodeId, &.{arg}),
+        .ret = ret,
+    } });
+    graph.registerFunctionResultRelation(left_request, .exact_destination);
+    graph.registerFunctionResultRelation(right_request, .produced);
+
+    const left_produced = try graph.internProducedIdentity(left_request);
+    const right_produced = try graph.internProducedIdentity(right_request);
+
+    try std.testing.expect(graph.sameClass(left_produced, right_produced));
+    try std.testing.expect(!graph.sameClass(left_request, right_request));
+    try std.testing.expectEqual(FunctionResultRelation.exact_destination, graph.functionResultRelation(left_request).?);
+    try std.testing.expectEqual(FunctionResultRelation.produced, graph.functionResultRelation(right_request).?);
+    try std.testing.expectEqual(@as(?FunctionResultRelation, null), graph.functionResultRelation(left_produced));
 }
 
 test "cyclic row extension is not a resolved graph type" {
@@ -6028,7 +5434,7 @@ test "cyclic row extension is not a resolved graph type" {
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const row = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const row = try graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
     try graph.setContent(row, .{ .tag_union = .{ .tags = &.{}, .ext = row } });
     try std.testing.expect(!try graph.typeIsResolved(row));
 }
@@ -6057,31 +5463,7 @@ fn assertNoNodeId(comptime T: type, comptime path: []const u8) void {
     }
 }
 
-test "active Monotype snapshots are immutable across graph mutations" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const node = try graph.newNode(.{ .primitive = .u64 });
-    const first = try graph.activeTypeViewForNode(node);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(first));
-
-    try graph.setContent(node, .{ .primitive = .str });
-    const second = try graph.activeTypeViewForNode(node);
-
-    try std.testing.expect(first != second);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(first));
-    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(second));
-}
-
-test "provisional Monotype view preserves an undetermined record field" {
+test "undetermined record field freezes to its required inline representation" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6095,8 +5477,9 @@ test "provisional Monotype view preserves an undetermined record field" {
 
     const field_name = try name_store.internRecordFieldLabel("value");
     const value_ty = try graph.newNode(.{ .primitive = .u64 });
-    const slot = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const slot = try graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
     const kind = try graph.newUndeterminedFieldKind();
+    try graph.registerUndeterminedFieldKindCells(kind, slot, value_ty);
     const fields = try graph.arena().alloc(InstField, 1);
     fields[0] = .{
         .name = field_name,
@@ -6110,11 +5493,61 @@ test "provisional Monotype view preserves an undetermined record field" {
         .ext = try graph.newNode(.empty_record),
     } });
 
-    const provisional = try graph.provisionalTypeViewForNode(record);
-    const provisional_fields = type_store.fieldSpan(type_store.get(provisional).record);
-    try std.testing.expectEqual(@as(usize, 1), provisional_fields.len);
-    const provisional_value_ty = GuardedList.at(provisional_fields, 0).value_ty orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(provisional_value_ty));
+    try std.testing.expect(graph.resolvedFieldKind(fields[0].kind) == null);
+    try graph.freezeRelations();
+    try std.testing.expectEqual(ResolvedFieldKind.required, graph.resolvedFieldKind(fields[0].kind).?);
+
+    const sealed = try graph.sealNode(record);
+    const sealed_fields = type_store.fieldSpan(type_store.get(sealed).record);
+    try std.testing.expectEqual(@as(usize, 1), sealed_fields.len);
+    const sealed_field = GuardedList.at(sealed_fields, 0);
+    try std.testing.expect(sealed_field.value_ty == null);
+    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(sealed_field.ty));
+}
+
+test "record interning preserves field specialization evidence" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const field_name = try name_store.internRecordFieldLabel("value");
+    const value_ty = try graph.newNode(.{ .primitive = .u64 });
+    const empty_record = try graph.newNode(.empty_record);
+
+    const required_fields = try graph.arena().alloc(InstField, 1);
+    required_fields[0] = .{
+        .name = field_name,
+        .ty = value_ty,
+        .kind = .required,
+        .default = null,
+    };
+    const required_record = try graph.newNode(.{ .record = .{
+        .fields = required_fields,
+        .ext = empty_record,
+    } });
+
+    const sealed_fields = try graph.arena().alloc(InstField, 1);
+    sealed_fields[0] = .{
+        .name = field_name,
+        .ty = value_ty,
+        .kind = .sealed,
+        .default = null,
+    };
+    const sealed_record = try graph.newNode(.{ .record = .{
+        .fields = sealed_fields,
+        .ext = empty_record,
+    } });
+
+    try std.testing.expect(!graph.sameClass(required_record, sealed_record));
+    try std.testing.expectEqual(ResolvedFieldKind.required, try graph.recordConstructionFieldKind(required_record, field_name));
+    try std.testing.expectEqual(ResolvedFieldKind.required, try graph.recordConstructionFieldKind(sealed_record, field_name));
 }
 
 test "record field node carries contextual row evidence into receiver" {
@@ -6290,60 +5723,6 @@ test "record field graph access distinguishes inspection from runtime constructi
     try std.testing.expect(graph.sameClass(field_ty, definition_private));
 }
 
-test "active Monotype snapshots keep different roots distinct" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const old_root = try graph.newNode(.{ .primitive = .u64 });
-    const new_root = try graph.newNode(.{ .primitive = .str });
-    const old_view = try graph.activeTypeViewForNode(old_root);
-    const new_view = try graph.activeTypeViewForNode(new_root);
-
-    try std.testing.expect(old_view != new_view);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(old_view));
-    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(new_view));
-}
-
-test "union resolves immutable snapshot provenance without reindexing" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const winner = try graph.newNode(.{ .primitive = .u64 });
-    const snapshot_count = 128;
-    var snapshots: [snapshot_count]Type.TypeId = undefined;
-    var owners: [snapshot_count]NodeId = undefined;
-
-    for (&snapshots, &owners) |*snapshot, *owner| {
-        const node = try graph.newNode(.{ .primitive = .u64 });
-        snapshot.* = try graph.activeTypeViewForNode(node);
-        owner.* = graph.linked_type_nodes.get(snapshot.*).?;
-        try graph.union_(winner, node);
-    }
-
-    for (snapshots, owners) |snapshot, owner| {
-        // The reverse index remains stable instead of rewriting every prior
-        // snapshot on each union. Root resolution happens only when queried.
-        try std.testing.expectEqual(owner, graph.linked_type_nodes.get(snapshot).?);
-        try std.testing.expectEqual(winner, graph.activeSnapshotNode(snapshot).?);
-    }
-}
-
 test "alias unification does not make the alias its own backing" {
     const gpa = std.testing.allocator;
 
@@ -6369,7 +5748,8 @@ test "alias unification does not make the alias its own backing" {
     try graph.unify(alias, backing);
     try std.testing.expect(graph.find(alias) != graph.find(backing));
 
-    const alias_ty = try graph.activeTypeViewForNode(alias);
+    try graph.freezeRelations();
+    const alias_ty = try graph.sealNode(alias);
     const alias_content = type_store.get(alias_ty);
     if (alias_content != .named) return error.TestExpectedEqual;
     const named = alias_content.named;
@@ -6377,7 +5757,7 @@ test "alias unification does not make the alias its own backing" {
     try std.testing.expect(named_backing.ty != alias_ty);
 }
 
-test "final sealing does not mutate an earlier active snapshot" {
+test "nominal unification with its own backing preserves a distinct backing node" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6389,35 +5769,28 @@ test "final sealing does not mutate an earlier active snapshot" {
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const a_name = try name_store.internRecordFieldLabel("a");
-    const a_ty = try graph.newNode(.{ .primitive = .u64 });
-
-    const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = a_name, .ty = a_ty, .default = null };
-    const row = try graph.newNode(.{ .record = .{
-        .fields = fields,
-        .ext = try graph.newNode(.empty_record),
+    const backing = try graph.newNode(.{ .primitive = .u64 });
+    const nominal = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(2) },
+        .def = .{ .module = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32)), .type_name = @enumFromInt(2) },
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = backing, .use = .inspectable },
     } });
 
-    const snapshot = try graph.activeTypeViewForNode(row);
-    const snapshot_field = GuardedList.at(type_store.fieldSpan(type_store.get(snapshot).record), 0);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(snapshot_field.ty));
+    try graph.unify(nominal, backing);
+    try std.testing.expect(!graph.sameClass(nominal, backing));
 
-    try graph.setContent(a_ty, .{ .primitive = .str });
-
+    const named = graph.content(nominal).named;
+    const retained_backing = named.backing orelse return error.TestExpectedEqual;
+    try std.testing.expect(!graph.sameClass(nominal, retained_backing.node));
+    try std.testing.expectEqual(InstNode{ .primitive = .u64 }, graph.content(retained_backing.node));
     try graph.freezeRelations();
-    var finals = GraphTypeFinals.init(graph);
-    defer finals.deinit();
-    const sealed = try finals.sealType(snapshot);
-
-    try std.testing.expect(sealed != snapshot);
-    const still_snapshot_field = GuardedList.at(type_store.fieldSpan(type_store.get(snapshot).record), 0);
-    const sealed_field = GuardedList.at(type_store.fieldSpan(type_store.get(sealed).record), 0);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(still_snapshot_field.ty));
-    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed_field.ty));
+    try std.testing.expect(!graph.finalizesAsClosedEmptyTagUnion(nominal));
 }
 
-test "final graph function recursively replaces active snapshots" {
+test "nominal selection over its unresolved backing preserves a distinct backing node" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6429,40 +5802,114 @@ test "final graph function recursively replaces active snapshots" {
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const a_name = try name_store.internRecordFieldLabel("a");
-    const a_ty = try graph.newNode(.{ .primitive = .u64 });
-
-    const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = a_name, .ty = a_ty, .default = null };
-    const row = try graph.newNode(.{ .record = .{
-        .fields = fields,
-        .ext = try graph.newNode(.empty_record),
+    const backing = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const nominal = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(3) },
+        .def = .{ .module = try name_store.internModuleIdentity(&([_]u8{0xAD} ** 32)), .type_name = @enumFromInt(3) },
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = backing, .use = .inspectable },
     } });
 
-    const args = try graph.arena().alloc(NodeId, 1);
-    args[0] = row;
-    const fn_node = try graph.newNode(.{ .func = .{
-        .args = args,
-        .ret = row,
-    } });
-    const draft_fn = try graph.activeTypeViewForNode(fn_node);
-    try graph.setContent(a_ty, .{ .primitive = .str });
+    try graph.unify(nominal, backing);
+    try std.testing.expect(graph.sameClass(nominal, backing));
 
-    try graph.freezeRelations();
-    var finals = GraphTypeFinals.init(graph);
-    defer finals.deinit();
-    const sealed_fn = try finals.sealType(draft_fn);
-    try std.testing.expect(sealed_fn != draft_fn);
-    const sealed_arg = GuardedList.at(type_store.span(type_store.get(sealed_fn).func.args), 0);
-
-    const draft_arg = GuardedList.at(type_store.span(type_store.get(draft_fn).func.args), 0);
-    const draft_field = GuardedList.at(type_store.fieldSpan(type_store.get(draft_arg).record), 0);
-    const sealed_field = GuardedList.at(type_store.fieldSpan(type_store.get(sealed_arg).record), 0);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(draft_field.ty));
-    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed_field.ty));
+    const retained_backing = graph.content(nominal).named.backing orelse return error.TestExpectedEqual;
+    try std.testing.expect(!graph.sameClass(nominal, retained_backing.node));
+    try std.testing.expectEqual(
+        InstVariableOrigin.checked_variable,
+        graph.content(retained_backing.node).unresolved.origin,
+    );
 }
 
-test "final sealed graph node does not allocate an active snapshot" {
+test "equivalent nominal wrapper unification preserves the structural backing" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAE} ** 32));
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = @enumFromInt(4) };
+    const structural = try graph.newNode(.{ .primitive = .u64 });
+    const inner = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(4) },
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = structural, .use = .inspectable },
+    } });
+    const outer = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(4) },
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = inner, .use = .inspectable },
+    } });
+
+    try graph.unify(outer, inner);
+    try std.testing.expect(graph.sameClass(outer, inner));
+
+    const retained_backing = graph.content(outer).named.backing orelse return error.TestExpectedEqual;
+    try std.testing.expect(!graph.sameClass(outer, retained_backing.node));
+    try std.testing.expectEqual(structural, graph.find(retained_backing.node));
+}
+
+test "producer root interning rekeys an immediate nominal child after argument selection" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const left_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const right_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAF} ** 32));
+    const type_name = try name_store.internTypeName("Recursive");
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+
+    const left = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(5) },
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{left_arg}),
+        .backing = null,
+    } });
+    const right = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(6) },
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().dupe(NodeId, &.{right_arg}),
+        .backing = null,
+    } });
+    const left_box = try graph.newProducedBox(left);
+    const right_box = try graph.newProducedBox(right);
+    try std.testing.expect(!graph.sameClass(left_box, right_box));
+
+    try graph.unify(left_arg, right_arg);
+    try std.testing.expect(graph.sameNominalIdentity(left, right));
+    try std.testing.expectEqual(
+        try graph.internProducedIdentity(left_box),
+        try graph.internProducedIdentity(right_box),
+    );
+}
+
+test "final sealed graph node materializes directly" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6487,11 +5934,10 @@ test "final sealed graph node does not allocate an active snapshot" {
 
     try graph.freezeRelations();
     const sealed = try graph.sealNode(row);
-    try std.testing.expectEqual(@as(usize, 0), graph.node_snapshots.count());
     try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(sealed).record).len);
 }
 
-test "active view of an imported recursive type preserves its exact immutable representation" {
+test "imported recursive type preserves its exact immutable representation" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6526,7 +5972,14 @@ test "active view of an imported recursive type preserves its exact immutable re
     defer graph.destroy();
 
     const imported = try graph.importMono(exact);
-    try std.testing.expectEqual(exact, try graph.activeTypeViewForNode(imported));
+    try std.testing.expectEqual(imported, try graph.importMono(exact));
+    try graph.freezeRelations();
+    const sealed = try graph.sealNode(imported);
+    const tags = type_store.tagSpan(type_store.get(sealed).tag_union);
+    try std.testing.expectEqual(@as(usize, 1), tags.len);
+    const payloads = type_store.span(GuardedList.at(tags, 0).payloads);
+    try std.testing.expectEqual(@as(usize, 1), payloads.len);
+    try std.testing.expectEqual(sealed, GuardedList.at(payloads, 0));
 }
 
 test "unresolved row graph node seals to closed empty tag union only at finalization" {
@@ -6549,7 +6002,42 @@ test "unresolved row graph node seals to closed empty tag union only at finaliza
     try std.testing.expectEqual(Type.Span.empty(), content.tag_union);
 }
 
-test "relation mutation invalidates active snapshots before freezing" {
+test "unconstrained specialization default closes only without exact selection" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const defaulted = try graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
+        null,
+        null,
+        .empty_tag_union,
+        [_]u8{0} ** 32,
+    ) });
+    const selected = try graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
+        null,
+        null,
+        .empty_tag_union,
+        [_]u8{1} ** 32,
+    ) });
+    const exact = try graph.newNode(.{ .primitive = .str });
+    try graph.completeProducedSelection(selected, exact);
+
+    try graph.freezeRelations();
+    const sealed_defaulted = try graph.sealNode(defaulted);
+    const sealed_selected = try graph.sealNode(selected);
+
+    try std.testing.expectEqual(Type.Span.empty(), type_store.get(sealed_defaulted).tag_union);
+    try std.testing.expectEqual(Type.Primitive.str, type_store.get(sealed_selected).primitive);
+}
+
+test "relation mutation remains available only before freezing" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6562,244 +6050,16 @@ test "relation mutation invalidates active snapshots before freezing" {
     defer graph.destroy();
 
     const resolved = try graph.newNode(.{ .primitive = .u64 });
-    const before_mutation = try graph.activeTypeViewForNode(resolved);
-    try std.testing.expect(graph.current_snapshots.count() != 0);
     const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
     try graph.unify(resolved, unresolved);
 
     try std.testing.expect(graph.acceptsRelationMutation());
-    try std.testing.expect(graph.current_snapshots_dirty);
-
-    const after_mutation = try graph.activeTypeViewForNode(resolved);
-    try std.testing.expect(!graph.current_snapshots_dirty);
-    try std.testing.expect(graph.current_snapshots.count() != 0);
-    try std.testing.expect(before_mutation != after_mutation);
+    try std.testing.expect(graph.sameClass(resolved, unresolved));
 
     try graph.freezeRelations();
 
     try std.testing.expectEqual(RelationState.frozen, graph.relation_state);
     try std.testing.expect(!graph.acceptsRelationMutation());
-}
-
-test "generated-private traversal scratch handles cycles and epoch rollover" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-    var diagnostics: GraphDiagnostics = .{};
-    graph.setDiagnostics(&diagnostics);
-
-    const Context = struct {
-        fn fill(_: @This(), reserved: NodeId) Allocator.Error!InstNode {
-            return .{ .box = reserved };
-        }
-    };
-    const recursive = try graph.addRecursiveNode(Context{}, Context.fill);
-    graph.containment_visit_epoch = std.math.maxInt(u32);
-    @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
-
-    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
-    try std.testing.expectEqual(@as(u32, 1), graph.containment_visit_epoch);
-
-    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_cache_hits);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
-
-    const unrelated = try graph.newNode(.{ .primitive = .u64 });
-    try graph.setContent(unrelated, .{ .primitive = .str });
-    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
-    try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_cache_hits);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.generated_private_nodes_visited);
-
-    try graph.setContent(recursive, .zst);
-    try std.testing.expect(!try graph.containsGeneratedPrivate(recursive));
-    try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_cache_hits);
-    try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_nodes_visited);
-}
-
-test "iterator-interface containment caches exact graph dependencies" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-    var diagnostics: GraphDiagnostics = .{};
-    graph.setDiagnostics(&diagnostics);
-
-    const child = try graph.newNode(.{ .primitive = .u64 });
-    const root = try graph.newNode(.{ .box = child });
-    graph.containment_visit_epoch = std.math.maxInt(u32);
-    @memset(graph.containment_visit_epochs.items, std.math.maxInt(u32));
-
-    try std.testing.expect(!try graph.containsIteratorInterface(root));
-    try std.testing.expectEqual(@as(u32, 1), graph.containment_visit_epoch);
-    try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_nodes_visited);
-
-    try std.testing.expect(!try graph.containsIteratorInterface(root));
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.iterator_interface_cache_hits);
-
-    const unrelated = try graph.newNode(.{ .primitive = .u64 });
-    try graph.setContent(unrelated, .{ .primitive = .str });
-    try std.testing.expect(!try graph.containsIteratorInterface(root));
-    try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_cache_hits);
-    try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_nodes_visited);
-
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x42} ** 32));
-    const type_name = try name_store.internTypeName("Iter");
-    try graph.setContent(child, .{ .named = .{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(14) },
-        .def = .{ .module = module_identity, .type_name = type_name },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = &.{},
-        .backing = null,
-    } });
-    try std.testing.expect(try graph.containsIteratorInterface(root));
-    try std.testing.expectEqual(@as(u64, 2), diagnostics.iterator_interface_cache_hits);
-    try std.testing.expectEqual(@as(u64, 4), diagnostics.iterator_interface_nodes_visited);
-}
-
-test "iterator-interface containment agrees between Monotype and graph" {
-    // `Type.Store.containsIteratorInterface` and
-    // `InstGraph.containsIteratorInterface` are separate walks over separate
-    // representations, and the Monotype walk gates skipping graph
-    // construction entirely. A structural position one descends into and the
-    // other does not would silently drop a producer's minted representation,
-    // so every container position is checked in both, with an iterator leaf
-    // and a plain leaf.
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x51} ** 32));
-    const iter_name = try name_store.internTypeName("Iter");
-    const wrapper_name = try name_store.internTypeName("Wrapper");
-    const field_name = try name_store.internRecordFieldLabel("it");
-    const tag_name = try name_store.internTagLabel("Holds");
-
-    const Shapes = struct {
-        graph: *InstGraph,
-        module_identity: names.ModuleIdentityId,
-        wrapper_name: names.TypeNameId,
-        field_name: names.RecordFieldNameId,
-        tag_name: names.TagNameId,
-
-        fn wrap(self: @This(), leaf: NodeId, position: usize) Allocator.Error!NodeId {
-            const u64_node = try self.graph.newNode(.{ .primitive = .u64 });
-            return switch (position) {
-                0 => leaf,
-                1 => try self.graph.newNode(.{ .list = leaf }),
-                2 => try self.graph.newNode(.{ .box = leaf }),
-                3 => try self.graph.newNode(.{ .tuple = try self.graph.arena().dupe(NodeId, &.{ u64_node, leaf }) }),
-                4 => blk: {
-                    const fields = try self.graph.arena().dupe(InstField, &.{.{ .name = self.field_name, .ty = leaf, .default = null }});
-                    break :blk try self.graph.newNode(.{ .record = .{
-                        .fields = fields,
-                        .ext = try self.graph.newNode(.empty_record),
-                    } });
-                },
-                5 => blk: {
-                    const payloads = try self.graph.arena().dupe(NodeId, &.{leaf});
-                    const tags = try self.graph.arena().dupe(InstTag, &.{.{
-                        .name = self.tag_name,
-                        .checked_name = self.tag_name,
-                        .payloads = payloads,
-                    }});
-                    break :blk try self.graph.newNode(.{ .tag_union = .{
-                        .tags = tags,
-                        .ext = try self.graph.newNode(.empty_tag_union),
-                    } });
-                },
-                6 => try self.graph.newNode(.{ .func = .{
-                    .args = try self.graph.arena().dupe(NodeId, &.{leaf}),
-                    .ret = u64_node,
-                } }),
-                // A nominal wrapper reaching the leaf through its backing.
-                7 => try self.graph.newNode(.{ .named = .{
-                    .named_type = .{ .module = .{}, .ty = testCheckedTypeId(21) },
-                    .def = .{ .module = self.module_identity, .type_name = self.wrapper_name },
-                    .kind = .nominal,
-                    .builtin_owner = null,
-                    .args = try self.graph.arena().dupe(NodeId, &.{}),
-                    .backing = .{ .node = leaf, .use = .inspectable },
-                } }),
-                // A nominal wrapper reaching the leaf through a type argument.
-                8 => try self.graph.newNode(.{ .named = .{
-                    .named_type = .{ .module = .{}, .ty = testCheckedTypeId(22) },
-                    .def = .{ .module = self.module_identity, .type_name = self.wrapper_name },
-                    .kind = .nominal,
-                    .builtin_owner = null,
-                    .args = try self.graph.arena().dupe(NodeId, &.{leaf}),
-                    .backing = .{ .node = u64_node, .use = .inspectable },
-                } }),
-                else => unreachable,
-            };
-        }
-    };
-    const shapes = Shapes{
-        .graph = graph,
-        .module_identity = module_identity,
-        .wrapper_name = wrapper_name,
-        .field_name = field_name,
-        .tag_name = tag_name,
-    };
-
-    const position_count = 9;
-    const case_count = position_count * 2;
-    var roots: [case_count]NodeId = undefined;
-    var graph_answers: [case_count]bool = undefined;
-
-    for (0..position_count) |position| {
-        for ([_]bool{ true, false }, 0..) |iterator_leaf, leaf_index| {
-            const leaf = if (iterator_leaf) try graph.newNode(.{ .named = .{
-                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(20) },
-                .def = .{ .module = module_identity, .type_name = iter_name },
-                .kind = .@"opaque",
-                .builtin_owner = .iter,
-                .args = try graph.arena().dupe(NodeId, &.{try graph.newNode(.{ .primitive = .u64 })}),
-                .backing = .{
-                    .node = try graph.newNode(.{ .primitive = .u64 }),
-                    .use = .runtime_layout_only,
-                },
-            } }) else try graph.newNode(.{ .primitive = .str });
-
-            const case_index = position * 2 + leaf_index;
-            roots[case_index] = try shapes.wrap(leaf, position);
-            graph_answers[case_index] = try graph.containsIteratorInterface(roots[case_index]);
-        }
-    }
-
-    // Sealing is only allowed once relation production has finished, so every
-    // shape is built and asked of the graph first, then compared.
-    try graph.freezeRelations();
-    for (roots, graph_answers, 0..) |root, graph_answer, case_index| {
-        const iterator_leaf = case_index % 2 == 0;
-        const sealed = try graph.sealNode(root);
-        const mono_answer = try type_store.containsIteratorInterface(sealed);
-        if (graph_answer != mono_answer) {
-            std.debug.print(
-                "position {d} iterator_leaf={} graph={} mono={}\n",
-                .{ case_index / 2, iterator_leaf, graph_answer, mono_answer },
-            );
-        }
-        try std.testing.expectEqual(graph_answer, mono_answer);
-        try std.testing.expectEqual(iterator_leaf, graph_answer);
-    }
 }
 
 test "final type sealing remains allowed after instantiation relations freeze" {
@@ -6920,7 +6180,7 @@ test "explicit empty tag union imports as closed uninhabited row" {
     try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(imported));
 }
 
-test "finished Monotype detection includes imported structural descendants" {
+test "imported singleton types share ordinary exact graph nodes" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6929,21 +6189,23 @@ test "finished Monotype detection includes imported structural descendants" {
     var name_store = names.NameStore.init(gpa);
     defer name_store.deinit();
 
-    const imported_item_ty = try type_store.add(.{ .primitive = .u64 });
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const imported_item = try graph.importMono(imported_item_ty);
-    const fresh_list = try graph.newNode(.{ .list = imported_item });
-    const fresh_tuple = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{fresh_list}) });
-    try std.testing.expect(try graph.containsFinishedMono(fresh_tuple));
+    const empty_record = try graph.newNode(.empty_record);
+    const empty_record_ty = try type_store.add(.{ .record = Type.Span.empty() });
+    try std.testing.expectEqual(empty_record, try graph.importMono(empty_record_ty));
 
-    const fresh_item = try graph.newNode(.{ .primitive = .u64 });
-    const entirely_fresh = try graph.newNode(.{ .list = fresh_item });
-    try std.testing.expect(!try graph.containsFinishedMono(entirely_fresh));
+    const empty_tag_union = try graph.newNode(.empty_tag_union);
+    const empty_tag_union_ty = try type_store.add(.{ .tag_union = Type.Span.empty() });
+    try std.testing.expectEqual(empty_tag_union, try graph.importMono(empty_tag_union_ty));
+
+    const zst = try graph.newNode(.zst);
+    const zst_ty = try type_store.add(.zst);
+    try std.testing.expectEqual(zst, try graph.importMono(zst_ty));
 }
 
-test "opaque interface relation preserves distinct public and generated-private backing authority" {
+test "generated identity treats public opaque and private nominal views as one type" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6955,65 +6217,115 @@ test "opaque interface relation preserves distinct public and generated-private 
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAD} ** 32));
-    const type_name = try name_store.internTypeName("FieldNames");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1) };
-    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
-    const public_args = try graph.arena().alloc(NodeId, 1);
-    public_args[0] = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const private_args = try graph.arena().alloc(NodeId, 1);
-    private_args[0] = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const public_backing = try graph.newNode(.empty_record);
-    const private_backing = try graph.newNode(.{ .record = .{
-        .fields = try graph.arena().alloc(InstField, 0),
-        .ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
-    } });
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD1} ** 32));
+    const type_name = try name_store.internTypeName("Date");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(15) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name, .source_decl = 4 };
+    const backing = try graph.newNode(.{ .primitive = .i32 });
     const public = try graph.newNode(.{ .named = .{
         .named_type = named_type,
         .def = def,
         .kind = .@"opaque",
-        .builtin_owner = .fields,
-        .args = public_args,
-        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = backing, .use = .runtime_layout_only },
     } });
     const private = try graph.newNode(.{ .named = .{
         .named_type = named_type,
         .def = def,
-        .kind = .@"opaque",
-        .builtin_owner = .fields,
-        .args = private_args,
-        .backing = .{
-            .node = private_backing,
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = backing, .use = .inspectable },
+    } });
+
+    const public_digest = try graph.generatedIdentityInputDigest(public);
+    const private_digest = try graph.generatedIdentityInputDigest(private);
+    try std.testing.expectEqualSlices(u8, &public_digest.bytes, &private_digest.bytes);
+}
+
+test "recursive generated iterator reservation completes at its producer boundary" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const item_cell = try graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
+    const exact_item = try graph.newNode(.{ .primitive = .u64 });
+    const backing = try graph.newNode(.{ .primitive = .u8 });
+    const def: Type.TypeDef = .{
+        .module = try name_store.internModuleIdentity(&([_]u8{0xD3} ** 32)),
+        .type_name = try name_store.internTypeName("Iter"),
+        .source_decl = 17,
+    };
+    const Context = struct {
+        graph: *InstGraph,
+        item: NodeId,
+        backing: NodeId,
+        def: Type.TypeDef,
+
+        fn fill(ctx: @This(), self_node: NodeId) Allocator.Error!InstNode {
+            _ = self_node;
+            return .{ .named = .{
+                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(17) },
+                .def = ctx.def,
+                .kind = .nominal,
+                .builtin_owner = null,
+                .args = try ctx.graph.arena().dupe(NodeId, &.{ctx.item}),
+                .backing = .{
+                    .node = ctx.backing,
+                    .use = .inspectable,
+                    .authority = .generated_private,
+                },
+            } };
+        }
+    };
+    const reservation = try graph.reserveRecursiveGeneratedIterator(
+        def,
+        item_cell,
+        Context{
+            .graph = graph,
+            .item = item_cell,
+            .backing = backing,
+            .def = def,
         },
-    } });
+        Context.fill,
+    );
+    const second_reservation = try graph.reserveRecursiveGeneratedIterator(
+        def,
+        item_cell,
+        Context{
+            .graph = graph,
+            .item = item_cell,
+            .backing = backing,
+            .def = def,
+        },
+        Context.fill,
+    );
+    try std.testing.expect(reservation != second_reservation);
+    try std.testing.expectEqual(@as(usize, 2), graph.unfinished_generated_iterator_reservations);
+    try std.testing.expect(!graph.generated_iterators_by_item.contains(item_cell));
 
-    try graph.relateOpaqueInterface(public, private);
+    try graph.completeProducedSelection(item_cell, exact_item);
+    const completed = try graph.completeRecursiveGeneratedIterator(reservation, def, exact_item);
+    try std.testing.expect(graph.sameClass(reservation, completed));
+    try std.testing.expect(graph.content(completed).named.def.generated != null);
+    try std.testing.expectEqual(@as(usize, 1), graph.unfinished_generated_iterator_reservations);
+    const second_completed = try graph.completeRecursiveGeneratedIterator(second_reservation, def, exact_item);
+    try std.testing.expect(graph.sameClass(completed, second_completed));
+    try std.testing.expectEqual(@as(usize, 0), graph.unfinished_generated_iterator_reservations);
+    try std.testing.expect(!graph.generated_iterators_by_item.contains(item_cell));
+    try std.testing.expect(graph.generated_iterators_by_item.contains(exact_item));
 
-    const public_content = graph.content(public);
-    if (public_content != .named) return error.TestUnexpectedResult;
-    const retained_public = public_content.named;
-    const private_content = graph.content(private);
-    if (private_content != .named) return error.TestUnexpectedResult;
-    const retained_private = private_content.named;
-    try std.testing.expect(!graph.sameClass(public, private));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, retained_public.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, retained_private.backing.?.authority);
-    try std.testing.expect(!graph.sameClass(public_backing, private_backing));
-    try std.testing.expect(graph.sameClass(public_args[0], private_args[0]));
-    try std.testing.expectEqual(@as(usize, 0), (try graph.recordConstructionNodes(public)).fields.len);
-
-    const field_name = try name_store.internRecordFieldLabel("value");
-    const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }), .default = null };
-    const structural_record = try graph.newNode(.{ .record = .{
-        .fields = fields,
-        .ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
-    } });
-    const projected = try graph.recordNodes(structural_record);
-    try std.testing.expectEqual(@as(usize, 1), projected.fields.len);
-    try std.testing.expectEqual(field_name, projected.fields[0].name);
+    const lookup = try graph.lookupGeneratedIterator(def, exact_item);
+    try std.testing.expectEqual(completed, lookup.existing.?);
+    try graph.freezeRelations();
 }
 
 test "named type relation to its own backing preserves the backing edge" {
@@ -7055,7 +6367,7 @@ test "named type relation to its own backing preserves the backing edge" {
     try std.testing.expectEqual(@as(usize, 1), (try graph.recordConstructionNodes(named)).fields.len);
 }
 
-test "opaque interface relation preserves forced-dynamic iterator identity" {
+test "ordinary nominal reservation checks exact roots before normalizing row decompositions" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -7067,475 +6379,65 @@ test "opaque interface relation preserves forced-dynamic iterator identity" {
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xFE} ** 32));
-    const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(4) };
-    const public_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const private_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const public_backing = try graph.newNode(.empty_record);
-    const private_backing = try graph.newNode(.empty_record);
-    const public = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
+    const empty = try graph.newNode(.empty_record);
+    const label = try name_store.internRecordFieldLabel("value");
+    const fields = try graph.arena().alloc(InstField, 1);
+    fields[0] = .{
+        .name = label,
+        .ty = try graph.newNode(.{ .primitive = .u64 }),
+        .default = null,
+    };
+    const flat_argument = try graph.newNode(.{ .record = .{
+        .fields = fields,
+        .ext = empty,
+    } });
+    const extended_argument = try graph.newNode(.{ .record = .{
+        .fields = &.{},
+        .ext = flat_argument,
+    } });
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD2} ** 32));
+    const type_name = try name_store.internTypeName("Wrapper");
+    var exact_args = [_]NodeId{flat_argument};
+    var identity: InstNamed = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(16) },
         .def = .{ .module = module_identity, .type_name = type_name },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{public_item}),
-        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    const private = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = .{
-            .module = module_identity,
-            .type_name = type_name,
-            .iterator_representation = .forced_dynamic,
-            .iterator_kind = .forced_dynamic,
-        },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{private_item}),
-        .backing = .{
-            .node = private_backing,
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-    } });
-
-    try graph.relateOpaqueInterface(public, private);
-
-    try std.testing.expect(!graph.sameClass(public, private));
-    try std.testing.expect(graph.sameClass(public_item, private_item));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public).named.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private).named.backing.?.authority);
-    try std.testing.expectEqual(Type.IteratorRepresentation.none, graph.content(public).named.def.iterator_representation);
-    try std.testing.expectEqual(Type.IteratorRepresentation.forced_dynamic, graph.content(private).named.def.iterator_representation);
-}
-
-test "opaque iterator relation materializes unresolved public interface from provenance" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x51} ** 32));
-    const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(9) };
-    const public_backing = try graph.newNode(.empty_record);
-    const public_source: InstIteratorPublicSource = .{
-        .named_type = named_type,
-        .def = .{ .module = module_identity, .type_name = type_name },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-        .declared_order = &.{},
-    };
-    const public = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const private_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const private = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = .{
-            .module = module_identity,
-            .type_name = type_name,
-            .iterator_representation = .minted,
-            .iterator_kind = .list,
-            .iterator_depth = 1,
-        },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ private_item, try graph.newNode(.empty_record) }),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-        .generated_iterator = .{
-            .callable_evidence = null,
-            .public_source = public_source,
-        },
-    } });
-
-    try graph.relateOpaqueInterface(public, private);
-
-    const retained_public = graph.content(public).named;
-    try std.testing.expect(!graph.sameClass(public, private));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, retained_public.backing.?.authority);
-    try std.testing.expectEqual(Type.IteratorRepresentation.none, retained_public.def.iterator_representation);
-    try std.testing.expectEqual(@as(usize, 1), retained_public.args.len);
-    try std.testing.expect(graph.sameClass(retained_public.args[0], private_item));
-}
-
-test "opaque iterator relation resolves unresolved public variable to imported generated iterator" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x71} ** 32));
-    const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(12) };
-    const public = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const item = try graph.newNode(.{ .primitive = .u64 });
-    const private = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = .{
-            .module = module_identity,
-            .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x72} ** 32 },
-            .iterator_representation = .minted,
-            .iterator_kind = .list,
-            .iterator_depth = 1,
-        },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-    } });
-
-    try graph.relateOpaqueInterface(public, private);
-
-    const retained = graph.content(public).named;
-    try std.testing.expect(graph.sameClass(public, private));
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, retained.backing.?.authority);
-    try std.testing.expectEqual(Type.IteratorRepresentation.minted, retained.def.iterator_representation);
-    try std.testing.expectEqual(@as(usize, 1), retained.args.len);
-    try std.testing.expect(graph.sameClass(retained.args[0], item));
-}
-
-test "opaque interface relation delegates nested private iterator requests to unification" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x73} ** 32));
-    const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(13) };
-    const item = try graph.newNode(.{ .primitive = .u64 });
-    const left_component = try graph.newNode(.empty_record);
-    const right_component = try graph.newNode(.empty_record);
-    const left_iter = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = .{
-            .module = module_identity,
-            .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x74} ** 32 },
-            .iterator_representation = .minted,
-            .iterator_kind = .concat,
-            .iterator_depth = 2,
-        },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ item, left_component }),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-    } });
-    const right_iter = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = .{
-            .module = module_identity,
-            .type_name = type_name,
-            .generated = .{ .bytes = [_]u8{0x75} ** 32 },
-            .iterator_representation = .minted,
-            .iterator_kind = .concat,
-            .iterator_depth = 2,
-        },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ item, right_component }),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-    } });
-    const public_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{left_iter}),
-        .ret = try graph.newNode(.empty_record),
-    } });
-    const private_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{right_iter}),
-        .ret = try graph.newNode(.empty_record),
-    } });
-
-    try graph.relateOpaqueInterface(public_fn, private_fn);
-
-    try std.testing.expect(graph.sameClass(left_iter, right_iter));
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(left_iter).named.backing.?.authority);
-    try std.testing.expectEqual(Type.IteratorRepresentation.minted, graph.content(left_iter).named.def.iterator_representation);
-}
-
-test "opaque relation materializes unresolved public named shell from request" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x52} ** 32));
-    const shell_type_name = try name_store.internTypeName("ShellEvidence");
-    const iter_type_name = try name_store.internTypeName("Iter");
-    const shell_named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(10) };
-    const iter_named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(11) };
-    const shell_def: Type.TypeDef = .{ .module = module_identity, .type_name = shell_type_name };
-    const iter_def: Type.TypeDef = .{ .module = module_identity, .type_name = iter_type_name };
-    const public = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
-    const public_source: InstIteratorPublicSource = .{
-        .named_type = iter_named_type,
-        .def = iter_def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
-        .declared_order = &.{},
-    };
-    const item = try graph.newNode(.{ .primitive = .u64 });
-    const private_arg = try graph.newNode(.{ .named = .{
-        .named_type = iter_named_type,
-        .def = .{
-            .module = module_identity,
-            .type_name = iter_type_name,
-            .iterator_representation = .minted,
-            .iterator_kind = .list,
-            .iterator_depth = 1,
-        },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ item, try graph.newNode(.empty_record) }),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-        .generated_iterator = .{
-            .callable_evidence = null,
-            .public_source = public_source,
-        },
-    } });
-    const request = try graph.newNode(.{ .named = .{
-        .named_type = shell_named_type,
-        .def = shell_def,
-        .kind = .@"opaque",
-        .builtin_owner = .fields,
-        .args = try graph.arena().dupe(NodeId, &.{private_arg}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-        },
-    } });
-
-    try graph.relateOpaqueInterface(public, request);
-
-    const retained_public = graph.content(public).named;
-    try std.testing.expect(graph.sameClass(public, request));
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, retained_public.backing.?.authority);
-    try std.testing.expectEqual(@as(usize, 1), retained_public.args.len);
-    try std.testing.expect(graph.sameClass(retained_public.args[0], private_arg));
-}
-
-test "generated iterator depth visits wide graphs without a size cutoff" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x64} ** 32));
-    const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(5) };
-    const public_backing = try graph.newNode(.empty_record);
-    const public_source: InstIteratorPublicSource = .{
-        .named_type = named_type,
-        .def = .{ .module = module_identity, .type_name = type_name },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-        .declared_order = &.{},
-    };
-    const item = try graph.newNode(.{ .primitive = .u64 });
-    const source = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = .{
-            .module = module_identity,
-            .type_name = type_name,
-            .iterator_kind = .single,
-        },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-        .generated_iterator = .{
-            .callable_evidence = null,
-            .public_source = public_source,
-        },
-    } });
-
-    // Put the only iterator-bearing child after the former 64-node walk
-    // budget. Graph width must not change the adapter's representation.
-    const wide_children = try graph.arena().alloc(NodeId, 65);
-    for (wide_children[0..64]) |*child| {
-        child.* = try graph.newNode(.{ .primitive = .u64 });
-    }
-    wide_children[64] = source;
-    const wide_component = try graph.newNode(.{ .tuple = wide_children });
-    const adapter = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = .{
-            .module = module_identity,
-            .type_name = type_name,
-            .iterator_kind = .concat,
-        },
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{ item, wide_component }),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-        .generated_iterator = .{
-            .callable_evidence = null,
-            .public_source = public_source,
-        },
-    } });
-
-    try graph.finalizeGeneratedIteratorRepresentations();
-
-    const finalized = graph.content(adapter).named.def;
-    try std.testing.expectEqual(Type.IteratorRepresentation.minted, finalized.iterator_representation);
-    try std.testing.expectEqual(@as(u8, 2), finalized.iterator_depth);
-}
-
-test "recursive join keeps graph-owned iterator provenance over a finished Monotype" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x65} ** 32));
-    const type_name = try name_store.internTypeName("Iter");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(6) };
-    const public_def: Type.TypeDef = .{
-        .module = module_identity,
-        .type_name = type_name,
-        .iterator_topology = .{
-            .len_field = try name_store.internRecordFieldLabel("len"),
-            .step_field = try name_store.internRecordFieldLabel("step"),
-            .known_tag = try name_store.internTagLabel("Known"),
-            .unknown_tag = try name_store.internTagLabel("Unknown"),
-            .done_tag = try name_store.internTagLabel("Done"),
-            .one_tag = try name_store.internTagLabel("One"),
-            .skip_tag = try name_store.internTagLabel("Skip"),
-            .item_field = try name_store.internRecordFieldLabel("item"),
-            .rest_field = try name_store.internRecordFieldLabel("rest"),
-        },
-    };
-    const item = try graph.newNode(.{ .primitive = .u64 });
-    const public_backing = try graph.newNode(.empty_record);
-    const public_source: InstIteratorPublicSource = .{
-        .named_type = named_type,
-        .def = public_def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-        .declared_order = &.{},
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &exact_args,
+        .backing = null,
     };
 
-    var finished_def = public_def;
-    finished_def.generated = .{ .bytes = [_]u8{0xA5} ** 32 };
-    finished_def.iterator_representation = .minted;
-    finished_def.iterator_kind = .list;
-    finished_def.iterator_depth = 1;
-    const finished = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = finished_def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-    } });
+    const first = try graph.reserveOrdinaryNamedBacking(identity, .inspectable);
+    const named = switch (first) {
+        .existing => return error.TestUnexpectedResult,
+        .vacant => |reservation| reservation.named,
+    };
+    const declared_order = [_]InstDeclaredField{.{ .named = label }};
+    try graph.completeOrdinaryNamedDeclaredOrder(named, &declared_order);
+    try std.testing.expectEqualSlices(
+        InstDeclaredField,
+        &declared_order,
+        graph.content(named).named.declared_order,
+    );
+    const before_exact_hit = graph.nodes.items.len;
+    const exact_hit = try graph.reserveOrdinaryNamedBacking(identity, .inspectable);
+    try std.testing.expectEqual(named, switch (exact_hit) {
+        .existing => |existing| existing,
+        .vacant => return error.TestUnexpectedResult,
+    });
+    try std.testing.expectEqual(before_exact_hit, graph.nodes.items.len);
 
-    var owned_def = public_def;
-    owned_def.iterator_representation = .minted;
-    owned_def.iterator_kind = .list;
-    owned_def.iterator_depth = 1;
-    const owned = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = owned_def,
-        .kind = .@"opaque",
-        .builtin_owner = .iter,
-        .args = try graph.arena().dupe(NodeId, &.{item}),
-        .backing = .{
-            .node = try graph.newNode(.empty_record),
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-        .generated_iterator = .{
-            .callable_evidence = null,
-            .public_source = public_source,
-        },
-    } });
-
-    // This order is significant: the finished type is the left side of the
-    // recursive join, but only the graph-owned side can author the final
-    // forced-dynamic representation.
-    try graph.markRecursiveValueSlot(finished);
-    try graph.unify(finished, owned);
-    try graph.finalizeGeneratedIteratorRepresentations();
-
-    const finalized = graph.content(finished).named;
-    try std.testing.expect(finalized.generated_iterator != null);
-    try std.testing.expectEqual(Type.IteratorRepresentation.forced_dynamic, finalized.def.iterator_representation);
-    try std.testing.expectEqual(Type.IteratorKind.forced_dynamic, finalized.def.iterator_kind);
+    var extended_args = [_]NodeId{extended_argument};
+    identity.args = &extended_args;
+    const normalized_hit = try graph.reserveOrdinaryNamedBacking(identity, .inspectable);
+    try std.testing.expectEqual(named, switch (normalized_hit) {
+        .existing => |existing| existing,
+        .vacant => return error.TestUnexpectedResult,
+    });
 }
 
-test "opaque interface relation preserves nested generated-private backing" {
+test "produced records erase checked row topology at their construction boundary" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -7547,88 +6449,84 @@ test "opaque interface relation preserves nested generated-private backing" {
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xBC} ** 32));
-    const type_name = try name_store.internTypeName("NestedEvidence");
-    const inner_type_name = try name_store.internTypeName("InnerEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(2) };
-    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(3) };
-    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
-    const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
-    const public_inner_backing = try graph.newNode(.empty_record);
-    const private_inner_backing = try graph.newNode(.empty_record);
-    const public_arg = try graph.newNode(.{ .named = .{
-        .named_type = inner_named_type,
-        .def = inner_def,
-        .kind = .@"opaque",
-        .builtin_owner = .fields,
-        .args = try graph.arena().alloc(NodeId, 0),
-        .backing = .{ .node = public_inner_backing, .use = .runtime_layout_only },
-    } });
-    const private_arg = try graph.newNode(.{ .named = .{
-        .named_type = inner_named_type,
-        .def = inner_def,
-        .kind = .@"opaque",
-        .builtin_owner = .fields,
-        .args = try graph.arena().alloc(NodeId, 0),
-        .backing = .{
-            .node = private_inner_backing,
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
-    } });
-    const public_backing = try graph.newNode(.empty_record);
-    const private_backing = try graph.newNode(.empty_record);
-    const public = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = def,
-        .kind = .@"opaque",
-        .builtin_owner = .fields,
-        .args = try graph.arena().dupe(NodeId, &.{public_arg}),
-        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
-    } });
-    const private = try graph.newNode(.{ .named = .{
-        .named_type = named_type,
-        .def = def,
-        .kind = .@"opaque",
-        .builtin_owner = .fields,
-        .args = try graph.arena().dupe(NodeId, &.{private_arg}),
-        .backing = .{
-            .node = private_backing,
-            .use = .runtime_layout_only,
-            .authority = .generated_private,
-        },
+    const empty = try graph.newNode(.empty_record);
+    const a_name = try name_store.internRecordFieldLabel("a");
+    const b_name = try name_store.internRecordFieldLabel("b");
+    const a_node = try graph.newNode(.{ .primitive = .u8 });
+    const b_node = try graph.newNode(.{ .primitive = .u16 });
+    const tail = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{
+            .name = a_name,
+            .ty = a_node,
+            .default = null,
+        }}),
+        .ext = empty,
     } });
 
-    const public_list = try graph.newNode(.{ .list = public });
-    const private_list = try graph.newNode(.{ .list = private });
-    const public_tuple = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{public}) });
-    const private_tuple = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{private}) });
-    const public_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{public_list}),
-        .ret = public_tuple,
-    } });
-    const private_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{private_list}),
-        .ret = private_tuple,
-    } });
+    const from_extension = try graph.newProducedRecord(&.{.{
+        .name = b_name,
+        .ty = b_node,
+        .default = null,
+    }}, tail);
+    const from_flat_fields = try graph.newProducedRecord(&.{
+        .{ .name = b_name, .ty = b_node, .default = null },
+        .{ .name = a_name, .ty = a_node, .default = null },
+    }, empty);
 
-    try graph.relateOpaqueInterface(public_fn, private_fn);
+    try std.testing.expectEqual(from_extension, from_flat_fields);
+    const produced = graph.content(from_extension).record;
+    try std.testing.expectEqual(empty, graph.rootNode(produced.ext));
+    try std.testing.expectEqual(@as(usize, 2), produced.fields.len);
+    try std.testing.expectEqual(a_name, produced.fields[0].name);
+    try std.testing.expectEqual(a_node, graph.rootNode(produced.fields[0].ty));
+    try std.testing.expectEqual(b_name, produced.fields[1].name);
+    try std.testing.expectEqual(b_node, graph.rootNode(produced.fields[1].ty));
+}
 
-    try std.testing.expect(!graph.sameClass(public_fn, private_fn));
-    try std.testing.expect(!graph.sameClass(public_list, private_list));
-    try std.testing.expect(!graph.sameClass(public_tuple, private_tuple));
-    try std.testing.expect(graph.sameClass(try graph.listElementNode(public_list), public));
-    try std.testing.expect(graph.sameClass(try graph.listElementNode(private_list), private));
-    try std.testing.expect(!graph.sameClass(public, private));
-    try std.testing.expect(!graph.sameClass(public_backing, private_backing));
-    try std.testing.expect(!graph.sameClass(public_arg, private_arg));
-    try std.testing.expect(!graph.sameClass(public_inner_backing, private_inner_backing));
-    const retained_public = graph.content(public).named;
-    const retained_private = graph.content(private).named;
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, retained_public.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, retained_private.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public_arg).named.backing.?.authority);
-    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private_arg).named.backing.?.authority);
+test "exact producers convert a concrete checked recipe bottom-up once" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    graph.beginCheckedBaseConstruction();
+    const item = try graph.newNode(.{ .primitive = .u8 });
+    graph.markCheckedBase(item);
+    const checked_list = try graph.newNode(.{ .list = item });
+    graph.markCheckedBase(checked_list);
+    const checked_default = try graph.newNode(.{ .unresolved = InstVariable.checkedVariableAtKey(
+        null,
+        null,
+        .empty_tag_union,
+        [_]u8{0} ** 32,
+    ) });
+    graph.markCheckedBase(checked_default);
+    const checked_tuple_items = try graph.arena().dupe(NodeId, &.{ checked_list, checked_default });
+    const checked_tuple = try graph.newNode(.{ .tuple = checked_tuple_items });
+    graph.markCheckedBase(checked_tuple);
+    graph.endCheckedBaseConstruction();
+
+    const produced_box = try graph.newProducedBox(checked_tuple);
+    const produced_tuple = graph.content(produced_box).box;
+    const produced_list = graph.content(produced_tuple).tuple[0];
+    const produced_default = graph.content(produced_tuple).tuple[1];
+
+    try std.testing.expect(!graph.nodeIsCheckedBase(produced_box));
+    try std.testing.expect(!graph.nodeIsCheckedBase(produced_tuple));
+    try std.testing.expect(!graph.nodeIsCheckedBase(produced_list));
+    try std.testing.expectEqual(item, graph.content(produced_list).list);
+    try std.testing.expect(!graph.nodeIsCheckedBase(produced_default));
+    try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(produced_default));
+
+    const node_count = graph.nodes.items.len;
+    try std.testing.expectEqual(produced_box, try graph.newProducedBox(checked_tuple));
+    try std.testing.expectEqual(node_count, graph.nodes.items.len);
 }
 
 test "issue 9647: unresolved tag row extension absorbs rest without allocating a rest node" {
@@ -7719,11 +6617,14 @@ test "issue 9647: same nominal backing wrapper resolves to structural backing on
 
     try graph.unify(outer_named, other);
 
-    try std.testing.expectEqual(before_nodes + 1, graph.nodes.items.len);
+    try std.testing.expect(graph.sameClass(inner_named, outer_named));
+    try std.testing.expectEqual(structural_backing, other);
+    try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
     const outer_content = graph.content(outer_named);
     if (outer_content != .named) return error.TestUnexpectedResult;
     const compressed = outer_content.named;
-    try std.testing.expectEqual(structural_backing, compressed.backing.?.node);
+    try std.testing.expect(!graph.sameClass(outer_named, compressed.backing.?.node));
+    try std.testing.expect(graph.content(compressed.backing.?.node) == .tag_union);
 }
 
 test "issue 9647: recursive nominal backing cycle is not chased as structural backing" {
@@ -7744,7 +6645,7 @@ test "issue 9647: recursive nominal backing cycle is not chased as structural ba
     const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(2) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
 
-    const nominal = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const nominal = try graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
     try graph.setContent(nominal, .{ .named = .{
         .named_type = named_type,
         .def = def,
@@ -7786,7 +6687,7 @@ test "recursive nominal backing can meet an alias to that nominal" {
     const nominal_def: Type.TypeDef = .{ .module = module_identity, .type_name = nominal_name };
     const alias_def: Type.TypeDef = .{ .module = module_identity, .type_name = alias_name };
 
-    const nominal = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const nominal = try graph.newNode(.{ .unresolved = InstVariable.constructionPlaceholder() });
     try graph.setContent(nominal, .{ .named = .{
         .named_type = nominal_type,
         .def = nominal_def,
@@ -7811,4 +6712,29 @@ test "recursive nominal backing can meet an alias to that nominal" {
     try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
     try std.testing.expectEqual(nominal, graph.find(nominal));
     try std.testing.expectEqual(alias, graph.find(alias));
+}
+
+test "permanently inhabited graph roots memoize only stable negative answers" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+    var diagnostics = GraphDiagnostics{};
+    graph.setDiagnostics(&diagnostics);
+
+    const inhabited = try graph.newNode(.{ .primitive = .u64 });
+    try std.testing.expect(!try graph.mayFinalizeAsUninhabited(inhabited));
+    try std.testing.expect(!try graph.mayFinalizeAsUninhabited(inhabited));
+    try std.testing.expectEqual(@as(u64, 2), diagnostics.permanent_inhabitedness_requests);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.permanent_inhabitedness_hits);
+
+    const unresolved = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    try std.testing.expect(try graph.mayFinalizeAsUninhabited(unresolved));
+    try std.testing.expect(try graph.mayFinalizeAsUninhabited(unresolved));
+    try std.testing.expectEqual(@as(u64, 4), diagnostics.permanent_inhabitedness_requests);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.permanent_inhabitedness_hits);
 }

@@ -218,6 +218,13 @@ pub const IteratorProcedureId = enum(u8) {
     iter_from_step,
     range_done,
 
+    /// Only the concrete `iter_from_step` boundary constructs a generated
+    /// iterator identity. Public iterator helpers carry the identity produced
+    /// by the `iter_from_step` call in their bodies.
+    pub fn constructsGeneratedIdentity(self: IteratorProcedureId) bool {
+        return self == .iter_from_step;
+    }
+
     /// Whether this exact checked procedure returns an iterator value. Keep
     /// this exhaustive: adding an iterator procedure must declare its producer
     /// role here instead of letting a later pass infer it from result shape.
@@ -308,6 +315,13 @@ pub const IteratorProcedureId = enum(u8) {
         };
     }
 };
+
+test "iterator identity inputs are explicit" {
+    try std.testing.expect(IteratorProcedureId.iter_from_step.constructsGeneratedIdentity());
+    try std.testing.expect(!IteratorProcedureId.range_done.constructsGeneratedIdentity());
+    try std.testing.expect(!IteratorProcedureId.list_iter.constructsGeneratedIdentity());
+    try std.testing.expect(!IteratorProcedureId.iter_next.constructsGeneratedIdentity());
+}
 
 const IteratorProcedureNameEntry = struct { []const u8, IteratorProcedureId };
 
@@ -478,6 +492,9 @@ pub const GraphParticipatingTarget = struct {
 pub const ProcedureMethodTarget = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
+    /// Definition whose procedure body the target executes. This differs from
+    /// `MethodTarget.def_idx` when an associated method is bound by reference.
+    source_def_idx: CIR.Def.Idx,
     runtime_target: ProcedureRuntimeTarget = .procedure,
 };
 
@@ -485,6 +502,7 @@ fn procedureRuntimeTargetForDef(
     module: TypedCIR.Module,
     def_idx: CIR.Def.Idx,
     method_owner: MethodOwner,
+    method_requires_exact_graph: bool,
 ) ProcedureRuntimeTarget {
     if (intrinsicForProcedureDef(module, def_idx)) |intrinsic| {
         if (intrinsic.callsiteArity() != null) return .{ .intrinsic = intrinsic };
@@ -495,6 +513,7 @@ fn procedureRuntimeTargetForDef(
     if (std.meta.activeTag(method_owner) == .builtin and isIteratorOwner(method_owner.builtin)) {
         return .{ .graph_participating = .{} };
     }
+    if (method_requires_exact_graph) return .{ .graph_participating = .{} };
     if (module.moduleEnvConst().providedLowLevelForDef(def_idx)) |op| return .{ .low_level = op };
     return .procedure;
 }
@@ -517,6 +536,9 @@ pub const LocalProcedureMethodTarget = struct {
     context_anchor: CheckedStatementId,
     /// Exact generalized-local evidence scope owned by this target.
     dispatch_scope: ?DispatchScopeId = null,
+    /// Whether this local procedure consumes or produces an exact Monotype
+    /// graph that must become its specialization interface.
+    graph_participating: bool = false,
 };
 
 /// Public `MethodTargetKind` declaration.
@@ -612,6 +634,7 @@ pub const MethodRegistry = struct {
             };
             const def_idx = entry.value.def_idx;
             if (unsupportedGeneratedMethodBinding(module, entry.value)) continue;
+            const method_requires_exact_graph = entry.key.methodIdent().eql(module_env.idents.from_interpolation);
             const method_owner = try methodOwnerForRegistryEntry(
                 module,
                 names,
@@ -637,11 +660,17 @@ pub const MethodRegistry = struct {
                         break :blk .{ .procedure = .{
                             .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
                             .template = template,
-                            .runtime_target = procedureRuntimeTargetForDef(module, def_idx, method_owner),
+                            .source_def_idx = def_idx,
+                            .runtime_target = procedureRuntimeTargetForDef(module, def_idx, method_owner, method_requires_exact_graph),
                         } };
                     },
                 }
-            } else if (localProcedureTargetForMethodBinding(module, checked_bodies, entry.key.owner, entry.value)) |local|
+            } else if (localProcedureTargetForMethodBinding(
+                module,
+                checked_bodies,
+                entry.value,
+                method_requires_exact_graph,
+            )) |local|
                 .{ .local_proc = local }
             else if (referencedProcedureTargetForMethodBinding(
                 module,
@@ -649,6 +678,7 @@ pub const MethodRegistry = struct {
                 checked_bodies,
                 entry.value,
                 method_owner,
+                method_requires_exact_graph,
             )) |referenced| blk: {
                 referenced_callable_var = referenced.callable_var;
                 break :blk referenced.kind;
@@ -756,8 +786,8 @@ fn unsupportedGeneratedMethodBinding(
 fn localProcedureTargetForMethodBinding(
     module: TypedCIR.Module,
     checked_bodies: anytype,
-    owner_statement: CIR.Statement.Idx,
     binding: ModuleEnv.MethodBinding,
+    graph_participating: bool,
 ) ?LocalProcedureMethodTarget {
     const raw_node = @intFromEnum(binding.type_node_idx);
     if (raw_node >= module.nodeCount()) {
@@ -789,11 +819,11 @@ fn localProcedureTargetForMethodBinding(
         unreachable;
     };
 
-    const context_anchor = checked_bodies.statementIdForSource(owner_statement) orelse {
+    const context_anchor = checked_bodies.statementIdForSource(statement) orelse {
         if (@import("builtin").mode == .Debug) {
             std.debug.panic(
-                "checked static dispatch registry invariant violated: local method owner statement {d} has no checked statement",
-                .{@intFromEnum(owner_statement)},
+                "checked static dispatch registry invariant violated: local method declaration statement {d} has no checked statement",
+                .{@intFromEnum(statement)},
             );
         }
         unreachable;
@@ -803,6 +833,7 @@ fn localProcedureTargetForMethodBinding(
         .binder = binder,
         .expr = expr,
         .context_anchor = context_anchor,
+        .graph_participating = graph_participating,
     };
 }
 
@@ -827,6 +858,7 @@ fn referencedProcedureTargetForMethodBinding(
     checked_bodies: anytype,
     binding: ModuleEnv.MethodBinding,
     method_owner: MethodOwner,
+    method_requires_exact_graph: bool,
 ) ?ReferencedProcedureTarget {
     const module_env = module.moduleEnvConst();
     var expr_idx = methodBindingExpr(module, binding) orelse return null;
@@ -844,7 +876,8 @@ fn referencedProcedureTargetForMethodBinding(
                         .callable => .{ .procedure = .{
                             .proc = .{ .artifact = template_entry.template.artifact, .proc_base = template_entry.template.proc_base },
                             .template = template_entry.template,
-                            .runtime_target = procedureRuntimeTargetForDef(module, target_def_idx, method_owner),
+                            .source_def_idx = target_def_idx,
+                            .runtime_target = procedureRuntimeTargetForDef(module, target_def_idx, method_owner, method_requires_exact_graph),
                         } },
                         .structural => |kind| .{ .structural = kind },
                     },
@@ -863,6 +896,7 @@ fn referencedProcedureTargetForMethodBinding(
                         .binder = binder,
                         .expr = expr,
                         .context_anchor = checked_bodies.statementIdForSource(decl.statement) orelse return null,
+                        .graph_participating = method_requires_exact_graph,
                     } },
                     .callable_var = module.exprType(decl.expr),
                 };
@@ -1180,14 +1214,37 @@ pub const StaticDispatchDispatcher = union(enum) {
 };
 
 /// Public `StaticDispatchOperand` declaration.
+pub const LiteralConversionResultTopology = struct {
+    ok_tag: canonical.TagLabelId,
+    err_tag: canonical.TagLabelId,
+};
+
+/// Compiler-generated argument passed to a custom numeral conversion.
+pub const GeneratedNumeralOperand = struct {
+    literal: ModuleEnv.NumeralLiteral,
+    literal_tag: canonical.TagLabelId,
+    is_negative_field: canonical.RecordFieldLabelId,
+    digits_before_pt_field: canonical.RecordFieldLabelId,
+    digits_after_pt_field: canonical.RecordFieldLabelId,
+    digits_after_pt_count_field: canonical.RecordFieldLabelId,
+    result: LiteralConversionResultTopology,
+};
+
+/// Compiler-generated argument passed to a custom string conversion.
+pub const GeneratedQuoteOperand = struct {
+    literal: CheckedStringLiteralId,
+    result: LiteralConversionResultTopology,
+};
+
+/// One source or compiler-generated operand in a static dispatch call.
 pub const StaticDispatchOperand = union(enum) {
     checked_expr: CheckedExprId,
     /// Compiler-generated finite `Iter` for string interpolation. The checked
     /// expression owns the first segment and flat interpolation parts.
     generated_interpolation_iter: CheckedExprId,
-    generated_numeral: ModuleEnv.NumeralLiteral,
+    generated_numeral: GeneratedNumeralOperand,
     /// A string literal's post-escape contents, passed to `from_quote` as Str.
-    generated_quote: CheckedStringLiteralId,
+    generated_quote: GeneratedQuoteOperand,
 };
 
 /// Public `StructuralKind` declaration.
@@ -1902,7 +1959,20 @@ pub const StaticDispatchPlanTable = struct {
                 }
                 unreachable;
             }
-            var args = [_]StaticDispatchOperand{.{ .generated_numeral = literal }};
+            const idents = module.commonIdents();
+            const result_topology = LiteralConversionResultTopology{
+                .ok_tag = try names.internTagIdent(module.identStoreConst(), idents.ok),
+                .err_tag = try names.internTagIdent(module.identStoreConst(), idents.err),
+            };
+            var args = [_]StaticDispatchOperand{.{ .generated_numeral = .{
+                .literal = literal,
+                .literal_tag = try names.internTagIdent(module.identStoreConst(), idents.numeral_literal),
+                .is_negative_field = try names.internRecordFieldIdent(module.identStoreConst(), idents.is_negative),
+                .digits_before_pt_field = try names.internRecordFieldIdent(module.identStoreConst(), idents.digits_before_pt),
+                .digits_after_pt_field = try names.internRecordFieldIdent(module.identStoreConst(), idents.digits_after_pt),
+                .digits_after_pt_count_field = try names.internRecordFieldIdent(module.identStoreConst(), idents.digits_after_pt_count),
+                .result = result_topology,
+            } }};
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
@@ -1957,7 +2027,14 @@ pub const StaticDispatchPlanTable = struct {
                 unreachable;
             }
             const literal = checked_expr_data.str_from_quote.literal;
-            var args = [_]StaticDispatchOperand{.{ .generated_quote = literal }};
+            const idents = module.commonIdents();
+            var args = [_]StaticDispatchOperand{.{ .generated_quote = .{
+                .literal = literal,
+                .result = .{
+                    .ok_tag = try names.internTagIdent(module.identStoreConst(), idents.ok),
+                    .err_tag = try names.internTagIdent(module.identStoreConst(), idents.err),
+                },
+            } }};
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));

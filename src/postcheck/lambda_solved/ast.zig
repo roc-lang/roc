@@ -44,6 +44,10 @@ pub const ProgramView = struct {
     defs: []const Def,
     local_tys: []const Type.TypeVarId,
     expr_tys: []const Type.TypeVarId,
+    /// Whether evaluating each expression would have to produce an
+    /// uninhabited value. Later lowering uses this explicit solved output to
+    /// stop at the first impossible constructor child.
+    expr_is_uninhabited: []const bool,
     pat_tys: []const Type.TypeVarId,
     fn_tys: []const Type.TypeVarId,
     layout_requests: []const LayoutRequest,
@@ -58,6 +62,7 @@ pub const Program = struct {
     defs: std.ArrayList(Def),
     local_tys: std.ArrayList(Type.TypeVarId),
     expr_tys: std.ArrayList(Type.TypeVarId),
+    expr_is_uninhabited: std.ArrayList(bool),
     pat_tys: std.ArrayList(Type.TypeVarId),
     fn_tys: std.ArrayList(Type.TypeVarId),
     layout_requests: std.ArrayList(LayoutRequest),
@@ -71,6 +76,7 @@ pub const Program = struct {
             .defs = .empty,
             .local_tys = .empty,
             .expr_tys = .empty,
+            .expr_is_uninhabited = .empty,
             .pat_tys = .empty,
             .fn_tys = .empty,
             .layout_requests = .empty,
@@ -83,6 +89,7 @@ pub const Program = struct {
         self.layout_requests.deinit(self.allocator);
         self.fn_tys.deinit(self.allocator);
         self.pat_tys.deinit(self.allocator);
+        self.expr_is_uninhabited.deinit(self.allocator);
         self.expr_tys.deinit(self.allocator);
         self.local_tys.deinit(self.allocator);
         self.defs.deinit(self.allocator);
@@ -97,11 +104,22 @@ pub const Program = struct {
             .defs = self.defs.items,
             .local_tys = self.local_tys.items,
             .expr_tys = self.expr_tys.items,
+            .expr_is_uninhabited = self.expr_is_uninhabited.items,
             .pat_tys = self.pat_tys.items,
             .fn_tys = self.fn_tys.items,
             .layout_requests = self.layout_requests.items,
             .runtime_schema_requests = self.runtime_schema_requests.items,
         };
+    }
+
+    /// Return Lambda Solved's explicit inhabitation result for one lifted
+    /// expression.
+    pub fn exprIsUninhabited(self: *const Program, expr: Lifted.ExprId) bool {
+        const index = @intFromEnum(expr);
+        if (index >= self.expr_is_uninhabited.items.len) {
+            Common.invariant("Lambda Solved omitted expression inhabitation data");
+        }
+        return self.expr_is_uninhabited.items[index];
     }
 };
 

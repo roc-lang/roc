@@ -1439,6 +1439,28 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "42.0" },
     },
     .{
+        .name = "inspect: list concat carries callable evidence from a nonempty input",
+        .source_kind = .module,
+        .source =
+        \\main = match List.concat([], [|x| x + 1]) {
+        \\    [f] => f(41)
+        \\    _ => 0
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: list append merges callable evidence from stored and inserted values",
+        .source_kind = .module,
+        .source =
+        \\main = match [|x| x + 1].append(|x| x + 2) {
+        \\    [f, g] => f(39) + g(0)
+        \\    _ => 0
+        \\}
+        ,
+        .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
         .name = "inspect: compile-time callable result reused through top-level data",
         .source_kind = .module,
         .source =
@@ -2062,6 +2084,54 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
+    },
+    .{
+        .name = "inspect: capturing local from_interpolation receives exact generated iterator",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    suffix = "!"
+        \\    Local := [Local(Str)].{
+        \\        from_interpolation : Str, Iter((Str, Str)) -> Local
+        \\        from_interpolation = |first, rest| {
+        \\            joined = rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))
+        \\            Local.Local(joined.concat(suffix))
+        \\        }
+        \\    }
+        \\    name = "world"
+        \\    value : Local
+        \\    value = "hello ${name}"
+        \\    value
+        \\}
+        ,
+        .expected = .{ .inspect_str = "Local(\"hello world!\")" },
+    },
+    .{
+        .name = "inspect: referenced recursive from_interpolation preserves exact iterator",
+        .source_kind = .module,
+        .source =
+        \\Url := [Url(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Url
+        \\    from_interpolation = join_parts
+        \\}
+        \\
+        \\join_parts : Str, Iter((Str, Str)) -> Url
+        \\join_parts = |acc, rest|
+        \\    match Iter.next(rest) {
+        \\        Done => Url.Url(acc)
+        \\        One({ item: (interpolated, segment), rest: next }) => join_parts(acc.concat(interpolated).concat(segment), next)
+        \\        Skip({ rest: next }) => join_parts(acc, next)
+        \\    }
+        \\
+        \\main = {
+        \\    name = "world"
+        \\    value : Url
+        \\    value = "hello ${name}!"
+        \\    direct = join_parts("", [("x", "y")].iter())
+        \\    (value, direct)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(Url(\"hello world!\"), Url(\"xy\"))" },
     },
     .{
         .name = "inspect: generalized interpolation supports custom and builtin specializations",
@@ -2910,6 +2980,19 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "Ok({ n: 5.0 })" },
+    },
+    .{
+        .name = "inspect: early returns produce their exact error rows before selection",
+        .source_kind = .module,
+        .source =
+        \\choose_error = |first| {
+        \\    if first { return Err(First) }
+        \\    Err(Second)
+        \\}
+        \\
+        \\main = choose_error(True)
+        ,
+        .expected = .{ .inspect_str = "Err(First)" },
     },
     .{
         .name = "inspect: two-level closure factory",
@@ -4839,6 +4922,426 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Unknown" },
     },
     .{
+        .name = "inspect: ordinary procedure return preserves exact iterator",
+        .source_kind = .module,
+        .source =
+        \\make_iter = |values| values.iter()
+        \\
+        \\main = Iter.fold(make_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: ordinary procedure preserves nested exact iterator",
+        .source_kind = .module,
+        .source =
+        \\make_iter = |values| {
+        \\    iterator = values.iter()
+        \\    { iterator }
+        \\}
+        \\
+        \\main = Iter.fold(make_iter([1.I64, 2, 3]).iterator, [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: independent procedure arguments preserve both canonical iterator values",
+        .source_kind = .module,
+        .source =
+        \\fold_two : Iter(I64), Iter(I64) -> List(I64)
+        \\fold_two = |first, second| {
+        \\    from_first = Iter.fold(first, [], |out, value| out.append(value))
+        \\    Iter.fold(second, from_first, |out, value| out.append(value))
+        \\}
+        \\
+        \\main = fold_two(
+        \\    [1.I64, 2].iter(),
+        \\    [3.I64, 4].iter().map(|value| value),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3, 4]" },
+    },
+    .{
+        .name = "inspect: callable returned by a procedure preserves an exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\choose = |callable| callable
+        \\
+        \\main = {
+        \\    make_iter = choose(|values| values.iter())
+        \\    Iter.fold(make_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: callable selected from a record preserves an exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\make_iter : List(I64) -> Iter(I64)
+        \\make_iter = |values| values.iter()
+        \\
+        \\main = {
+        \\    operations = { make_iter: make_iter }
+        \\    Iter.fold((operations.make_iter)([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: callable selected from a returned record preserves an exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\make_iter : List(I64) -> Iter(I64)
+        \\make_iter = |values| values.iter()
+        \\
+        \\make_operations = || { make_iter: make_iter }
+        \\
+        \\main = {
+        \\    operations = make_operations()
+        \\    Iter.fold((operations.make_iter)([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: top-level record constant preserves an exact callable result",
+        .source_kind = .module,
+        .source =
+        \\operations = { make_iter: |values| values.iter() }
+        \\
+        \\main = Iter.fold((operations.make_iter)([1.I64, 2, 3]), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: top-level tuple constant preserves an exact callable result",
+        .source_kind = .module,
+        .source =
+        \\operations = (|values| values.iter(), {})
+        \\
+        \\main = Iter.fold((operations.0)([1.I64, 2, 3]), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: top-level tag constant preserves an exact callable result",
+        .source_kind = .module,
+        .source =
+        \\operation = MakeIter(|values| values.iter())
+        \\
+        \\main = match operation {
+        \\    MakeIter(make_iter) => Iter.fold(make_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: top-level list constant preserves an exact callable result",
+        .source_kind = .module,
+        .source =
+        \\operations = [|values| values.iter()]
+        \\
+        \\main = match operations {
+        \\    [make_iter] => Iter.fold(make_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\    _ => []
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: top-level box constant preserves an exact callable result",
+        .source_kind = .module,
+        .source =
+        \\operation = Box.box(|values| values.iter())
+        \\
+        \\main = {
+        \\    make_iter = Box.unbox(operation)
+        \\    Iter.fold(make_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: record rest preserves an exact iterator field",
+        .source_kind = .module,
+        .source =
+        \\make_record = |values| { ignored: "drop", iterator: values.iter() }
+        \\
+        \\main = {
+        \\    { ignored: _, ..rest } = make_record([1.I64, 2, 3])
+        \\    Iter.fold(rest.iterator, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: match destructure preserves an exact iterator field",
+        .source_kind = .module,
+        .source =
+        \\select_iter : { iterator : Iter(I64), ignored : Str } -> Iter(I64)
+        \\select_iter = |record|
+        \\    match record {
+        \\        { iterator, ignored: _ } => iterator
+        \\    }
+        \\
+        \\main = {
+        \\    selected = select_iter({ iterator: [1.I64, 2, 3].iter(), ignored: "drop" })
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: parameter destructure preserves an exact iterator field",
+        .source_kind = .module,
+        .source =
+        \\select_iter : { iterator : Iter(I64), ignored : Str } -> Iter(I64)
+        \\select_iter = |{ iterator, ignored: _ }| iterator
+        \\
+        \\main = {
+        \\    selected = select_iter({ iterator: [1.I64, 2, 3].iter(), ignored: "drop" })
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: for binder early return preserves an exact iterator item",
+        .source_kind = .module,
+        .source =
+        \\first_iter : List(Iter(I64)) -> Iter(I64)
+        \\first_iter = |iters| {
+        \\    for iter in iters {
+        \\        return iter
+        \\    }
+        \\    [].iter()
+        \\}
+        \\
+        \\main = {
+        \\    selected = first_iter([[1.I64, 2, 3].iter(), [4.I64].iter()])
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: nested return preserves an exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\return_from_condition : Iter(I64) -> Iter(I64)
+        \\return_from_condition = |iter| if return iter {
+        \\    crash "unreachable"
+        \\} else {
+        \\    crash "unreachable"
+        \\}
+        \\
+        \\main = {
+        \\    selected = return_from_condition([1.I64, 2, 3].iter())
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: box round trip preserves an exact iterator",
+        .source_kind = .module,
+        .source =
+        \\box_round_trip = |value| Box.unbox(Box.box(value))
+        \\
+        \\main = {
+        \\    selected = box_round_trip([1.I64, 2, 3].iter())
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: list append and get preserve an exact iterator item",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    stored = [].append([1.I64, 2, 3].iter())
+        \\    selected = stored.get(0).ok_or([].iter())
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: list reverse preserves an exact iterator item",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    stored = List.rev([[1.I64, 2, 3].iter()])
+        \\    selected = stored.get(0).ok_or([].iter())
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: list replace relates equal exact iterator list occurrences",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    replaced = Try.ok_or(
+        \\        List.replace([[1.I64].iter()], 0, [2.I64, 3].iter()),
+        \\        { list: [], prev: [].iter() },
+        \\    )
+        \\    current = replaced.list.get(0).ok_or([].iter())
+        \\    (
+        \\        Iter.fold(replaced.prev, [], |out, value| out.append(value)),
+        \\        Iter.fold(current, [], |out, value| out.append(value)),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([1], [2, 3])" },
+    },
+    .{
+        .name = "inspect: list map preserves an exact iterator result item",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    stored = List.map([1.I64, 2], |value| [value].iter())
+        \\    selected = stored.get(1).ok_or([].iter())
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[2]" },
+    },
+    .{
+        .name = "inspect: list map extracts an exact iterator input item",
+        .source_kind = .module,
+        .source =
+        \\main = List.map(
+        \\    [[1.I64, 2, 3].iter()],
+        \\    |iter| Iter.fold(iter, 0.I64, |sum, value| sum + value),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "[6]" },
+    },
+    .{
+        .name = "inspect: generic procedure passes through exact iterator",
+        .source_kind = .module,
+        .source =
+        \\identity = |value| value
+        \\
+        \\main = Iter.fold(identity([1.I64, 2, 3].iter()), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: exact iterator result flows through procedure chain",
+        .source_kind = .module,
+        .source =
+        \\make_iter = |values| values.iter()
+        \\forward_iter = |values| make_iter(values)
+        \\
+        \\main = Iter.fold(forward_iter([1.I64, 2, 3]), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: local procedure preserves evidence-dependent exact result",
+        .source_kind = .module,
+        .source =
+        \\Source := [Source].{
+        \\    choose : Source, Iter(I64) -> Iter(I64)
+        \\    choose = |_, iter| iter
+        \\}
+        \\
+        \\through_local : source, Iter(I64) -> Iter(I64) where [source.choose : source, Iter(I64) -> Iter(I64)]
+        \\through_local = |source, iter| {
+        \\    forward = || source.choose(iter)
+        \\    forward()
+        \\}
+        \\
+        \\main = Iter.fold(through_local(Source.Source, [1.I64, 2, 3].iter().map(|value| value)), [], |out, value| out.append(value))
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: local method evidence preserves an exact result",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    Local := [Local(List(I64))].{
+        \\        iter : Local -> Iter(I64)
+        \\        iter = |Local.Local(values)| values.iter().map(|value| value)
+        \\    }
+        \\    through_method = |value| value.iter()
+        \\    selected = through_method(Local.Local([1, 2, 3]))
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: mutually recursive procedures preserve exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\forward : Iter(I64), U64 -> Iter(I64)
+        \\forward = |iter, remaining|
+        \\    if remaining > 0 {
+        \\        bounce(iter, remaining - 1)
+        \\    } else {
+        \\        iter
+        \\    }
+        \\bounce : Iter(I64), U64 -> Iter(I64)
+        \\bounce = |iter, remaining| forward(iter, remaining)
+        \\main = {
+        \\    selected = bounce([1.I64, 2, 3].iter(), 1)
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: control flow shares the canonical iterator representation",
+        .source_kind = .module,
+        .source =
+        \\choose = |condition|
+        \\    if condition {
+        \\        [1.I64, 2, 3].iter()
+        \\    } else {
+        \\        [4.I64, 5, 6].iter().map(|value| value)
+        \\    }
+        \\collect = |condition| Iter.fold(choose(condition), [], |out, value| out.append(value))
+        \\main = (collect(True), collect(False))
+        ,
+        .expected = .{ .inspect_str = "([1, 2, 3], [4, 5, 6])" },
+    },
+    .{
+        .name = "inspect: local attached procedure preserves exact iterator result",
+        .source_kind = .module,
+        .source =
+        \\make_iter = || [1.I64, 2, 3].iter()
+        \\
+        \\main = {
+        \\    Source := [Source].{
+        \\        make : Source -> Iter(I64)
+        \\        make = |_| make_iter()
+        \\    }
+        \\    selected = Source.make(Source.Source)
+        \\    Iter.fold(selected, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: iterator procedure value retains its checked source",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    iter_fn = List.iter
+        \\    iterator = iter_fn([1.I64, 2, 3])
+        \\    Iter.fold(iterator, [], |out, value| out.append(value))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
         .name = "inspect: Iter.append yields item after iterator",
         .source =
         \\{
@@ -5037,6 +5540,369 @@ const core_tests = [_]TestCase{
         \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
         ,
         .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "for loop over a match joining two producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| match flag {
+        \\    True => xs.iter()
+        \\    False => (0..<n).iter()
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "for loop over an early return joining two producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| {
+        \\    if flag {
+        \\        return xs.iter()
+        \\    }
+        \\    (0..<n).iter()
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "for loop over a record branch joining nested producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> { it : Iter(U64) }
+        \\pick = |xs, n, flag| if flag {
+        \\    { it: xs.iter() }
+        \\} else {
+        \\    { it: (0..<n).iter() }
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for x in pick(xs, n, flag).it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "for loop over list storage joining nested producer representations",
+        .source_kind = .module,
+        .source =
+        \\wrap : List(U64), U64 -> List({ it : Iter(U64) })
+        \\wrap = |xs, n| [{ it: xs.iter() }, { it: (0..<n).iter() }]
+        \\
+        \\main = {
+        \\    var $sum = 0
+        \\    for row in wrap([1, 2, 3], 4) {
+        \\        for x in row.it {
+        \\            $sum = $sum + x
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "12" },
+    },
+    .{
+        .name = "for loop over a branch joining list element producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> List(Iter(U64))
+        \\pick = |xs, n, flag| if flag {
+        \\    [xs.iter()]
+        \\} else {
+        \\    [(0..<n).iter()]
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    var $sum = 0
+        \\    for it in pick(xs, n, flag) {
+        \\        for x in it {
+        \\            $sum = $sum + x
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(6, 6)" },
+    },
+    .{
+        .name = "for loop over a stateful branch joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> (Iter(U64), U64)
+        \\pick = |xs, n, flag| {
+        \\    var $selected = 0
+        \\    it : Iter(U64)
+        \\    it = if flag {
+        \\        $selected = 10
+        \\        xs.iter()
+        \\    } else {
+        \\        $selected = 20
+        \\        (0..<n).iter()
+        \\    }
+        \\    (it, $selected)
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    (it, selected) = pick(xs, n, flag)
+        \\    var $sum = selected
+        \\    for x in it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(16, 26)" },
+    },
+    .{
+        .name = "for loop over a stateful match joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> (Iter(U64), U64)
+        \\pick = |xs, n, flag| {
+        \\    var $selected = 0
+        \\    it : Iter(U64)
+        \\    it = match flag {
+        \\        True => {
+        \\            $selected = 10
+        \\            xs.iter()
+        \\        }
+        \\        False => {
+        \\            $selected = 20
+        \\            (0..<n).iter()
+        \\        }
+        \\    }
+        \\    (it, $selected)
+        \\}
+        \\
+        \\sum_it : List(U64), U64, Bool -> U64
+        \\sum_it = |xs, n, flag| {
+        \\    (it, selected) = pick(xs, n, flag)
+        \\    var $sum = selected
+        \\    for x in it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main = (sum_it([1, 2, 3], 4, Bool.True), sum_it([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(16, 26)" },
+    },
+    .{
+        .name = "for loop after state-only branch joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| {
+        \\    var $it = xs.iter()
+        \\    if flag {
+        \\        $it = xs.iter_rev()
+        \\    } else {
+        \\        $it = (0..<n).iter()
+        \\    }
+        \\    $it
+        \\}
+        \\
+        \\digits : List(U64), U64, Bool -> U64
+        \\digits = |xs, n, flag| {
+        \\    var $out = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = (digits([1, 2, 3], 4, Bool.True), digits([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(321, 123)" },
+    },
+    .{
+        .name = "for loop after state-only match joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, flag| {
+        \\    var $it = xs.iter()
+        \\    match flag {
+        \\        True => {
+        \\            $it = xs.iter_rev()
+        \\            {}
+        \\        }
+        \\        False => {
+        \\            $it = (0..<n).iter()
+        \\            {}
+        \\        }
+        \\    }
+        \\    $it
+        \\}
+        \\
+        \\digits : List(U64), U64, Bool -> U64
+        \\digits = |xs, n, flag| {
+        \\    var $out = 0
+        \\    for x in pick(xs, n, flag) {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = (digits([1, 2, 3], 4, Bool.True), digits([1, 2, 3], 4, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(321, 123)" },
+    },
+    .{
+        .name = "for loop after nested stateful branch joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool, Bool -> (Iter(U64), Iter(U64))
+        \\pick = |xs, n, outer, inner| {
+        \\    var $saved = xs.iter()
+        \\    it = if outer {
+        \\        $saved = xs.iter_rev()
+        \\        if inner {
+        \\            $saved = (0..<n).iter()
+        \\            xs.iter()
+        \\        } else {
+        \\            $saved = xs.iter()
+        \\            xs.iter_rev()
+        \\        }
+        \\    } else {
+        \\        $saved = (0..<n).iter()
+        \\        xs.iter()
+        \\    }
+        \\    (it, $saved)
+        \\}
+        \\
+        \\digits : Iter(U64) -> U64
+        \\digits = |it| {
+        \\    var $out = 0
+        \\    for x in it {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\run : List(U64), U64, Bool, Bool -> (U64, U64)
+        \\run = |xs, n, outer, inner| {
+        \\    (it, saved) = pick(xs, n, outer, inner)
+        \\    (digits(it), digits(saved))
+        \\}
+        \\
+        \\main = (run([4, 5, 6], 3, Bool.True, Bool.True), run([4, 5, 6], 3, Bool.True, Bool.False), run([4, 5, 6], 3, Bool.False, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "((456, 12), (654, 456), (456, 12))" },
+    },
+    .{
+        .name = "for loop after nested stateful match joining producer representations",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool, Bool -> (Iter(U64), Iter(U64))
+        \\pick = |xs, n, outer, inner| {
+        \\    var $saved = xs.iter()
+        \\    it = match outer {
+        \\        True => {
+        \\            $saved = xs.iter_rev()
+        \\            match inner {
+        \\                True => {
+        \\                    $saved = (0..<n).iter()
+        \\                    xs.iter()
+        \\                }
+        \\                False => {
+        \\                    $saved = xs.iter()
+        \\                    xs.iter_rev()
+        \\                }
+        \\            }
+        \\        }
+        \\        False => {
+        \\            $saved = (0..<n).iter()
+        \\            xs.iter()
+        \\        }
+        \\    }
+        \\    (it, $saved)
+        \\}
+        \\
+        \\digits : Iter(U64) -> U64
+        \\digits = |it| {
+        \\    var $out = 0
+        \\    for x in it {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\run : List(U64), U64, Bool, Bool -> (U64, U64)
+        \\run = |xs, n, outer, inner| {
+        \\    (it, saved) = pick(xs, n, outer, inner)
+        \\    (digits(it), digits(saved))
+        \\}
+        \\
+        \\main = (run([4, 5, 6], 3, Bool.True, Bool.True), run([4, 5, 6], 3, Bool.True, Bool.False), run([4, 5, 6], 3, Bool.False, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "((456, 12), (654, 456), (456, 12))" },
+    },
+    .{
+        .name = "for loop after loop-carried iterator reassignment",
+        .source_kind = .module,
+        .source =
+        \\pick : List(U64), U64, Bool -> Iter(U64)
+        \\pick = |xs, n, replace| {
+        \\    var $it = xs.iter_rev()
+        \\    var $again = replace
+        \\    while $again {
+        \\        $it = (0..<n).iter()
+        \\        $again = Bool.False
+        \\    }
+        \\    $it
+        \\}
+        \\
+        \\digits : List(U64), U64, Bool -> U64
+        \\digits = |xs, n, replace| {
+        \\    var $out = 0
+        \\    for x in pick(xs, n, replace) {
+        \\        $out = $out * 10 + x
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\main = (digits([4, 5, 6], 3, Bool.True), digits([4, 5, 6], 3, Bool.False))
+        ,
+        .expected = .{ .inspect_str = "(12, 654)" },
     },
     .{
         .name = "inspect: wrapper iterator with distinct branch producers stays correct",

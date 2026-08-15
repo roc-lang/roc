@@ -123,21 +123,8 @@ pub const TypeDef = struct {
     /// Compiler-generated specialization identity for internal nominals minted
     /// after checking while preserving the public declaration identity.
     generated: ?names.TypeDigest = null,
-    iterator_representation: IteratorRepresentation = .none,
-    iterator_kind: IteratorKind = .none,
-    iterator_depth: u8 = 0,
     iterator_topology: ?IteratorTopology = null,
 };
-
-/// Target-independent Monotype iterator tier preserved across constant storage.
-pub const IteratorRepresentation = enum(u8) {
-    none,
-    minted,
-    forced_dynamic,
-};
-
-/// Producer or adapter that minted a stored iterator representation.
-pub const IteratorKind = static_dispatch.IteratorKind;
 
 /// How much of a stored named type's backing type later stages may inspect.
 pub const TypeBackingUse = enum {
@@ -637,9 +624,6 @@ pub const ConstTypeStore = struct {
             .type_name = try translation.target.internTypeName(translation.source.typeNameText(def.type_name)),
             .source_decl = def.source_decl,
             .generated = def.generated,
-            .iterator_representation = def.iterator_representation,
-            .iterator_kind = def.iterator_kind,
-            .iterator_depth = def.iterator_depth,
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try translateRecordFieldName(name_translation, topology.len_field),
                 .step_field = try translateRecordFieldName(name_translation, topology.step_field),

@@ -113,7 +113,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // ModuleEnv.init() also interns 16 well-known identifiers: Try, OutOfRange, Builtin, plus, minus, times, div_by, div_trunc_by, rem_by, negate, not, is_lt, is_lte, is_gt, is_gte, is_eq
     // Plus 19 type identifiers: Str, Builtin.Try, Builtin.Num.Numeral, Builtin.Str, List, Box, Builtin.Num.{U8, I8, U16, I16, U32, I32, U64, I64, U128, I128, F32, F64, Dec}
     // Plus 3 field/tag identifiers: before_dot, after_dot, ProvidedByCompiler
-    // Plus 7 more identifiers: tag, payload, is_negative, digits_before_pt, digits_after_pt, box, unbox
+    // Plus 8 more identifiers: tag, payload, Literal, is_negative, digits_before_pt, digits_after_pt, box, unbox
     // Plus 2 Try tag identifiers: Ok, Err
     // Plus 1 method identifier: from_numeral
     // Plus 1 interpolation method identifier: from_interpolation
@@ -135,7 +135,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Builtin.Num.Range, range_exclusive_to, range_inclusive_to
     // Count reflects the merged builtin set, including structural parser/encoder
     // method identifiers, Builtin.Json.Encoding's parse/encode helpers, and Crypto.
-    try testing.expectEqual(@as(u32, 121), original.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 122), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -146,7 +146,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // First verify that the CommonEnv data was preserved after deserialization
     // Should have same identifiers as original, including the builtin structural method identifiers.
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 121), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 122), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

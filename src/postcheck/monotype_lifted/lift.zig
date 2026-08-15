@@ -718,7 +718,10 @@ const Lifter = struct {
                     .is_cold = call.is_cold,
                 } });
             },
-            .low_level => |call| try self.rewriteExprSpan(call.args),
+            .low_level => |call| {
+                try self.rewriteExprSpan(call.args);
+                if (call.produced_type_source) |source| try self.rewriteExpr(source);
+            },
             .field_access => |field| try self.rewriteExpr(field.receiver),
             .tuple_access => |access| try self.rewriteExpr(access.tuple),
             .structural_eq => |eq| {

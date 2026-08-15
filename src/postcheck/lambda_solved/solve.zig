@@ -109,16 +109,11 @@ const Solver = struct {
     return_contexts: std.ArrayList(ReturnContext),
     active_unifications: std.AutoHashMap(UnifyPair, void),
     unify_stack: std.ArrayList(UnifyFrame),
-    active_private_evidence_relations: std.AutoHashMap(UnifyPair, void),
     /// Per lifted Monotype: whether any `func` or `erased` node is reachable
     /// from it. Clones of callable-free types carry no unbound slots and no
     /// mutable lambda-set state, so one shared clone serves every use, and
     /// lazy-leaf walks skip callable-free leaves without materializing them.
     contains_callable: []bool,
-    /// Per lifted Monotype: whether a forced-dynamic iterator named type is
-    /// reachable from it. The forced-dynamic scan materializes exactly these
-    /// leaves so the named nodes it must mark exist in the solved store.
-    contains_forced_dynamic: []bool,
     shared_clones: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
     /// One memo map per lazily materialized tree, tying recursive
     /// back-references to their existing vars exactly as an eager clone's
@@ -139,25 +134,6 @@ const Solver = struct {
     };
 
     const BoundLowLevel = enum {
-        box_box,
-        box_unbox,
-        list_get_unsafe,
-        list_append_unsafe,
-        list_concat,
-        list_reserve,
-        list_drop_at,
-        list_sublist,
-        list_take_first,
-        list_take_last,
-        list_drop_first,
-        list_drop_last,
-        list_release_excess_capacity,
-        list_reverse,
-        list_set,
-        list_replace_unsafe,
-        list_swap,
-        list_prepend,
-        list_map_prepare_reuse,
         dict_pseudo_seed,
         hasher_finish,
         crypto_sha256_hash_bytes,
@@ -221,7 +197,6 @@ const Solver = struct {
 
         const masks = try computeReachabilityMasks(allocator, lifted.types);
         errdefer allocator.free(masks.contains_callable);
-        errdefer allocator.free(masks.contains_forced_dynamic);
 
         return .{
             .allocator = allocator,
@@ -238,9 +213,7 @@ const Solver = struct {
             .return_contexts = .empty,
             .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
             .unify_stack = .empty,
-            .active_private_evidence_relations = std.AutoHashMap(UnifyPair, void).init(allocator),
             .contains_callable = masks.contains_callable,
-            .contains_forced_dynamic = masks.contains_forced_dynamic,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
             .leaf_contexts = .empty,
             .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
@@ -256,9 +229,7 @@ const Solver = struct {
         for (self.leaf_contexts.items) |*ctx| ctx.deinit();
         self.leaf_contexts.deinit(self.allocator);
         self.shared_clones.deinit();
-        self.allocator.free(self.contains_forced_dynamic);
         self.allocator.free(self.contains_callable);
-        self.active_private_evidence_relations.deinit();
         self.unify_stack.deinit(self.allocator);
         self.active_unifications.deinit();
         self.return_contexts.deinit(self.allocator);
@@ -325,8 +296,6 @@ const Solver = struct {
             });
         }
 
-        try self.markForcedDynamicIteratorCallables();
-
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
         for (self.expr_tys, 0..) |maybe_ty, index| {
             const ty = maybe_ty orelse try self.monoLeaf(self.lifted.exprs[index].ty);
@@ -356,6 +325,8 @@ const Solver = struct {
         // After finalization so the materialized clones' callable slots close
         // exactly as their eager counterparts always did.
         try self.closeUnfilledCallableSlots();
+
+        try self.appendExprInhabitanceColumn();
     }
 
     fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
@@ -761,7 +732,11 @@ const Solver = struct {
                 for (args, 0..) |arg, i| {
                     arg_tys[i] = try self.inferExpr(arg);
                 }
-                try self.bindLowLevelTypes(call.op, expected, arg_tys);
+                const produced_type_source = if (call.produced_type_source) |source|
+                    try self.inferExpr(source)
+                else
+                    null;
+                try self.bindLowLevelTypes(call.op, expected, expr.ty, args, arg_tys, produced_type_source);
             },
             .field_access => |field| {
                 var prefix_ty = try self.inferExpr(field.receiver);
@@ -1062,7 +1037,7 @@ const Solver = struct {
                 }
             },
             .nominal => |backing| {
-                if (self.hasGeneratedOpaquePatOwner(pat_id) or try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
+                if (try self.hasBuiltinOwner(pat_ty, .fields) or try self.hasBuiltinOwner(pat_ty, .field)) {
                     try self.bindGeneratedOpaqueBackingPattern(backing);
                 } else {
                     if (try self.namedBacking(pat_ty)) |backing_ty| {
@@ -1073,13 +1048,6 @@ const Solver = struct {
                 }
             },
         }
-    }
-
-    fn hasGeneratedOpaquePatOwner(self: *Solver, pat_id: Lifted.PatId) bool {
-        const content = self.lifted.types.get(self.lifted.pats[@intFromEnum(pat_id)].ty);
-        if (std.meta.activeTag(content) != .named) return false;
-        const backing = content.named.backing orelse return false;
-        return backing.authority == .generated_private;
     }
 
     fn bindGeneratedOpaqueBackingPattern(self: *Solver, pat_id: Lifted.PatId) Allocator.Error!void {
@@ -1191,29 +1159,6 @@ const Solver = struct {
             Common.invariant("return target type differed from enclosing function return type");
         }
         return context.solved_ret;
-    }
-
-    fn markForcedDynamicIteratorCallables(self: *Solver) Allocator.Error!void {
-        self.program.types.compressAllRoots();
-        // Expanding a leaf appends fresh child vars, so the bound is re-read
-        // every iteration and an expanded var is revisited in place.
-        var index: usize = 0;
-        while (index < self.program.types.vars.items.len) : (index += 1) {
-            const ty: Type.TypeVarId = @enumFromInt(@as(u32, @intCast(index)));
-            if (self.program.types.rootCompressed(ty) != ty) continue;
-            const content = self.program.types.get(ty);
-            const tag = std.meta.activeTag(content);
-            if (tag == .named) {
-                if (content.named.def.iterator_representation == .forced_dynamic) {
-                    try self.markErasedCallablesReachedByType(ty);
-                }
-            } else if (tag == .mono) {
-                if (self.contains_forced_dynamic[@intFromEnum(content.mono.id)]) {
-                    _ = try self.expandMonoRoot(ty, content.mono);
-                    index -= 1;
-                }
-            }
-        }
     }
 
     fn sameMonoType(self: *Solver, a: MonoType.TypeId, b: MonoType.TypeId) Allocator.Error!bool {
@@ -1419,7 +1364,9 @@ const Solver = struct {
                     try work.append(self.allocator, self.program.types.spanItem(items, index));
                 },
                 .record => |fields| for (0..fields.count()) |index| {
-                    try work.append(self.allocator, self.program.types.fieldItem(fields, index).ty);
+                    const field = self.program.types.fieldItem(fields, index);
+                    try work.append(self.allocator, field.ty);
+                    if (field.value_ty) |value_ty| try work.append(self.allocator, value_ty);
                 },
                 .tag_union => |tags| for (0..tags.count()) |tag_index| {
                     const tag = self.program.types.tagItem(tags, tag_index);
@@ -1461,15 +1408,12 @@ const Solver = struct {
     }
 
     /// Materialized clone for a leaf that survived solving, matching what the
-    /// post-solve eager clone produced: shared for callable-free Monotypes,
-    /// self-marking for forced-dynamic iterator content.
+    /// post-solve eager clone produced. Callable-free Monotypes are shared.
     fn finalMonoClone(self: *Solver, id: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
         var cloner = TypeCloner.init(self);
         cloner.share = true;
         defer cloner.deinit();
-        const lowered = try cloner.lower(id);
-        try cloner.markForcedDynamicCallables();
-        return lowered;
+        return try cloner.lower(id);
     }
 
     fn listElem(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
@@ -1504,6 +1448,15 @@ const Solver = struct {
         Common.invariant("low-level record result was missing a required field");
     }
 
+    fn monoRecordFieldByLabel(self: *Solver, ty: MonoType.TypeId, label: []const u8) MonoType.TypeId {
+        const content = self.lifted.types.get(ty);
+        if (std.meta.activeTag(content) != .record) Common.invariant("low-level record result had a non-record Monotype");
+        for (self.lifted.types.fieldSpan(content.record)) |field| {
+            if (std.mem.eql(u8, self.lifted.names.recordFieldLabelText(field.name), label)) return field.ty;
+        }
+        Common.invariant("low-level record result Monotype was missing a required field");
+    }
+
     fn tagPayloadsSpan(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error!Type.Span {
         const content = try self.shapeContent(ty);
         if (std.meta.activeTag(content) != .tag_union) Common.invariant("tag operation had a non-tag-union checked type");
@@ -1530,76 +1483,15 @@ const Solver = struct {
         self: *Solver,
         op: can.CIR.Expr.LowLevel,
         expected: Type.TypeVarId,
+        expected_mono: MonoType.TypeId,
+        arg_exprs: []const Lifted.ExprId,
         args: []const Type.TypeVarId,
+        produced_type_source: ?Type.TypeVarId,
     ) Allocator.Error!void {
+        if (arg_exprs.len != args.len) Common.invariant("low-level expression and type argument counts differed");
+        if (try self.bindProducedLowLevelTypeFlow(op, expected, expected_mono, arg_exprs, args, produced_type_source)) return;
         const bound_op = std.meta.stringToEnum(BoundLowLevel, @tagName(op)) orelse return;
         switch (bound_op) {
-            .box_box => {
-                expectLowLevelArity(op, args, 1);
-                try self.unify(args[0], try self.boxElem(expected));
-                try self.markErasedCallablesReachedByType(args[0]);
-            },
-            .box_unbox => {
-                expectLowLevelArity(op, args, 1);
-                try self.unify(expected, try self.boxElem(args[0]));
-                try self.markErasedCallablesReachedByType(expected);
-            },
-            .list_get_unsafe => {
-                expectLowLevelArity(op, args, 2);
-                try self.unify(expected, try self.listElem(args[0]));
-            },
-            .list_append_unsafe => {
-                expectLowLevelArity(op, args, 2);
-                try self.unify(expected, args[0]);
-                try self.unify(args[1], try self.listElem(expected));
-            },
-            .list_concat => {
-                expectLowLevelArity(op, args, 2);
-                try self.unify(expected, args[0]);
-                try self.unify(expected, args[1]);
-            },
-            .list_reserve,
-            .list_drop_at,
-            .list_sublist,
-            .list_take_first,
-            .list_take_last,
-            .list_drop_first,
-            .list_drop_last,
-            => {
-                expectLowLevelArity(op, args, 2);
-                try self.unify(expected, args[0]);
-            },
-            .list_release_excess_capacity,
-            .list_reverse,
-            => {
-                expectLowLevelArity(op, args, 1);
-                try self.unify(expected, args[0]);
-            },
-            .list_set => {
-                expectLowLevelArity(op, args, 3);
-                try self.unify(expected, args[0]);
-                try self.unify(args[2], try self.listElem(expected));
-            },
-            .list_replace_unsafe => {
-                expectLowLevelArity(op, args, 3);
-                const elem = try self.listElem(args[0]);
-                try self.unify(args[2], elem);
-                try self.unify(try self.recordFieldByLabel(expected, "list"), args[0]);
-                try self.unify(try self.recordFieldByLabel(expected, "prev"), elem);
-            },
-            .list_swap => {
-                expectLowLevelArity(op, args, 3);
-                try self.unify(expected, args[0]);
-            },
-            .list_prepend => {
-                expectLowLevelArity(op, args, 2);
-                try self.unify(expected, args[0]);
-                try self.unify(args[1], try self.listElem(expected));
-            },
-            .list_map_prepare_reuse => {
-                expectLowLevelArity(op, args, 1);
-                try self.unify(expected, args[0]);
-            },
             .dict_pseudo_seed => expectLowLevelArity(op, args, 0),
             .hasher_finish => expectLowLevelArity(op, args, 1),
             .crypto_sha256_hash_bytes,
@@ -1630,6 +1522,118 @@ const Solver = struct {
             .hasher_write_bytes,
             .hasher_write_str,
             => expectLowLevelArity(op, args, 2),
+        }
+    }
+
+    /// Carry callable identity through the exact produced-type relationship
+    /// declared by the primitive itself. Monotype has already selected these
+    /// runtime types; Lambda Solved only relates the fresh callable slots of
+    /// the corresponding runtime occurrences.
+    fn bindProducedLowLevelTypeFlow(
+        self: *Solver,
+        op: can.CIR.Expr.LowLevel,
+        expected: Type.TypeVarId,
+        expected_mono: MonoType.TypeId,
+        arg_exprs: []const Lifted.ExprId,
+        args: []const Type.TypeVarId,
+        produced_type_source: ?Type.TypeVarId,
+    ) Allocator.Error!bool {
+        const produced_flow = op.producedTypeFlow();
+        const expects_contextual_source = switch (produced_flow) {
+            .list_from_enclosing_function_arg_result, .enclosing_function_list_item => true,
+            .none, .box_from_item, .box_item, .list_item, .list_insert, .list_join, .list_replace, .same_as_arg => false,
+        };
+        if (expects_contextual_source != (produced_type_source != null)) {
+            Common.invariant("low-level produced-type source did not match its declared flow");
+        }
+
+        switch (produced_flow) {
+            .none => return false,
+            .box_from_item => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                try self.unify(args[flow.item_arg], try self.boxElem(expected));
+                try self.markErasedCallablesReachedByType(args[flow.item_arg]);
+            },
+            .box_item => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                try self.unify(expected, try self.boxElem(args[flow.box_arg]));
+                try self.markErasedCallablesReachedByType(expected);
+            },
+            .list_item => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                try self.unify(expected, try self.listElem(args[flow.list_arg]));
+            },
+            .list_insert => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                try self.unify(args[flow.item_arg], try self.listElem(expected));
+                try self.relateSameMonotypeOccurrences(
+                    expected,
+                    expected_mono,
+                    args[flow.list_arg],
+                    self.lifted.exprs[@intFromEnum(arg_exprs[flow.list_arg])].ty,
+                );
+            },
+            .list_join => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                inline for (.{ flow.left_arg, flow.right_arg }) |arg_index| {
+                    try self.relateSameMonotypeOccurrences(
+                        expected,
+                        expected_mono,
+                        args[arg_index],
+                        self.lifted.exprs[@intFromEnum(arg_exprs[arg_index])].ty,
+                    );
+                }
+            },
+            .list_replace => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                const input_elem = try self.listElem(args[flow.list_arg]);
+                const result_list = try self.recordFieldByLabel(expected, "list");
+                try self.relateSameMonotypeOccurrences(
+                    result_list,
+                    self.monoRecordFieldByLabel(expected_mono, "list"),
+                    args[flow.list_arg],
+                    self.lifted.exprs[@intFromEnum(arg_exprs[flow.list_arg])].ty,
+                );
+                try self.unify(args[flow.item_arg], try self.listElem(result_list));
+                try self.unify(try self.recordFieldByLabel(expected, "prev"), input_elem);
+            },
+            .same_as_arg => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                try self.unify(expected, args[flow.arg]);
+            },
+            .list_from_enclosing_function_arg_result => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                const source = produced_type_source orelse
+                    Common.invariant("contextual callable-result flow had no explicit source");
+                const callable = try self.functionShape(source);
+                try self.unify(try self.listElem(expected), callable.ret);
+            },
+            .enclosing_function_list_item => |flow| {
+                expectLowLevelArity(op, args, flow.arity);
+                const source = produced_type_source orelse
+                    Common.invariant("contextual list-item flow had no explicit source");
+                try self.unify(expected, try self.listElem(source));
+            },
+        }
+        return true;
+    }
+
+    /// Two runtime occurrences of one exact Monotype still receive separate
+    /// Lambda-Solved callable slots. Relate those slots at a low-level storage
+    /// boundary only when Monotype says the complete runtime types are equal.
+    /// A checked-public empty list and a list with an exact generated element
+    /// deliberately compare unequal and therefore remain independent.
+    fn relateSameMonotypeOccurrences(
+        self: *Solver,
+        left: Type.TypeVarId,
+        left_mono: MonoType.TypeId,
+        right: Type.TypeVarId,
+        right_mono: MonoType.TypeId,
+    ) Allocator.Error!void {
+        if (left_mono == right_mono or
+            try self.lifted.types.typeEql(self.allocator, self.lifted.names, left_mono, right_mono))
+        {
+            try self.unify(left, right);
         }
     }
 
@@ -1902,28 +1906,29 @@ const Solver = struct {
                     left_named.kind != right_named.kind or
                     left_named.builtin_owner != right_named.builtin_owner)
                 {
-                    if (try self.unifyForcedDynamicIterator(a, b, left_named, right_named)) return;
-                    if (try self.unifyIteratorOwnerStampedPublic(a, b, left_named, right_named)) return;
-                    if (try self.unifyGeneratedIteratorJoin(a, b, left_named, right_named)) return;
-                    if (try self.unifyPublicGeneratedIterator(a, b, left_named, right_named)) return;
                     if (try self.unifyNominalOpaqueViews(a, b, left_named, right_named)) return;
                     Common.invariant("named type identity failed Lambda Solved unification");
                 }
                 if (left_named.backing) |left_backing| {
                     const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
-                    if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
-                    if (left_backing.authority == right_backing.authority) {
-                        stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
-                        try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
-                    } else if (left_backing.authority == .generated_private) {
-                        try self.relateGeneratedPrivateEvidence(right_backing.ty, left_backing.ty);
-                        self.program.types.set(b, .{ .link = a });
-                    } else if (right_backing.authority == .generated_private) {
-                        try self.relateGeneratedPrivateEvidence(left_backing.ty, right_backing.ty);
-                        self.program.types.set(a, .{ .link = b });
-                    } else {
-                        Common.invariant("named type backing authorities were incompatible during Lambda Solved unification");
+                    if (left_backing.use != right_backing.use) {
+                        // Backing use is compile-time visibility, not runtime
+                        // representation. Monotype has already emitted every
+                        // explicit nominal construction/destructure, so two
+                        // otherwise-identical named runtime types retain the
+                        // more restrictive interface visibility when they
+                        // meet here.
+                        var selected_named = left_named;
+                        var selected_backing = left_backing;
+                        selected_backing.use = .runtime_layout_only;
+                        selected_named.backing = selected_backing;
+                        self.program.types.set(a, .{ .named = selected_named });
                     }
+                    if (left_backing.authority != right_backing.authority) {
+                        Common.invariant("exact named types reached Lambda Solved with different backing authorities");
+                    }
+                    stack.items[finish_index].finish.action = .{ .link_rhs_to_lhs = .{ .lhs = a, .rhs = b } };
+                    try self.pushUnifyPair(stack, left_backing.ty, right_backing.ty);
                 } else if (right_named.backing != null) {
                     Common.invariant("named type backing differed during Lambda Solved unification");
                 } else {
@@ -2072,30 +2077,79 @@ const Solver = struct {
     fn typeIsProvenUninhabited(self: *Solver, ty: Type.TypeVarId) Allocator.Error!bool {
         var visiting = self.solved_set_pool.acquire();
         defer self.solved_set_pool.release(&visiting);
-        return self.typeIsProvenUninhabitedInner(ty, &visiting);
+        var mono_visiting = self.mono_set_pool.acquire();
+        defer self.mono_set_pool.release(&mono_visiting);
+        var cycle_hits: u64 = 0;
+        return self.typeIsProvenUninhabitedInner(
+            ty,
+            &visiting,
+            null,
+            &mono_visiting,
+            null,
+            &cycle_hits,
+        );
+    }
+
+    /// Return the immutable expression inhabitance column with one memoized
+    /// analysis over the finalized type stores. Expression types repeat
+    /// heavily, so allocating and walking fresh maps per expression is pure
+    /// post-check waste.
+    fn appendExprInhabitanceColumn(self: *Solver) Allocator.Error!void {
+        var visiting = self.solved_set_pool.acquire();
+        defer self.solved_set_pool.release(&visiting);
+        var memo = collections.DenseMap(Type.TypeVarId, bool).init(self.allocator);
+        defer memo.deinit();
+        var mono_visiting = self.mono_set_pool.acquire();
+        defer self.mono_set_pool.release(&mono_visiting);
+        var mono_memo = collections.DenseMap(MonoType.TypeId, bool).init(self.allocator);
+        defer mono_memo.deinit();
+        var cycle_hits: u64 = 0;
+
+        try self.program.expr_is_uninhabited.ensureTotalCapacity(self.allocator, self.program.expr_tys.items.len);
+        for (self.program.expr_tys.items) |ty| {
+            if (visiting.count() != 0 or mono_visiting.count() != 0) {
+                Common.invariant("expression inhabitance analysis retained active nodes between roots");
+            }
+            try self.program.expr_is_uninhabited.append(
+                self.allocator,
+                try self.typeIsProvenUninhabitedInner(
+                    ty,
+                    &visiting,
+                    &memo,
+                    &mono_visiting,
+                    &mono_memo,
+                    &cycle_hits,
+                ),
+            );
+        }
     }
 
     fn typeIsProvenUninhabitedInner(
         self: *Solver,
         ty: Type.TypeVarId,
         visiting: *collections.DenseMap(Type.TypeVarId, void),
+        memo: ?*collections.DenseMap(Type.TypeVarId, bool),
+        mono_visiting: *collections.DenseMap(MonoType.TypeId, void),
+        mono_memo: ?*collections.DenseMap(MonoType.TypeId, bool),
+        cycle_hits: *u64,
     ) Allocator.Error!bool {
         const root = self.program.types.rootCompressed(ty);
+        if (memo) |completed| if (completed.get(root)) |result| return result;
         const entry = try visiting.getOrPut(root);
-        if (entry.found_existing) return false;
+        if (entry.found_existing) {
+            cycle_hits.* +%= 1;
+            return false;
+        }
         defer _ = visiting.remove(root);
+        const cycle_hits_before = cycle_hits.*;
 
-        return switch (self.program.types.get(root)) {
+        const result = try switch (self.program.types.get(root)) {
             // Probe leaves against the lifted store instead of materializing:
             // uninhabitedness is a pure function of the Monotype.
-            .mono => |leaf| blk: {
-                var mono_visiting = self.mono_set_pool.acquire();
-                defer self.mono_set_pool.release(&mono_visiting);
-                break :blk try self.monoProvenUninhabited(leaf.id, &mono_visiting);
-            },
+            .mono => |leaf| self.monoProvenUninhabited(leaf.id, mono_visiting, mono_memo, cycle_hits),
             .named => |named| if (named.backing) |backing|
                 if (backing.use == .inspectable)
-                    self.typeIsProvenUninhabitedInner(backing.ty, visiting)
+                    self.typeIsProvenUninhabitedInner(backing.ty, visiting, memo, mono_visiting, mono_memo, cycle_hits)
                 else
                     false
             else
@@ -2106,7 +2160,7 @@ const Solver = struct {
                     const tag = self.program.types.tagItem(tags, tag_index);
                     var tag_inhabited = true;
                     for (0..tag.payloads.count()) |payload_index| {
-                        if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(tag.payloads, payload_index), visiting)) {
+                        if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(tag.payloads, payload_index), visiting, memo, mono_visiting, mono_memo, cycle_hits)) {
                             tag_inhabited = false;
                             break;
                         }
@@ -2117,19 +2171,23 @@ const Solver = struct {
             },
             .tuple => |items| blk: {
                 for (0..items.count()) |index| {
-                    if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(items, index), visiting)) break :blk true;
+                    if (try self.typeIsProvenUninhabitedInner(self.program.types.spanItem(items, index), visiting, memo, mono_visiting, mono_memo, cycle_hits)) break :blk true;
                 }
                 break :blk false;
             },
             .record => |fields| blk: {
                 for (0..fields.count()) |index| {
-                    if (try self.typeIsProvenUninhabitedInner(self.program.types.fieldItem(fields, index).ty, visiting)) break :blk true;
+                    if (try self.typeIsProvenUninhabitedInner(self.program.types.fieldItem(fields, index).ty, visiting, memo, mono_visiting, mono_memo, cycle_hits)) break :blk true;
                 }
                 break :blk false;
             },
-            .box => |payload| self.typeIsProvenUninhabitedInner(payload, visiting),
+            .box => |payload| self.typeIsProvenUninhabitedInner(payload, visiting, memo, mono_visiting, mono_memo, cycle_hits),
             .list, .func, .primitive, .lambda_set, .erased, .zst, .link, .unbound, .forall => false,
         };
+        if (memo) |completed| {
+            if (result or cycle_hits.* == cycle_hits_before) try completed.put(root, result);
+        }
+        return result;
     }
 
     /// `typeIsProvenUninhabitedInner` over the lifted Monotype store, for
@@ -2138,15 +2196,22 @@ const Solver = struct {
         self: *Solver,
         id: MonoType.TypeId,
         visiting: *collections.DenseMap(MonoType.TypeId, void),
+        memo: ?*collections.DenseMap(MonoType.TypeId, bool),
+        cycle_hits: *u64,
     ) Allocator.Error!bool {
+        if (memo) |completed| if (completed.get(id)) |result| return result;
         const entry = try visiting.getOrPut(id);
-        if (entry.found_existing) return false;
+        if (entry.found_existing) {
+            cycle_hits.* +%= 1;
+            return false;
+        }
         defer _ = visiting.remove(id);
+        const cycle_hits_before = cycle_hits.*;
 
-        return switch (self.lifted.types.get(id)) {
+        const result = try switch (self.lifted.types.get(id)) {
             .named => |named| if (named.backing) |backing|
                 if (backing.use == .inspectable)
-                    self.monoProvenUninhabited(backing.ty, visiting)
+                    self.monoProvenUninhabited(backing.ty, visiting, memo, cycle_hits)
                 else
                     false
             else
@@ -2157,7 +2222,7 @@ const Solver = struct {
                 for (tag_span) |tag| {
                     var tag_inhabited = true;
                     for (self.lifted.types.span(tag.payloads)) |payload| {
-                        if (try self.monoProvenUninhabited(payload, visiting)) {
+                        if (try self.monoProvenUninhabited(payload, visiting, memo, cycle_hits)) {
                             tag_inhabited = false;
                             break;
                         }
@@ -2168,327 +2233,23 @@ const Solver = struct {
             },
             .tuple => |items| blk: {
                 for (self.lifted.types.span(items)) |item| {
-                    if (try self.monoProvenUninhabited(item, visiting)) break :blk true;
+                    if (try self.monoProvenUninhabited(item, visiting, memo, cycle_hits)) break :blk true;
                 }
                 break :blk false;
             },
             .record => |fields| blk: {
                 for (self.lifted.types.fieldSpan(fields)) |field| {
-                    if (try self.monoProvenUninhabited(field.ty, visiting)) break :blk true;
+                    if (try self.monoProvenUninhabited(field.ty, visiting, memo, cycle_hits)) break :blk true;
                 }
                 break :blk false;
             },
-            .box => |payload| self.monoProvenUninhabited(payload, visiting),
+            .box => |payload| self.monoProvenUninhabited(payload, visiting, memo, cycle_hits),
             .list, .func, .primitive, .erased, .zst => false,
         };
-    }
-
-    /// Transfer Lambda Solved callable evidence from a checked-public value
-    /// shape into its producer-authored generated-private representation.
-    /// Monotype has already sealed both representations, so this relation
-    /// deliberately preserves every composite and named root. Only callable
-    /// slots (and still-open Lambda Solved slots) are unified.
-    fn relateGeneratedPrivateEvidence(
-        self: *Solver,
-        public_ty: Type.TypeVarId,
-        private_ty: Type.TypeVarId,
-    ) Allocator.Error!void {
-        const public_root = self.program.types.rootCompressed(public_ty);
-        const private_root = self.program.types.rootCompressed(private_ty);
-        if (public_root == private_root) return;
-
-        const pair = UnifyPair.init(public_root, private_root);
-        const active = try self.active_private_evidence_relations.getOrPut(pair);
-        if (active.found_existing) return;
-        defer _ = self.active_private_evidence_relations.remove(pair);
-
-        const public = try self.resolvedContentAt(public_root);
-        const private = try self.resolvedContentAt(private_root);
-        const private_content_tag = std.meta.activeTag(private);
-        if (public == .unbound or private == .unbound or
-            public == .lambda_set or private == .lambda_set or
-            public == .erased or private == .erased)
-        {
-            try self.unify(public_root, private_root);
-            return;
+        if (memo) |completed| {
+            if (result or cycle_hits.* == cycle_hits_before) try completed.put(id, result);
         }
-
-        switch (public) {
-            .link, .unbound, .lambda_set, .erased => unreachable,
-            .mono => Common.invariant("lazy Monotype leaf reached the generated-private evidence relation unexpanded"),
-            .forall => Common.invariant("generated-private evidence relation received a generalized public type"),
-            .primitive => |public_primitive| {
-                if (private_content_tag != .primitive) Common.invariant("generated-private evidence relation received different type structure");
-                if (public_primitive != private.primitive) Common.invariant("generated-private evidence relation received different primitive types");
-            },
-            .zst => if (private != .zst) Common.invariant("generated-private evidence relation received different type structure"),
-            .list => |public_elem| {
-                if (private_content_tag != .list) Common.invariant("generated-private evidence relation received different type structure");
-                try self.relateGeneratedPrivateEvidence(public_elem, private.list);
-            },
-            .box => |public_elem| {
-                if (private_content_tag != .box) Common.invariant("generated-private evidence relation received different type structure");
-                try self.relateGeneratedPrivateEvidence(public_elem, private.box);
-            },
-            .tuple => |public_items| {
-                if (private_content_tag != .tuple) Common.invariant("generated-private evidence relation received different type structure");
-                const private_items = private.tuple;
-                if (public_items.count() != private_items.count()) {
-                    Common.invariant("generated-private evidence relation received tuples of different arity");
-                }
-                for (0..public_items.count()) |index| {
-                    try self.relateGeneratedPrivateEvidence(
-                        self.program.types.spanItem(public_items, index),
-                        self.program.types.spanItem(private_items, index),
-                    );
-                }
-            },
-            .record => |public_fields| {
-                if (private_content_tag != .record) Common.invariant("generated-private evidence relation received different type structure");
-                const private_fields = private.record;
-                if (public_fields.count() != private_fields.count()) {
-                    Common.invariant("generated-private evidence relation received records with different fields");
-                }
-                for (0..public_fields.count()) |index| {
-                    const public_field = self.program.types.fieldItem(public_fields, index);
-                    const private_field = self.program.types.fieldItem(private_fields, index);
-                    if (public_field.name != private_field.name) {
-                        Common.invariant("generated-private evidence relation received records with different fields");
-                    }
-                    try self.relateGeneratedPrivateEvidence(public_field.ty, private_field.ty);
-                    if ((public_field.value_ty == null) != (private_field.value_ty == null)) {
-                        Common.invariant("generated-private evidence relation received different record field kinds");
-                    }
-                    if (public_field.value_ty) |public_value_ty| {
-                        try self.relateGeneratedPrivateEvidence(public_value_ty, private_field.value_ty.?);
-                    }
-                }
-            },
-            .tag_union => |public_tags| {
-                if (private_content_tag != .tag_union) Common.invariant("generated-private evidence relation received different type structure");
-                const private_tags = private.tag_union;
-                if (public_tags.count() != private_tags.count()) {
-                    Common.invariant("generated-private evidence relation received tag unions with different tags");
-                }
-                for (0..public_tags.count()) |tag_index| {
-                    const public_tag = self.program.types.tagItem(public_tags, tag_index);
-                    const private_tag = self.program.types.tagItem(private_tags, tag_index);
-                    if (public_tag.name != private_tag.name or public_tag.checked_name != private_tag.checked_name or
-                        public_tag.payloads.count() != private_tag.payloads.count())
-                    {
-                        Common.invariant("generated-private evidence relation received tag unions with different tags");
-                    }
-                    for (0..public_tag.payloads.count()) |payload_index| {
-                        try self.relateGeneratedPrivateEvidence(
-                            self.program.types.spanItem(public_tag.payloads, payload_index),
-                            self.program.types.spanItem(private_tag.payloads, payload_index),
-                        );
-                    }
-                }
-            },
-            .func => |public_fn| {
-                if (private_content_tag != .func) Common.invariant("generated-private evidence relation received different type structure");
-                const private_fn = private.func;
-                if (public_fn.args.count() != private_fn.args.count()) {
-                    Common.invariant("generated-private evidence relation received functions of different arity");
-                }
-                for (0..public_fn.args.count()) |index| {
-                    try self.relateGeneratedPrivateEvidence(
-                        self.program.types.spanItem(public_fn.args, index),
-                        self.program.types.spanItem(private_fn.args, index),
-                    );
-                }
-                try self.unify(public_fn.callable, private_fn.callable);
-                try self.relateGeneratedPrivateEvidence(public_fn.ret, private_fn.ret);
-            },
-            .named => |public_named| {
-                if (private_content_tag != .named) Common.invariant("generated-private evidence relation received different type structure");
-                const private_named = private.named;
-                const same_identity = public_named.kind == private_named.kind and
-                    std.meta.eql(public_named.def, private_named.def) and
-                    public_named.builtin_owner == private_named.builtin_owner;
-                if (!same_identity and MonoType.iteratorRelation(public_named, private_named) == .ordinary) {
-                    Common.invariant("generated-private evidence relation received different named types");
-                }
-                if (same_identity) {
-                    if (public_named.args.count() != private_named.args.count()) {
-                        Common.invariant("generated-private evidence relation received named types with different arity");
-                    }
-                    for (0..public_named.args.count()) |index| {
-                        try self.relateGeneratedPrivateEvidence(
-                            self.program.types.spanItem(public_named.args, index),
-                            self.program.types.spanItem(private_named.args, index),
-                        );
-                    }
-                    if (public_named.backing) |public_backing| {
-                        const private_backing = private_named.backing orelse
-                            Common.invariant("generated-private evidence relation received different named backing presence");
-                        if (public_backing.use != private_backing.use) {
-                            Common.invariant("generated-private evidence relation received different named backing uses");
-                        }
-                        try self.relateGeneratedPrivateEvidence(public_backing.ty, private_backing.ty);
-                    } else if (private_named.backing != null) {
-                        Common.invariant("generated-private evidence relation received different named backing presence");
-                    }
-                } else {
-                    if (public_named.args.count() == 0 or private_named.args.count() == 0) {
-                        Common.invariant("generated-private iterator evidence lacked a public item argument");
-                    }
-                    try self.relateGeneratedPrivateEvidence(
-                        self.program.types.spanItem(public_named.args, 0),
-                        self.program.types.spanItem(private_named.args, 0),
-                    );
-                }
-            },
-        }
-    }
-
-    fn unifyIteratorOwnerStampedPublic(
-        self: *Solver,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (left.kind != right.kind) return false;
-        if (!sameMonoTypeDef(left.def, right.def)) return false;
-        _ = iteratorLikeOwnerFromPair(left.builtin_owner, right.builtin_owner) orelse return false;
-        if (left.builtin_owner == right.builtin_owner) return false;
-
-        try self.unifySpans(left.args, right.args, "iterator owner-stamp argument lists failed Lambda Solved unification");
-        if (isIteratorLikeOwner(left.builtin_owner)) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
-        return true;
-    }
-
-    fn unifyForcedDynamicIterator(
-        self: *Solver,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .forced_dynamic) return false;
-
-        const left_dynamic = left.def.iterator_representation == .forced_dynamic;
-        if (left.args.count() == 0 or right.args.count() == 0) {
-            Common.invariant("forced-dynamic iterator reached Lambda Solved without a public item argument");
-        }
-
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-        const dynamic = if (left_dynamic) left else right;
-        const other = if (left_dynamic) right else left;
-        switch (other.def.iterator_representation) {
-            .none => try self.relateForcedDynamicPublicEvidence(dynamic, other),
-            .minted => try self.unifyGeneratedIteratorBackings(left, right),
-            .forced_dynamic => Common.invariant("forced-dynamic iterator relation received two dynamic representations"),
-        }
-        if (left_dynamic) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
-        return true;
-    }
-
-    fn relateForcedDynamicPublicEvidence(self: *Solver, dynamic: anytype, public: anytype) Allocator.Error!void {
-        const public_backing = public.backing orelse return;
-        const dynamic_backing = dynamic.backing orelse
-            Common.invariant("forced-dynamic iterator relation found dynamic backing on only one side");
-        if (public_backing.use != dynamic_backing.use) {
-            Common.invariant("forced-dynamic iterator relation found different backing uses");
-        }
-        if (public_backing.authority != .checked_public or dynamic_backing.authority != .generated_private) {
-            Common.invariant("forced-dynamic iterator evidence relation received incorrect backing authority");
-        }
-        try self.relateGeneratedPrivateEvidence(public_backing.ty, dynamic_backing.ty);
-    }
-
-    fn unifyGeneratedIteratorJoin(
-        self: *Solver,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .minted_join) return false;
-
-        if (left.args.count() == 0 or right.args.count() == 0) {
-            Common.invariant("generated iterator join reached Lambda Solved without a public item argument");
-        }
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-
-        if (left.backing) |left_backing| {
-            const right_backing = right.backing orelse
-                Common.invariant("generated iterator join found backing on only one side");
-            if (left_backing.use != right_backing.use) {
-                Common.invariant("generated iterator join found different backing uses");
-            }
-            if (left_backing.authority != right_backing.authority) {
-                Common.invariant("generated iterator join found different backing authorities");
-            }
-            try self.unify(left_backing.ty, right_backing.ty);
-        } else if (right.backing != null) {
-            Common.invariant("generated iterator join found backing on only one side");
-        }
-
-        if (isIteratorLikeOwner(left.builtin_owner)) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
-        return true;
-    }
-
-    fn unifyPublicGeneratedIterator(
-        self: *Solver,
-        left_ty: Type.TypeVarId,
-        right_ty: Type.TypeVarId,
-        left: anytype,
-        right: anytype,
-    ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .public_minted) return false;
-
-        if (left.args.count() == 0 or right.args.count() == 0) {
-            Common.invariant("generated iterator evidence reached Lambda Solved without a public item argument");
-        }
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-
-        const left_minted = left.def.iterator_representation == .minted;
-        const generated = if (left_minted) left else right;
-        const public = if (left_minted) right else left;
-        if (public.backing) |public_backing| {
-            const generated_backing = generated.backing orelse
-                Common.invariant("generated iterator evidence had no private backing");
-            if (generated_backing.authority != .generated_private) {
-                Common.invariant("generated iterator evidence backing lacked private authority");
-            }
-            try self.relateGeneratedPrivateEvidence(public_backing.ty, generated_backing.ty);
-        }
-
-        if (left_minted) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
-        }
-        return true;
-    }
-
-    fn unifyGeneratedIteratorBackings(self: *Solver, left: anytype, right: anytype) Allocator.Error!void {
-        const left_backing = left.backing orelse
-            Common.invariant("generated iterator relation found backing on only one side");
-        const right_backing = right.backing orelse
-            Common.invariant("generated iterator relation found backing on only one side");
-        if (left_backing.use != right_backing.use) {
-            Common.invariant("generated iterator relation found different backing uses");
-        }
-        if (left_backing.authority != .generated_private or right_backing.authority != .generated_private) {
-            Common.invariant("private iterator relation received a checked-public backing");
-        }
-        try self.unify(left_backing.ty, right_backing.ty);
+        return result;
     }
 
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
@@ -2789,21 +2550,15 @@ fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
 
 const ReachabilityMasks = struct {
     contains_callable: []bool,
-    contains_forced_dynamic: []bool,
 };
 
-/// Reverse-reachability over the lifted Monotype store: from `func` and
-/// `erased` nodes (types whose clones need fresh callable slots) and from
-/// forced-dynamic iterator named nodes (leaves the forced-dynamic scan must
-/// materialize).
+/// Reverse-reachability over the lifted Monotype store from `func` and
+/// `erased` nodes, whose clones need fresh callable slots.
 fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Error!ReachabilityMasks {
     const count = types.types.len;
     const flags = try allocator.alloc(bool, count);
     errdefer allocator.free(flags);
     @memset(flags, false);
-    const forced = try allocator.alloc(bool, count);
-    errdefer allocator.free(forced);
-    @memset(forced, false);
 
     const edge_counts = try allocator.alloc(u32, count);
     defer allocator.free(edge_counts);
@@ -2888,22 +2643,7 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
             try work.append(allocator, parent);
         }
     }
-    for (types.types, 0..) |content, index| {
-        if (std.meta.activeTag(content) == .named) {
-            if (content.named.def.iterator_representation == .forced_dynamic) {
-                forced[index] = true;
-                try work.append(allocator, @intCast(index));
-            }
-        }
-    }
-    while (work.pop()) |index| {
-        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-            if (forced[parent]) continue;
-            forced[parent] = true;
-            try work.append(allocator, parent);
-        }
-    }
-    return .{ .contains_callable = flags, .contains_forced_dynamic = forced };
+    return .{ .contains_callable = flags };
 }
 
 const TypeCloner = struct {
@@ -2952,22 +2692,6 @@ const TypeCloner = struct {
         self.solver.program.types.set(reserved, try self.lowerContent(self.solver.lifted.types.get(ty)));
         if (shareable) try self.solver.shared_clones.put(ty, reserved);
         return reserved;
-    }
-
-    /// Apply the explicit dynamic boundary only after the entire requested
-    /// Monotype clone is complete. A forced iterator can be reached while an
-    /// enclosing function or payload clone still holds reservations, so doing
-    /// this per-node would let callable identity observe an unfinished graph.
-    fn markForcedDynamicCallables(self: *TypeCloner) Allocator.Error!void {
-        var entries = self.map.iterator();
-        while (entries.next()) |entry| {
-            const content = self.solver.lifted.types.get(entry.key_ptr.*);
-            if (std.meta.activeTag(content) == .named) {
-                if (content.named.def.iterator_representation == .forced_dynamic) {
-                    try self.solver.markErasedCallablesReachedByType(entry.value_ptr.*);
-                }
-            }
-        }
     }
 
     /// Re-materializes a nominal record's declared field order from the monotype
@@ -3093,32 +2817,7 @@ fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
         left.type_name == right.type_name and
         left.source_decl == right.source_decl and
         optionalDigestEql(left.generated, right.generated) and
-        left.iterator_representation == right.iterator_representation and
-        left.iterator_kind == right.iterator_kind and
-        left.iterator_depth == right.iterator_depth and
         std.meta.eql(left.iterator_topology, right.iterator_topology);
-}
-
-fn iteratorLikeOwnerFromPair(
-    left: ?static_dispatch.BuiltinOwner,
-    right: ?static_dispatch.BuiltinOwner,
-) ?static_dispatch.BuiltinOwner {
-    if (left) |left_owner| {
-        if (!isIteratorLikeOwner(left_owner)) return null;
-        if (right) |right_owner| {
-            if (left_owner != right_owner) return null;
-        }
-        return left_owner;
-    }
-    if (right) |right_owner| {
-        if (!isIteratorLikeOwner(right_owner)) return null;
-        return right_owner;
-    }
-    return null;
-}
-
-fn isIteratorLikeOwner(owner: ?static_dispatch.BuiltinOwner) bool {
-    return static_dispatch.isIteratorOwner(owner orelse return false);
 }
 
 fn optionalDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {

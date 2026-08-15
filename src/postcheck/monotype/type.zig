@@ -74,84 +74,14 @@ pub const TypeDef = struct {
     /// Declaring statement in the (content-identified) module: the
     /// within-module discriminator for same-named block-local declarations.
     source_decl: ?u32 = null,
-    /// Compiler-generated specialization identity for internal nominals minted
+    /// Compiler-generated specialization identity for internal nominals produced
     /// from a public source nominal. Null means this is the source nominal.
     generated: ?names.TypeDigest = null,
-    /// Representation decision produced when an internal iterator nominal is
-    /// created. Later stages consume the recorded tier and mint depth directly.
-    iterator_representation: IteratorRepresentation = .none,
-    /// Exact producer or adapter that minted this iterator representation.
-    /// Consumers use this evidence instead of reconstructing an operation from
-    /// the generated function body's shape.
-    iterator_kind: IteratorKind = .none,
-    /// Producer-computed minted-chain depth. Meaningful only for `.minted`.
-    iterator_depth: u8 = 0,
     /// Checker-authored identities for the iterator representation.
     /// Generated iterator types retain these as the exact representation roles
     /// consumed by post-check stages.
     iterator_topology: ?IteratorTopology = null,
 };
-
-/// Explicit representation tier assigned when an iterator nominal is created.
-pub const IteratorRepresentation = check.ConstStore.IteratorRepresentation;
-
-/// Producer-owned identity shared across checked and Monotype storage.
-pub const IteratorKind = static_dispatch.IteratorKind;
-
-/// Exceptional relation between two named iterator types. Equal identities
-/// and unrelated named types use ordinary named-type unification.
-pub const IteratorRelation = enum(u8) {
-    ordinary,
-    public_minted,
-    forced_dynamic,
-    minted_join,
-};
-
-/// Classifies the representation-tier relation shared by Monotype
-/// instantiation and Lambda Solved unification.
-pub fn iteratorRelation(left: anytype, right: anytype) IteratorRelation {
-    if (left.kind != right.kind) return .ordinary;
-    if (left.def.module != right.def.module or
-        left.def.type_name != right.def.type_name or
-        left.def.source_decl != right.def.source_decl)
-    {
-        return .ordinary;
-    }
-    if (!iteratorOwnerPair(left.builtin_owner, right.builtin_owner)) return .ordinary;
-
-    const left_representation = left.def.iterator_representation;
-    const right_representation = right.def.iterator_representation;
-    if ((left_representation == .forced_dynamic) != (right_representation == .forced_dynamic)) {
-        return .forced_dynamic;
-    }
-    if ((left_representation == .minted and right_representation == .none) or
-        (left_representation == .none and right_representation == .minted))
-    {
-        return .public_minted;
-    }
-    if (left_representation == .minted and
-        right_representation == .minted and
-        !optionalDigestEql(left.def.generated, right.def.generated))
-    {
-        return .minted_join;
-    }
-    return .ordinary;
-}
-
-fn iteratorOwnerPair(
-    left: ?static_dispatch.BuiltinOwner,
-    right: ?static_dispatch.BuiltinOwner,
-) bool {
-    const owner = left orelse right orelse return false;
-    if (!static_dispatch.isIteratorOwner(owner)) return false;
-    if (left) |left_owner| {
-        if (left_owner != owner) return false;
-    }
-    if (right) |right_owner| {
-        if (right_owner != owner) return false;
-    }
-    return true;
-}
 
 /// Named checked type instance.
 pub const NamedType = struct {
@@ -203,17 +133,6 @@ pub const FieldDefault = struct {
     expr_node: u32,
 };
 
-/// Whether a Monotype-shaped record field already has a committed runtime
-/// slot. Durable Monotypes are always `resolved`. Interface-replay memoization
-/// also uses immutable provisional Type views; an `undetermined` field in one
-/// of those views records that its checked presence variable still owns the
-/// slot decision. In that state `ty` mirrors `value_ty` for structural identity
-/// only and must not reach layout or completed Monotype output.
-pub const FieldKindState = enum(u8) {
-    resolved,
-    undetermined,
-};
-
 /// Record field type entry.
 pub const MonoTypeField = struct {
     name: names.RecordFieldNameId,
@@ -223,9 +142,6 @@ pub const MonoTypeField = struct {
     /// can participate in later specialization without reconstructing field
     /// presence from the slot's shape.
     value_ty: ?TypeId = null,
-    /// Explicitly distinguishes a finished slot from a provisional field whose
-    /// checked presence variable has not selected inline or optional encoding.
-    kind_state: FieldKindState = .resolved,
     /// Present exactly for `??`-defaulted fields; see `FieldDefault`.
     default: ?FieldDefault,
 };
@@ -295,21 +211,11 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
     types: StoreList(Content, "types"),
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
-    specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
+    specialization_lookup_digests: StoreList(?names.TypeDigest, "specialization_lookup_digests"),
     /// Newly reserved recursive slots may be referenced while their content is
     /// being built, but they are not observable types until filled. Filled
     /// nodes are immutable, which makes their cached digests permanently valid.
     constructing: StoreList(bool, "constructing"),
-    /// Cached immutable answer for whether a finished type contains an Iter or
-    /// Stream interface at any structural depth.
-    iterator_interface_cache: StoreList(?bool, "iterator_interface_cache"),
-    /// Reusable exact walk state. Type ids are dense, so epochs provide cycle
-    /// detection without allocating a dense map sized to the largest type id
-    /// on every closed direct call.
-    iterator_interface_pending: std.ArrayList(TypeId),
-    iterator_interface_visited: std.ArrayList(TypeId),
-    iterator_interface_visit_epochs: StoreList(u32, "iterator_interface_visit_epochs"),
-    iterator_interface_visit_epoch: u32,
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     tags: StoreList(Tag, "tags"),
@@ -321,13 +227,8 @@ pub const Store = struct {
             .allocator = allocator,
             .types = .empty,
             .type_digests = .empty,
-            .specialization_digests = .empty,
+            .specialization_lookup_digests = .empty,
             .constructing = .empty,
-            .iterator_interface_cache = .empty,
-            .iterator_interface_pending = .empty,
-            .iterator_interface_visited = .empty,
-            .iterator_interface_visit_epochs = .empty,
-            .iterator_interface_visit_epoch = 0,
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
@@ -341,12 +242,8 @@ pub const Store = struct {
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
-        self.iterator_interface_visit_epochs.deinit(self.allocator);
-        self.iterator_interface_visited.deinit(self.allocator);
-        self.iterator_interface_pending.deinit(self.allocator);
-        self.iterator_interface_cache.deinit(self.allocator);
         self.constructing.deinit(self.allocator);
-        self.specialization_digests.deinit(self.allocator);
+        self.specialization_lookup_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
     }
@@ -413,13 +310,10 @@ pub const Store = struct {
         errdefer _ = self.types.pop();
         try self.type_digests.append(self.allocator, null);
         errdefer _ = self.type_digests.pop();
-        try self.specialization_digests.append(self.allocator, null);
-        errdefer _ = self.specialization_digests.pop();
+        try self.specialization_lookup_digests.append(self.allocator, null);
+        errdefer _ = self.specialization_lookup_digests.pop();
         try self.constructing.append(self.allocator, false);
         errdefer _ = self.constructing.pop();
-        try self.iterator_interface_cache.append(self.allocator, null);
-        errdefer _ = self.iterator_interface_cache.pop();
-        try self.iterator_interface_visit_epochs.append(self.allocator, 0);
         return @enumFromInt(@as(u32, @intCast(index)));
     }
 
@@ -454,117 +348,10 @@ pub const Store = struct {
         }
         self.types.set(index, content);
         self.constructing.set(index, false);
-        self.iterator_interface_cache.set(index, null);
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
         return self.types.unsafeRawItemsForView()[@intFromEnum(ty)];
-    }
-
-    /// Whether an immutable Monotype contains the public iterator interface at
-    /// any structural depth. Closed-call lowering uses this directly so an
-    /// ordinary return type never has to be imported into a live graph merely
-    /// to answer an ownership question.
-    ///
-    /// `InstGraph.containsIteratorInterface` answers the same question for the
-    /// live graph. The two walk different representations, so they cannot
-    /// share code, but they must agree for every pair of corresponding types:
-    /// this walk gates skipping graph construction entirely, so a structural
-    /// position it declines to descend into would drop a producer's minted
-    /// representation while the graph walk still claims to protect it. The
-    /// test "iterator-interface containment agrees between Monotype and graph"
-    /// in `solve.zig` pins the two together position by position.
-    pub fn containsIteratorInterface(self: *Store, root: TypeId) std.mem.Allocator.Error!bool {
-        self.requireConstructed(root);
-        const root_index = @intFromEnum(root);
-        if (self.iterator_interface_cache.unsafeRawItemsForView()[root_index]) |cached| return cached;
-
-        self.iterator_interface_pending.clearRetainingCapacity();
-        self.iterator_interface_visited.clearRetainingCapacity();
-        defer self.iterator_interface_pending.clearRetainingCapacity();
-        defer self.iterator_interface_visited.clearRetainingCapacity();
-        if (self.iterator_interface_visit_epoch == std.math.maxInt(u32)) {
-            @memset(self.iterator_interface_visit_epochs.unsafeRawItemsMutForStore(), 0);
-            self.iterator_interface_visit_epoch = 1;
-        } else {
-            self.iterator_interface_visit_epoch += 1;
-        }
-        const visit_epoch = self.iterator_interface_visit_epoch;
-        try self.iterator_interface_pending.append(self.allocator, root);
-        while (self.iterator_interface_pending.pop()) |ty| {
-            const ty_index = @intFromEnum(ty);
-            if (self.iterator_interface_visit_epochs.unsafeRawItemsForView()[ty_index] == visit_epoch) continue;
-            self.iterator_interface_visit_epochs.set(ty_index, visit_epoch);
-            try self.iterator_interface_visited.append(self.allocator, ty);
-            self.requireConstructed(ty);
-            if (ty != root) {
-                if (self.iterator_interface_cache.unsafeRawItemsForView()[ty_index]) |cached| {
-                    if (cached) {
-                        self.iterator_interface_cache.set(root_index, true);
-                        return true;
-                    }
-                    continue;
-                }
-            }
-            switch (self.get(ty)) {
-                .primitive, .erased, .zst => {},
-                .list, .box => |child| try self.iterator_interface_pending.append(self.allocator, child),
-                .tuple => |items| {
-                    const item_types = self.span(items);
-                    for (0..GuardedList.borrowLen(item_types)) |index| {
-                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(item_types, index));
-                    }
-                },
-                .func => |function| {
-                    const arg_types = self.span(function.args);
-                    for (0..GuardedList.borrowLen(arg_types)) |index| {
-                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(arg_types, index));
-                    }
-                    try self.iterator_interface_pending.append(self.allocator, function.ret);
-                },
-                .tag_union => |tags| {
-                    const variants = self.tagSpan(tags);
-                    for (0..GuardedList.borrowLen(variants)) |variant_index| {
-                        const tag = GuardedList.at(variants, variant_index);
-                        const payloads = self.span(tag.payloads);
-                        for (0..GuardedList.borrowLen(payloads)) |payload_index| {
-                            try self.iterator_interface_pending.append(self.allocator, GuardedList.at(payloads, payload_index));
-                        }
-                    }
-                },
-                .record => |fields| {
-                    const record_fields = self.fieldSpan(fields);
-                    for (0..GuardedList.borrowLen(record_fields)) |index| {
-                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(record_fields, index).ty);
-                    }
-                },
-                .named => |named| {
-                    if (named.builtin_owner) |owner| {
-                        if (static_dispatch.isIteratorOwner(owner)) {
-                            self.iterator_interface_cache.set(ty_index, true);
-                            self.iterator_interface_cache.set(root_index, true);
-                            return true;
-                        }
-                    }
-                    const args = self.span(named.args);
-                    for (0..GuardedList.borrowLen(args)) |index| {
-                        try self.iterator_interface_pending.append(self.allocator, GuardedList.at(args, index));
-                    }
-                    if (named.backing) |backing| try self.iterator_interface_pending.append(self.allocator, backing.ty);
-                    const declared_fields = self.declaredFieldSpan(named.declared_order);
-                    for (0..GuardedList.borrowLen(declared_fields)) |index| {
-                        switch (GuardedList.at(declared_fields, index)) {
-                            .named => {},
-                            .padding => |padding| try self.iterator_interface_pending.append(self.allocator, padding),
-                        }
-                    }
-                },
-            }
-        }
-        for (self.iterator_interface_visited.items) |visited| {
-            self.iterator_interface_cache.set(@intFromEnum(visited), false);
-        }
-        return false;
     }
 
     pub fn span(self: *const Store, span_: Span) StoreSpanBorrow(TypeId, "spans") {
@@ -594,10 +381,8 @@ pub const Store = struct {
     const Mark = struct {
         types_len: usize,
         type_digests_len: usize,
-        specialization_digests_len: usize,
+        specialization_lookup_digests_len: usize,
         constructing_len: usize,
-        iterator_interface_cache_len: usize,
-        iterator_interface_visit_epochs_len: usize,
         spans_len: usize,
         fields_len: usize,
         tags_len: usize,
@@ -608,10 +393,8 @@ pub const Store = struct {
         return .{
             .types_len = self.types.len(),
             .type_digests_len = self.type_digests.len(),
-            .specialization_digests_len = self.specialization_digests.len(),
+            .specialization_lookup_digests_len = self.specialization_lookup_digests.len(),
             .constructing_len = self.constructing.len(),
-            .iterator_interface_cache_len = self.iterator_interface_cache.len(),
-            .iterator_interface_visit_epochs_len = self.iterator_interface_visit_epochs.len(),
             .spans_len = self.spans.len(),
             .fields_len = self.fields.len(),
             .tags_len = self.tags.len(),
@@ -623,14 +406,8 @@ pub const Store = struct {
         self.assertMutable();
         self.types.restoreLen(mark_.types_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
-        self.specialization_digests.restoreLen(mark_.specialization_digests_len);
+        self.specialization_lookup_digests.restoreLen(mark_.specialization_lookup_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
-        self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
-        // A surviving reserved slot may have been filled after the mark with
-        // children that are now truncated and whose ids can be reused. Clear
-        // every retained containment answer so those new children are walked.
-        @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
-        self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
         self.tags.restoreLen(mark_.tags_len);
@@ -872,8 +649,8 @@ pub const Store = struct {
         return self.view().verify(name_store);
     }
 
-    pub fn specializationDigestsView(self: *const Store) []const ?names.TypeDigest {
-        return self.specialization_digests.unsafeRawItemsForView();
+    pub fn specializationLookupDigestsView(self: *const Store) []const ?names.TypeDigest {
+        return self.specialization_lookup_digests.unsafeRawItemsForView();
     }
 
     pub fn typeDigestCached(
@@ -886,7 +663,7 @@ pub const Store = struct {
         return self.cachedDigestInner(name_store, ty, .full, &ctx, stats);
     }
 
-    pub fn specializationDigestCached(
+    pub fn specializationLookupDigestCached(
         self: *Store,
         name_store: *const names.NameStore,
         ty: TypeId,
@@ -899,10 +676,12 @@ pub const Store = struct {
     /// Exact structural equality for closed Monotype types.
     ///
     /// This mirrors the intentional identity rules used by `typeDigest`:
-    /// aliases with backing compare as their backing, non-alias named types
-    /// compare by named identity and arguments, and structural rows compare by
-    /// label text and ordered children. Unlike the digest, this is authoritative
-    /// and must be checked before one specialization can reuse another.
+    /// aliases with backing compare as their backing, content-addressed
+    /// generated nominals compare by their atomic generated identity, ordinary
+    /// non-alias named types compare by named identity and arguments, and
+    /// structural rows compare by label text and ordered children. Unlike the
+    /// digest, this is authoritative and must be checked before one
+    /// specialization can reuse another.
     pub fn typeEql(
         self: *const Store,
         name_store: *const names.NameStore,
@@ -942,6 +721,28 @@ pub const Store = struct {
     const NamedDigestMode = enum {
         full,
         identity_only,
+    };
+
+    /// Specialization lookup needs a stable structural bucket selector, not a
+    /// cryptographic content identity. Exact structural equality remains the
+    /// authority after a bucket hit. Keep the same 32-byte carrier as durable
+    /// type digests while placing the stable Wyhash result in its first word.
+    const SpecializationHasher = struct {
+        inner: std.hash.Wyhash,
+
+        fn init(_: struct {}) SpecializationHasher {
+            return .{ .inner = std.hash.Wyhash.init(0x726f635f73706563) };
+        }
+
+        fn update(self: *SpecializationHasher, bytes: []const u8) void {
+            self.inner.update(bytes);
+        }
+
+        fn finalResult(self: *SpecializationHasher) [32]u8 {
+            var result = [_]u8{0} ** 32;
+            std.mem.writeInt(u64, result[0..8], self.inner.final(), .little);
+            return result;
+        }
     };
 
     fn assertMutable(self: *const Store) void {
@@ -1031,12 +832,12 @@ pub const Store = struct {
         for (ctx.items[0..ctx.len], 0..) |open_ty, position| {
             if (open_ty == ty) {
                 ctx.cycle_count += 1;
-                return cycleDigest(@intCast(position));
+                return cycleDigest(@intCast(position), named_mode);
             }
         }
-        if (self.openNamedCyclePosition(name_store, self.get(ty), ctx.items[0..ctx.len])) |position| {
+        if (self.openNamedCyclePosition(name_store, self.get(ty), ctx.items[0..ctx.len], named_mode)) |position| {
             ctx.cycle_count += 1;
-            return cycleDigest(@intCast(position));
+            return cycleDigest(@intCast(position), named_mode);
         }
 
         const index = @intFromEnum(ty);
@@ -1048,7 +849,7 @@ pub const Store = struct {
                 }
             },
             .identity_only => {
-                if (self.specialization_digests.unsafeRawItemsForView()[index]) |digest| {
+                if (self.specialization_lookup_digests.unsafeRawItemsForView()[index]) |digest| {
                     if (stats) |s| s.cache_hits += 1;
                     return digest;
                 }
@@ -1062,30 +863,45 @@ pub const Store = struct {
 
         if (ctx.len == digest_visiting_max) {
             ctx.cycle_count += 1;
-            return deepDigest(ty);
+            return deepDigest(ty, named_mode);
         }
 
         ctx.items[ctx.len] = ty;
         ctx.len += 1;
         const cycle_count_before = ctx.cycle_count;
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        self.writeCachedTypeDigest(name_store, &hasher, ty, named_mode, ctx, stats);
+        const digest = switch (named_mode) {
+            .full => self.computeCachedDigest(std.crypto.hash.sha2.Sha256, name_store, ty, named_mode, ctx, stats),
+            .identity_only => self.computeCachedDigest(SpecializationHasher, name_store, ty, named_mode, ctx, stats),
+        };
         ctx.len -= 1;
 
-        const digest: names.TypeDigest = .{ .bytes = hasher.finalResult() };
         if (ctx.cycle_count == cycle_count_before) {
             switch (named_mode) {
                 .full => self.type_digests.set(index, digest),
-                .identity_only => self.specialization_digests.set(index, digest),
+                .identity_only => self.specialization_lookup_digests.set(index, digest),
             }
         }
         return digest;
     }
 
+    fn computeCachedDigest(
+        self: *Store,
+        comptime Hasher: type,
+        name_store: *const names.NameStore,
+        ty: TypeId,
+        named_mode: NamedDigestMode,
+        ctx: *CachedDigestContext,
+        stats: ?*DigestStats,
+    ) names.TypeDigest {
+        var hasher = Hasher.init(.{});
+        self.writeCachedTypeDigest(name_store, &hasher, ty, named_mode, ctx, stats);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
     fn writeCachedChildDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         child: TypeId,
         named_mode: NamedDigestMode,
         ctx: *CachedDigestContext,
@@ -1099,7 +915,7 @@ pub const Store = struct {
     fn writeCachedTypeSpanDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         span_: Span,
         named_mode: NamedDigestMode,
         ctx: *CachedDigestContext,
@@ -1116,7 +932,7 @@ pub const Store = struct {
     fn writeCachedTypeDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         ty: TypeId,
         named_mode: NamedDigestMode,
         ctx: *CachedDigestContext,
@@ -1128,6 +944,7 @@ pub const Store = struct {
                 writeBytes(hasher, @tagName(primitive));
             },
             .named => |named| {
+                if (writeGeneratedNominalIdentity(hasher, named.def.generated)) return;
                 if (named.kind == .alias) {
                     const backing = named.backing orelse {
                         writeBytes(hasher, "alias-without-backing");
@@ -1144,9 +961,6 @@ pub const Store = struct {
                     writeBytes(hasher, name_store.typeNameText(named.def.type_name));
                 }
                 writeOptionalDigest(hasher, named.def.generated);
-                writeBytes(hasher, @tagName(named.def.iterator_representation));
-                writeBytes(hasher, @tagName(named.def.iterator_kind));
-                writeU32(hasher, named.def.iterator_depth);
                 writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
@@ -1174,7 +988,6 @@ pub const Store = struct {
                     const field = GuardedList.at(field_slice, index);
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
                     writeFieldDefaultDigest(name_store, hasher, field.default);
-                    writeBytes(hasher, @tagName(field.kind_state));
                     if (field.value_ty) |value_ty| {
                         writeBytes(hasher, "field-optional-value");
                         self.writeCachedChildDigest(name_store, hasher, value_ty, named_mode, ctx, stats);
@@ -1222,7 +1035,7 @@ pub const Store = struct {
     fn writeCachedNamedBackingDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         backing: ?NamedBacking,
         ctx: *CachedDigestContext,
         stats: ?*DigestStats,
@@ -1240,7 +1053,7 @@ pub const Store = struct {
     fn writeCachedDeclaredOrderDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         declared_order: Span,
         ctx: *CachedDigestContext,
         stats: ?*DigestStats,
@@ -1269,9 +1082,10 @@ pub const Store = struct {
     /// a function of its declaration and arguments.
     fn writeNamedIdentityHead(
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         named: NamedContent,
     ) void {
+        if (writeGeneratedNominalIdentity(hasher, named.def.generated)) return;
         hasher.update(&named.named_type.module.bytes);
         writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
         writeOptionalU32(hasher, named.def.source_decl);
@@ -1279,9 +1093,6 @@ pub const Store = struct {
             writeBytes(hasher, name_store.typeNameText(named.def.type_name));
         }
         writeOptionalDigest(hasher, named.def.generated);
-        writeBytes(hasher, @tagName(named.def.iterator_representation));
-        writeBytes(hasher, @tagName(named.def.iterator_kind));
-        writeU32(hasher, named.def.iterator_depth);
         writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
         writeBytes(hasher, @tagName(named.kind));
         if (named.builtin_owner) |owner| {
@@ -1295,10 +1106,20 @@ pub const Store = struct {
     fn namedIdentityHead(
         name_store: *const names.NameStore,
         named: NamedContent,
+        named_mode: NamedDigestMode,
     ) [32]u8 {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        writeNamedIdentityHead(name_store, &hasher, named);
-        return hasher.finalResult();
+        return switch (named_mode) {
+            .full => blk: {
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                writeNamedIdentityHead(name_store, &hasher, named);
+                break :blk hasher.finalResult();
+            },
+            .identity_only => blk: {
+                var hasher = SpecializationHasher.init(.{});
+                writeNamedIdentityHead(name_store, &hasher, named);
+                break :blk hasher.finalResult();
+            },
+        };
     }
 
     /// Whether two named nodes denote the same named type at the same
@@ -1312,11 +1133,15 @@ pub const Store = struct {
         lhs: NamedContent,
         rhs: NamedContent,
         rhs_head: [32]u8,
+        named_mode: NamedDigestMode,
     ) bool {
+        if (lhs.def.generated != null or rhs.def.generated != null) {
+            return optionalDigestEql(lhs.def.generated, rhs.def.generated);
+        }
         const lhs_args = self.span(lhs.args);
         const rhs_args = self.span(rhs.args);
         if (lhs_args.len != rhs_args.len) return false;
-        if (!std.mem.eql(u8, &namedIdentityHead(name_store, lhs), &rhs_head)) return false;
+        if (!std.mem.eql(u8, &namedIdentityHead(name_store, lhs, named_mode), &rhs_head)) return false;
         for (0..lhs_args.len) |index| {
             const lhs_arg = GuardedList.at(lhs_args, index);
             const rhs_arg = GuardedList.at(rhs_args, index);
@@ -1326,8 +1151,14 @@ pub const Store = struct {
             // so mixing them here would let the cached and uncached callers
             // reach different fold decisions and disagree about which types are
             // the same.
-            const lhs_digest = self.typeDigest(name_store, lhs_arg);
-            const rhs_digest = self.typeDigest(name_store, rhs_arg);
+            const lhs_digest = switch (named_mode) {
+                .full => self.typeDigest(name_store, lhs_arg),
+                .identity_only => self.specializationDigest(name_store, lhs_arg),
+            };
+            const rhs_digest = switch (named_mode) {
+                .full => self.typeDigest(name_store, rhs_arg),
+                .identity_only => self.specializationDigest(name_store, rhs_arg),
+            };
             if (!std.mem.eql(u8, &lhs_digest.bytes, &rhs_digest.bytes)) return false;
         }
         return true;
@@ -1343,18 +1174,19 @@ pub const Store = struct {
         name_store: *const names.NameStore,
         node: Content,
         open: []const TypeId,
+        named_mode: NamedDigestMode,
     ) ?usize {
         if (open.len == 0) return null;
         if (node != .named) return null;
         const named = node.named;
         if (named.kind == .alias) return null;
-        const head = namedIdentityHead(name_store, named);
+        const head = namedIdentityHead(name_store, named, named_mode);
         for (open, 0..) |open_ty, position| {
             const open_content = self.get(open_ty);
             if (open_content != .named) continue;
             const open_named = open_content.named;
             if (open_named.kind == .alias) continue;
-            if (self.namedIdentityMatches(name_store, open_named, named, head)) return position;
+            if (self.namedIdentityMatches(name_store, open_named, named, head, named_mode)) return position;
         }
         return null;
     }
@@ -1362,7 +1194,7 @@ pub const Store = struct {
     fn writeTypeDigest(
         self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         ty: TypeId,
         visiting: *DigestVisiting,
         named_mode: NamedDigestMode,
@@ -1375,7 +1207,7 @@ pub const Store = struct {
                 return;
             }
         }
-        if (self.openNamedCyclePosition(name_store, self.get(ty), visiting.items[0..visiting.len])) |position| {
+        if (self.openNamedCyclePosition(name_store, self.get(ty), visiting.items[0..visiting.len], named_mode)) |position| {
             writeBytes(hasher, "cycle");
             writeU32(hasher, @intCast(position));
             return;
@@ -1397,6 +1229,7 @@ pub const Store = struct {
                 writeBytes(hasher, @tagName(primitive));
             },
             .named => |named| {
+                if (writeGeneratedNominalIdentity(hasher, named.def.generated)) return;
                 // Aliases are transparent: their digest is their backing's.
                 if (named.kind == .alias) {
                     const backing = named.backing orelse {
@@ -1414,9 +1247,6 @@ pub const Store = struct {
                     writeBytes(hasher, name_store.typeNameText(named.def.type_name));
                 }
                 writeOptionalDigest(hasher, named.def.generated);
-                writeBytes(hasher, @tagName(named.def.iterator_representation));
-                writeBytes(hasher, @tagName(named.def.iterator_kind));
-                writeU32(hasher, named.def.iterator_depth);
                 writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
@@ -1444,7 +1274,6 @@ pub const Store = struct {
                     const field = GuardedList.at(field_slice, index);
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
                     writeFieldDefaultDigest(name_store, hasher, field.default);
-                    writeBytes(hasher, @tagName(field.kind_state));
                     if (field.value_ty) |value_ty| {
                         writeBytes(hasher, "field-optional-value");
                         self.writeTypeDigest(name_store, hasher, value_ty, visiting, named_mode);
@@ -1492,7 +1321,7 @@ pub const Store = struct {
     fn writeTypeSpanDigest(
         self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         span_: Span,
         visiting: *DigestVisiting,
         named_mode: NamedDigestMode,
@@ -1508,7 +1337,7 @@ pub const Store = struct {
     fn writeNamedBackingDigest(
         self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         backing: ?NamedBacking,
         visiting: *DigestVisiting,
     ) void {
@@ -1525,7 +1354,7 @@ pub const Store = struct {
     fn writeDeclaredOrderDigest(
         self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        hasher: anytype,
         declared_order: Span,
         visiting: *DigestVisiting,
     ) void {
@@ -1643,6 +1472,9 @@ fn namedTypeViewEql(
     visited: *std.AutoHashMap(u64, void),
     mode: TypeMatchMode,
 ) std.mem.Allocator.Error!bool {
+    if (lhs.def.generated != null or rhs.def.generated != null) {
+        return optionalDigestEql(lhs.def.generated, rhs.def.generated);
+    }
     if (lhs.kind != rhs.kind) return false;
     if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
     if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
@@ -1653,9 +1485,6 @@ fn namedTypeViewEql(
         return false;
     }
     if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
-    if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
-    if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
-    if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
     if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
     if (lhs.builtin_owner != rhs.builtin_owner) return false;
     if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited, mode)) return false;
@@ -1703,7 +1532,7 @@ fn fieldDefaultEql(name_store: *const names.NameStore, lhs: ?FieldDefault, rhs: 
 /// Fold one record field's `??` default identity (or its absence) into a
 /// type digest; shared by the Monotype and lambda-mono digest writers so
 /// rows disagreeing about defaults digest differently at every stage.
-pub fn writeFieldDefaultDigest(name_store: *const names.NameStore, hasher: *std.crypto.hash.sha2.Sha256, default: ?FieldDefault) void {
+pub fn writeFieldDefaultDigest(name_store: *const names.NameStore, hasher: anytype, default: ?FieldDefault) void {
     if (default) |field_default| {
         writeBytes(hasher, "field-default");
         writeBytes(hasher, name_store.moduleIdentityBytes(field_default.module));
@@ -1727,7 +1556,6 @@ fn fieldSpanViewEql(
     for (lhs, rhs) |lhs_field, rhs_field| {
         if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name))) return false;
         if (!fieldDefaultEql(name_store, lhs_field.default, rhs_field.default)) return false;
-        if (lhs_field.kind_state != rhs_field.kind_state) return false;
         if ((lhs_field.value_ty == null) != (rhs_field.value_ty == null)) return false;
         if (lhs_field.value_ty) |lhs_value_ty| {
             if (!try typeViewEqlInner(type_view, name_store, lhs_value_ty, rhs_field.value_ty.?, visited, mode)) return false;
@@ -1980,6 +1808,9 @@ fn namedTypeEqlAcrossStores(
     rhs: NamedContent,
     visited: *std.AutoHashMap(u64, void),
 ) std.mem.Allocator.Error!bool {
+    if (lhs.def.generated != null or rhs.def.generated != null) {
+        return optionalDigestEql(lhs.def.generated, rhs.def.generated);
+    }
     if (lhs.kind != rhs.kind) return false;
     if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
     if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
@@ -1990,9 +1821,6 @@ fn namedTypeEqlAcrossStores(
         return false;
     }
     if (!optionalDigestEql(lhs.def.generated, rhs.def.generated)) return false;
-    if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
-    if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
-    if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
     if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
     if (lhs.builtin_owner != rhs.builtin_owner) return false;
     if (!try typeSpanEqlAcrossStores(name_store, lhs_view, lhs.args, rhs_view, rhs.args, visited)) return false;
@@ -2044,7 +1872,6 @@ fn fieldSpanEqlAcrossStores(
     for (lhs, rhs) |lhs_field, rhs_field| {
         if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name))) return false;
         if (!fieldDefaultEql(name_store, lhs_field.default, rhs_field.default)) return false;
-        if (lhs_field.kind_state != rhs_field.kind_state) return false;
         if ((lhs_field.value_ty == null) != (rhs_field.value_ty == null)) return false;
         if (lhs_field.value_ty) |lhs_value_ty| {
             if (!try typeEqlAcrossStoresInner(name_store, lhs_view, lhs_value_ty, rhs_view, rhs_field.value_ty.?, visited)) return false;
@@ -2296,7 +2123,6 @@ pub const Interner = opaque {
         name: names.RecordFieldNameId,
         ty: RecursiveLink,
         value_ty: ?RecursiveLink = null,
-        kind_state: FieldKindState = .resolved,
         default: ?FieldDefault,
     };
 
@@ -2421,7 +2247,6 @@ pub const Interner = opaque {
                 .name = field.name,
                 .ty = self.lowerRecursiveLink(ids, root, field.ty),
                 .value_ty = if (field.value_ty) |value_ty| self.lowerRecursiveLink(ids, root, value_ty) else null,
-                .kind_state = field.kind_state,
                 .default = field.default,
             };
         }
@@ -2551,21 +2376,28 @@ fn assertNoDuplicateTags(name_store: *const names.NameStore, tags_: []const Tag)
     }
 }
 
-fn cycleDigest(position: u32) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "cycle");
-    writeU32(&hasher, position);
+fn cycleDigest(position: u32, named_mode: Store.NamedDigestMode) names.TypeDigest {
+    return switch (named_mode) {
+        .full => taggedDigest(std.crypto.hash.sha2.Sha256, "cycle", position),
+        .identity_only => taggedDigest(Store.SpecializationHasher, "cycle", position),
+    };
+}
+
+fn deepDigest(ty: TypeId, named_mode: Store.NamedDigestMode) names.TypeDigest {
+    return switch (named_mode) {
+        .full => taggedDigest(std.crypto.hash.sha2.Sha256, "deep", @intFromEnum(ty)),
+        .identity_only => taggedDigest(Store.SpecializationHasher, "deep", @intFromEnum(ty)),
+    };
+}
+
+fn taggedDigest(comptime Hasher: type, tag: []const u8, value: u32) names.TypeDigest {
+    var hasher = Hasher.init(.{});
+    writeBytes(&hasher, tag);
+    writeU32(&hasher, value);
     return .{ .bytes = hasher.finalResult() };
 }
 
-fn deepDigest(ty: TypeId) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "deep");
-    writeU32(&hasher, @intFromEnum(ty));
-    return .{ .bytes = hasher.finalResult() };
-}
-
-fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn writeBytes(hasher: anytype, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
@@ -2574,18 +2406,18 @@ fn specializationUsesBacking(backing: ?NamedBacking) bool {
     return if (backing) |present| present.authority == .generated_private else false;
 }
 
-fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
+fn writeU32(hasher: anytype, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }
 
-fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+fn writeOptionalU32(hasher: anytype, value: ?u32) void {
     const present: u8 = if (value == null) 0 else 1;
     hasher.update(std.mem.asBytes(&present));
     if (value) |v| writeU32(hasher, v);
 }
 
-fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeDigest) void {
+fn writeOptionalDigest(hasher: anytype, value: ?names.TypeDigest) void {
     if (value) |digest| {
         writeBytes(hasher, "digest");
         hasher.update(&digest.bytes);
@@ -2594,8 +2426,19 @@ fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeD
     }
 }
 
+/// A producer-assigned generated digest is the complete identity of a
+/// generated nominal. Its arguments, public/private view, iterator metadata,
+/// declared order, and private backing are implementation details already
+/// committed by that digest and must remain behind this atomic boundary.
+fn writeGeneratedNominalIdentity(hasher: anytype, generated: ?names.TypeDigest) bool {
+    const digest = generated orelse return false;
+    writeBytes(hasher, "generated-nominal");
+    hasher.update(&digest.bytes);
+    return true;
+}
+
 fn writeIteratorTopology(
-    hasher: *std.crypto.hash.sha2.Sha256,
+    hasher: anytype,
     name_store: *const names.NameStore,
     topology: ?IteratorTopology,
 ) void {
@@ -3157,6 +3000,10 @@ test "monotype digest terminates on recursive structural types" {
 
     const other = store.typeDigest(&name_store, rec_b);
     try std.testing.expect(std.mem.eql(u8, first.bytes[0..], other.bytes[0..]));
+
+    const first_specialization = store.specializationLookupDigestCached(&name_store, rec_a, null);
+    const other_specialization = store.specializationLookupDigestCached(&name_store, rec_b, null);
+    try std.testing.expect(std.mem.eql(u8, first_specialization.bytes[0..], other_specialization.bytes[0..]));
 }
 
 test "monotype cached digest survives completion of an unrelated reserved slot" {
@@ -3199,33 +3046,6 @@ test "monotype cached digest survives completion of an unrelated reserved slot" 
     try std.testing.expectEqual(@as(u64, 0), after_fill_stats.nodes_visited);
 }
 
-test "monotype iterator containment cache is invalidated by rollback" {
-    var name_store = names.NameStore.init(std.testing.allocator);
-    defer name_store.deinit();
-
-    var store = Store.init(std.testing.allocator);
-    defer store.deinit();
-
-    const survivor = try store.reserveSlot();
-    const mark_ = store.mark();
-    const transient = try store.add(.{ .primitive = .u64 });
-    store.fillReservedSlot(survivor, .{ .box = transient });
-    try std.testing.expect(!try store.containsIteratorInterface(survivor));
-
-    store.restore(mark_);
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
-    const type_name = try name_store.internTypeName("Iter");
-    const replacement = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
-        .def = .{ .module = module_identity, .type_name = type_name },
-        .kind = .nominal,
-        .builtin_owner = .iter,
-        .args = Span.empty(),
-    } });
-    try std.testing.expectEqual(transient, replacement);
-    try std.testing.expect(try store.containsIteratorInterface(survivor));
-}
-
 test "monotype cached digest stays stable across multiple edges into one recursive group" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
@@ -3248,8 +3068,8 @@ test "monotype cached digest stays stable across multiple edges into one recursi
     const second_full = store.typeDigestCached(&name_store, recursive, null);
     try std.testing.expect(std.mem.eql(u8, first_full.bytes[0..], second_full.bytes[0..]));
 
-    const first_specialization = store.specializationDigestCached(&name_store, recursive, null);
-    const second_specialization = store.specializationDigestCached(&name_store, recursive, null);
+    const first_specialization = store.specializationLookupDigestCached(&name_store, recursive, null);
+    const second_specialization = store.specializationLookupDigestCached(&name_store, recursive, null);
     try std.testing.expect(std.mem.eql(u8, first_specialization.bytes[0..], second_specialization.bytes[0..]));
 }
 
@@ -3437,6 +3257,116 @@ test "monotype type equality rejects digest-equal aliases without backing" {
     const second_digest = store.typeDigest(&name_store, second);
     try std.testing.expect(std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
     try std.testing.expect(!try store.typeEql(&name_store, first, second));
+}
+
+test "monotype generated nominal identity is atomic" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const first_module = try name_store.internModuleIdentity(&([_]u8{0xA1} ** 32));
+    const second_module = try name_store.internModuleIdentity(&([_]u8{0xB2} ** 32));
+    const first_name = try name_store.internTypeName("FirstGenerated");
+    const second_name = try name_store.internTypeName("SecondGenerated");
+    const field_name = try name_store.internRecordFieldLabel("field");
+    const generated = names.TypeDigest{ .bytes = [_]u8{0xC3} ** 32 };
+    const different_generated = names.TypeDigest{ .bytes = [_]u8{0xD4} ** 32 };
+
+    const i64_ty = try store.add(.{ .primitive = .i64 });
+    const str_ty = try store.add(.{ .primitive = .str });
+    const first_args = try store.addSpan(&.{i64_ty});
+    const second_args = try store.addSpan(&.{str_ty});
+    const second_order = try store.addDeclaredFields(&.{
+        .{ .named = field_name },
+        .{ .padding = str_ty },
+    });
+
+    const first = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{ .bytes = [_]u8{0x11} ** 32 }, .ty = @enumFromInt(1) },
+        .def = .{
+            .module = first_module,
+            .type_name = first_name,
+            .source_decl = 1,
+            .generated = generated,
+        },
+        .kind = .nominal,
+        .args = first_args,
+        .backing = .{ .ty = i64_ty, .use = .inspectable },
+    } });
+    const same_identity = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{ .bytes = [_]u8{0x22} ** 32 }, .ty = @enumFromInt(2) },
+        .def = .{
+            .module = second_module,
+            .type_name = second_name,
+            .source_decl = 2,
+            .generated = generated,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = second_args,
+        .backing = .{ .ty = str_ty, .use = .runtime_layout_only, .authority = .generated_private },
+        .declared_order = second_order,
+    } });
+    var different_content = store.get(same_identity).named;
+    different_content.def.generated = different_generated;
+    const different_identity = try store.add(.{ .named = different_content });
+
+    const first_digest = store.typeDigest(&name_store, first);
+    const same_digest = store.typeDigest(&name_store, same_identity);
+    const different_digest = store.typeDigest(&name_store, different_identity);
+    try std.testing.expectEqualSlices(u8, first_digest.bytes[0..], same_digest.bytes[0..]);
+    try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], different_digest.bytes[0..]));
+
+    const first_specialization = store.specializationDigest(&name_store, first);
+    const same_specialization = store.specializationDigest(&name_store, same_identity);
+    const different_specialization = store.specializationDigest(&name_store, different_identity);
+    try std.testing.expectEqualSlices(u8, first_specialization.bytes[0..], same_specialization.bytes[0..]);
+    try std.testing.expect(!std.mem.eql(u8, first_specialization.bytes[0..], different_specialization.bytes[0..]));
+
+    try std.testing.expect(try store.typeEql(&name_store, first, same_identity));
+    try std.testing.expect(!try store.typeEql(&name_store, first, different_identity));
+    try std.testing.expect(try typeEqlAcrossStores(
+        std.testing.allocator,
+        &name_store,
+        store.view(),
+        first,
+        store.view(),
+        same_identity,
+    ));
+
+    var full_stats: Store.DigestStats = .{};
+    _ = store.typeDigestCached(&name_store, first, &full_stats);
+    try std.testing.expectEqual(@as(u64, 1), full_stats.cache_misses);
+    try std.testing.expectEqual(@as(u64, 1), full_stats.nodes_visited);
+
+    var specialization_stats: Store.DigestStats = .{};
+    _ = store.specializationLookupDigestCached(&name_store, first, &specialization_stats);
+    try std.testing.expectEqual(@as(u64, 1), specialization_stats.cache_misses);
+    try std.testing.expectEqual(@as(u64, 1), specialization_stats.nodes_visited);
+
+    const interner = try Interner.init(std.testing.allocator, &name_store);
+    defer interner.deinit();
+    const interned_i64 = try interner.internPrimitive(.i64);
+    const interned_str = try interner.internPrimitive(.str);
+    const interned_first = try interner.internNamed(.{
+        .named_type = .{ .module = .{ .bytes = [_]u8{0x11} ** 32 }, .ty = @enumFromInt(1) },
+        .def = .{ .module = first_module, .type_name = first_name, .generated = generated },
+        .kind = .nominal,
+        .args = &.{interned_i64},
+        .backing = .{ .ty = interned_i64, .use = .inspectable },
+    });
+    const interned_same = try interner.internNamed(.{
+        .named_type = .{ .module = .{ .bytes = [_]u8{0x22} ** 32 }, .ty = @enumFromInt(2) },
+        .def = .{ .module = second_module, .type_name = second_name, .generated = generated },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = &.{interned_str},
+        .backing = .{ .ty = interned_str, .use = .runtime_layout_only, .authority = .generated_private },
+        .declared_order = &.{.{ .padding = interned_str }},
+    });
+    try std.testing.expectEqual(interned_first, interned_same);
 }
 
 test "monotype named type digest includes backing" {
