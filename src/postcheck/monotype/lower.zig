@@ -5011,12 +5011,10 @@ const Builder = struct {
         };
     }
 
-    /// Builds the declared-field-order span for a nominal/opaque record backing
-    /// from its source declaration (the declaration backing preserves source
-    /// order, unlike the lexicographically-sorted lowered row). Returns the empty
-    /// span for non-record backings or encodings that intentionally have no
-    /// declaration backing. The span feeds layout selection only; the lowered
-    /// row stays lexicographic.
+    /// Builds the declared-field span for a nominal/opaque record backing from
+    /// explicit checked metadata. Boxy uses it for aggregate descriptor
+    /// planning; LSS consumes it as layout order only when it contains padding.
+    /// The lowered backing row remains lexicographic.
     fn declaredOrderForNominal(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!Type.Span {
         if (nominal.declared_fields.len != 0) {
             return try self.lowerCheckedDeclaredOrder(view, nominal.declared_fields, view, nominal.padding_field_types);

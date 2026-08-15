@@ -6060,17 +6060,19 @@ payloads use payload position order. Monotype lowering copies those spans
 directly. It does not sort by display text, declaration spelling, runtime
 encoding, or incidental map iteration.
 
-Nominal records additionally carry their declared field order as separate
-explicit data, because their runtime layout follows declaration order rather
-than the lexicographic row order (see Nominal Record Field Order). The
-lexicographic row order remains the identity used for field-name resolution;
-declared order feeds only layout. In CheckedModule data this is a flat
-`CheckedDeclaredField` pool. A named entry stores the record-field label that
-must be matched against the lexicographic backing row; a padding entry stores
-the ordinal of the corresponding checked padding type in
+Checked nominal records preserve their declared field order as separate
+explicit data so source-level unnamed fields are not lost when the backing row
+is sorted lexicographically (see Nominal Record Field Order). The lexicographic
+row order remains the identity used for field-name resolution. In CheckedModule
+data the source order is a flat `CheckedDeclaredField` pool. A named entry stores
+the record-field label that matches the lexicographic backing row; a padding
+entry stores the ordinal of the corresponding checked padding type in
 `padding_field_types`. The padding type itself is not duplicated in the
-declared-order entry, so generic nominal instantiation substitutes padding
-types in exactly one place. These stay two separate data.
+declared-order entry, so generic nominal instantiation substitutes padding types
+in exactly one place. Monotype preserves this field metadata because boxy
+aggregate descriptors also consume it. Layout selection is independent:
+without padding, LSS and boxy's runtime layout path reuse the structural
+backing; with padding, they propagate an explicit declared-order policy.
 
 For named types, checking outputs:
 
@@ -7328,21 +7330,25 @@ caches of explicit checked and boxy lowering data. They must not recover missing
 data from source syntax, type display strings, backend symbols, or runtime
 bytes.
 
-Boxy representation planning consumes checked nominal declared-order entries
-directly. For usage payloads whose finalized representation points at a local or
-imported box-payload capability, the planner obtains the instantiated backing
-root and padding roots from that capability rather than treating empty
+Boxy representation planning preserves checked nominal declared-field entries
+as explicit aggregate metadata for runtime descriptor lowering. Separately, an
+unnamed field selects declared-order runtime layout. For usage payloads whose
+finalized representation points at a local or imported box-payload capability,
+the planner obtains the instantiated backing root and padding roots from that
+capability rather than treating empty
 `padding_field_types` on the usage payload as absence of padding. Imported
 capability roots are source-module checked ids; the planner maps them into the
-root checked type store by their exported checked type digests. Named
-declared fields from imported declarations are matched against the mapped
-root backing row through checked field-label text, not by assuming equal
-module-local label ids. The planner lowers each named entry to the matching
-backing-row child and each padding entry to the instantiated padding type
-referenced by its ordinal. The boxy layout planner then emits a nominal struct
-node in that declared order and marks it with the shared layout graph's
-nominal-struct marker. The ordinary layout store verifies or repairs the field
-order; boxy does not implement a separate nominal layout algorithm.
+root checked type store by their exported checked type digests. Named declared
+fields from imported declarations are matched against the mapped root backing
+row through checked field-label text, not by assuming equal module-local label
+ids. The planner lowers each named entry to the matching backing-row child and
+each padding entry to the instantiated padding type referenced by its ordinal.
+For descriptor payloads the boxy layout planner can emit a structurally ordered
+span from the declared-field metadata. For ordinary runtime layout, it emits a
+declared-order span only when padding selects that policy; without padding it
+reuses the structural backing representation. The ordinary layout store commits
+the selected policy; boxy does not implement a separate nominal layout
+algorithm.
 
 Boxy tag-union planning stores tag variants explicitly, separately from payload
 children. The representation's child span still contains payload children in
@@ -8306,20 +8312,22 @@ alignment to the struct, so pure padding never inflates a struct's alignment.
 Using an unnamed field in a structural record type is rejected during
 canonicalization.
 
-Declared field order is explicit data. Record rows are sorted lexicographically
-by name at several stages (checking, Monotype row lowering, and Monotype
-instantiation) because field-name resolution and digests depend on a single
-fixed order, so the declared order is not recoverable from the lowered record
-itself. Canonicalization preserves it—a nominal declaration's record
+Declared field order is explicit checked data. Record rows are sorted
+lexicographically by name at several stages (checking, Monotype row lowering,
+and Monotype instantiation) because field-name resolution and digests depend on
+a single fixed order, so the declared order is not recoverable from the lowered
+record itself. Canonicalization preserves it—a nominal declaration's record
 annotation keeps its fields in source order—and checking records it as
 explicit CheckedModule data distinct from the (lexicographic) backing row,
-so later stages consume it without rescanning declarations. Monotype lowering,
-boxy planning, and layout lowering all use this checked datum. The struct
-commit uses
-it only for the unnamed-field opt-in described above; otherwise nominal records
-use the structural order of their backing row. Field-name resolution continues
-to use the lexicographic row order, independent of the layout offset map. The
-same data is consumed by the interpreter's layout store, so all backends agree.
+so later stages never rescan declarations. Monotype lowering preserves this
+metadata for boxy aggregate descriptor planning. LSS and boxy representation
+planning use the presence of explicit checked padding types to select the
+declared-order layout policy; otherwise their runtime layout path reuses the
+structural backing row. The layout graph records the selected policy on the
+struct span, and the store commits it without probing or reconstructing intent.
+Field-name resolution continues to use the lexicographic row order, independent
+of the layout offset map. The same policy is consumed by the interpreter's
+layout store, so all backends agree.
 
 ### Pattern Lowering
 
