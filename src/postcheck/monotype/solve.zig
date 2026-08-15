@@ -290,9 +290,17 @@ pub const TagRowNodes = struct {
     tags: []const InstTag,
 };
 
+/// Whether one graph relation may replay checker-approved record-construction
+/// width absorption or must preserve exact closed-row width.
+pub const RowWidthRelation = enum(u8) {
+    exact,
+    construction,
+};
+
 const NodePair = struct {
     left: NodeId,
     right: NodeId,
+    row_width: RowWidthRelation = .exact,
 };
 
 const RelationStamp = struct {
@@ -300,6 +308,7 @@ const RelationStamp = struct {
     left_version: u32,
     right: NodeId,
     right_version: u32,
+    row_width: RowWidthRelation,
 };
 
 const NominalBackingDeclaration = struct {
@@ -2237,7 +2246,7 @@ pub const InstGraph = struct {
         if (try self.containsFinishedMono(public_node) or try self.containsFinishedMono(private_node)) {
             Common.invariant("finished Monotype reached generated-private representation selection");
         }
-        try self.unifyRootsTransitively(public_node, private_node, true);
+        try self.unifyRootsTransitively(public_node, private_node, true, .exact);
     }
 
     fn relateOpaqueInterfacePair(
@@ -2444,9 +2453,9 @@ pub const InstGraph = struct {
         if (only_public.items.len == 0 and only_private.items.len == 0) {
             try self.relateOpaqueChild(flat_public.ext, flat_private.ext, pending);
         } else if (only_public.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_public.ext, only_private.items, flat_private.ext, pending);
+            try self.writeOrQueueTagRest(flat_public.ext, only_private.items, flat_private.ext, .exact, pending);
         } else if (only_private.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_private.ext, only_public.items, flat_public.ext, pending);
+            try self.writeOrQueueTagRest(flat_private.ext, only_public.items, flat_public.ext, .exact, pending);
         } else {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
             if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
@@ -2454,10 +2463,10 @@ pub const InstGraph = struct {
                 defer rest.deinit(self.allocator);
                 try rest.appendSlice(self.allocator, only_public.items);
                 try rest.appendSlice(self.allocator, only_private.items);
-                try self.writeOrQueueTagRest(flat_public.ext, rest.items, new_ext, pending);
+                try self.writeOrQueueTagRest(flat_public.ext, rest.items, new_ext, .exact, pending);
             } else {
-                try self.writeOrQueueTagRest(flat_public.ext, only_private.items, new_ext, pending);
-                try self.writeOrQueueTagRest(flat_private.ext, only_public.items, new_ext, pending);
+                try self.writeOrQueueTagRest(flat_public.ext, only_private.items, new_ext, .exact, pending);
+                try self.writeOrQueueTagRest(flat_private.ext, only_public.items, new_ext, .exact, pending);
             }
         }
     }
@@ -2526,9 +2535,9 @@ pub const InstGraph = struct {
         if (only_public.items.len == 0 and only_private.items.len == 0) {
             try self.relateOpaqueChild(flat_public.ext, flat_private.ext, pending);
         } else if (only_public.items.len == 0) {
-            try self.writeOrQueueRecordRest(flat_public.ext, only_private.items, flat_private.ext, pending);
+            try self.writeOrQueueRecordRest(flat_public.ext, only_private.items, flat_private.ext, .exact, pending);
         } else if (only_private.items.len == 0) {
-            try self.writeOrQueueRecordRest(flat_private.ext, only_public.items, flat_public.ext, pending);
+            try self.writeOrQueueRecordRest(flat_private.ext, only_public.items, flat_public.ext, .exact, pending);
         } else {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
             if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
@@ -2536,10 +2545,10 @@ pub const InstGraph = struct {
                 defer rest.deinit(self.allocator);
                 try rest.appendSlice(self.allocator, only_public.items);
                 try rest.appendSlice(self.allocator, only_private.items);
-                try self.writeOrQueueRecordRest(flat_public.ext, rest.items, new_ext, pending);
+                try self.writeOrQueueRecordRest(flat_public.ext, rest.items, new_ext, .exact, pending);
             } else {
-                try self.writeOrQueueRecordRest(flat_public.ext, only_private.items, new_ext, pending);
-                try self.writeOrQueueRecordRest(flat_private.ext, only_public.items, new_ext, pending);
+                try self.writeOrQueueRecordRest(flat_public.ext, only_private.items, new_ext, .exact, pending);
+                try self.writeOrQueueRecordRest(flat_private.ext, only_public.items, new_ext, .exact, pending);
             }
         }
     }
@@ -3355,7 +3364,15 @@ pub const InstGraph = struct {
     }
 
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
-        try self.unifyRootsTransitively(a, b, false);
+        try self.unifyRootsTransitively(a, b, false, .exact);
+    }
+
+    /// Replay a checker-approved construction relation. Unlike ordinary graph
+    /// equality, a closed record may absorb unmatched fields whose explicit
+    /// kind is optional or defaulted; required and unresolved fields remain an
+    /// invariant violation.
+    pub fn unifyConstruction(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
+        try self.unifyRootsTransitively(a, b, false, .construction);
     }
 
     /// Join two matching structural request containers after their components
@@ -3454,6 +3471,7 @@ pub const InstGraph = struct {
         a: NodeId,
         b: NodeId,
         allow_private_selection: bool,
+        row_width: RowWidthRelation,
     ) Allocator.Error!void {
         self.requireRelationProduction();
         self.countDiagnostic("unify_requests");
@@ -3461,9 +3479,9 @@ pub const InstGraph = struct {
         defer pending.deinit(self.allocator);
         var related = std.AutoHashMap(NodePair, void).init(self.allocator);
         defer related.deinit();
-        try pending.append(self.allocator, .{ .left = a, .right = b });
+        try pending.append(self.allocator, .{ .left = a, .right = b, .row_width = row_width });
         while (pending.pop()) |pair| {
-            try self.unifyRoots(pair.left, pair.right, &pending, &related, allow_private_selection);
+            try self.unifyRoots(pair.left, pair.right, pair.row_width, &pending, &related, allow_private_selection);
         }
     }
 
@@ -3471,6 +3489,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         raw_left: NodeId,
         raw_right: NodeId,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
         related: *std.AutoHashMap(NodePair, void),
         allow_private_selection: bool,
@@ -3478,10 +3497,10 @@ pub const InstGraph = struct {
         const left = self.find(raw_left);
         const right = self.find(raw_right);
         if (left == right) return;
-        const pair = NodePair{ .left = left, .right = right };
+        const pair = NodePair{ .left = left, .right = right, .row_width = row_width };
         if (related.contains(pair)) return;
         try related.put(pair, {});
-        const relation = self.relationStamp(left, right);
+        const relation = self.relationStamp(left, right, row_width);
         if (self.processed_relations.contains(relation)) return;
         try self.processed_relations.put(relation, {});
 
@@ -3504,22 +3523,22 @@ pub const InstGraph = struct {
                 try self.setContent(right, .{ .unresolved = mergeVariables(left_content.unresolved, right_content.unresolved) });
                 try self.union_(right, left);
             } else if (right_content == .named and right_content.named.kind == .alias) {
-                try self.unifyThroughBacking(right, right_content, left, pending);
+                try self.unifyThroughBacking(right, right_content, left, row_width, pending);
             } else {
                 try self.union_(right, left);
             }
         } else if (right_content == .unresolved) {
             if (left_content == .named and left_content.named.kind == .alias) {
-                try self.unifyThroughBacking(left, left_content, right, pending);
+                try self.unifyThroughBacking(left, left_content, right, row_width, pending);
             } else {
                 try self.union_(left, right);
             }
         } else {
-            try self.unifyConcrete(left, left_content, right, right_content, pending);
+            try self.unifyConcrete(left, left_content, right, right_content, row_width, pending);
         }
     }
 
-    fn relationStamp(self: *InstGraph, left: NodeId, right: NodeId) RelationStamp {
+    fn relationStamp(self: *InstGraph, left: NodeId, right: NodeId, row_width: RowWidthRelation) RelationStamp {
         const left_raw = @intFromEnum(left);
         const right_raw = @intFromEnum(right);
         if (left_raw <= right_raw) {
@@ -3528,6 +3547,7 @@ pub const InstGraph = struct {
                 .left_version = self.versions.items[left_raw],
                 .right = right,
                 .right_version = self.versions.items[right_raw],
+                .row_width = row_width,
             };
         }
         return .{
@@ -3535,6 +3555,7 @@ pub const InstGraph = struct {
             .left_version = self.versions.items[right_raw],
             .right = left,
             .right_version = self.versions.items[left_raw],
+            .row_width = row_width,
         };
     }
 
@@ -3558,6 +3579,7 @@ pub const InstGraph = struct {
         left_content: InstNode,
         right: NodeId,
         right_content: InstNode,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         switch (left_content) {
@@ -3567,27 +3589,27 @@ pub const InstGraph = struct {
                     if (left_prim != right_content.primitive) Common.invariant("instantiation unified two different primitive types");
                     try self.union_(left, right);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified a primitive type with a non-primitive type");
                 }
             },
             .list => |left_elem| {
                 if (right_content == .list) {
-                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_content.list });
+                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_content.list, .row_width = row_width });
                     try self.union_(left, right);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified a List with a non-List type");
                 }
             },
             .box => |left_elem| {
                 if (right_content == .box) {
-                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_content.box });
+                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_content.box, .row_width = row_width });
                     try self.union_(left, right);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified a Box with a non-Box type");
                 }
@@ -3597,11 +3619,11 @@ pub const InstGraph = struct {
                     const right_items = right_content.tuple;
                     if (left_items.len != right_items.len) Common.invariant("instantiation unified tuples of different arity");
                     for (left_items, right_items) |left_item, right_item| {
-                        try pending.append(self.allocator, .{ .left = left_item, .right = right_item });
+                        try pending.append(self.allocator, .{ .left = left_item, .right = right_item, .row_width = row_width });
                     }
                     try self.union_(left, right);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified a tuple with a non-tuple type");
                 }
@@ -3611,23 +3633,23 @@ pub const InstGraph = struct {
                     const right_fn = right_content.func;
                     if (left_fn.args.len != right_fn.args.len) Common.invariant("instantiation unified functions of different arity");
                     for (left_fn.args, right_fn.args) |left_arg, right_arg| {
-                        try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg });
+                        try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg, .row_width = row_width });
                     }
-                    try pending.append(self.allocator, .{ .left = left_fn.ret, .right = right_fn.ret });
+                    try pending.append(self.allocator, .{ .left = left_fn.ret, .right = right_fn.ret, .row_width = row_width });
                     try self.union_(left, right);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified a function with a non-function type");
                 }
             },
             .tag_union => {
                 if (right_content == .tag_union) {
-                    try self.unifyTagRows(left, right, pending);
+                    try self.unifyTagRows(left, right, row_width, pending);
                 } else if (right_content == .empty_tag_union) {
-                    try self.unifyRowWithEmpty(left, right, .tag_union);
+                    try self.unifyRowWithEmpty(left, right, .tag_union, row_width);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified a tag union with a non-tag-union type");
                 }
@@ -3636,20 +3658,20 @@ pub const InstGraph = struct {
                 if (right_content == .empty_tag_union) {
                     try self.union_(left, right);
                 } else if (right_content == .tag_union) {
-                    try self.unifyRowWithEmpty(right, left, .tag_union);
+                    try self.unifyRowWithEmpty(right, left, .tag_union, row_width);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified an empty tag union with an incompatible type");
                 }
             },
             .record => {
                 if (right_content == .record) {
-                    try self.unifyRecordRows(left, right, pending);
+                    try self.unifyRecordRows(left, right, row_width, pending);
                 } else if (right_content == .empty_record) {
-                    try self.unifyRowWithEmpty(left, right, .record);
+                    try self.unifyRowWithEmpty(left, right, .record, row_width);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified a record with a non-record type");
                 }
@@ -3658,9 +3680,9 @@ pub const InstGraph = struct {
                 if (right_content == .empty_record) {
                     try self.union_(left, right);
                 } else if (right_content == .record) {
-                    try self.unifyRowWithEmpty(right, left, .record);
+                    try self.unifyRowWithEmpty(right, left, .record, row_width);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified an empty record with an incompatible type");
                 }
@@ -3669,11 +3691,11 @@ pub const InstGraph = struct {
                 if (right_content == .named) {
                     const right_named = right_content.named;
                     if (left_named.kind == .alias) {
-                        try self.unifyThroughBacking(left, left_content, right, pending);
+                        try self.unifyThroughBacking(left, left_content, right, row_width, pending);
                         return;
                     }
                     if (right_named.kind == .alias) {
-                        try self.unifyThroughBacking(right, right_content, left, pending);
+                        try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                         return;
                     }
                     switch (self.iteratorRelation(left_named, right_named)) {
@@ -3685,6 +3707,7 @@ pub const InstGraph = struct {
                             try pending.append(self.allocator, .{
                                 .left = left_named.args[0],
                                 .right = right_named.args[0],
+                                .row_width = row_width,
                             });
                             if (left_named.def.iterator_representation == .minted) {
                                 try self.union_(left, right);
@@ -3700,6 +3723,7 @@ pub const InstGraph = struct {
                             try pending.append(self.allocator, .{
                                 .left = left_named.args[0],
                                 .right = right_named.args[0],
+                                .row_width = row_width,
                             });
                             if (left_named.def.iterator_representation == .forced_dynamic) {
                                 try self.union_(left, right);
@@ -3715,6 +3739,7 @@ pub const InstGraph = struct {
                             try pending.append(self.allocator, .{
                                 .left = left_named.args[0],
                                 .right = right_named.args[0],
+                                .row_width = row_width,
                             });
                             if (left_named.backing) |left_backing| {
                                 const right_backing = right_named.backing orelse
@@ -3728,6 +3753,7 @@ pub const InstGraph = struct {
                                 try pending.append(self.allocator, .{
                                     .left = left_backing.node,
                                     .right = right_backing.node,
+                                    .row_width = row_width,
                                 });
                             } else if (right_named.backing != null) {
                                 Common.invariant("minted iterator join found backing on only one side");
@@ -3771,12 +3797,12 @@ pub const InstGraph = struct {
                     }
                     if (std.meta.eql(left_named.def, right_named.def) and left_named.args.len == right_named.args.len) {
                         for (left_named.args, right_named.args) |left_arg, right_arg| {
-                            try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg });
+                            try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg, .row_width = row_width });
                         }
                         if (left_named.backing) |left_backing| {
                             if (right_named.backing) |right_backing| {
                                 if (left_backing.authority == right_backing.authority) {
-                                    try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
+                                    try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node, .row_width = row_width });
                                 } else {
                                     const private_is_left = left_backing.authority == .generated_private;
                                     const private_is_right = right_backing.authority == .generated_private;
@@ -3799,9 +3825,9 @@ pub const InstGraph = struct {
                         try self.union_(left, right);
                         return;
                     }
-                    try self.unifyThroughBacking(left, left_content, right, pending);
+                    try self.unifyThroughBacking(left, left_content, right, row_width, pending);
                 } else {
-                    try self.unifyThroughBacking(left, left_content, right, pending);
+                    try self.unifyThroughBacking(left, left_content, right, row_width, pending);
                 }
             },
             .erased => |left_digest| {
@@ -3811,7 +3837,7 @@ pub const InstGraph = struct {
                     }
                     try self.union_(left, right);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified an erased type with an incompatible type");
                 }
@@ -3820,7 +3846,7 @@ pub const InstGraph = struct {
                 if (right_content == .zst) {
                     try self.union_(left, right);
                 } else if (right_content == .named) {
-                    try self.unifyThroughBacking(right, right_content, left, pending);
+                    try self.unifyThroughBacking(right, right_content, left, row_width, pending);
                 } else {
                     Common.invariant("instantiation unified a zero-sized type with an incompatible type");
                 }
@@ -3882,6 +3908,7 @@ pub const InstGraph = struct {
         named_node: NodeId,
         named_content: InstNode,
         other: NodeId,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         if (named_content != .named) unreachable;
@@ -3912,16 +3939,16 @@ pub const InstGraph = struct {
         // leave a non-recursive named type pointing to itself.
         if (backing_node == other) return;
         if (named.kind == .alias) {
-            try pending.append(self.allocator, .{ .left = backing_node, .right = other });
+            try pending.append(self.allocator, .{ .left = backing_node, .right = other, .row_width = row_width });
             return;
         }
         if (self.nodes.items[@intFromEnum(other)] == .named) {
-            try pending.append(self.allocator, .{ .left = backing_node, .right = other });
+            try pending.append(self.allocator, .{ .left = backing_node, .right = other, .row_width = row_width });
             return;
         }
         const moved = try self.newNode(self.nodes.items[@intFromEnum(other)]);
         try self.union_(named_node, other);
-        try pending.append(self.allocator, .{ .left = backing_node, .right = moved });
+        try pending.append(self.allocator, .{ .left = backing_node, .right = moved, .row_width = row_width });
     }
 
     const StructuralBacking = struct {
@@ -4039,9 +4066,37 @@ pub const InstGraph = struct {
         };
     }
 
+    fn recordFieldsAreAbsorbable(self: *InstGraph, fields: []const InstField) bool {
+        for (fields) |field| {
+            const kind = self.resolvedFieldKind(field.kind) orelse return false;
+            switch (kind) {
+                .optional, .defaulted => {},
+                .required => return false,
+            }
+        }
+        return true;
+    }
+
+    fn closedRecordAbsorbsFields(
+        self: *InstGraph,
+        raw_ext: NodeId,
+        fields: []const InstField,
+        row_width: RowWidthRelation,
+    ) bool {
+        if (row_width != .construction or fields.len == 0) return false;
+        if (self.nodes.items[@intFromEnum(self.find(raw_ext))] != .empty_record) return false;
+        return self.recordFieldsAreAbsorbable(fields);
+    }
+
     /// A row with a head met an empty row: the head must be empty too, and the
     /// row's extension must also be empty.
-    fn unifyRowWithEmpty(self: *InstGraph, row: NodeId, empty: NodeId, kind: RowKind) Allocator.Error!void {
+    fn unifyRowWithEmpty(
+        self: *InstGraph,
+        row: NodeId,
+        empty: NodeId,
+        kind: RowKind,
+        row_width: RowWidthRelation,
+    ) Allocator.Error!void {
         switch (kind) {
             .tag_union => {
                 const flat = try self.flattenTagRow(row);
@@ -4052,10 +4107,21 @@ pub const InstGraph = struct {
             },
             .record => {
                 const flat = try self.flattenRecordRow(row);
-                if (flat.fields.len != 0) Common.invariant("instantiation unified a non-empty record with an empty record");
+                if (flat.fields.len != 0 and
+                    (row_width != .construction or !self.recordFieldsAreAbsorbable(flat.fields)))
+                {
+                    Common.invariant("instantiation unified a non-absorbable record with an empty record");
+                }
                 try self.unify(flat.ext, empty);
-                try self.setContent(row, .empty_record);
-                try self.union_(empty, row);
+                if (flat.fields.len == 0) {
+                    try self.setContent(row, .empty_record);
+                    try self.union_(empty, row);
+                } else {
+                    // The empty construction adopts the explicit optional or
+                    // defaulted slots; its lowering materializes Missing tags
+                    // or defaults from the now-shared record class.
+                    try self.union_(row, empty);
+                }
             },
         }
     }
@@ -4199,7 +4265,13 @@ pub const InstGraph = struct {
         return self.name_store.recordFieldLabelText(name);
     }
 
-    fn unifyTagRows(self: *InstGraph, left: NodeId, right: NodeId, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
+    fn unifyTagRows(
+        self: *InstGraph,
+        left: NodeId,
+        right: NodeId,
+        row_width: RowWidthRelation,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
         const flat_left = try self.flattenTagRow(left);
         const flat_right = try self.flattenTagRow(right);
 
@@ -4219,7 +4291,7 @@ pub const InstGraph = struct {
                     Common.invariant("instantiation unified one tag at two different payload arities");
                 }
                 for (left_tag.payloads, right_tag.payloads) |left_payload, right_payload| {
-                    try pending.append(self.allocator, .{ .left = left_payload, .right = right_payload });
+                    try pending.append(self.allocator, .{ .left = left_payload, .right = right_payload, .row_width = row_width });
                 }
                 shared = true;
                 break;
@@ -4250,13 +4322,13 @@ pub const InstGraph = struct {
 
         var merged_ext = flat_left.ext;
         if (only_left.items.len == 0 and only_right.items.len == 0) {
-            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext });
+            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext, .row_width = row_width });
         } else if (only_left.items.len == 0) {
             // Left lacks tags: its extension absorbs the right-only tags.
-            try self.writeOrQueueTagRest(flat_left.ext, only_right.items, flat_right.ext, pending);
+            try self.writeOrQueueTagRest(flat_left.ext, only_right.items, flat_right.ext, row_width, pending);
             merged_ext = flat_right.ext;
         } else if (only_right.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_right.ext, only_left.items, flat_left.ext, pending);
+            try self.writeOrQueueTagRest(flat_right.ext, only_left.items, flat_left.ext, row_width, pending);
             merged_ext = flat_left.ext;
         } else {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
@@ -4265,10 +4337,10 @@ pub const InstGraph = struct {
                 defer rest.deinit(self.allocator);
                 try rest.appendSlice(self.allocator, only_left.items);
                 try rest.appendSlice(self.allocator, only_right.items);
-                try self.writeOrQueueTagRest(flat_left.ext, rest.items, new_ext, pending);
+                try self.writeOrQueueTagRest(flat_left.ext, rest.items, new_ext, row_width, pending);
             } else {
-                try self.writeOrQueueTagRest(flat_left.ext, only_right.items, new_ext, pending);
-                try self.writeOrQueueTagRest(flat_right.ext, only_left.items, new_ext, pending);
+                try self.writeOrQueueTagRest(flat_left.ext, only_right.items, new_ext, row_width, pending);
+                try self.writeOrQueueTagRest(flat_right.ext, only_left.items, new_ext, row_width, pending);
             }
             merged_ext = new_ext;
         }
@@ -4285,6 +4357,7 @@ pub const InstGraph = struct {
         ext: NodeId,
         tags: []const InstTag,
         tail_ext: NodeId,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         const ext_root = self.find(ext);
@@ -4308,11 +4381,17 @@ pub const InstGraph = struct {
                 .tags = try self.arena().dupe(InstTag, tags),
                 .ext = tail_ext,
             } });
-            try pending.append(self.allocator, .{ .left = ext_root, .right = rest });
+            try pending.append(self.allocator, .{ .left = ext_root, .right = rest, .row_width = row_width });
         }
     }
 
-    fn unifyRecordRows(self: *InstGraph, left: NodeId, right: NodeId, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
+    fn unifyRecordRows(
+        self: *InstGraph,
+        left: NodeId,
+        right: NodeId,
+        row_width: RowWidthRelation,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
         const flat_left = try self.flattenRecordRow(left);
         const flat_right = try self.flattenRecordRow(right);
 
@@ -4337,8 +4416,9 @@ pub const InstGraph = struct {
                 try pending.append(self.allocator, .{
                     .left = left_field.value_ty orelse left_field.ty,
                     .right = right_field.value_ty orelse right_field.ty,
+                    .row_width = row_width,
                 });
-                try pending.append(self.allocator, .{ .left = left_field.ty, .right = right_field.ty });
+                try pending.append(self.allocator, .{ .left = left_field.ty, .right = right_field.ty, .row_width = row_width });
                 const resolved_default = if (self.resolvedFieldKind(merged_kind)) |resolved|
                     resolved.defaultIdentity()
                 else
@@ -4373,32 +4453,36 @@ pub const InstGraph = struct {
             }
         }
 
-        if (self.rowAdditionConflicts(flat_left.ext, only_right.items.len, .record) or
-            self.rowAdditionConflicts(flat_right.ext, only_left.items.len, .record))
+        const left_absorbs_right = self.closedRecordAbsorbsFields(flat_left.ext, only_right.items, row_width);
+        const right_absorbs_left = self.closedRecordAbsorbsFields(flat_right.ext, only_left.items, row_width);
+        if ((!left_absorbs_right and self.rowAdditionConflicts(flat_left.ext, only_right.items.len, .record)) or
+            (!right_absorbs_left and self.rowAdditionConflicts(flat_right.ext, only_left.items.len, .record)))
         {
             Common.invariant("instantiation widened a closed record");
         }
 
+        const add_to_left = if (left_absorbs_right) &.{} else only_right.items;
+        const add_to_right = if (right_absorbs_left) &.{} else only_left.items;
         var merged_ext = flat_left.ext;
-        if (only_left.items.len == 0 and only_right.items.len == 0) {
-            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext });
-        } else if (only_left.items.len == 0) {
-            try self.writeOrQueueRecordRest(flat_left.ext, only_right.items, flat_right.ext, pending);
+        if (add_to_left.len == 0 and add_to_right.len == 0) {
+            try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext, .row_width = row_width });
+        } else if (add_to_right.len == 0) {
+            try self.writeOrQueueRecordRest(flat_left.ext, add_to_left, flat_right.ext, row_width, pending);
             merged_ext = flat_right.ext;
-        } else if (only_right.items.len == 0) {
-            try self.writeOrQueueRecordRest(flat_right.ext, only_left.items, flat_left.ext, pending);
+        } else if (add_to_left.len == 0) {
+            try self.writeOrQueueRecordRest(flat_right.ext, add_to_right, flat_left.ext, row_width, pending);
             merged_ext = flat_left.ext;
         } else {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
                 var rest = std.ArrayList(InstField).empty;
                 defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_left.items);
-                try rest.appendSlice(self.allocator, only_right.items);
-                try self.writeOrQueueRecordRest(flat_left.ext, rest.items, new_ext, pending);
+                try rest.appendSlice(self.allocator, add_to_left);
+                try rest.appendSlice(self.allocator, add_to_right);
+                try self.writeOrQueueRecordRest(flat_left.ext, rest.items, new_ext, row_width, pending);
             } else {
-                try self.writeOrQueueRecordRest(flat_left.ext, only_right.items, new_ext, pending);
-                try self.writeOrQueueRecordRest(flat_right.ext, only_left.items, new_ext, pending);
+                try self.writeOrQueueRecordRest(flat_left.ext, add_to_left, new_ext, row_width, pending);
+                try self.writeOrQueueRecordRest(flat_right.ext, add_to_right, new_ext, row_width, pending);
             }
             merged_ext = new_ext;
         }
@@ -4415,6 +4499,7 @@ pub const InstGraph = struct {
         ext: NodeId,
         fields: []const InstField,
         tail_ext: NodeId,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         const ext_root = self.find(ext);
@@ -4438,7 +4523,7 @@ pub const InstGraph = struct {
                 .fields = try self.arena().dupe(InstField, fields),
                 .ext = tail_ext,
             } });
-            try pending.append(self.allocator, .{ .left = ext_root, .right = rest });
+            try pending.append(self.allocator, .{ .left = ext_root, .right = rest, .row_width = row_width });
         }
     }
 
@@ -6821,6 +6906,90 @@ test "final type sealing remains allowed after instantiation relations freeze" {
     const sealed = try graph.sealNode(node);
     const content = type_store.get(sealed);
     try std.testing.expectEqual(Type.Span.empty(), content.tag_union);
+}
+
+test "construction row relation absorbs only explicit optional or defaulted fields into closed records" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const a = try name_store.internRecordFieldLabel("a");
+    const b = try name_store.internRecordFieldLabel("b");
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const u64_node = try graph.newNode(.{ .primitive = .u64 });
+    const left_ext = try graph.newNode(.empty_record);
+    const right_ext = try graph.newNode(.empty_record);
+    const left = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{
+            .name = a,
+            .ty = u64_node,
+            .kind = .required,
+            .default = null,
+        }}),
+        .ext = left_ext,
+    } });
+    const right_only = [_]InstField{.{
+        .name = b,
+        .ty = u64_node,
+        .value_ty = u64_node,
+        .kind = .optional,
+        .default = null,
+    }};
+    const right = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{
+            .{
+                .name = a,
+                .ty = u64_node,
+                .kind = .required,
+                .default = null,
+            },
+            right_only[0],
+        }),
+        .ext = right_ext,
+    } });
+
+    try std.testing.expect(!graph.closedRecordAbsorbsFields(left_ext, &right_only, .exact));
+    try std.testing.expect(graph.closedRecordAbsorbsFields(left_ext, &right_only, .construction));
+    const default_identity: Type.FieldDefault = .{
+        .module = try name_store.internModuleIdentity(&([_]u8{0xA5} ** 32)),
+        .expr_node = 1,
+    };
+    const defaulted_only = [_]InstField{.{
+        .name = b,
+        .ty = u64_node,
+        .kind = .{ .defaulted = default_identity },
+        .default = default_identity,
+    }};
+    try std.testing.expect(graph.closedRecordAbsorbsFields(left_ext, &defaulted_only, .construction));
+    const required_only = [_]InstField{.{
+        .name = b,
+        .ty = u64_node,
+        .kind = .required,
+        .default = null,
+    }};
+    try std.testing.expect(!graph.closedRecordAbsorbsFields(left_ext, &required_only, .construction));
+
+    try graph.unifyConstruction(left, right);
+    try std.testing.expect(graph.sameClass(left, right));
+    const merged = try graph.flattenRecordRow(left);
+    try std.testing.expectEqual(@as(usize, 2), merged.fields.len);
+
+    const empty = try graph.newNode(.empty_record);
+    const optional_only = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &right_only),
+        .ext = try graph.newNode(.empty_record),
+    } });
+    try graph.unifyConstruction(empty, optional_only);
+    try std.testing.expect(graph.sameClass(empty, optional_only));
+    const absorbed_empty = try graph.flattenRecordRow(empty);
+    try std.testing.expectEqual(@as(usize, 1), absorbed_empty.fields.len);
+    try std.testing.expectEqual(b, absorbed_empty.fields[0].name);
 }
 
 test "imported closed tag row rejects additional evidence without mutating shared import" {

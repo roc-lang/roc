@@ -19069,7 +19069,15 @@ const ProcBodyBuilder = struct {
                         source_view,
                         target_view,
                         target_label,
-                    ) orelse boxyLowerInvariant("boxy record adapter source was missing target field");
+                    ) orelse {
+                        switch (target_child.record_field_kind.tag) {
+                            .optional, .undetermined => {
+                                target_field_index += 1;
+                                continue;
+                            },
+                            .required, .defaulted, .err => boxyLowerInvariant("boxy record adapter source was missing target field"),
+                        }
+                    };
 
                     const source_field_desc_info: ResultDescriptorSource = if (self.recordFieldNestedDescriptorIndex(
                         source_record_rep,

@@ -4534,7 +4534,7 @@ complete):
   children use a memoized `[#Missing, #Present(payload)]` representation and
   carry an explicit descriptor requirement because the payload may be erased
   through the containing record. A still-undetermined scheme-interior kind
-  preserves its checked kind-variable identity and uses that same canonical
+  preserves its checked kind-variable identity and uses that same checker-defined
   presence-slot representation: one non-specialized worker can therefore
   serve both required and optional instantiations without cloning its body.
   The slot descriptor records the `#Present` discriminant explicitly. Worker
@@ -4548,7 +4548,14 @@ complete):
   restore omitted defaults, and copy unmentioned update slots. Its `.?`
   lowering consumes the checked access segment modes and constructs the
   promised flat `Try` result. It does not infer field kinds from layouts,
-  variant shapes, or reserved labels.
+  variant shapes, or reserved labels. At a named record call boundary, a target
+  field absent from the worker source is legal only when the target child's
+  checked kind is explicitly `optional` or `undetermined`; descriptor lowering
+  preserves that target slot descriptor unchanged. Runtime materialization
+  validates its explicit presence-slot marker and writes the descriptor's
+  non-Present discriminant, while borrowed-result retention validates that the
+  already-materialized slot is Missing and performs no payload retain. A
+  missing required, defaulted, or unmarked field is an invariant violation.
 - Construction (`lowerRecordExpr`): graph-owned construction consumes the
   resolved field-kind cell. Construction from an already-sealed Monotype
   consumes the target `Type.Field`'s explicit resolved metadata
@@ -4649,7 +4656,7 @@ boundaries' still-flex arms (TypeWriter rendering, `copyCheckedRecordFields`
 CheckedModule output, the `writeFieldPresenceForKey` type-digest writer) now cover scheme
 interiors. Source-facing readers render and digest that state as
 required-equivalent, while representation strategies must either resolve it
-per instantiation or preserve it explicitly: Boxy planning uses the canonical
+per instantiation or preserve it explicitly: Boxy planning uses the checker-defined
 presence-slot representation described above. Monomorphic literal-minted kinds
 reach these readers already committed.
 
@@ -5358,7 +5365,7 @@ interpreter consume descriptor ids or descriptor-pointer locals through LIR
 statements; they do not synthesize descriptors from type names, layout shapes,
 or object symbols. In particular, Boxy adapters wrap and unwrap generalized
 field-presence slots only from the explicit presence-slot discriminant; tag
-names and tag-union shapes are never used to recover that semantic.
+names and tag-union shapes are never used to recover that field-presence kind.
 
 Descriptors are never stored inside ordinary Roc values. A value of type
 variable `a` is a one-word box pointer, not `{ data, desc }`. A record field,
@@ -6032,6 +6039,21 @@ reserve their ids inside the type interner while the group is being sealed, but
 no type id that is visible in Monotype IR is later refilled or changed. This is
 ordinary type solving inside one stage. Once Monotype IR is output, no
 unresolved node remains reachable and no later stage may change a type.
+
+Instantiation-graph row relations carry the checker's width mode explicitly.
+An exact relation rejects every field added to a closed record. A construction
+relation may instead absorb an unmatched field only when its graph field kind
+has explicitly resolved `optional` or `defaulted`; an unresolved or required
+kind still violates the relation. The mode travels with every pending relation
+and its processed-relation stamp, so nested construction structure cannot lose
+the judgment or be mistaken for a previously processed exact relation. A
+pristine checked procedure template relates to its caller-specialized request
+with construction width because the template body owns that construction;
+relating a finished Monotype or an ordinary committed interface remains exact.
+Absorption joins the construction to the target record class, making omitted
+optional/defaulted fields explicit before body lowering materializes Missing or
+the archived default. No row shape or slot representation is inspected to make
+this decision.
 
 A Monotype imported into another specialization graph is a finished snapshot,
 never a refreshable view: a specialization that needs more than its requested

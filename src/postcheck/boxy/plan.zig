@@ -232,8 +232,8 @@ pub const TypeRepresentation = struct {
     contains_dynamic: bool = false,
     /// This representation is the checker-defined `[#Missing, #Present(a)]`
     /// storage convention used for an optional or still-parametric field kind.
-    /// The discriminant is explicit so later stages never infer presence
-    /// semantics from tag names or representation shape.
+    /// The discriminant is explicit so later stages never infer the field's
+    /// presence kind from tag names or representation shape.
     presence_slot_present_discriminant: ?u16 = null,
     /// The source nominal type declared itself opaque: inspect must not
     /// reveal the backing structure.

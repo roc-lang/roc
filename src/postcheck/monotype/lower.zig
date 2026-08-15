@@ -695,6 +695,24 @@ fn relateFunctionRequestInterface(graph: *InstGraph, public_fn: NodeId, private_
     }
 }
 
+/// Relate a pristine checked procedure template to a caller request that the
+/// checker formed through a construction-width relation. Ordinary structure
+/// still unifies exactly; only explicit optional/defaulted record fields may
+/// be absorbed by a closed row.
+fn relateConstructionFunctionRequestInterface(graph: *InstGraph, checked_fn: NodeId, request_fn: NodeId) Allocator.Error!void {
+    if (try graph.containsGeneratedPrivate(checked_fn)) {
+        Common.invariant("pristine checked template root contained generated-private representation");
+    }
+    if (try graph.containsGeneratedPrivate(request_fn)) {
+        const public_request = graph.requestSourceInterface(request_fn) orelse
+            Common.invariant("generated-private construction request had no public source interface");
+        try graph.unifyConstruction(checked_fn, public_request);
+        try relateFunctionRequestInterface(graph, public_request, request_fn);
+        return;
+    }
+    try graph.unifyConstruction(checked_fn, request_fn);
+}
+
 fn relateRequestComponent(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!void {
     const left_root_private = isGeneratedPrivateRootNode(graph, left_node);
     const right_root_private = isGeneratedPrivateRootNode(graph, right_node);
@@ -1186,21 +1204,26 @@ fn hostedExternAbiViolationMessage(
 }
 
 fn relateCheckedNodeToMono(graph: *InstGraph, checked_node: NodeId, mono_node: NodeId) Allocator.Error!void {
-    _ = try checkedMonoRequestNode(graph, checked_node, mono_node);
+    _ = try checkedMonoRequestNode(graph, checked_node, mono_node, .exact);
 }
 
 /// Relate a checker-public node to an explicit Monotype request node. The
 /// returned node is the one specialization identity must consume: ordinary
 /// Monotypes join the checked class, while generated-private evidence remains
 /// a distinct request node related recursively to the public interface.
-fn checkedMonoRequestNode(graph: *InstGraph, checked_node: NodeId, mono_node: NodeId) Allocator.Error!NodeId {
+fn checkedMonoRequestNode(
+    graph: *InstGraph,
+    checked_node: NodeId,
+    mono_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!NodeId {
     if (try graph.containsGeneratedPrivate(mono_node)) {
         try graph.relateOpaqueInterface(checked_node, mono_node);
         return mono_node;
     }
     var seen = std.AutoHashMap(CheckedMonoRequestPair, void).init(graph.allocator);
     defer seen.deinit();
-    try relateCheckedMonoRequestNodeAt(graph, checked_node, mono_node, &seen);
+    try relateCheckedMonoRequestNodeAt(graph, checked_node, mono_node, row_width, &seen);
     return checked_node;
 }
 
@@ -1213,6 +1236,7 @@ fn relateCheckedMonoRequestNodeAt(
     graph: *InstGraph,
     checked_node: NodeId,
     request_node: NodeId,
+    row_width: solve.RowWidthRelation,
     seen: *std.AutoHashMap(CheckedMonoRequestPair, void),
 ) Allocator.Error!void {
     const checked_root = graph.rootNode(checked_node);
@@ -1248,6 +1272,7 @@ fn relateCheckedMonoRequestNodeAt(
                         graph,
                         checked_backing.node,
                         request_backing.node,
+                        row_width,
                         seen,
                     );
                     return;
@@ -1257,7 +1282,7 @@ fn relateCheckedMonoRequestNodeAt(
         },
         .list => |checked_elem| switch (request_content) {
             .list => |request_elem| {
-                try relateCheckedMonoRequestNodeAt(graph, checked_elem, request_elem, seen);
+                try relateCheckedMonoRequestNodeAt(graph, checked_elem, request_elem, row_width, seen);
                 try graph.joinRelatedRequestContainer(checked_root, request_root);
                 return;
             },
@@ -1265,7 +1290,7 @@ fn relateCheckedMonoRequestNodeAt(
         },
         .box => |checked_elem| switch (request_content) {
             .box => |request_elem| {
-                try relateCheckedMonoRequestNodeAt(graph, checked_elem, request_elem, seen);
+                try relateCheckedMonoRequestNodeAt(graph, checked_elem, request_elem, row_width, seen);
                 try graph.joinRelatedRequestContainer(checked_root, request_root);
                 return;
             },
@@ -1277,7 +1302,7 @@ fn relateCheckedMonoRequestNodeAt(
                     Common.invariant("checked Monotype request related tuples of different arity");
                 }
                 for (checked_items, request_items) |checked_item, request_item| {
-                    try relateCheckedMonoRequestNodeAt(graph, checked_item, request_item, seen);
+                    try relateCheckedMonoRequestNodeAt(graph, checked_item, request_item, row_width, seen);
                 }
                 try graph.joinRelatedRequestContainer(checked_root, request_root);
                 return;
@@ -1290,9 +1315,9 @@ fn relateCheckedMonoRequestNodeAt(
                     Common.invariant("checked Monotype request related functions of different arity");
                 }
                 for (checked_fn.args, request_fn.args) |checked_arg, request_arg| {
-                    try relateCheckedMonoRequestNodeAt(graph, checked_arg, request_arg, seen);
+                    try relateCheckedMonoRequestNodeAt(graph, checked_arg, request_arg, row_width, seen);
                 }
-                try relateCheckedMonoRequestNodeAt(graph, checked_fn.ret, request_fn.ret, seen);
+                try relateCheckedMonoRequestNodeAt(graph, checked_fn.ret, request_fn.ret, row_width, seen);
                 try graph.joinRelatedRequestContainer(checked_root, request_root);
                 return;
             },
@@ -1310,11 +1335,12 @@ fn relateCheckedMonoRequestNodeAt(
                                 graph,
                                 checked_field.value_ty orelse checked_field.ty,
                                 request_field.value_ty orelse request_field.ty,
+                                row_width,
                                 seen,
                             );
-                            try relateCheckedMonoRequestNodeAt(graph, checked_field.ty, request_field.ty, seen);
+                            try relateCheckedMonoRequestNodeAt(graph, checked_field.ty, request_field.ty, row_width, seen);
                         }
-                        try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, seen);
+                        try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, row_width, seen);
                         try graph.joinRelatedRequestContainer(checked_root, request_root);
                         return;
                     }
@@ -1330,10 +1356,10 @@ fn relateCheckedMonoRequestNodeAt(
                     } else {
                         for (checked_row.tags, request_row.tags) |checked_tag, request_tag| {
                             for (checked_tag.payloads, request_tag.payloads) |checked_payload, request_payload| {
-                                try relateCheckedMonoRequestNodeAt(graph, checked_payload, request_payload, seen);
+                                try relateCheckedMonoRequestNodeAt(graph, checked_payload, request_payload, row_width, seen);
                             }
                         }
-                        try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, seen);
+                        try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, row_width, seen);
                         try graph.joinRelatedRequestContainer(checked_root, request_root);
                         return;
                     }
@@ -1343,7 +1369,10 @@ fn relateCheckedMonoRequestNodeAt(
         },
         .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
     }
-    try graph.unify(checked_root, request_root);
+    switch (row_width) {
+        .exact => try graph.unify(checked_root, request_root),
+        .construction => try graph.unifyConstruction(checked_root, request_root),
+    }
 }
 
 fn sameNamedValueDefinition(left: anytype, right: anytype) bool {
@@ -4050,6 +4079,7 @@ const Builder = struct {
         {
             const public_request = source_ctx.graph.requestSourceInterface(request_fn_node) orelse request_fn_node;
             try constrainDeferredTemplateTypeArguments(source_ctx.graph, root_node, public_request);
+            try relateConstructionFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
         } else {
             if (template.target == .hosted) {
                 try relateHostedFunctionRequestInterface(
@@ -4067,7 +4097,10 @@ const Builder = struct {
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
         }
-        if (!local_context_dependent and template.target != .hosted) {
+        if (!local_context_dependent and
+            signature_relation != .independent_roots and
+            template.target != .hosted)
+        {
             try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
         }
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
@@ -19195,7 +19228,7 @@ const BodyContext = struct {
             .declared_return => {},
             .argument => |index| {
                 if (index >= callable.args.len) Common.invariant("checked intrinsic result argument was outside its callable request");
-                const request_ret = try checkedMonoRequestNode(self.graph, callable.ret, callable.args[index]);
+                const request_ret = try checkedMonoRequestNode(self.graph, callable.ret, callable.args[index], .exact);
                 callable_node = try functionRequestNode(self.graph, callable_node, callable.args, request_ret);
                 callable = try self.graph.functionNodes(callable_node);
             },
@@ -21259,7 +21292,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const checked_node = try self.instNode(checked_fn_ty);
         const request_node = try self.graph.importMono(mono_fn_ty);
-        const related = try checkedMonoRequestNode(self.graph, checked_node, request_node);
+        const related = try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
         return related;
     }
 
@@ -26799,7 +26832,7 @@ const BodyContext = struct {
             request_ret = if (try self.graph.containsGeneratedPrivate(expected))
                 expected
             else
-                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
+                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected, .exact);
         }
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
     }
@@ -26906,7 +26939,7 @@ const BodyContext = struct {
             request_ret = if (try self.graph.containsGeneratedPrivate(expected))
                 expected
             else
-                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
+                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected, .exact);
         } else {
             const caller_ret = try caller.instNode(checked_ret_ty);
             if (try self.graph.containsGeneratedPrivate(caller_ret)) {
@@ -27016,12 +27049,14 @@ const BodyContext = struct {
                 self.graph,
                 formal_node,
                 try self.graph.importMono(arg_ty),
+                .exact,
             );
         }
         const request_ret = try checkedMonoRequestNode(
             self.graph,
             function_nodes.ret,
             try self.graph.importMono(ret_ty),
+            .exact,
         );
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
     }
@@ -29912,6 +29947,7 @@ const BodyContext = struct {
             self.graph,
             try fn_ctx.instNode(fn_value.source_fn_ty),
             request_fn_node,
+            .exact,
         );
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
@@ -34087,7 +34123,7 @@ const BodyContext = struct {
             try self.freshInstNode(checked_ret_ty)
         else
             try self.lowerTypeNode(checked_ret_ty);
-        _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node);
+        _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node, .exact);
         if (direct_parametric_low_level) |op| {
             const args = try self.lowerDispatchOperandsAtNodes(
                 plan_args,
@@ -46782,6 +46818,7 @@ const BodyContext = struct {
                             self.graph,
                             public_node,
                             evidence_node,
+                            .exact,
                         );
                     } else {
                         request_arg.* = formal_node;
@@ -46793,6 +46830,7 @@ const BodyContext = struct {
                         self.graph,
                         formal_node,
                         try iterator.ty.toGraphNode(self.graph),
+                        .exact,
                     );
                 },
             }
@@ -46804,7 +46842,7 @@ const BodyContext = struct {
             request_ret = if (try self.graph.containsGeneratedPrivate(expected_node))
                 expected_node
             else
-                try checkedMonoRequestNode(self.graph, function_nodes.ret, expected_node);
+                try checkedMonoRequestNode(self.graph, function_nodes.ret, expected_node, .exact);
             if (try self.graph.containsGeneratedPrivate(request_ret)) contains_generated_private = true;
         }
         if (contains_generated_private) return try self.graphFunctionNode(request_args, request_ret);
@@ -51027,7 +51065,7 @@ test "direct call request preserves generated-private return provenance" {
     const args = try graph.arena().alloc(NodeId, 0);
     const public_fn = try graph.newNode(.{ .func = .{ .args = args, .ret = public_ret } });
 
-    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret);
+    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret, .exact);
     const request_fn = try functionRequestNode(graph, public_fn, args, request_ret);
 
     try std.testing.expect(request_fn != public_fn);
@@ -51073,7 +51111,7 @@ test "dispatch call target relation preserves generated-private return provenanc
     const private_ret = try graph.newNode(.{ .box = private_opaque });
     const args = try graph.arena().alloc(NodeId, 0);
     const target_fn = try graph.newNode(.{ .func = .{ .args = args, .ret = public_ret } });
-    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret);
+    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret, .exact);
     const request_fn = try functionRequestNode(graph, target_fn, args, request_ret);
 
     try relateFunctionRequestInterface(graph, target_fn, request_fn);
@@ -51128,8 +51166,8 @@ test "iterator request nodes preserve generated-private operand and result prove
     const public_result = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{public_opaque}) });
     const private_result = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{private_opaque}) });
 
-    const request_operand = try checkedMonoRequestNode(graph, public_operand, private_operand);
-    const request_result = try checkedMonoRequestNode(graph, public_result, private_result);
+    const request_operand = try checkedMonoRequestNode(graph, public_operand, private_operand, .exact);
+    const request_result = try checkedMonoRequestNode(graph, public_result, private_result, .exact);
 
     try std.testing.expectEqual(private_operand, request_operand);
     try std.testing.expectEqual(private_result, request_result);
@@ -51182,8 +51220,8 @@ test "partial synthetic request nodes preserve generated-private argument and re
     const public_ret = try graph.newNode(.{ .list = public_opaque });
     const private_ret = try graph.newNode(.{ .list = private_opaque });
 
-    const request_arg = try checkedMonoRequestNode(graph, public_arg, private_arg);
-    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret);
+    const request_arg = try checkedMonoRequestNode(graph, public_arg, private_arg, .exact);
+    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret, .exact);
 
     try std.testing.expectEqual(private_arg, request_arg);
     try std.testing.expectEqual(private_ret, request_ret);

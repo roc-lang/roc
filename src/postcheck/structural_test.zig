@@ -379,14 +379,15 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     try expectContains(selection, "containsFinishedMono(public_node)");
     try expectContains(selection, "containsFinishedMono(private_node)");
     try expectContains(selection, "finished Monotype reached generated-private representation selection");
-    try expectContains(selection, "unifyRootsTransitively(public_node, private_node, true)");
+    try expectContains(selection, "unifyRootsTransitively(public_node, private_node, true, .exact)");
 
     const ordinary_unify = sourceSliceBetween(
         solve_source,
         "pub fn unify(self: *InstGraph",
         "fn relationStamp(",
     );
-    try expectContains(ordinary_unify, "unifyRootsTransitively(a, b, false)");
+    try expectContains(ordinary_unify, "unifyRootsTransitively(a, b, false, .exact)");
+    try expectContains(ordinary_unify, "unifyRootsTransitively(a, b, false, .construction)");
     try expectContains(ordinary_unify, "generated-private representation reached ordinary public/private graph unification");
 
     const lower_source = @embedFile("monotype/lower.zig");
@@ -1312,7 +1313,7 @@ test "Monotype encoding intrinsics consume producer-owned identity and result to
         "fn lowerCallsiteIntrinsicArgAtType(",
     );
     try expectContains(intrinsic_call, "intrinsic.requestResultSource()");
-    try expectContains(intrinsic_call, "checkedMonoRequestNode(self.graph, callable.ret, callable.args[index])");
+    try expectContains(intrinsic_call, "checkedMonoRequestNode(self.graph, callable.ret, callable.args[index], .exact)");
     try expectContains(intrinsic_call, "self.currentPhaseTypeForNode(callable.ret)");
     try expectNotContains(intrinsic_call, "generatedFieldNamesBackingValueFieldNames");
 

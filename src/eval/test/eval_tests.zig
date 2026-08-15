@@ -376,12 +376,12 @@ const core_tests = [_]TestCase{
         .source =
         \\make = |value| { a: value }
         \\
-        \\record : { a ?: U8 }
+        \\record : { a ?: U8, b ?: U8 }
         \\record = make(5)
         \\
-        \\main = record.?a ?? 0
+        \\main = (record.?a ?? 0) + (record.?b ?? 20)
         ,
-        .expected = .{ .inspect_str = "5" },
+        .expected = .{ .inspect_str = "25" },
     },
     .{
         .name = "optional record field: generalized update cannot change a committed optional slot",
