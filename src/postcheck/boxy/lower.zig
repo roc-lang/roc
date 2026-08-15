@@ -27894,7 +27894,7 @@ const ProcBodyBuilder = struct {
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
         const present_index: usize = present_discriminant;
         if (variants.len != 2 or present_index >= variants.len) {
-            boxyLowerInvariant("presence-slot inspect had a non-canonical variant table");
+            boxyLowerInvariant("presence-slot inspect did not have exactly two variants");
         }
         const present_payloads = self.parent.plan.childSlice(variants[present_index].payloads);
         if (present_payloads.len != 1) {
