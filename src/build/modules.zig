@@ -624,9 +624,11 @@ pub const RocModules = struct {
         // Setup module dependencies using our generic helper
         self.setupModuleDependencies();
 
-        // `embedded_lld` is created outside the dependency table above; it only
-        // needs `collections` for the single-threaded arena.
+        // `embedded_lld` is created outside the dependency table above; it needs
+        // `collections` for the single-threaded arena and `build_options` for the
+        // Darwin sysroot path baked in at build time.
         self.embedded_lld.addImport("collections", self.collections);
+        self.embedded_lld.addImport("build_options", self.build_options);
 
         // The vendored ELF loader reaches one roc helper (`elf_self_relocate`)
         // through the `base` module.

@@ -3626,14 +3626,22 @@ a known iterator constructor, SpecConstr can:
 
 When the continuation observes only part of a compiler-generated tuple loop
 result, SpecConstr may narrow the loop's exit ABI without narrowing its
-back-edge state. That rewrite is lexical: the ordinary full expression clone
-carries the selected exit ABI while cloning the owning loop body, rewrites
-every `break` owned by that loop wherever it occurs (including inside mixed
-value-producing branch arms and statement values), and pushes an explicit null
-selection while cloning a nested loop body. Initial values remain in the
-enclosing lexical loop context. Re-cloned output breaks carry an explicit
-SpecConstr-owned selected-ABI stamp, so normalization propagates the already
-completed transfer instead of trying to recognize it from its scalar shape.
+back-edge state. Exit selection is a distinct final clone phase after the
+specialization graph is complete. Ordinary specialization and body-rewrite
+clones never initiate it. The exit-selection clone keeps calls opaque, does not
+rewrite call patterns, and cannot emit callable workers, so it cannot reopen
+the specialization graph through recursive call edges. Its recursive input is
+limited to the selected function's finite, acyclic expression ownership.
+
+That rewrite is lexical: the dedicated full expression clone carries the
+selected exit ABI while cloning the owning loop body, rewrites every `break`
+owned by that loop wherever it occurs (including inside mixed value-producing
+branch arms and statement values), and pushes an explicit null selection while
+cloning a nested loop body. Initial values remain in the enclosing lexical loop
+context. Re-cloned output breaks carry an explicit SpecConstr-owned selected-ABI
+stamp, so the exit-selection clone's internal normalization propagates the
+already completed transfer instead of trying to recognize it from its scalar
+shape.
 It is invalid to change the loop result type after rewriting only a terminating
 spine or a subset of exits; every selected exit must transfer exactly the
 explicitly selected tuple items.
@@ -10151,12 +10159,24 @@ The host may read, store, return, or release an owned argument. It must account
 for that ownership explicitly:
 
 ```text
-read and discard: decref the argument when done
+read and discard: release the argument when done
 store past return: move the argument ownership into storage, or incref a stored
-                   copy and then decref the call argument
+                   copy and then release the call argument
 return the same value: move the argument ownership into the return slot, or
-                       incref/decref so exactly one returned ownership remains
+                       incref/release so exactly one returned ownership remains
 ```
+
+Releasing an owned argument means the same operation compiled Roc code performs
+when it drops a value it owns, which for a container is not a decrement of the
+container's own count alone. A retain of a container is shallow—sharing a
+`List(T)` never touches item counts—so the matching release drops the items
+only when the container's own count reaches zero. A release that drops the
+items unconditionally frees them twice whenever the Roc caller still holds the
+container, and a release that never drops them leaks every item.
+Generated glue must therefore give the host a named release for every type
+reachable from a hosted or provided signature whose release is more than a
+single count decrement, and must name that release at the hosted signature: the
+container's own `decref` is a primitive, not a release, and must say so.
 
 The compiler must not infer different ownership behavior from hosted function
 names, return types, or body absence. Hosted-argument ownership is an ABI rule,
@@ -10509,13 +10529,18 @@ reports that the user must restart `roc --watch` and leaves the previous
 `RunImage` active.
 
 Successful rebuild workers write a fresh shared-memory image descriptor plus a
-new dev `RunImage` into either a compiler-selected free image region or the
-append position of the same mapping. Descriptor slots are managed separately
-from image bytes and are reused only as descriptors, never as code or data. The
-descriptor records the generation, `RunImage` header offset, image bound, image
-allocation start/end, lifecycle state, and atomic reference count. The worker
-commits the descriptor offset through the hot-load control block with
-release/acquire atomics. The host shim checks that control
+new dev `RunImage` candidate into either a compiler-selected free image region
+or the append position of the same mapping. Descriptor slots are managed
+separately from image bytes and are reused only as descriptors, never as code or
+data. The descriptor records the generation, `RunImage` header offset, image
+bound, image allocation start/end, lifecycle state, and atomic reference count.
+The worker leaves that descriptor in the writing state and exits after recording
+the exact source-input states it consumed. The parent installs the refreshed
+watch set, compares those recorded states with the current source-input states,
+and commits the descriptor offset through the hot-load control block only when
+they still match. A stale candidate is reclaimed without becoming visible to the
+host, and the parent starts a rebuild from the newer input states. The host shim
+checks that control
 block at Roc entrypoint boundaries. If a newer generation is available, the shim
 retains the latest descriptor, validates and relocates the replacement
 `RunImage` in place, marks its code pages read/execute in the shared mapping,
@@ -10533,8 +10558,8 @@ only retains and releases descriptor references. Calls that entered old code
 before the swap keep executing old code safely while new entrypoint calls use
 the new image.
 
-The compiler parent process is the sole owner of shared-memory image-byte
-reclamation. It keeps unbounded process-local lists of descriptor offsets,
+The compiler parent process is the sole owner of committing candidate descriptor offsets
+and shared-memory image-byte reclamation. It keeps unbounded process-local lists of descriptor offsets,
 reclaimed descriptor slots, and reclaimed image regions. After a rebuild commits
 a descriptor, after the host acknowledges, and before choosing storage for
 another rebuild, the parent sweeps all known descriptors. The current descriptor

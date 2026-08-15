@@ -28,6 +28,7 @@ const ContractEnv = struct {
     allocator_error_count: usize = 0,
     failure_count: usize = 0,
     log_count: usize = 0,
+    checksum_count: usize = 0,
     report: [1024]u8 = [_]u8{0} ** 1024,
     report_len: usize = 0,
 
@@ -282,6 +283,22 @@ export fn roc_cli_log(arg0: abi.RocStr) callconv(.c) void {
     owned.decref(&roc_host);
 }
 
+// The argument is an owned container whose elements are refcounted, so its
+// release is the generated `decrefListOfStr` helper rather than the list's own
+// shallow `decref`: the elements have to be dropped when this reference is the
+// last one, and left alone when Roc still holds the list.
+export fn roc_cli_checksum(arg0: abi.RocList(abi.RocStr)) callconv(.c) u64 {
+    var sum: u64 = 0;
+    for (arg0.items()) |item| {
+        for (item.asSlice()) |byte| {
+            sum += byte;
+        }
+    }
+    contract_env.checksum_count += 1;
+    abi.decrefListOfStr(arg0, &roc_host);
+    return sum;
+}
+
 export fn roc_cli_many(
     arg0: u8,
     arg1: u16,
@@ -350,6 +367,9 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
     if (contract_env.log_count != 1) {
         contract_env.fail("expected one log call, saw {}", .{contract_env.log_count});
+    }
+    if (contract_env.checksum_count != 3) {
+        contract_env.fail("expected three checksum calls, saw {}", .{contract_env.checksum_count});
     }
     if (contract_env.allocator_error_count != 0) {
         contract_env.fail("allocator recorded {} errors", .{contract_env.allocator_error_count});
