@@ -20616,6 +20616,8 @@ fn checkIteratorForLoop(
         loop_node,
         ModuleEnv.nodeIdxFrom(pattern),
         ModuleEnv.nodeIdxFrom(iterable),
+        iterator_var,
+        step_var,
         iter_fn_var,
         next_fn_var,
         step.topology,
