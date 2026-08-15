@@ -19396,7 +19396,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFn(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 

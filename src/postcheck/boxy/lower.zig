@@ -17043,7 +17043,7 @@ const ProcBodyBuilder = struct {
                 break :blk self.workerSourceForConstFnValue(module.const_store.getFn(fn_id));
             },
             .pending => self.workerSourceForCallableRootExpr(module, root.expr),
-            .const_node, .expect => null,
+            .const_node, .discarded, .expect => null,
         };
     }
 
