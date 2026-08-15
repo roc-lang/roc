@@ -27643,7 +27643,9 @@ const ProcBodyBuilder = struct {
             .record_unbound,
             => try self.lowerRecordInspectLocalsInto(target, source, rep, next),
             .tuple => try self.lowerTupleInspectLocalsInto(target, source, rep, next),
-            .tag_union => if (self.tagUnionRepHasExtension(rep))
+            .tag_union => if (rep.presence_slot_present_discriminant != null)
+                try self.lowerPresenceSlotInspectLocalsInto(target, source, rep, next)
+            else if (self.tagUnionRepHasExtension(rep))
                 try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next)
             else
                 try self.lowerTagUnionInspectLocalsInto(target, source, rep, next),
@@ -27871,6 +27873,62 @@ const ProcBodyBuilder = struct {
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(branches),
             .default_branch = bad_discriminant,
+            .continuation = null,
+        } });
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = discriminant,
+            .op = .{ .discriminant = .{ .source = source } },
+            .next = switch_stmt,
+        } });
+    }
+
+    fn lowerPresenceSlotInspectLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const present_discriminant = rep.presence_slot_present_discriminant orelse
+            boxyLowerInvariant("presence-slot inspect lacked its Present discriminant");
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        const present_index: usize = present_discriminant;
+        if (variants.len != 2 or present_index >= variants.len) {
+            boxyLowerInvariant("presence-slot inspect had a non-canonical variant table");
+        }
+        const present_payloads = self.parent.plan.childSlice(variants[present_index].payloads);
+        if (present_payloads.len != 1) {
+            boxyLowerInvariant("presence-slot inspect Present arm did not have one payload");
+        }
+        const payload_child = present_payloads[0];
+        switch (payload_child.role) {
+            .tag_payload => |payload| if (payload.tag != variants[present_index].name or payload.index != 0) {
+                boxyLowerInvariant("presence-slot inspect payload did not match its Present variant");
+            },
+            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("presence-slot inspect Present arm had a non-payload child"),
+        }
+
+        const missing_discriminant: u16 = if (present_discriminant == 0) 1 else 0;
+        if (variants[missing_discriminant].payloads.len != 0) {
+            boxyLowerInvariant("presence-slot inspect Missing arm carried a payload");
+        }
+
+        const present_body = try self.lowerInspectPartInto(target, .{ .tag_payload = .{
+            .source = source,
+            .variant_index = present_discriminant,
+            .payload_index = null,
+            .rep = payload_child.rep,
+        } }, next);
+        const missing_body = try self.assignStringBytesLiteral(target, "<missing>", next);
+        const branches = [_]LIR.CFSwitchBranch{
+            .{ .value = missing_discriminant, .body = missing_body },
+            .{ .value = present_discriminant, .body = present_body },
+        };
+        const discriminant = try self.addFrameLocal(.u16);
+        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = discriminant,
+            .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
+            .default_branch = try self.parent.result.store.addCFStmt(.runtime_error),
             .continuation = null,
         } });
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{

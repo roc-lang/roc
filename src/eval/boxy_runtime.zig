@@ -5447,6 +5447,9 @@ pub const BoxyRuntime = struct {
                 try out.appendSlice(self.eval_arena, "<opaque>");
                 return;
             }
+            if (opaque_desc.presence_slot_present_discriminant != null) {
+                return try self.appendPresenceSlotInspect(hooks, out, value, layout_idx, opaque_desc);
+            }
         }
         const layout_val = self.layout_store.getLayout(layout_idx);
         switch (layout_val.tag) {
@@ -5499,6 +5502,51 @@ pub const BoxyRuntime = struct {
                 .{@intFromEnum(layout_idx)},
             ),
         }
+    }
+
+    fn appendPresenceSlotInspect(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        out: *std.ArrayList(u8),
+        value: Value,
+        layout_idx: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+    ) Error!void {
+        const present_discriminant = desc.presence_slot_present_discriminant orelse
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot inspect lacked its Present discriminant",
+                .{},
+            );
+        const missing_discriminant = try self.missingPresenceSlotDiscriminant(desc);
+        const tag_base = self.resolveBoxyTagBaseValue(value, layout_idx, desc);
+        const discriminant = if (self.helper.sizeOf(tag_base.layout) == 0)
+            @as(u16, 0)
+        else
+            self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+        if (discriminant == missing_discriminant) {
+            try out.appendSlice(self.eval_arena, "<missing>");
+            return;
+        }
+        if (discriminant != present_discriminant) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot inspect read unexpected discriminant {d}",
+                .{discriminant},
+            );
+        }
+
+        const present = self.requireBoxyTagVariantByDiscriminant(desc, present_discriminant);
+        if (present.payload_count != 1) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot inspect Present arm had {d} payloads",
+                .{present.payload_count},
+            );
+        }
+        const payload_layout = self.requireBoxyTagPayloadLayout(tag_base.layout, present_discriminant);
+        const payload_desc = if (self.findBoxyPayloadDesc(present, 0)) |desc_ref|
+            try hooks.resolveDescRef(desc_ref)
+        else
+            null;
+        return try self.appendLayoutInspect(hooks, out, tag_base.value, payload_layout, payload_desc);
     }
 
     fn appendScalarInspect(

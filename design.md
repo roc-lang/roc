@@ -4634,8 +4634,13 @@ complete):
   slot-kind sibling of the Try(τ, [Missing]) codec convention, pinned by
   test/cli/JsonOptionalFieldKinds.roc. A user-annotated `[Missing, Present(τ)]` field
   is an ordinary tag union everywhere (inspect renders `Present(5)` as
-  `Present(5)`); the reserved-label union shares its LAYOUT (two
-  variants, variant 0 zero-sized) but not its identity. Every other
+  `Present(5)`). Boxy carries the same decision explicitly as
+  `presence_slot_present_discriminant` on the representation and runtime
+  descriptor. Both its static and descriptor-driven inspect paths consume that
+  marker: the Present arm delegates directly to the payload's inspect plan,
+  while the Missing arm renders `<missing>`. They never infer presence slots
+  from a tag union's shape or labels. The reserved-label union shares its
+  LAYOUT (two variants, variant 0 zero-sized) but not its identity. Every other
   consumer (`.?` chains, construction, update, destructure, glue) reads
   the explicit checked kind and never inspects labels at all.
 
