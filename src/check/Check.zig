@@ -88,6 +88,18 @@ const FunctionEffectResolution = enum {
     }
 };
 
+const ExpectEffectSlotId = enum(u32) { _ };
+
+const ExpectEffectSlot = struct {
+    region: Region,
+    effectful: bool = false,
+};
+
+const ExpectDispatchWatcher = struct {
+    slot: ExpectEffectSlotId,
+    fn_var: Var,
+};
+
 /// How a type variable occurrence will be represented in the checked type
 /// artifact consumed by later compiler stages.
 const InspectTypePosition = enum(u2) {
@@ -303,12 +315,13 @@ int_unbound_vars: std.AutoHashMap(Var, void),
 /// constraint failing in multiple passes (or reachable through several aliased
 /// type variables) is reported once.
 reported_constraint_errors: std.AutoHashMap(ReportedConstraintError, void),
-/// Constraint fn vars already reported as effectful dispatches in an expect
-/// body, so a constraint revisited across passes is reported once (replaces the
-/// old expect_region side table's fetchRemove dedup).
-reported_effectful_expect: std.AutoHashMap(Var, void),
-/// Region of the expect body currently being checked, if any.
-current_expect_region: ?Region,
+/// Sparse effect slots for actual expect bodies. Static-dispatch watchers name
+/// these slots; constraint copying and unification therefore cannot manufacture
+/// or lose an expect context.
+expect_effect_slots: std.ArrayListUnmanaged(ExpectEffectSlot),
+expect_dispatch_effect_watchers: std.ArrayListUnmanaged(ExpectDispatchWatcher),
+successful_dispatch_fn_vars: std.ArrayListUnmanaged(Var),
+current_expect_effect_slot: ?ExpectEffectSlotId,
 /// Dense table of top-level patterns, and whether their defs have been processed.
 top_level_ptrns: std.ArrayListUnmanaged(?DefProcessed),
 /// Read-only platform requirement surface used only when checking an app root.
@@ -2280,8 +2293,10 @@ fn initAssumePrepared(
         .scratch_generated_codec_calls = .empty,
         .int_unbound_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
-        .reported_effectful_expect = std.AutoHashMap(Var, void).init(gpa),
-        .current_expect_region = null,
+        .expect_effect_slots = .empty,
+        .expect_dispatch_effect_watchers = .empty,
+        .successful_dispatch_fn_vars = .empty,
+        .current_expect_effect_slot = null,
         .top_level_ptrns = try initNodeSlots(?DefProcessed, gpa, node_count, null),
         .platform_requirements = null,
         .platform_required_defs = .{},
@@ -2463,7 +2478,9 @@ pub fn deinit(self: *Self) void {
     self.checked_interpolation_part_constraints.deinit();
     self.int_unbound_vars.deinit();
     self.reported_constraint_errors.deinit();
-    self.reported_effectful_expect.deinit();
+    self.expect_effect_slots.deinit(self.gpa);
+    self.expect_dispatch_effect_watchers.deinit(self.gpa);
+    self.successful_dispatch_fn_vars.deinit(self.gpa);
     self.top_level_ptrns.deinit(self.gpa);
     self.platform_required_defs.deinit(self.gpa);
     for (self.platform_requirement_solutions.items) |solution| {
@@ -6278,6 +6295,7 @@ fn mkFlexWithFromNumeralConstraint(
         .fn_var = fn_var,
         .origin = .{ .from_literal = .{ .numeral = num_literal_info } },
     };
+    if (source_node != null) try self.recordCurrentExpectDispatchWatcher(fn_var);
 
     // Store it in the types store
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -6361,6 +6379,7 @@ fn mkFlexWithFromQuoteConstraint(
         .fn_var = fn_var,
         .origin = .{ .from_literal = .quote },
     };
+    if (source_node != null) try self.recordCurrentExpectDispatchWatcher(fn_var);
 
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
@@ -7005,12 +7024,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         switch (stmt) {
             .s_expect => |expr_stmt| {
                 // Check the body expression
-                const expect_does_fx = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
-                if (expect_does_fx) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                        .region = stmt_region,
-                    } });
-                }
+                _ = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 // Unify with Bool (expects must be bool expressions)
@@ -7078,6 +7092,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.finalizeLiteralDispatchResolutions();
     try self.finalizeTopLevelDemandDependencies(&env);
+    try self.finalizeExpectEffectSlots();
 
     try self.finalizeBindingSchemeNodes();
 
@@ -9649,11 +9664,65 @@ fn checkExpectBody(
     expected: Expected,
     expect_region: Region,
 ) std.mem.Allocator.Error!bool {
-    const saved_expect_region = self.current_expect_region;
-    self.current_expect_region = expect_region;
-    defer self.current_expect_region = saved_expect_region;
+    const slot: ExpectEffectSlotId = @enumFromInt(self.expect_effect_slots.items.len);
+    try self.expect_effect_slots.append(self.gpa, .{ .region = expect_region });
 
-    return try self.checkExpr(body, env, expected.suppressComptimeConditionWarnings().suppressHoistSelection());
+    const saved_expect_slot = self.current_expect_effect_slot;
+    self.current_expect_effect_slot = slot;
+    defer self.current_expect_effect_slot = saved_expect_slot;
+
+    const does_fx = try self.checkExpr(body, env, expected.suppressComptimeConditionWarnings().suppressHoistSelection());
+    self.expect_effect_slots.items[@intFromEnum(slot)].effectful = does_fx;
+    return does_fx;
+}
+
+fn recordCurrentExpectDispatchWatcher(self: *Self, fn_var: Var) Allocator.Error!void {
+    const slot = self.current_expect_effect_slot orelse return;
+    try self.expect_dispatch_effect_watchers.append(self.gpa, .{ .slot = slot, .fn_var = fn_var });
+}
+
+/// Record a committed successful dispatch edge. Expect watchers are resolved
+/// once at the checked boundary, after all roots have settled; storing the raw
+/// var preserves the exact edge while finalization normalizes roots in one
+/// linear pass. Probes never publish success—the committed relation is revisited
+/// by the ordinary dispatch pass.
+fn recordSuccessfulStaticDispatch(self: *Self, constraint: StaticDispatchConstraint) Allocator.Error!void {
+    if (self.probe_depth != 0 or self.expect_dispatch_effect_watchers.items.len == 0) return;
+    try self.successful_dispatch_fn_vars.append(self.gpa, constraint.fn_var);
+}
+
+fn finalizeExpectEffectSlots(self: *Self) Allocator.Error!void {
+    std.debug.assert(self.current_expect_effect_slot == null);
+    if (self.expect_effect_slots.items.len == 0) return;
+
+    if (self.expect_dispatch_effect_watchers.items.len > 0) {
+        var successful_roots: std.AutoHashMapUnmanaged(Var, void) = .empty;
+        defer successful_roots.deinit(self.gpa);
+        try successful_roots.ensureTotalCapacity(self.gpa, @intCast(self.successful_dispatch_fn_vars.items.len));
+        for (self.successful_dispatch_fn_vars.items) |fn_var| {
+            successful_roots.putAssumeCapacity(self.types.resolveVar(fn_var).var_, {});
+        }
+
+        // Finalization runs after the last type mutation, so one memo serves
+        // every watcher. Ordinary effect queries clear this cache because roots
+        // may change between calls; no such invalidation is possible here.
+        self.function_effect_resolution.clearRetainingCapacity();
+
+        for (self.expect_dispatch_effect_watchers.items) |watcher| {
+            const fn_root = self.types.resolveVar(watcher.fn_var).var_;
+            if (!successful_roots.contains(fn_root)) continue;
+            if (try self.functionEffectStateHelp(fn_root) == .effectful) {
+                self.expect_effect_slots.items[@intFromEnum(watcher.slot)].effectful = true;
+            }
+        }
+    }
+
+    for (self.expect_effect_slots.items) |slot| {
+        if (!slot.effectful) continue;
+        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+            .region = slot.region,
+        } });
+    }
 }
 
 fn varIsFunctionType(self: *Self, var_: Var) bool {
@@ -10927,6 +10996,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // root the expression contains
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
     try self.checkBindingRootsForInfiniteTypes();
+    try self.finalizeExpectEffectSlots();
 
     try self.finalizeBindingSchemeNodes();
 
@@ -11030,6 +11100,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     try self.reportPolymorphicConstrainedExpr(expr_idx);
     try self.poisonErroneousValueUses();
+    try self.finalizeExpectEffectSlots();
 
     try self.finalizeBindingSchemeNodes();
 
@@ -13174,9 +13245,6 @@ fn instantiateWhereAliasConstraint(
         .fn_name = constraint.fn_name,
         .fn_var = try self.instantiateVarWithSubs(constraint.fn_var, subs, env, .{ .explicit = region }),
         .origin = .{ .where_clause = .{} },
-        // The reference is what the user wrote, so an unmet constraint points
-        // at the where alias rather than at its declaration.
-        .provenance = .{ .expect_region = StaticDispatchConstraint.Provenance.OptRegion.some(region) },
     };
 }
 
@@ -17288,11 +17356,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_expect => |expect| {
             self.markCurrentHoistObservableEffect();
             const expect_does_fx = try self.checkExpectBody(expect.body, env, child_expected, expr_region);
-            if (expect_does_fx) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                    .region = expr_region,
-                } });
-            }
             does_fx = expect_does_fx or does_fx;
             const body_var = ModuleEnv.varFrom(expect.body);
 
@@ -18821,11 +18884,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 self.markCurrentHoistObservableEffect();
                 statement_blocks_later_hoists = true;
                 const expect_does_fx = try self.checkExpectBody(expr_stmt.body, env, statement_expected, stmt_region);
-                if (expect_does_fx) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                        .region = stmt_region,
-                    } });
-                }
                 does_fx = expect_does_fx or does_fx;
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
@@ -20371,6 +20429,7 @@ fn mkBinopConstraint(
         .origin = .{ .desugared_binop = .{ .negated = negated } },
         .provenance = constraintProvenance(binop_expr_idx),
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     if (binop_expr_idx) |expr_idx| {
         try self.publishBinopDispatchExpr(expr_idx, method_name, region, constraint_fn_var);
@@ -20467,6 +20526,7 @@ fn mkUnaryOp(
         .origin = .desugared_unaryop,
         .provenance = constraintProvenance(unary_expr_idx),
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     if (unary_expr_idx) |expr_idx| {
         try self.publishUnaryDispatchExpr(expr_idx, method_name, region, constraint_fn_var);
@@ -20600,18 +20660,6 @@ fn constraintProvenance(intro_expr: ?CIR.Expr.Idx) StaticDispatchConstraint.Prov
     };
 }
 
-/// Like `constraintProvenance`, but also captures the current expect-body region.
-/// Only method-dispatch constraints carry it—the region feeds the
-/// "effectful dispatch in expect" diagnostic, matching what the old
-/// expect_region side table recorded (never for binop/unary origins).
-fn methodDispatchProvenance(self: *const Self, intro_expr: ?CIR.Expr.Idx) StaticDispatchConstraint.Provenance {
-    var provenance = constraintProvenance(intro_expr);
-    if (self.current_expect_region) |r| {
-        provenance.expect_region = StaticDispatchConstraint.Provenance.OptRegion.some(r);
-    }
-    return provenance;
-}
-
 fn mkSyntheticReceiverDispatchConstraint(
     self: *Self,
     receiver_var: Var,
@@ -20659,8 +20707,9 @@ fn mkReceiverDispatchConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = .method_call,
-        .provenance = self.methodDispatchProvenance(method_expr_idx),
+        .provenance = constraintProvenance(method_expr_idx),
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(
@@ -20695,8 +20744,9 @@ fn mkTypeMethodCallConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = .method_call,
-        .provenance = self.methodDispatchProvenance(method_expr_idx),
+        .provenance = constraintProvenance(method_expr_idx),
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(
@@ -20736,7 +20786,7 @@ fn mkInterpolationMetadata(
     }
 
     return .{
-        .expr_region = StaticDispatchConstraint.Provenance.OptRegion.some(
+        .expr_region = StaticDispatchConstraint.OptRegion.some(
             self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx)),
         ),
         .item_var = item_var,
@@ -20765,9 +20815,10 @@ fn mkInterpolationConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = .{ .from_literal = .interpolation },
-        .provenance = self.methodDispatchProvenance(expr_idx),
+        .provenance = constraintProvenance(expr_idx),
         .interpolation = try self.mkInterpolationMetadata(expr_idx, item_var),
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(
@@ -25884,7 +25935,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                             try self.markStaticDispatchRejected(constraint);
                         } else {
-                            try self.reportEffectfulDispatchInExpect(constraint);
+                            try self.recordSuccessfulStaticDispatch(constraint);
 
                             // The body provably forces this where-clause method: a
                             // body dispatch matched it and unified successfully. Mark
@@ -26301,7 +26352,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
                     } else {
-                        try self.reportEffectfulDispatchInExpect(constraint);
+                        try self.recordSuccessfulStaticDispatch(constraint);
                     }
                 }
                 break :dispatch_resolution;
@@ -26618,7 +26669,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
                     } else {
-                        try self.reportEffectfulDispatchInExpect(constraint);
+                        try self.recordSuccessfulStaticDispatch(constraint);
                     }
                 }
                 break :dispatch_resolution;
@@ -26862,20 +26913,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
     {
         self.retireResolvedTypeSchemeRequirements();
     }
-}
-
-fn reportEffectfulDispatchInExpect(
-    self: *Self,
-    constraint: StaticDispatchConstraint,
-) std.mem.Allocator.Error!void {
-    if (!try self.varIsEffectfulFunction(constraint.fn_var)) return;
-    const expect_region = constraint.provenance.expect_region.get() orelse return;
-    // Report each constraint once even though constraint checking revisits it
-    // across passes—the dedup set replaces the old side table's fetchRemove.
-    if ((try self.reported_effectful_expect.getOrPut(constraint.fn_var)).found_existing) return;
-    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-        .region = expect_region,
-    } });
 }
 
 fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_var: Var, region: Region) Allocator.Error!void {
@@ -29746,7 +29783,7 @@ fn satisfyDerivedMapConstraint(
     if ((try self.unify(expected_var, constraint.fn_var, env)).isProblem()) return false;
 
     self.recordDerivedMapPlan(constraint.fn_var, analysis.plan);
-    try self.reportEffectfulDispatchInExpect(constraint);
+    try self.recordSuccessfulStaticDispatch(constraint);
     return true;
 }
 

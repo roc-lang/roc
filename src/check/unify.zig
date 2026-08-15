@@ -3282,14 +3282,10 @@ const Unifier = struct {
             }
             // Provenance is metadata (excluded from constraint identity): merge it
             // field-wise, keeping the winner's value and falling back to the other
-            // side's so an introducing site or expect region recorded on either
-            // constraint survives the merge—the old var-keyed side tables linked
-            // both unified vars to the same entry.
+            // side's so an introducing site recorded on either constraint
+            // survives the merge.
             if (constraint.provenance.intro_expr == .none) {
                 constraint.provenance.intro_expr = two_constraints.a.provenance.intro_expr;
-            }
-            if (constraint.provenance.expect_region.get() == null) {
-                constraint.provenance.expect_region = two_constraints.a.provenance.expect_region;
             }
             if (!constraint.interpolation.isPresent()) {
                 constraint.interpolation = two_constraints.a.interpolation;
