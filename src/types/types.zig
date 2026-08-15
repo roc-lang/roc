@@ -41,10 +41,11 @@ test {
     // Folding `binop_negated` and `num_literal` into the `origin` union is a
     // semantic regrouping (kind-specific payloads now live inside their variant),
     // not a size win: the literal-origin variant still embeds a full `NumeralInfo`,
-    // so the `Origin` union dominates the struct. Provenance adds a raw expr index
-    // (4B) plus a where-clause expect region (8B), both `maxInt`-sentinel packed.
-    // The optional derived-map payload selection adds its tag, payload index,
-    // and optional discriminant without affecting type identity.
+    // so the `Origin` union dominates the struct. Provenance adds one raw expr
+    // index (4B); expect effects live in checker-owned slots because they belong
+    // to call occurrences, not copied type constraints. The optional derived-map
+    // payload selection adds its tag, payload index, and optional discriminant
+    // without affecting type identity.
     try std.testing.expectEqual(96, @sizeOf(StaticDispatchConstraint));
     // Directed effect dependencies must survive type generalization,
     // instantiation, and cross-module copying, so they live with the function
@@ -1096,13 +1097,12 @@ pub const StaticDispatchConstraint = struct {
     /// as a plain index because `types` sits below `canonicalize` in the layering
     /// and cannot name `CIR.Expr.Idx`; the checker converts it back. It is
     /// module-local—after cross-module import it refers to the ORIGINATING
-    /// module's CIR. `expect_region` is the where-clause "expect" region, set
-    /// only when the constraint was created inside a where-clause annotation
-    /// context (distinct from the intro expr's own region). Both use a `maxInt`
-    /// sentinel for "absent" so the record grows by only an index + a region.
+    /// module's CIR. It uses a `maxInt` sentinel for "absent" so the record is
+    /// exactly one index. Effect context belongs to checker-owned effect slots,
+    /// not constraint provenance: constraints are copied and merged, while an
+    /// effect belongs to the expression occurrence that performs the call.
     pub const Provenance = struct {
         intro_expr: OptExprIdx = .none,
-        expect_region: OptRegion = OptRegion.none,
 
         /// An optional raw `CIR.Expr.Idx`. `none` marks a synthetic constraint
         /// with no introducing expression.
@@ -1120,32 +1120,32 @@ pub const StaticDispatchConstraint = struct {
                 return if (self == .none) null else @intFromEnum(self);
             }
         };
+    };
 
-        /// An optional region packed into a `Region` using a `maxInt` start
-        /// offset as the "absent" sentinel (a real region never starts at
-        /// `maxInt`), avoiding the extra tag byte a Zig optional would add.
-        pub const OptRegion = struct {
-            region: base.Region,
+    /// An optional region packed into a `Region` using a `maxInt` start offset
+    /// as the "absent" sentinel (a real region never starts at `maxInt`),
+    /// avoiding the extra tag byte a Zig optional would add.
+    pub const OptRegion = struct {
+        region: base.Region,
 
-            pub const none = OptRegion{ .region = .{
-                .start = .{ .offset = std.math.maxInt(u32) },
-                .end = .{ .offset = std.math.maxInt(u32) },
-            } };
+        pub const none = OptRegion{ .region = .{
+            .start = .{ .offset = std.math.maxInt(u32) },
+            .end = .{ .offset = std.math.maxInt(u32) },
+        } };
 
-            pub fn some(region: base.Region) OptRegion {
-                std.debug.assert(region.start.offset != std.math.maxInt(u32));
-                return .{ .region = region };
-            }
+        pub fn some(region: base.Region) OptRegion {
+            std.debug.assert(region.start.offset != std.math.maxInt(u32));
+            return .{ .region = region };
+        }
 
-            /// The region, or null when absent.
-            pub fn get(self: OptRegion) ?base.Region {
-                return if (self.region.start.offset == std.math.maxInt(u32)) null else self.region;
-            }
-        };
+        /// The region, or null when absent.
+        pub fn get(self: OptRegion) ?base.Region {
+            return if (self.region.start.offset == std.math.maxInt(u32)) null else self.region;
+        }
     };
 
     pub const InterpolationMetadata = struct {
-        expr_region: Provenance.OptRegion = Provenance.OptRegion.none,
+        expr_region: OptRegion = OptRegion.none,
         item_var: Var = no_var,
         interpolated_parts: InterpolationPartMetadata.SafeList.Range = .empty(),
 
