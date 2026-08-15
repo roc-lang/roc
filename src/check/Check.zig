@@ -2017,14 +2017,31 @@ const ScratchStaticDispatchConstraint = struct {
 };
 
 const ReturnConstraint = struct {
-    expected: Var,
     actual_expr: CIR.Expr.Idx,
-    ctx: problem.Context,
+    kind: ReturnConstraintKind,
+};
+
+const ReturnConstraintKind = enum(u8) {
+    return_expr,
+    try_suffix,
+
+    fn problemContext(self: ReturnConstraintKind) problem.Context {
+        return switch (self) {
+            .return_expr => .early_return,
+            .try_suffix => .try_operator,
+        };
+    }
 };
 
 const ReturnConstraintFrame = struct {
+    /// The canonical owner of every return in this frame.
     lambda: CIR.Expr.Idx,
+    /// Start of this lambda's deferred constraints in the shared scratch list.
     start: usize,
+    /// The inferred body result that unannotated returns constrain after body checking.
+    body_result: Var,
+    /// The result supplied by an annotation or another explicit function expectation.
+    expected_result: ?Var,
 };
 
 /// A constraint generated during type checking, to be checked at the end
@@ -14366,11 +14383,12 @@ fn setBuiltinTypeContent(
 
 // types //
 
+/// Expression-local expectations. Lambda return targets live in
+/// `ReturnConstraintFrame` so a nested expression annotation cannot replace them.
 const Expected = struct {
     annotation: ?CIR.Annotation.Idx = null,
     expected_type: ?ExpectedType = null,
     branch_result: ?Var = null,
-    return_result: ?Var = null,
     comptime_condition_warnings: enum { emit, suppress } = .emit,
     hoist_position: HoistPosition = .suppressed,
 
@@ -14392,7 +14410,6 @@ const Expected = struct {
             .annotation = annotation_idx,
             .expected_type = self.expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
@@ -14403,7 +14420,6 @@ const Expected = struct {
             .annotation = self.annotation,
             .expected_type = expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
@@ -14414,7 +14430,6 @@ const Expected = struct {
             .annotation = null,
             .expected_type = expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
@@ -14425,7 +14440,6 @@ const Expected = struct {
             .annotation = self.annotation,
             .expected_type = self.expected_type,
             .branch_result = branch_result,
-            .return_result = self.return_result orelse branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
@@ -14436,7 +14450,6 @@ const Expected = struct {
             .annotation = self.annotation,
             .expected_type = self.expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = hoist_position,
         };
@@ -14451,7 +14464,6 @@ const Expected = struct {
             .annotation = self.annotation,
             .expected_type = self.expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = .suppress,
             .hoist_position = .comptime_root,
         };
@@ -14460,7 +14472,6 @@ const Expected = struct {
     fn forBranchBody(self: Expected) Expected {
         return .{
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = .suppressed,
         };
@@ -14468,17 +14479,14 @@ const Expected = struct {
 
     fn forStatement(self: Expected) Expected {
         return .{
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
     }
 
-    fn forReturnValue(self: Expected) Expected {
-        const expected_return = self.returnResult();
+    fn forReturnValue(self: Expected, expected_return: ?Var) Expected {
         return .{
             .branch_result = expected_return,
-            .return_result = expected_return,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
@@ -14489,7 +14497,6 @@ const Expected = struct {
             .annotation = self.annotation,
             .expected_type = self.expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = .suppress,
             .hoist_position = self.hoist_position,
         };
@@ -14497,13 +14504,6 @@ const Expected = struct {
 
     fn emitsComptimeConditionWarnings(self: Expected) bool {
         return self.comptime_condition_warnings == .emit;
-    }
-
-    fn returnResult(self: Expected) ?Var {
-        if (self.return_result) |return_result| {
-            return return_result;
-        }
-        return self.branch_result;
     }
 };
 
@@ -16463,7 +16463,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
 
             const lambda_body_expected = Expected.none().withHoistPosition(nested_expected.hoist_position);
-            try self.pushReturnConstraintFrame(expr_idx);
+            const expected_result = if (mb_anno_func) |expected_func| expected_func.ret else null;
+            try self.pushReturnConstraintFrame(expr_idx, body_var, expected_result);
             var return_constraints_processed = false;
             defer if (!return_constraints_processed) self.discardReturnConstraintFrame(expr_idx);
 
@@ -17355,21 +17356,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_return => |ret| {
             self.markCurrentHoistObservableEffect();
-            const return_expected = nested_expected.forReturnValue();
+            const expected_return = self.expectedReturnResultFor(ret.lambda);
+            const return_expected = nested_expected.forReturnValue(expected_return);
             does_fx = try self.checkExpr(ret.expr, env, return_expected) or does_fx;
-            const return_ctx: problem.Context = switch (ret.context) {
-                .return_expr => .early_return,
-                .try_suffix => .try_operator,
+            const return_kind: ReturnConstraintKind = switch (ret.context) {
+                .return_expr => .return_expr,
+                .try_suffix => .try_suffix,
             };
 
-            if (return_expected.returnResult()) |expected_return| {
-                try self.checkReturnRelation(expected_return, ret.expr, return_ctx, env);
+            if (expected_return) |annotated_return| {
+                try self.checkReturnRelation(annotated_return, ret.expr, return_kind.problemContext(), env);
             } else {
                 // Validate the lambda body type against the return value after the
                 // body is fully checked, but before the lambda generalizes.
-                const lambda_expr = self.cir.store.getExpr(ret.lambda);
-                std.debug.assert(lambda_expr == .e_lambda);
-                try self.appendReturnConstraint(ret.lambda, ModuleEnv.varFrom(lambda_expr.e_lambda.body), ret.expr, return_ctx);
+                try self.appendReturnConstraint(ret.lambda, ret.expr, return_kind);
             }
 
             // Note that we DO NOT unify the return type with the expr here.
@@ -18843,17 +18843,16 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 self.markCurrentHoistObservableEffect();
                 statement_blocks_later_hoists = true;
                 // Type check the return expression
-                const return_expected = expected.forReturnValue();
+                const expected_return = self.expectedReturnResultFor(ret.lambda);
+                const return_expected = expected.forReturnValue(expected_return);
                 does_fx = try self.checkExpr(ret.expr, env, return_expected) or does_fx;
 
-                if (return_expected.returnResult()) |expected_return| {
-                    try self.checkReturnRelation(expected_return, ret.expr, .early_return, env);
+                if (expected_return) |annotated_return| {
+                    try self.checkReturnRelation(annotated_return, ret.expr, .early_return, env);
                 } else {
                     // Validate the lambda body type against the return value after the
                     // body is fully checked, but before the lambda generalizes.
-                    const lambda_expr = self.cir.store.getExpr(ret.lambda);
-                    std.debug.assert(lambda_expr == .e_lambda);
-                    try self.appendReturnConstraint(ret.lambda, ModuleEnv.varFrom(lambda_expr.e_lambda.body), ret.expr, .early_return);
+                    try self.appendReturnConstraint(ret.lambda, ret.expr, .return_expr);
                 }
 
                 // A return statement's type should be a flex var so it can unify with any type.
@@ -19448,7 +19447,7 @@ fn checkMatchExpr(
         if (!try_result.isOk()) {
             has_invalid_try = true;
             had_type_error = true;
-        } else if (expected.returnResult()) |expected_return| {
+        } else if (self.currentExpectedReturnResult()) |expected_return| {
             if (self.tryConditionIsDirectHostedCall(match.cond)) {
                 try self.widenTryConditionForExpectedReturn(cond_var, expected_return, env, expr_region);
             }
@@ -24578,11 +24577,30 @@ fn isDecNominal(self: *Self, var_: Var) bool {
     return nominal.ident.ident_idx.eql(self.cir.idents.dec_type);
 }
 
-fn pushReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+fn pushReturnConstraintFrame(
+    self: *Self,
+    lambda_idx: CIR.Expr.Idx,
+    body_result: Var,
+    expected_result: ?Var,
+) std.mem.Allocator.Error!void {
     try self.return_constraint_frames.append(self.gpa, .{
         .lambda = lambda_idx,
         .start = self.return_constraints.items.len,
+        .body_result = body_result,
+        .expected_result = expected_result,
     });
+}
+
+fn currentExpectedReturnResult(self: *const Self) ?Var {
+    if (self.return_constraint_frames.items.len == 0) return null;
+    return self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1].expected_result;
+}
+
+fn expectedReturnResultFor(self: *const Self, lambda_idx: CIR.Expr.Idx) ?Var {
+    std.debug.assert(self.return_constraint_frames.items.len > 0);
+    const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
+    std.debug.assert(frame.lambda == lambda_idx);
+    return frame.expected_result;
 }
 
 fn discardReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) void {
@@ -24597,46 +24615,15 @@ fn discardReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) void {
 fn appendReturnConstraint(
     self: *Self,
     lambda_idx: CIR.Expr.Idx,
-    expected: Var,
     actual_expr: CIR.Expr.Idx,
-    ctx: problem.Context,
+    kind: ReturnConstraintKind,
 ) std.mem.Allocator.Error!void {
-    switch (ctx) {
-        .early_return, .try_operator => {},
-        .none,
-        .fn_call_arity,
-        .fn_call_arg,
-        .if_condition,
-        .if_branch,
-        .match_pattern,
-        .match_alt_binder,
-        .match_branch,
-        .list_entry,
-        .interpolation_part,
-        .type_annotation,
-        .record_destructure,
-        .binop_lhs,
-        .binop_rhs,
-        .record_access,
-        .record_update,
-        .try_operator_expr,
-        .statement_value,
-        .nominal_constructor,
-        .fn_args_bound_var,
-        .platform_requirement,
-        .method_type,
-        .expect,
-        .recursive_def,
-        => unreachable,
-    }
-
     std.debug.assert(self.return_constraint_frames.items.len > 0);
     const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
     std.debug.assert(frame.lambda == lambda_idx);
     try self.return_constraints.append(self.gpa, .{
-        .expected = expected,
         .actual_expr = actual_expr,
-        .ctx = ctx,
+        .kind = kind,
     });
 }
 
@@ -24663,39 +24650,12 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
     std.debug.assert(frame.lambda == lambda_idx);
 
     for (self.return_constraints.items[frame.start..]) |constraint| {
-        switch (constraint.ctx) {
-            .early_return => {
-                try self.checkReturnRelation(constraint.expected, constraint.actual_expr, .early_return, env);
-            },
-            .try_operator => {
-                try self.checkReturnRelation(constraint.expected, constraint.actual_expr, .try_operator, env);
-            },
-            .none,
-            .fn_call_arity,
-            .fn_call_arg,
-            .if_condition,
-            .if_branch,
-            .match_pattern,
-            .match_alt_binder,
-            .match_branch,
-            .list_entry,
-            .interpolation_part,
-            .type_annotation,
-            .record_destructure,
-            .binop_lhs,
-            .binop_rhs,
-            .record_access,
-            .record_update,
-            .try_operator_expr,
-            .statement_value,
-            .nominal_constructor,
-            .fn_args_bound_var,
-            .platform_requirement,
-            .method_type,
-            .expect,
-            .recursive_def,
-            => unreachable,
-        }
+        try self.checkReturnRelation(
+            frame.body_result,
+            constraint.actual_expr,
+            constraint.kind.problemContext(),
+            env,
+        );
     }
 
     self.return_constraints.shrinkRetainingCapacity(frame.start);
