@@ -696,6 +696,57 @@ test "hoist roots selected for tag payload extraction binders" {
     try std.testing.expect(roots[1].pattern != null);
 }
 
+test "refutable closed destructure selects validation root without live binders" {
+    var test_env = try TestEnv.init("Test",
+        \\main = || {
+        \\    Ok(_) = List.get([1], 0)
+        \\    Ok({})
+        \\}
+    );
+    defer test_env.deinit();
+
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    const validation = switch (roots[0].body) {
+        .pattern_validation => |validation| validation,
+        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+    };
+    try std.testing.expectEqual(roots[0].expr, validation.base_expr);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+}
+
+test "concrete extraction subsumes refutable destructure validation root" {
+    var test_env = try TestEnv.init("Test",
+        \\main = || {
+        \\    Ok(value) = List.get([1], 0)
+        \\    Ok({})
+        \\}
+    );
+    defer test_env.deinit();
+
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try expectPatternExtractionRoot(roots[0]);
+}
+
+test "non-concrete extraction retains refutable destructure validation root" {
+    var test_env = try TestEnv.init("Test",
+        \\main = || {
+        \\    Ok(value) = List.get([[]], 0)
+        \\    Ok({})
+        \\}
+    );
+    defer test_env.deinit();
+
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    const validation = switch (roots[0].body) {
+        .pattern_validation => |validation| validation,
+        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+    };
+    try std.testing.expectEqual(roots[0].expr, validation.base_expr);
+}
+
 test "hoist roots selected for nested tag payload extraction binders" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
@@ -935,7 +986,7 @@ fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) error{ Tes
     try std.testing.expect(root.pattern != null);
     const extraction = switch (root.body) {
         .pattern_extraction => |extraction| extraction,
-        .expr => return error.ExpectedPatternExtractionRoot,
+        .expr, .pattern_validation => return error.ExpectedPatternExtractionRoot,
     };
     try std.testing.expectEqual(root.expr, extraction.base_expr);
     try std.testing.expectEqual(root.pattern.?, extraction.result_pattern);
@@ -964,7 +1015,7 @@ fn countPatternExtractionRoots(roots: []const hoist_roots.SelectedHoistedRoot) u
     for (roots) |root| {
         switch (root.body) {
             .pattern_extraction => count += 1,
-            .expr => {},
+            .expr, .pattern_validation => {},
         }
     }
     return count;
