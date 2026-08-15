@@ -8209,11 +8209,17 @@ pub const MonoLlvmCodeGen = struct {
         const true_block = wip.block(0, "str_eq_true") catch return error.OutOfMemory;
         const false_block = wip.block(0, "str_eq_false") catch return error.OutOfMemory;
         const same_len_block = wip.block(0, "str_eq_same_len") catch return error.OutOfMemory;
+        const compare_block = wip.block(0, "str_eq_compare") catch return error.OutOfMemory;
         const after_block = wip.block(0, "str_eq_after") catch return error.OutOfMemory;
         const same_len = wip.icmp(.eq, lhs.len, rhs.len, "") catch return error.OutOfMemory;
         _ = wip.brCond(same_len, same_len_block, false_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = same_len_block };
+        // `bytes` is the actual content address for every string representation.
+        const same_bytes = wip.icmp(.eq, lhs.bytes, rhs.bytes, "") catch return error.OutOfMemory;
+        _ = wip.brCond(same_bytes, true_block, compare_block, .none) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = compare_block };
         try self.emitByteSlicesEqualBranch(lhs.bytes, rhs.bytes, lhs.len, true_block, false_block);
         try self.emitStrBoolJoin(target, true_block, false_block, after_block);
     }
