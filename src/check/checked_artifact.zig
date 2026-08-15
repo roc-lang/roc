@@ -18257,8 +18257,11 @@ fn sealConstEvalTemplatesForRoots(
         if (!compileTimeRootHasConstBody(root.kind)) continue;
         const const_ref = switch (root.kind) {
             .constant => blk: {
-                const pattern = root.pattern orelse checkedArtifactInvariant("constant root has no top-level pattern", .{});
-                const top_level = top_level_values.lookupByPattern(pattern) orelse {
+                const def_idx = switch (root.source) {
+                    .def => |def| def,
+                    .expr, .statement, .required_binding, .hoisted => checkedArtifactInvariant("constant root source is not a top-level definition", .{}),
+                };
+                const top_level = top_level_values.lookupByDef(def_idx) orelse {
                     checkedArtifactInvariant("constant root has no top-level value entry", .{});
                 };
                 break :blk switch (top_level.value) {
@@ -19202,7 +19205,7 @@ pub const CheckedProcedureTemplateTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
-        global_value_defs: []const CIR.Def.Idx,
+        value_binding_defs: []const CIR.Def.Idx,
         names: *canonical.CanonicalNameStore,
         owner_artifact: canonical.ArtifactRef,
         checked_type_publication: *CheckedTypePublication,
@@ -19217,7 +19220,7 @@ pub const CheckedProcedureTemplateTable = struct {
 
         const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
 
-        for (global_value_defs) |def_idx| {
+        for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
             if (!topLevelExprIsAlreadyProcedure(def.expr.data)) continue;
 
@@ -23561,21 +23564,6 @@ pub const CompileTimeRoot = struct {
     }
 };
 
-fn topLevelDefHasValueImplementation(
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    global_value_defs: []const CIR.Def.Idx,
-    source_name: canonical.ExportNameId,
-) Allocator.Error!bool {
-    for (global_value_defs) |other_def_idx| {
-        const other_def = module.def(other_def_idx);
-        if (other_def.expr.data == .e_anno_only) continue;
-        const other_name = (try topLevelDefSourceName(module, names, other_def)) orelse continue;
-        if (other_name == source_name) return true;
-    }
-    return false;
-}
-
 /// Public `CompileTimeRootTable` declaration.
 ///
 /// This is the durable compile-time root schedule and payload table. It stores
@@ -23598,8 +23586,7 @@ pub const CompileTimeRootTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
-        names: *canonical.CanonicalNameStore,
-        global_value_defs: []const CIR.Def.Idx,
+        value_binding_defs: []const CIR.Def.Idx,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
         checked_types: *const CheckedTypePublication,
         checked_body_builder: *CheckedBodyStoreBuilder,
@@ -23640,20 +23627,11 @@ pub const CompileTimeRootTable = struct {
             inserted.value_ptr.* = roots.items.len - 1;
         }
 
-        var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
-        defer seen_source_names.deinit(allocator);
-
         const module_env = module.moduleEnvConst();
-        for (global_value_defs) |def_idx| {
+        for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
             if (topLevelDefSourceIdent(def) == null) continue;
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
-
-            const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
-            if (def.expr.data == .e_anno_only and try topLevelDefHasValueImplementation(module, names, global_value_defs, source_name)) continue;
-            const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
-            if (seen_source_name.found_existing) continue;
-            seen_source_name.value_ptr.* = {};
 
             const source_ty = module.defType(def_idx);
             if (sourceTypeIsFunction(module, source_ty)) {
@@ -25001,7 +24979,7 @@ pub const TopLevelValueTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
-        global_value_defs: []const CIR.Def.Idx,
+        value_binding_defs: []const CIR.Def.Idx,
         names: *canonical.CanonicalNameStore,
         checked_bodies: *const CheckedBodyStore,
         templates: *const CheckedProcedureTemplateTable,
@@ -25021,17 +24999,10 @@ pub const TopLevelValueTable = struct {
         var by_def = std.ArrayList(TopLevelValueByDefEntry).empty;
         errdefer by_def.deinit(allocator);
 
-        var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
-        defer seen_source_names.deinit(allocator);
-
-        for (global_value_defs) |def_idx| {
+        for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
             const checked_pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx);
             const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
-            if (def.expr.data == .e_anno_only and try topLevelDefHasValueImplementation(module, names, global_value_defs, source_name)) continue;
-            const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
-            if (seen_source_name.found_existing) continue;
-            seen_source_name.value_ptr.* = {};
             const source_ty = module.defType(def_idx);
             const source_scheme = try canonical_type_keys.schemeFromVar(
                 allocator,
@@ -32284,7 +32255,7 @@ pub fn publishFromTypedModule(
     try checked_body_builder.reserveSyntheticExprs(allocator, syntheticExprCapacityForHoistedRoots(inputs.hoisted_roots));
     const checked_bodies = checked_body_builder.storePtr();
 
-    const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
+    const value_binding_defs = module_env.store.sliceDefs(module_env.value_binding_defs);
 
     var relation_type_substitutions = try PlatformRelationTypeSubstitutions.fromRelation(
         allocator,
@@ -32316,7 +32287,7 @@ pub fn publishFromTypedModule(
     var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
         allocator,
         module,
-        global_value_defs,
+        value_binding_defs,
         &canonical_names,
         owner_artifact,
         &checked_type_publication,
@@ -32380,8 +32351,7 @@ pub fn publishFromTypedModule(
     var compile_time_roots = try CompileTimeRootTable.fromModule(
         allocator,
         module,
-        &canonical_names,
-        global_value_defs,
+        value_binding_defs,
         inputs.hoisted_roots,
         &checked_type_publication,
         &checked_body_builder,
@@ -32419,7 +32389,7 @@ pub fn publishFromTypedModule(
     var top_level_values = try TopLevelValueTable.fromModule(
         allocator,
         module,
-        global_value_defs,
+        value_binding_defs,
         &canonical_names,
         checked_bodies,
         &checked_procedure_templates,
@@ -32921,7 +32891,7 @@ fn expectProvidedExportKind(
     var builtin_templates = try CheckedProcedureTemplateTable.fromModule(
         allocator,
         builtin_module,
-        builtin_env.store.sliceDefs(builtin_env.global_value_defs),
+        builtin_env.store.sliceDefs(builtin_env.value_binding_defs),
         &builtin_names,
         artifactRef(builtin_key),
         &builtin_checked_type_publication,
@@ -33017,7 +32987,7 @@ fn expectProvidedExportKind(
     defer checked_body_builder.deinit(allocator);
     const checked_bodies = checked_body_builder.storePtr();
 
-    const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
+    const value_binding_defs = module_env.store.sliceDefs(module_env.value_binding_defs);
 
     var relation_type_substitutions = PlatformRelationTypeSubstitutions{};
     defer relation_type_substitutions.deinit(allocator);
@@ -33028,7 +32998,7 @@ fn expectProvidedExportKind(
     var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
         allocator,
         module,
-        global_value_defs,
+        value_binding_defs,
         &canonical_names,
         owner_artifact,
         &checked_type_publication,
@@ -33101,8 +33071,7 @@ fn expectProvidedExportKind(
     var compile_time_roots = try CompileTimeRootTable.fromModule(
         allocator,
         module,
-        &canonical_names,
-        global_value_defs,
+        value_binding_defs,
         &.{},
         &checked_type_publication,
         &checked_body_builder,
@@ -33134,7 +33103,7 @@ fn expectProvidedExportKind(
     var top_level_values = try TopLevelValueTable.fromModule(
         allocator,
         module,
-        global_value_defs,
+        value_binding_defs,
         &canonical_names,
         checked_bodies,
         &checked_procedure_templates,

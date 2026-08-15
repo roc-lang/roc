@@ -10801,7 +10801,7 @@ fn exposedAppDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
 }
 
 fn topLevelDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
-    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+    for (self.cir.store.sliceDefs(self.cir.top_level_value_defs)) |def_idx| {
         const def_ident = self.getPatternIdent(self.cir.store.getDef(def_idx).pattern) orelse continue;
         if (def_ident == ident) return def_idx;
     }
