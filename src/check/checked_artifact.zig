@@ -1092,7 +1092,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .field_default => .compile_time_constant,
+                    .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .field_default => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                 },
@@ -1101,7 +1101,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .compile_time,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -1994,7 +1994,7 @@ fn compileTimeRootKindMatchesRequest(
     request_kind: RootRequestKind,
 ) bool {
     return switch (root_kind) {
-        .constant, .hoisted_constant => request_kind == .compile_time_constant,
+        .constant, .hoisted_constant, .hoisted_validation => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .numeral_conversion, .quote_conversion, .field_default => request_kind == .compile_time_constant,
@@ -2064,6 +2064,7 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
     return switch (root.kind) {
         .constant,
         .hoisted_constant,
+        .hoisted_validation,
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
@@ -4551,7 +4552,7 @@ pub const CheckedTypeStore = struct {
         names: *const canonical.CanonicalNameStore,
     ) Allocator.Error!CheckedTypeId {
         const key = try checkedTypePayloadKeyBuild(allocator, names, self, .empty_record);
-        if (self.rootForKey(key)) |existing| {
+        if (self.rootForKey(key.key)) |existing| {
             if (self.payload(existing) != .empty_record) try self.replaceTypeRootPayload(allocator, existing, .empty_record);
             return existing;
         }
@@ -10408,6 +10409,13 @@ pub const SyntheticExprOrigin = union(enum) {
         selected_root_index: u32,
         scrutinee_pattern: CheckedPatternId,
     },
+    pattern_validation_result: struct {
+        selected_root_index: u32,
+    },
+    pattern_validation_wrapper: struct {
+        selected_root_index: u32,
+        scrutinee_pattern: CheckedPatternId,
+    },
 };
 
 const SyntheticExprOriginRecord = struct {
@@ -15367,6 +15375,18 @@ fn appendSyntheticLocalLookupRefs(
                     checkedArtifactInvariant("synthetic wrapper origin pointed at a non-match expression", .{});
                 }
             },
+            .pattern_validation_result => {
+                const expr = checked_bodies.expr(origin_record.expr);
+                if (expr.data != .empty_record) {
+                    checkedArtifactInvariant("synthetic pattern-validation result was not unit", .{});
+                }
+            },
+            .pattern_validation_wrapper => {
+                const expr = checked_bodies.expr(origin_record.expr);
+                if (checkedExprDataCategory(std.meta.activeTag(expr.data)) != .match_expr) {
+                    checkedArtifactInvariant("synthetic pattern-validation wrapper was not a match expression", .{});
+                }
+            },
         }
     }
 }
@@ -18272,6 +18292,7 @@ fn sealConstEvalTemplatesForRoots(
                 };
                 break :blk hoisted.const_ref;
             },
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .numeral_conversion,
@@ -19390,7 +19411,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .comptime_only,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .comptime_only,
                 },
             });
         }
@@ -23495,6 +23516,9 @@ pub const CompileTimeRootKind = enum {
     constant,
     /// A selected top-level-equivalent expression inside a runtime body.
     hoisted_constant,
+    /// A selected compile-time-known refutable destructure whose successful
+    /// result has no runtime value to archive.
+    hoisted_validation,
     callable_binding,
     expect,
     /// A `from_numeral` conversion of a numeric literal whose target is a
@@ -23526,6 +23550,7 @@ pub const CompileTimeRootPayload = union(enum) {
     pending,
     const_node: ConstNodeId,
     fn_value: ConstFnId,
+    discarded,
     expect,
 };
 
@@ -23556,7 +23581,7 @@ pub const CompileTimeRoot = struct {
             .numeral_conversion => .numeral,
             .quote_conversion => .quote,
             .field_default => self.literal_conversion,
-            .constant, .hoisted_constant, .callable_binding, .expect => null,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => null,
         };
     }
 };
@@ -23601,7 +23626,7 @@ pub const CompileTimeRootTable = struct {
         names: *canonical.CanonicalNameStore,
         global_value_defs: []const CIR.Def.Idx,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
-        checked_types: *const CheckedTypePublication,
+        checked_types: *CheckedTypePublication,
         checked_body_builder: *CheckedBodyStoreBuilder,
         procedure_templates: *const CheckedProcedureTemplateTable,
     ) Allocator.Error!CompileTimeRootTable {
@@ -23694,14 +23719,19 @@ pub const CompileTimeRootTable = struct {
                     checkedArtifactInvariant("non-function selected root was classified as a callable binding", .{})
                 else
                     .callable_binding,
+                .discarded => .hoisted_validation,
+            };
+            const checked_type = switch (selected.value_kind) {
+                .data_constant, .callable_binding => try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
+                .discarded => try checked_types.store.ensureEmptyRecordRoot(allocator, names),
             };
             const checked_expr = try checkedExprIdForSelectedHoistedRoot(
                 allocator,
                 module,
-                checked_types,
                 checked_body_builder,
                 @intCast(selected_index),
                 selected,
+                checked_type,
             );
             const hoisted_body = try hoist_roots.cloneBody(allocator, selected.body);
             try appendCompileTimeRoot(&roots, allocator, .{
@@ -23713,9 +23743,12 @@ pub const CompileTimeRootTable = struct {
                 } },
                 .source_pattern = selected.pattern,
                 .hoisted_body = hoisted_body,
-                .pattern = if (selected.pattern) |pattern| checkedPatternIdForSource(checked_bodies, pattern) else null,
+                .pattern = switch (selected.body) {
+                    .pattern_validation => |validation| checkedPatternIdForSource(checked_bodies, validation.scrutinee_pattern),
+                    .expr, .pattern_extraction => if (selected.pattern) |pattern| checkedPatternIdForSource(checked_bodies, pattern) else null,
+                },
                 .expr = checked_expr,
-                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
+                .checked_type = checked_type,
                 .payload = .pending,
             });
         }
@@ -23815,9 +23848,20 @@ pub const CompileTimeRootTable = struct {
 
     pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CheckedPatternId) ?ComptimeRootId {
         for (self.roots) |entry| {
+            if (entry.kind == .hoisted_validation) continue;
             if (entry.pattern != null and entry.pattern.? == pattern) return entry.id;
         }
         return null;
+    }
+
+    pub fn validationResolvedByPattern(self: *const CompileTimeRootTable, pattern: CheckedPatternId) bool {
+        for (self.roots) |entry| {
+            if (entry.kind != .hoisted_validation or entry.pattern != pattern) continue;
+            const body = entry.hoisted_body orelse checkedArtifactInvariant("hoisted validation root had no selected body", .{});
+            if (body != .pattern_validation or !body.pattern_validation.erase_runtime) return false;
+            return entry.payload == .discarded;
+        }
+        return false;
     }
 
     /// Look up the field-default root (design.md "Defaulted Fields") whose
@@ -23982,7 +24026,11 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
     const matches = switch (kind) {
         .constant, .hoisted_constant => switch (payload) {
             .const_node => true,
-            .pending, .fn_value, .expect => false,
+            .pending, .fn_value, .discarded, .expect => false,
+        },
+        .hoisted_validation => switch (payload) {
+            .discarded => true,
+            .pending, .const_node, .fn_value, .expect => false,
         },
         .callable_binding => switch (payload) {
             // A callable initializer that reaches an explicit checked error is
@@ -23990,15 +24038,15 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
             // node at the callable's expected type, so execution crashes at
             // the exact invalid binding while independent roots remain usable.
             .fn_value, .const_node => true,
-            .pending, .expect => false,
+            .pending, .discarded, .expect => false,
         },
         .expect => switch (payload) {
             .expect => true,
-            .pending, .const_node, .fn_value => false,
+            .pending, .const_node, .fn_value, .discarded => false,
         },
         .numeral_conversion, .quote_conversion, .field_default => switch (payload) {
             .const_node => true,
-            .pending, .fn_value, .expect => false,
+            .pending, .fn_value, .discarded, .expect => false,
         },
     };
     if (matches) return;
@@ -24010,6 +24058,7 @@ fn verifyCompileTimeRootLiteralConversion(root: CompileTimeRoot) void {
         .field_default => {},
         .constant,
         .hoisted_constant,
+        .hoisted_validation,
         .callable_binding,
         .expect,
         .numeral_conversion,
@@ -24023,7 +24072,7 @@ fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
         .constant, .hoisted_constant => true,
         // A field default's constant is restored by expression lookup at
         // construction sites, never exported as a named data constant.
-        .callable_binding, .expect, .numeral_conversion, .quote_conversion, .field_default => false,
+        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .field_default => false,
     };
 }
 
@@ -24427,6 +24476,32 @@ fn exhaustivenessReplacingRootForSource(
     source: problem.Store.ExhaustivenessSiteSource,
 ) ?CompileTimeRoot {
     for (compile_time_roots.roots) |root| {
+        if (root.hoisted_body) |body| {
+            const base_expr, const exact_pattern = switch (body) {
+                .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
+                .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
+                .expr => continue,
+            };
+            if (source == .destructure_pattern and source.destructure_pattern == exact_pattern) return root;
+
+            // Pattern roots evaluate both their synthetic outer match and the
+            // original right-hand side. The exact-pattern check above owns the
+            // former; sites contained by the base expression belong to the
+            // latter even when the extracted value is callable.
+            const checked_base_expr = checkedExprIdForSource(checked_bodies, base_expr);
+            const base_contains = switch (source) {
+                .match_expr => |source_expr| blk: {
+                    const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
+                    break :blk checkedExprContainsExpr(checked_bodies, checked_base_expr, checked_expr);
+                },
+                .destructure_pattern => |source_pattern| blk: {
+                    const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
+                    break :blk checkedExprContainsPattern(checked_bodies, checked_base_expr, checked_pattern);
+                },
+            };
+            if (base_contains) return root;
+            continue;
+        }
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
         const contains = switch (source) {
             .match_expr => |source_expr| blk: {
@@ -24447,6 +24522,7 @@ fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
     return switch (kind) {
         .constant,
         .hoisted_constant,
+        .hoisted_validation,
         .numeral_conversion,
         .quote_conversion,
         // A default expression never occurs in a runtime body: any
@@ -24821,6 +24897,7 @@ fn syntheticExprCapacityForHoistedRoots(selected_hoisted_roots: []const hoist_ro
         count += switch (root.body) {
             .expr => 0,
             .pattern_extraction => 2,
+            .pattern_validation => 2,
         };
     }
     return count;
@@ -24838,10 +24915,10 @@ fn checkedExprIdForSource(checked_bodies: *const CheckedBodyStore, expr: CIR.Exp
 fn checkedExprIdForSelectedHoistedRoot(
     allocator: Allocator,
     module: TypedCIR.Module,
-    checked_types: *const CheckedTypePublication,
     checked_body_builder: *CheckedBodyStoreBuilder,
     selected_index: u32,
     selected: hoist_roots.SelectedHoistedRoot,
+    checked_type: CheckedTypeId,
 ) Allocator.Error!CheckedExprId {
     const checked_bodies = checked_body_builder.storePtr();
     return switch (selected.body) {
@@ -24852,7 +24929,15 @@ fn checkedExprIdForSelectedHoistedRoot(
             checked_body_builder,
             selected_index,
             extraction,
-            try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(extraction.result_pattern)),
+            checked_type,
+        ),
+        .pattern_validation => |validation| try appendCheckedPatternValidationRootExpr(
+            allocator,
+            module,
+            checked_body_builder,
+            selected_index,
+            validation,
+            checked_type,
         ),
     };
 }
@@ -24913,6 +24998,68 @@ fn appendCheckedPatternExtractionRootExpr(
         .selected_root_index = selected_index,
         .scrutinee_pattern = checked_scrutinee_pattern,
     } }, checked_type, match_region, data);
+}
+
+fn appendCheckedPatternValidationRootExpr(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_body_builder: *CheckedBodyStoreBuilder,
+    selected_index: u32,
+    validation: hoist_roots.PatternValidation,
+    checked_type: CheckedTypeId,
+) Allocator.Error!CheckedExprId {
+    const checked_bodies = checked_body_builder.storePtr();
+    const scrutinee = checkedExprIdForSource(checked_bodies, validation.base_expr);
+    const checked_scrutinee_pattern = checkedPatternIdForSource(checked_bodies, validation.scrutinee_pattern);
+    const match_region = module.regionAt(ModuleEnv.nodeIdxFrom(validation.scrutinee_pattern));
+    const result = try checked_body_builder.appendSyntheticExpr(
+        allocator,
+        .{ .pattern_validation_result = .{ .selected_root_index = selected_index } },
+        checked_type,
+        match_region,
+        .empty_record,
+    );
+
+    try checked_bodies.match_branch_pattern_pool.ensureUnusedCapacity(allocator, 1);
+    const pattern_start: u32 = @intCast(checked_bodies.match_branch_pattern_pool.items.len);
+    checked_bodies.match_branch_pattern_pool.appendAssumeCapacity(.{
+        .pattern = checked_scrutinee_pattern,
+        .degenerate = false,
+        .bn_start = 0,
+        .bn_len = 0,
+    });
+    errdefer _ = checked_bodies.match_branch_pattern_pool.pop();
+
+    const branches = try allocator.alloc(CheckedMatchBranch, 1);
+    var branches_owned = true;
+    errdefer if (branches_owned) allocator.free(branches);
+    branches[0] = .{
+        .pt_start = pattern_start,
+        .pt_len = 1,
+        .value = result,
+        .guard = null,
+    };
+
+    var data: CheckedExprData = .{ .match_ = .{
+        .cond = scrutinee,
+        .branches = branches,
+        .is_try_suffix = false,
+        .skip_exhaustiveness = false,
+        .comptime_site_kind = .destructure,
+    } };
+    branches_owned = false;
+    defer deinitCheckedExprData(allocator, &data);
+
+    return try checked_body_builder.appendSyntheticExpr(
+        allocator,
+        .{ .pattern_validation_wrapper = .{
+            .selected_root_index = selected_index,
+            .scrutinee_pattern = checked_scrutinee_pattern,
+        } },
+        checked_type,
+        match_region,
+        data,
+    );
 }
 
 fn checkedPatternIdForSource(checked_bodies: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) CheckedPatternId {
@@ -28919,7 +29066,9 @@ pub const CheckedModuleArtifact = struct {
     // of publishing a second root for the same checked expression.
     // Version 64 publishes iterator producer identities for `List.iter_rev`,
     // the numeric `to`/`until` ranges, and the F32/F64 range helpers.
-    const serialized_layout_version: u32 = 64;
+    // Version 65 publishes compile-time-only pattern-validation roots and
+    // their discarded payload state.
+    const serialized_layout_version: u32 = 65;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29119,10 +29268,11 @@ pub const CheckedModuleArtifact = struct {
             verifyCompileTimeRootLiteralConversion(root);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             switch (root.kind) {
-                .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => switch (root.payload) {
+                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => switch (root.payload) {
                     .pending => {},
                     .const_node,
                     .fn_value,
+                    .discarded,
                     .expect,
                     => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
@@ -29131,6 +29281,7 @@ pub const CheckedModuleArtifact = struct {
                     .pending,
                     .const_node,
                     .fn_value,
+                    .discarded,
                     => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
                 },
             }
@@ -29849,7 +30000,7 @@ pub const CheckedModuleArtifact = struct {
             if (root.kind == .expect) {
                 switch (root.payload) {
                     .expect => {},
-                    .pending, .const_node, .fn_value => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
+                    .pending, .const_node, .fn_value, .discarded => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
                 }
                 continue;
             }
@@ -29860,7 +30011,7 @@ pub const CheckedModuleArtifact = struct {
                         std.debug.panic("checked artifact invariant violated: requested compile-time root has pending payload", .{});
                     }
                 },
-                .const_node, .fn_value, .expect => {
+                .const_node, .fn_value, .discarded, .expect => {
                     if (!has_request) {
                         std.debug.panic("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
                     }

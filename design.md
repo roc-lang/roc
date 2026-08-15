@@ -577,6 +577,25 @@ shared. Records that contain static lists should point at shared static list
 bytes; equivalent named and inline constants should produce equivalent static
 data.
 
+A compile-time-known refutable destructure must be evaluated even when its
+pattern binds no demanded value. Root selection records a validation
+candidate for the checked scrutinee and pattern. An eligible enclosing root
+subsumes that candidate normally; if a runtime-dependent or effectful parent
+prevents subsumption, the candidate becomes a validation-only root whose unit
+result is discarded. Successful validation may erase a pure binder-free runtime
+statement, while a failed validation reports the ordinary empirical
+exhaustiveness diagnostic. Validation uses the checked pattern compiler and
+compile-time evaluator; it never reinterprets source patterns separately.
+
+Local binding dependencies remain candidates until their enclosing expression
+is either selected or rejected. A selected maximal parent owns the computation
+and its transient binders, including callable-typed binders that never enter
+static storage. Only when no eligible parent can own the use does the dependency
+become its own data or callable extraction root. Consequently selection does not
+duplicate a closed computation merely because a nested value is named, and the
+representation requirements of the root result never constrain transient local
+or match-branch binders.
+
 When checking finalization lowers a root that refers to an already-stored,
 representation-stable `ConstStore` value, it must preserve that sharing by
 emitting an explicit LIR static-data value. It must not recursively rebuild that

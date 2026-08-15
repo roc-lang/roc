@@ -416,6 +416,7 @@ fn resolveCallableEvalTemplate(
         .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
         .pending => boxyLowerInvariant("pending callable eval root reached runtime boxy worker resolution before compile-time finalization"),
         .const_node,
+        .discarded,
         .expect,
         => boxyLowerInvariant("callable eval binding root did not output a callable value"),
     };
@@ -13177,6 +13178,7 @@ const ProcBodyBuilder = struct {
             ),
             .pending => try self.lowerPendingQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
             .fn_value,
+            .discarded,
             .expect,
             => boxyLowerInvariant("from_quote conversion root had a non-data payload"),
         };
@@ -13323,6 +13325,7 @@ const ProcBodyBuilder = struct {
             ),
             .pending => try self.lowerPendingNumeralConversionInto(target, expr_id, checked_ty, maybe_plan, next),
             .fn_value,
+            .discarded,
             .expect,
             => boxyLowerInvariant("from_numeral conversion root had a non-data payload"),
         };
@@ -21604,7 +21607,7 @@ const ProcBodyBuilder = struct {
         const node = switch (root.payload) {
             .const_node => |node| node,
             .pending => boxyLowerInvariant("pending field-default root reached runtime boxy lowering"),
-            .fn_value, .expect => boxyLowerInvariant("field-default root did not contain constant data"),
+            .fn_value, .discarded, .expect => boxyLowerInvariant("field-default root did not contain constant data"),
         };
         const type_module = procedureModuleById(self.parent.modules, field_type.module);
         return try self.restoreConstNodeInto(target, declaring_module, type_module, node, field_type.ty, next);
