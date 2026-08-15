@@ -77,7 +77,7 @@ EndOfFile,
 						(p-assign (ident "x"))))
 				(args
 					(e-num (value "1"))))))
-	(e-dispatch-call (method "map") (constraint-fn-var 253)
+	(e-dispatch-call (method "map") (constraint-fn-var 257)
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "list"))))

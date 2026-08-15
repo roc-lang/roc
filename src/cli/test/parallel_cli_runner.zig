@@ -1382,6 +1382,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app_while.roc: while loop performs zero allocations (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_while.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 1609, loop allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app.roc: for loop performs zero allocations (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 1609, loop allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app.roc: for loop performs zero allocations (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 1609, loop allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10484: test/alloc-count/app_json_encode.roc: Json.to_str allocations do not scale with element count (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_json_encode.roc", .contains = &.{.{ .stream = .stderr, .text = "json bytes: 833 13313" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10484: test/alloc-count/app_json_encode.roc: Json.to_str allocations do not scale with element count (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_json_encode.roc", .contains = &.{.{ .stream = .stderr, .text = "json bytes: 833 13313" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test/str/app_static_24_byte_string.roc does not panic", .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/str/app_static_24_byte_string.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_creates_output } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (dev)", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_dev_creates_output } },
@@ -1551,6 +1553,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "same-allocation string equality fixture runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/str_eq_same_allocation.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "same-allocation string equality fixture runs (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/str_eq_same_allocation.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "same-allocation string equality fixture runs (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/str_eq_same_allocation.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD concat shift rejects counts above sixteen (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/runtime_simd_concat_shift_crash.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "U8x16.concat_shift_bytes: count out of range" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD concat shift rejects counts above sixteen (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_simd_concat_shift_crash.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "U8x16.concat_shift_bytes: count out of range" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD concat shift rejects counts above sixteen (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/runtime_simd_concat_shift_crash.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "U8x16.concat_shift_bytes: count out of range" }} } } },
@@ -8113,10 +8118,10 @@ fn compileGlueRuntimeZigWasmHost(
         "wasm32-freestanding-none",
         "-mcpu",
         "baseline+simd128",
+        "-OReleaseSmall",
         "-fPIC",
         "-ffunction-sections",
         "-fdata-sections",
-        "-fcompiler-rt",
         host_path,
         emit_flag,
     }, project_root_path, .{ .args = &.{} })) |failure| return failure;
@@ -8155,100 +8160,6 @@ fn compileGlueRuntimeRustHost(
     return null;
 }
 
-/// Whether the file at `path` is a WebAssembly object (magic "\x00asm").
-/// Used to tell real wasm archive members apart from the host-arch ELF
-/// objects rustc mixes into the wasm32 `rust-std`. Any open/read failure
-/// reads as "not wasm" so a bad member is dropped rather than force-linked.
-fn fileHasWasmMagic(io: std.Io, path: []const u8) bool {
-    var file = std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_only }) catch return false;
-    defer file.close(io);
-    var magic: [4]u8 = undefined;
-    const bytes_read = file.readPositionalAll(io, &magic, 0) catch return false;
-    return bytes_read == magic.len and std.mem.eql(u8, &magic, "\x00asm");
-}
-
-/// Rebuild `staticlib_path` into `out_path` keeping only its real wasm object
-/// members. rustc's precompiled `wasm32-unknown-unknown` `rust-std` bundles
-/// some compiler_builtins intrinsics as host-arch (x86_64) ELF objects rather
-/// than wasm; `wasm-ld --whole-archive` force-includes every member and aborts
-/// on those ("Bitcode section not found in object file"). The dropped
-/// intrinsics are unreferenced by the glue contract apps—if a future app
-/// needed one, the final wasm link would report it undefined rather than
-/// miscompile.
-fn rebuildWasmOnlyArchive(
-    io: std.Io,
-    allocator: Allocator,
-    env: *const CaseEnv,
-    timer: *harness.Timer,
-    timeout_ms: u64,
-    staticlib_path: []const u8,
-    out_path: []const u8,
-) ?TestResult {
-    const extract_dir = std.fmt.allocPrint(allocator, "{s}.members", .{out_path}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime wasm member dir: {}", .{err});
-    std.Io.Dir.cwd().createDirPath(io, extract_dir) catch |err|
-        return customInfraFailure(allocator, timer, "failed to create glue runtime wasm member dir: {}", .{err});
-
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "zig",
-        "ar",
-        "x",
-        "--output",
-        extract_dir,
-        staticlib_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-
-    var members: std.ArrayListUnmanaged([]const u8) = .empty;
-    {
-        var dir = std.Io.Dir.cwd().openDir(io, extract_dir, .{ .iterate = true }) catch |err|
-            return customInfraFailure(allocator, timer, "failed to open glue runtime wasm member dir: {}", .{err});
-        defer dir.close(io);
-        var walker = dir.walk(allocator) catch |err|
-            return customInfraFailure(allocator, timer, "failed to walk glue runtime wasm member dir: {}", .{err});
-        defer walker.deinit();
-        while (walker.next(io) catch |err|
-            return customInfraFailure(allocator, timer, "failed to iterate glue runtime wasm member dir: {}", .{err})) |entry|
-        {
-            if (entry.kind != .file) continue;
-            // path.join returns a fresh allocation, so it outlives the walker's
-            // transient entry buffer.
-            const member_path = std.fs.path.join(allocator, &.{ extract_dir, entry.basename }) catch |err|
-                return customInfraFailure(allocator, timer, "failed to allocate glue runtime wasm member path: {}", .{err});
-            if (!fileHasWasmMagic(io, member_path)) continue;
-            members.append(allocator, member_path) catch |err|
-                return customInfraFailure(allocator, timer, "failed to record glue runtime wasm member: {}", .{err});
-        }
-    }
-
-    if (members.items.len == 0)
-        return customFailure(allocator, timer, "wasm32 Rust host archive had no wasm members after filtering", .{});
-
-    // rustc's wasm32 staticlib fans out into hundreds of object members (~420
-    // here), so `zig ar rcs out member...` would build a multi-tens-of-KB
-    // command line. Windows caps a process command line at 32767 chars, past
-    // which CreateProcessW fails with error.NameTooLong, so pass the members
-    // through an llvm-ar response file (@file) to keep the spawned command
-    // line short. Each path is double-quoted so a directory containing spaces
-    // still parses; members always end in a file name (never a separator), so
-    // no trailing backslash can escape the closing quote under the Windows
-    // response-file tokenizer.
-    const rsp_path = std.fmt.allocPrint(allocator, "{s}.rsp", .{out_path}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime wasm archive response path: {}", .{err});
-    var rsp_content: std.ArrayListUnmanaged(u8) = .empty;
-    for (members.items) |member| {
-        rsp_content.print(allocator, "\"{s}\"\n", .{member}) catch |err|
-            return customInfraFailure(allocator, timer, "failed to build glue runtime wasm archive response file: {}", .{err});
-    }
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = rsp_path, .data = rsp_content.items }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to write glue runtime wasm archive response file: {}", .{err});
-    const rsp_arg = std.fmt.allocPrint(allocator, "@{s}", .{rsp_path}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime wasm archive response arg: {}", .{err});
-
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ "zig", "ar", "rcs", out_path, rsp_arg }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-
-    return null;
-}
-
 fn compileGlueRuntimeRustWasmHost(
     io: std.Io,
     allocator: Allocator,
@@ -8258,9 +8169,9 @@ fn compileGlueRuntimeRustWasmHost(
     host_path: []const u8,
     host_wasm_path: []const u8,
 ) ?TestResult {
-    const host_staticlib_path = std.fmt.allocPrint(allocator, "{s}.a", .{host_wasm_path}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime Rust wasm staticlib path: {}", .{err});
-
+    // Have rustc resolve core and compiler_builtins, but keep the result
+    // relocatable for Roc's surgical linker. link-dead-code disables the
+    // gc-sections flag that wasm-ld rejects when combined with -r.
     if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
         "rustc",
         "--edition=2021",
@@ -8268,29 +8179,25 @@ fn compileGlueRuntimeRustWasmHost(
         "warnings",
         "--target",
         "wasm32-unknown-unknown",
+        "--cfg",
+        "no_roc_std_helpers",
         "-C",
         "panic=abort",
         "-C",
+        "opt-level=s",
+        "-C",
         "target-feature=+simd128",
+        "-C",
+        "link-dead-code=yes",
+        "-C",
+        "link-arg=-r",
+        "-C",
+        "link-arg=--allow-undefined",
+        "-C",
+        "link-arg=--strip-debug",
         "--crate-type",
-        "staticlib",
+        "cdylib",
         host_path,
-        "-o",
-        host_staticlib_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-
-    // Drop the host-arch ELF compiler_builtins objects rustc bundles into the
-    // wasm32 staticlib before the relocatable merge; see rebuildWasmOnlyArchive.
-    const wasm_only_staticlib_path = std.fmt.allocPrint(allocator, "{s}.wasm-only.a", .{host_wasm_path}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime wasm-only staticlib path: {}", .{err});
-    if (rebuildWasmOnlyArchive(io, allocator, env, timer, timeout_ms, host_staticlib_path, wasm_only_staticlib_path)) |failure| return failure;
-
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "zig",
-        "wasm-ld",
-        "-r",
-        "--whole-archive",
-        wasm_only_staticlib_path,
         "-o",
         host_wasm_path,
     }, project_root_path, .{ .args = &.{} })) |failure| return failure;

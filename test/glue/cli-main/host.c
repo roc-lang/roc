@@ -30,6 +30,7 @@ static size_t live_alloc_count = 0;
 static size_t allocator_error_count = 0;
 static size_t failure_count = 0;
 static size_t log_count = 0;
+static size_t checksum_count = 0;
 static char report[1024];
 
 static void record_failure(const char *fmt, ...) {
@@ -281,6 +282,47 @@ static void roc_str_decref(RocStr str) {
     }
 }
 
+static uint8_t *roc_list_allocation_ptr(RocList list) {
+    if (list.elements == NULL) {
+        return NULL;
+    }
+    if ((list.capacity_or_alloc_ptr & 1u) != 0) {
+        return (uint8_t *)(list.capacity_or_alloc_ptr & ~(uintptr_t)1u);
+    }
+    return (uint8_t *)list.elements;
+}
+
+/* Release one owned reference to a List(Str). The element strings are released
+ * only when this reference is the last one, which is what compiled Roc code
+ * does when it drops a list it owns. Releasing them unconditionally frees them
+ * twice whenever Roc still holds the list. */
+static void roc_list_of_str_decref(RocList list) {
+    uint8_t *alloc_ptr = roc_list_allocation_ptr(list);
+    if (alloc_ptr == NULL) {
+        return;
+    }
+    intptr_t *rc = (intptr_t *)(alloc_ptr - sizeof(intptr_t));
+    if (*rc == 0) {
+        return;
+    }
+    if (*rc == 1) {
+        /* A seamless slice keeps the whole-allocation element count one word
+         * below the refcount, so teardown covers elements outside the visible
+         * window too; every other list carries its own length. */
+        const size_t count = ((list.capacity_or_alloc_ptr & 1u) != 0)
+            ? ((const size_t *)alloc_ptr)[-2]
+            : list.length;
+        const RocStr *items = (const RocStr *)alloc_ptr;
+        for (size_t index = 0; index < count; index++) {
+            roc_str_decref(items[index]);
+        }
+    }
+    *rc -= 1;
+    if (*rc == 0) {
+        roc_dealloc(alloc_ptr - 2 * sizeof(size_t), ROC_ALIGNOF(size_t));
+    }
+}
+
 static RocList make_args(void) {
     const size_t length = 2;
     const size_t header_bytes = 2 * sizeof(size_t);
@@ -315,6 +357,22 @@ void roc_cli_log(RocStr arg0) {
     }
     log_count += 1;
     roc_str_decref(arg0);
+}
+
+uint64_t roc_cli_checksum(RocList arg0) {
+    uint64_t sum = 0;
+    const RocStr *items = (const RocStr *)arg0.elements;
+    for (size_t index = 0; index < arg0.length; index++) {
+        RocStr item = items[index];
+        const uint8_t *bytes = roc_str_bytes(&item);
+        const size_t len = roc_str_len(&item);
+        for (size_t offset = 0; offset < len; offset++) {
+            sum += (uint64_t)bytes[offset];
+        }
+    }
+    checksum_count += 1;
+    roc_list_of_str_decref(arg0);
+    return sum;
 }
 
 CliHostManyResult roc_cli_many(
@@ -381,6 +439,9 @@ int main(void) {
     }
     if (log_count != 1) {
         record_failure("expected one log call, saw %zu", log_count);
+    }
+    if (checksum_count != 3) {
+        record_failure("expected three checksum calls, saw %zu", checksum_count);
     }
     if (allocator_error_count != 0) {
         record_failure("allocator recorded %zu errors", allocator_error_count);

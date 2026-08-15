@@ -40,13 +40,20 @@ pub const Field = struct {
     is_padding: bool = false,
 };
 
-/// Span into a graph's contiguous field storage.
+/// Span into a graph's contiguous field storage plus the explicit policy the
+/// store uses when committing those fields.
 pub const FieldSpan = extern struct {
     start: u32,
     len: u16,
+    order: FieldOrder = .structural,
+
+    pub const FieldOrder = enum(u8) {
+        structural,
+        declared,
+    };
 
     pub fn empty() FieldSpan {
-        return .{ .start = 0, .len = 0 };
+        return .{ .start = 0, .len = 0, .order = .structural };
     }
 };
 
@@ -77,32 +84,25 @@ pub const Graph = struct {
     nodes: std.ArrayListUnmanaged(Node) = .empty,
     fields: std.ArrayListUnmanaged(Field) = .empty,
     refs: std.ArrayListUnmanaged(Ref) = .empty,
-    /// Struct nodes whose fields are in nominal-record declared order. They are
-    /// ordinary `.struct_` nodes for every graph pass (cycle detection,
-    /// refcounting, boxing); only the final commit differs, keeping declared
-    /// order (repaired for padding) instead of sorting by alignment. See
-    /// `field_order` and design.md "Nominal Record Field Order".
-    nominal_structs: std.ArrayListUnmanaged(NodeId) = .empty,
 
     /// Release all graph storage.
     pub fn deinit(self: *Graph, allocator: std.mem.Allocator) void {
         self.nodes.deinit(allocator);
         self.fields.deinit(allocator);
         self.refs.deinit(allocator);
-        self.nominal_structs.deinit(allocator);
     }
 
-    /// Mark a `.struct_` node as a nominal record laid out in declared order.
-    pub fn markNominalStruct(self: *Graph, allocator: std.mem.Allocator, id: NodeId) Allocator.Error!void {
-        try self.nominal_structs.append(allocator, id);
-    }
-
-    /// Whether `id` was marked as a nominal-record struct node.
-    pub fn isNominalStruct(self: *const Graph, id: NodeId) bool {
-        for (self.nominal_structs.items) |marked| {
-            if (marked == id) return true;
+    /// Mark a field span as declaration-ordered. Only nominal records with an
+    /// unnamed padding field may select this policy.
+    pub fn declaredOrder(self: *const Graph, span: FieldSpan) FieldSpan {
+        var has_padding = false;
+        for (self.getFields(span)) |field| {
+            has_padding = has_padding or field.is_padding;
         }
-        return false;
+        std.debug.assert(has_padding);
+        var declared = span;
+        declared.order = .declared;
+        return declared;
     }
 
     /// Reserve a local node id before its final shape is known.
@@ -126,6 +126,7 @@ pub const Graph = struct {
         return .{
             .start = start,
             .len = @intCast(fields.len),
+            .order = .structural,
         };
     }
 

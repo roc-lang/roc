@@ -21,6 +21,7 @@ platform ""
         "roc_host_boxed_transition": Host.boxed_transition!,
         "roc_host_store_boxed": Host.store_boxed!,
         "roc_host_stored_boxed_call": Host.stored_boxed_call!,
+        "roc_host_sum_str_bytes": Host.sum_str_bytes!,
         "roc_padded_check": Padded.check!,
         "roc_stderr_line": Stderr.line!,
         "roc_stdin_line": Stdin.line!,
