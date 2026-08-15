@@ -413,7 +413,7 @@ pub const ConstTypeStore = struct {
     field_pool: std.ArrayList(TypeField),
     /// Flat pool of tag-union variants.
     tag_pool: std.ArrayList(TypeTag),
-    /// Flat pool of nominal declared field order entries.
+    /// Flat pool of nominal declared field entries.
     declared_field_pool: std.ArrayList(TypeDeclaredField),
     /// True for a store reconstructed from a serialized buffer.
     serialized: bool = false,

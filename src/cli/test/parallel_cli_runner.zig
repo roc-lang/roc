@@ -1381,6 +1381,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app_while.roc: while loop performs zero allocations (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_while.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 1609, loop allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app.roc: for loop performs zero allocations (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 1609, loop allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app.roc: for loop performs zero allocations (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 1609, loop allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10484: test/alloc-count/app_json_encode.roc: Json.to_str allocations do not scale with element count (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_json_encode.roc", .contains = &.{.{ .stream = .stderr, .text = "json bytes: 833 13313" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10484: test/alloc-count/app_json_encode.roc: Json.to_str allocations do not scale with element count (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_json_encode.roc", .contains = &.{.{ .stream = .stderr, .text = "json bytes: 833 13313" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test/str/app_static_24_byte_string.roc does not panic", .skip = .{ .windows = "test/str platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/str/app_static_24_byte_string.roc", .exit = .not_panic, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_interpreter_creates_output } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build creates executable from test/int/app.roc (dev)", .backend = .dev, .skip = .{ .windows = "test/int platform does not have Windows host libraries" }, .body = .{ .custom = .build_int_dev_creates_output } },
@@ -1550,6 +1552,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "same-allocation string equality fixture runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/str_eq_same_allocation.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "same-allocation string equality fixture runs (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/str_eq_same_allocation.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "same-allocation string equality fixture runs (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/str_eq_same_allocation.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD concat shift rejects counts above sixteen (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/runtime_simd_concat_shift_crash.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "U8x16.concat_shift_bytes: count out of range" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD concat shift rejects counts above sixteen (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_simd_concat_shift_crash.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "U8x16.concat_shift_bytes: count out of range" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD concat shift rejects counts above sixteen (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/runtime_simd_concat_shift_crash.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "U8x16.concat_shift_bytes: count out of range" }} } } },
@@ -8163,13 +8168,9 @@ fn compileGlueRuntimeRustWasmHost(
     host_path: []const u8,
     host_wasm_path: []const u8,
 ) ?TestResult {
-    const host_object_path = std.fmt.allocPrint(allocator, "{s}.o", .{host_wasm_path}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime Rust wasm object path: {}", .{err});
-    const host_staticlib_path = std.fmt.allocPrint(allocator, "{s}.a", .{host_wasm_path}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime Rust wasm staticlib path: {}", .{err});
-    const emit_arg = std.fmt.allocPrint(allocator, "obj={s},link={s}", .{ host_object_path, host_staticlib_path }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime Rust wasm emit argument: {}", .{err});
-
+    // Have rustc resolve core and compiler_builtins, but keep the result
+    // relocatable for Roc's surgical linker. link-dead-code disables the
+    // gc-sections flag that wasm-ld rejects when combined with -r.
     if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
         "rustc",
         "--edition=2021",
@@ -8185,23 +8186,17 @@ fn compileGlueRuntimeRustWasmHost(
         "opt-level=s",
         "-C",
         "target-feature=+simd128",
+        "-C",
+        "link-dead-code=yes",
+        "-C",
+        "link-arg=-r",
+        "-C",
+        "link-arg=--allow-undefined",
+        "-C",
+        "link-arg=--strip-debug",
         "--crate-type",
-        "staticlib",
-        "--emit",
-        emit_arg,
+        "cdylib",
         host_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-
-    // Root the host's own object explicitly, then let wasm-ld extract only the
-    // Rust runtime members that object actually references. A whole-archive
-    // link makes Roc's surgical linker process hundreds of unused members.
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "zig",
-        "wasm-ld",
-        "-r",
-        "--strip-debug",
-        host_object_path,
-        host_staticlib_path,
         "-o",
         host_wasm_path,
     }, project_root_path, .{ .args = &.{} })) |failure| return failure;

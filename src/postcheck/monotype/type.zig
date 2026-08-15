@@ -243,11 +243,10 @@ pub const MonoTypeTag = struct {
 /// Compatibility name for existing Monotype tag-union variant entries.
 pub const Tag = MonoTypeTag;
 
-/// One entry of a nominal record's declared layout order. The backing row is
-/// always lexicographic (for name resolution and digests); a nominal type
-/// additionally carries this declared order, which the layout commit consumes to
-/// place fields in source order with no internal padding. See design.md
-/// "Nominal Record Field Order".
+/// One entry of a nominal record's declared fields. The backing row is always
+/// lexicographic; this separate source order supports boxy descriptor planning,
+/// and layout selection consumes it only when padding opts into declared order.
+/// See design.md "Nominal Record Field Order".
 pub const DeclaredField = union(enum(u8)) {
     /// A named backing field, matched against the lexicographic backing row by
     /// name at layout time.
@@ -267,8 +266,8 @@ pub const MonoTypeNode = union(enum(u8)) {
         builtin_owner: ?static_dispatch.BuiltinOwner = null,
         args: Span,
         backing: ?NamedBacking = null,
-        /// Declared field order for a nominal/opaque record backing; empty for
-        /// every other named type (consumed only by layout).
+        /// Declared fields for a nominal/opaque record backing; empty for other
+        /// named types.
         declared_order: Span = Span.empty(),
     },
     record: Span,

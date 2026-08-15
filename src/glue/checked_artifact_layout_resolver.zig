@@ -458,8 +458,7 @@ pub const Resolver = struct {
         }
 
         const span = try build_state.graph.appendFields(self.allocator, graph_fields.items);
-        build_state.graph.setNode(placeholder, .{ .struct_ = span });
-        try build_state.graph.markNominalStruct(self.allocator, placeholder);
+        build_state.graph.setNode(placeholder, .{ .struct_ = build_state.graph.declaredOrder(span) });
         return true;
     }
 
@@ -487,7 +486,7 @@ pub const Resolver = struct {
                 .child = try self.buildFieldSlotRef(artifact, field, build_state),
             });
         }
-        return self.buildStructNode(build_state, graph_fields.items, false);
+        return self.buildStructNode(build_state, graph_fields.items);
     }
 
     /// The internal layout slot of one checked record field (design.md "Field
@@ -536,7 +535,7 @@ pub const Resolver = struct {
                 .child = try self.buildRefForType(artifact, item, .ordinary, build_state),
             });
         }
-        return self.buildStructNode(build_state, fields.items, false);
+        return self.buildStructNode(build_state, fields.items);
     }
 
     fn buildTagUnionRef(
@@ -581,13 +580,11 @@ pub const Resolver = struct {
         self: *Resolver,
         build_state: *BuildState,
         fields: []const GraphField,
-        nominal_struct: bool,
     ) Error!GraphRef {
         if (fields.len == 0) return .{ .canonical = .zst };
         const node_id = try build_state.graph.reserveNode(self.allocator);
         const span = try build_state.graph.appendFields(self.allocator, fields);
         build_state.graph.setNode(node_id, .{ .struct_ = span });
-        if (nominal_struct) try build_state.graph.markNominalStruct(self.allocator, node_id);
         return .{ .local = node_id };
     }
 
