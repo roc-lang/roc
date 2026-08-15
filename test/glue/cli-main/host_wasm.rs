@@ -445,8 +445,7 @@ fn run_contract() {
         env_mut().fail("expected one log call");
     }
     if env_mut().checksum_count != 3 {
-        let count = env_mut().checksum_count;
-        env_mut().fail(format_args!("expected three checksum calls, saw {count}"));
+        env_mut().fail("expected three checksum calls");
     }
     if env_mut().allocator_error_count != 0 {
         env_mut().fail("allocator recorded errors");

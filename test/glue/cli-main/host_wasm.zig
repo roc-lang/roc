@@ -367,7 +367,7 @@ fn runContract() void {
         contract_env.fail("expected one log call");
     }
     if (contract_env.checksum_count != 3) {
-        contract_env.fail("expected three checksum calls, saw {}", .{contract_env.checksum_count});
+        contract_env.fail("expected three checksum calls");
     }
     if (contract_env.allocator_error_count != 0) {
         contract_env.fail("allocator recorded errors");
