@@ -5011,19 +5011,18 @@ const Builder = struct {
         };
     }
 
-    /// Builds the declared-layout-order span for a nominal/opaque record that
-    /// explicitly opts in with an unnamed padding field. Nominals without
-    /// padding return the empty span and reuse their lexicographically ordered
-    /// structural backing throughout post-check lowering.
+    /// Builds the declared-field span for a nominal/opaque record backing from
+    /// explicit checked metadata. Boxy uses it for aggregate descriptor
+    /// planning; LSS consumes it as layout order only when it contains padding.
+    /// The lowered backing row remains lexicographic.
     fn declaredOrderForNominal(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!Type.Span {
-        if (nominal.declared_fields.len != 0 and nominal.padding_field_types.len != 0) {
+        if (nominal.declared_fields.len != 0) {
             return try self.lowerCheckedDeclaredOrder(view, nominal.declared_fields, view, nominal.padding_field_types);
         }
         const lookup = self.nominalDeclarationFor(view, nominal) orelse {
             if (!nominalHasDeclarationBacking(nominal)) return Type.Span.empty();
             Common.invariant("declaration-backed nominal reached Monotype lowering without declaration data");
         };
-        if (lookup.padding_field_tys.len == 0) return Type.Span.empty();
         const declared_fields = lookup.declaration.declaredFields(lookup.view.types);
         if (declared_fields.len != 0) {
             return try self.lowerCheckedDeclaredOrder(
@@ -16425,7 +16424,6 @@ const BodyContext = struct {
             if (!nominalHasDeclarationBacking(nominal)) return &.{};
             Common.invariant("declaration-backed nominal reached Monotype instantiation without declaration data");
         };
-        if (lookup.padding_field_tys.len == 0) return &.{};
         const fields = lookup.declaration.declaredRecordFields(lookup.view.types);
         if (fields.len == 0) return &.{};
 

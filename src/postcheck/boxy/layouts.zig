@@ -705,11 +705,16 @@ const GraphBuilder = struct {
         if (rep.kind == .nominal) {
             switch (rep.kind.nominal) {
                 .transparent => {
-                    if (rep.declared_fields.len != 0) {
+                    const needs_field_node = rep.record_field_order == .declared or
+                        (self.descriptor_payload and rep.declared_fields.len != 0);
+                    if (needs_field_node) {
                         const node = try self.graph.reserveNode(self.parent.allocator);
                         self.local_nodes[index] = node;
                         const fields = try self.nominalDeclaredFields(rep);
-                        self.graph.setNode(node, .{ .struct_ = self.graph.declaredOrder(fields) });
+                        self.graph.setNode(node, .{ .struct_ = if (rep.record_field_order == .declared)
+                            self.graph.declaredOrder(fields)
+                        else
+                            fields });
                         return .{ .local = node };
                     }
                     return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .nominal_backing).rep);
@@ -1260,6 +1265,8 @@ test "boxy layout planner commits nominal declared fields through shared layout 
 
     var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(4))}, .{});
     defer program.deinit();
+    const nominal = program.representations.items[@intFromEnum(program.root_reps.items[0])];
+    try std.testing.expectEqual(Plan.RecordFieldOrder.declared, nominal.record_field_order);
 
     var store = try layout.Store.init(gpa, .u64);
     defer store.deinit();
@@ -1319,7 +1326,8 @@ test "boxy layout planner reuses structural backing order without padding" {
     var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(3))}, .{});
     defer program.deinit();
     const nominal = program.representations.items[@intFromEnum(program.root_reps.items[0])];
-    try std.testing.expectEqual(@as(usize, 0), program.declaredFieldSlice(nominal.declared_fields).len);
+    try std.testing.expectEqual(@as(usize, 2), program.declaredFieldSlice(nominal.declared_fields).len);
+    try std.testing.expectEqual(Plan.RecordFieldOrder.structural, nominal.record_field_order);
 
     var store = try layout.Store.init(gpa, .u64);
     defer store.deinit();

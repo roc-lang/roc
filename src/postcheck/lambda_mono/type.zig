@@ -80,8 +80,8 @@ pub const FnVariant = struct {
     capture_ty: ?TypeId,
 };
 
-/// One entry of an opted-in nominal record's declared layout order. Mirrors
-/// `MonoType.DeclaredField`; consumed only by layout selection.
+/// One entry of a nominal record's declared fields. Mirrors
+/// `MonoType.DeclaredField`; consumed by layout and descriptor planning.
 pub const DeclaredField = union(enum) {
     named: names.RecordFieldNameId,
     padding: TypeId,
@@ -101,8 +101,7 @@ pub const Content = union(enum) {
             use: MonoType.BackingUse,
             authority: MonoType.BackingAuthority = .checked_public,
         } = null,
-        /// Declared layout order for a nominal/opaque record with unnamed
-        /// padding; empty otherwise.
+        /// Declared fields for a nominal/opaque record backing; empty otherwise.
         declared_order: Span = Span.empty(),
     },
     record: Span,

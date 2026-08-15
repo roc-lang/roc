@@ -210,13 +210,22 @@ pub const NominalBackingArgSubstitution = struct {
     actual_rep: TypeRepId,
 };
 
+/// Runtime field-order policy selected from checked nominal metadata.
+pub const RecordFieldOrder = enum(u8) {
+    structural,
+    declared,
+};
+
 /// Planner output describing one checked type's complete representation.
 pub const TypeRepresentation = struct {
     source_type: CheckedTypeIdentity,
     kind: RepresentationKind,
     children: Span = .{},
     tag_variants: Span = .{},
+    /// Explicit nominal field metadata used by aggregate descriptor lowering.
+    /// `record_field_order` independently controls its runtime layout.
     declared_fields: Span = .{},
+    record_field_order: RecordFieldOrder = .structural,
     nominal_backing_arg_substitutions: Span = .{},
     dictionaries: Span = .{},
     descriptor: ?DescriptorRequirementId = null,
@@ -4337,12 +4346,13 @@ const Builder = struct {
             });
         }
         var declared_fields = Span.empty();
+        var record_field_order: RecordFieldOrder = .structural;
         const declared_order = store.type_store.declaredFieldSpan(named.declared_order);
         var has_declared_padding = false;
         for (declared_order) |field| {
             has_declared_padding = has_declared_padding or field == .padding;
         }
-        if (has_declared_padding) {
+        if (declared_order.len != 0) {
             if (named.kind == .alias) boxyPlanInvariant("stored alias carried nominal declared field order");
             const backing = backing_rep orelse
                 boxyPlanInvariant("stored nominal declared field order had no backing representation");
@@ -4398,6 +4408,7 @@ const Builder = struct {
             const start: u32 = @intCast(self.plan.declared_fields.items.len);
             try self.plan.declared_fields.appendSlice(self.allocator, pending.items);
             declared_fields = .{ .start = start, .len = @intCast(pending.items.len) };
+            if (has_declared_padding) record_field_order = .declared;
         }
 
         const kind: RepresentationKind = if (named.kind == .alias)
@@ -4420,6 +4431,7 @@ const Builder = struct {
             .kind = kind,
             .children = try self.commitPendingChildren(children.items),
             .declared_fields = declared_fields,
+            .record_field_order = record_field_order,
             .inspect_opaque = named.kind == .@"opaque" or
                 kind == .generated_field or
                 kind == .generated_field_names or
@@ -4717,11 +4729,12 @@ const Builder = struct {
         for (nominal.args, 0..) |arg, index| {
             try self.appendPendingChild(&children, view, .{ .nominal_arg = @intCast(index) }, arg);
         }
-        if (self.nominalPaddingSource(view, nominal)) |padding_source| {
-            for (padding_source.types, 0..) |padding, index| {
+        const padding_source = self.nominalPaddingSource(view, nominal);
+        if (padding_source) |source| {
+            for (source.types, 0..) |padding, index| {
                 try self.appendPendingChild(
                     &children,
-                    padding_source.view,
+                    source.view,
                     .{ .nominal_padding_field = @intCast(index) },
                     padding,
                 );
@@ -4745,6 +4758,7 @@ const Builder = struct {
                 .transparent },
             .children = try self.commitPendingChildren(children.items),
             .declared_fields = declared_fields,
+            .record_field_order = if (padding_source != null) .declared else .structural,
             .nominal_backing_arg_substitutions = backing_arg_substitutions,
             .inspect_opaque = nominal.is_opaque,
         };
@@ -4882,7 +4896,7 @@ const Builder = struct {
     }
 
     fn nominalDeclaredSource(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) ?NominalDeclaredSource {
-        if (nominal.declared_fields.len != 0 and nominal.padding_field_types.len != 0) {
+        if (nominal.declared_fields.len != 0) {
             return .{
                 .field_view = view,
                 .fields = nominal.declared_fields,
@@ -4892,7 +4906,6 @@ const Builder = struct {
         }
         if (nominal.builtin != null) return null;
         const lookup = self.nominalDeclarationFor(view, nominal) orelse return null;
-        if (lookup.padding_types.len == 0) return null;
         const fields = lookup.declaration.declaredFields(lookup.view.checked_types);
         if (fields.len == 0) return null;
         return .{

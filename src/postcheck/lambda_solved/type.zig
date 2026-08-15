@@ -65,8 +65,8 @@ pub const FnMember = struct {
     captures: Span,
 };
 
-/// One entry of an opted-in nominal record's declared layout order; consumed
-/// only by layout selection (the backing row stays lexicographic).
+/// One entry of a nominal record's declared fields; consumed by layout and
+/// descriptor planning (the backing row stays lexicographic).
 pub const DeclaredField = union(enum) {
     named: names.RecordFieldNameId,
     padding: TypeVarId,
@@ -89,8 +89,7 @@ pub const Content = union(enum) {
             use: MonoType.BackingUse,
             authority: MonoType.BackingAuthority = .checked_public,
         } = null,
-        /// Declared layout order for a nominal/opaque record with unnamed
-        /// padding; empty otherwise.
+        /// Declared fields for a nominal/opaque record backing; empty otherwise.
         declared_order: Span = Span.empty(),
     },
     record: Span,
