@@ -3195,6 +3195,22 @@ test "Repl - top-level destructure definitions publish their binders" {
     defer testing.allocator.free(tuple_sum);
     try testing.expectEqualStrings("3.0", tuple_sum);
 
+    const funcs_anno = try repl.step("funcs : { scale : U64 -> U64, other : U64 }");
+    defer testing.allocator.free(funcs_anno);
+    try testing.expectEqualStrings("", funcs_anno);
+
+    const funcs_assigned = try repl.step("funcs = { scale: |x| x * 2, other: 0 }");
+    defer testing.allocator.free(funcs_assigned);
+    try testing.expectEqualStrings("assigned `funcs`", funcs_assigned);
+
+    const funcs_destructure = try repl.step("{ scale, .. } = funcs");
+    defer testing.allocator.free(funcs_destructure);
+    try testing.expectEqualStrings("assigned `scale`", funcs_destructure);
+
+    const scaled = try repl.step("scale(21)");
+    defer testing.allocator.free(scaled);
+    try testing.expectEqualStrings("42", scaled);
+
     const config = reporting.ReportingConfig.initForTesting();
     const req_type = try repl.executeCommandWithConfig(.{ .type_of = "req" }, config);
     defer req_type.deinit(testing.allocator);
