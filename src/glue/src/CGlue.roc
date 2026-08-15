@@ -1232,8 +1232,12 @@ header_guard_top = {
 		"",
 		"Hosted argument ownership:",
 		"Roc transfers ownership of refcounted arguments to the hosted function.",
-		"The hosted function must decref owned refcounted arguments when done,",
+		"The hosted function must release owned refcounted arguments when done,",
 		"or retain/transfer ownership explicitly when storing or returning them.",
+		"Releasing a container releases its elements only when the container's own",
+		"count reaches zero, which is what compiled Roc code does when it drops one",
+		"it owns. Releasing the elements unconditionally double-frees them whenever",
+		"the Roc caller still holds the container.",
 	])
 
 	"${header_doc}\n#ifndef ROC_PLATFORM_ABI_H\n#define ROC_PLATFORM_ABI_H\n\n"

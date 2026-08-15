@@ -10,20 +10,19 @@ app [main!] { roc: platform "../main.roc" }
 # EXPECTED
 RESERVED DEPENDENCY NAME - app_header__roc_version_reserved.md:1:15:1:42
 # PROBLEMS
+── ✗ reserved dependency name ───────── app_header__roc_version_reserved.md:1:15
 
-┌──────────────────────────┐
-│ RESERVED DEPENDENCY NAME ├─ I was parsing a dependency record, and `roc` ───┐
-└┬─────────────────────────┘  is used as the name of a platform or package.   │
- │                                                                            │
- │  app [main!] { roc: platform "../main.roc" }                               │
- │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                 │
- └────────────────────────────────── app_header__roc_version_reserved.md:1:15 ┘
+I was parsing a dependency record, and `roc` is used as the name of a platform
+or package.
 
-    The `roc` name is reserved for pinning the compiler version, so it cannot
-    name a dependency. Pick a different name for this one.
+app [main!] { roc: platform "../main.roc" }
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    For example:
-        pf: platform "../platform/main.roc"
+The roc name is reserved for pinning the compiler version, so it cannot name a
+dependency. Pick a different name for this one.
+
+For example:
+    pf: platform "../platform/main.roc"
 
 # TOKENS
 ~~~zig

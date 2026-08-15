@@ -22,28 +22,24 @@ main! = |_| {
 NAME NOT IN SCOPE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
+── ✗ name not in scope ────────────────────────── hello_world_with_block.md:11:2
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!("Hello, world!")                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └──────────────────────────────────────────── hello_world_with_block.md:11:2 ┘
+Nothing is named line! in this scope.
 
-    Is it misspelled, or is there an import missing?
+Stdout.line!("Hello, world!")
+^^^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `world` is defined here and then never used. ───┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  world = "World"                                                           │
- │  ‾‾‾‾‾                                                                     │
- └───────────────────────────────────────────── hello_world_with_block.md:9:2 ┘
+── ● unused variable ───────────────────────────── hello_world_with_block.md:9:2
 
-    If you don't need this variable, prefix it with an underscore like `_world`
-    to suppress this warning.
+Variable world is defined here and then never used:
+
+world = "World"
+^^^^^
+
+If you don't need this variable, prefix it with an underscore like _world to
+suppress this warning.
 
 # TOKENS
 ~~~zig

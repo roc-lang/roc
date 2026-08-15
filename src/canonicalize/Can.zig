@@ -1238,7 +1238,7 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "Json", "Encoding", "Try", "Dict", "Set", "Str", "Iter", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Crypto" };
+    const builtin_types = [_][]const u8{ "Bool", "Json", "Encoding", "Try", "Dict", "Set", "Str", "Iter", "Range", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Crypto" };
     for (builtin_types) |type_name_text| {
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
@@ -3699,6 +3699,26 @@ fn recordAssociatedValue(
     };
 }
 
+/// Report a statement that is not allowed inside an associated block.
+///
+/// The parser rejects some statements before canonicalization gets to them, but not
+/// all of them: the ones routed here reach this point silently, so without this they
+/// would be dropped without any diagnostic at all. This mirrors how the top level
+/// rejects the same statements.
+fn reportInvalidAssociatedStatement(
+    self: *Self,
+    keyword: []const u8,
+    region: AST.TokenizedRegion,
+) std.mem.Allocator.Error!void {
+    const string_idx = try self.env.insertString(keyword);
+    try self.env.pushDiagnostic(Diagnostic{
+        .invalid_associated_statement = .{
+            .stmt = string_idx,
+            .region = self.parse_ir.tokenizedRegionToRegion(region),
+        },
+    });
+}
+
 fn canonicalizeAssociatedItems(
     self: *Self,
     state: *AssociatedItemsState,
@@ -4059,10 +4079,16 @@ fn canonicalizeAssociatedItems(
                     },
                 });
             },
-            .@"var", .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .file_import, .malformed => {
-                // Other statement types (var, expr, crash, dbg, expect, for, return, malformed)
-                // are not valid in associated blocks but are already caught by the parser,
-                // so we don't need to emit additional diagnostics here
+            .crash => |crash_stmt| try self.reportInvalidAssociatedStatement("crash", crash_stmt.region),
+            .dbg => |dbg_stmt| try self.reportInvalidAssociatedStatement("dbg", dbg_stmt.region),
+            .@"for" => |for_stmt| try self.reportInvalidAssociatedStatement("for", for_stmt.region),
+            .@"while" => |while_stmt| try self.reportInvalidAssociatedStatement("while", while_stmt.region),
+            .@"return" => |return_stmt| try self.reportInvalidAssociatedStatement("return", return_stmt.region),
+            .@"break" => |break_stmt| try self.reportInvalidAssociatedStatement("break", break_stmt.region),
+            .@"var", .expr, .expect, .file_import, .malformed => {
+                // var, expr, file_import and malformed are already reported by the parser.
+                // expect is not reported by anything today; see #10730 for whether it should
+                // run inside an associated block or be rejected like the statements above.
             },
         }
     }

@@ -10,18 +10,16 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_nested_heterogeneous_lists.md:1:6:1:13
 # PROBLEMS
+── ✗ type mismatch ─────────────────────── can_nested_heterogeneous_lists.md:1:6
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  [[1, "hello"], [2, 3]]                                                    │
- │       ‾‾‾‾‾‾‾                                                              │
- └───────────────────────────────────── can_nested_heterogeneous_lists.md:1:6 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+[[1, "hello"], [2, 3]]
+     ^^^^^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig

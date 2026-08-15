@@ -10,18 +10,17 @@ type=expr
 # EXPECTED
 MISSING METHOD - call_float_literal.md:1:1:1:4
 # PROBLEMS
+── ✗ missing method ────────────────────────────────── call_float_literal.md:1:1
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  0.0()                                                                     │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────── call_float_literal.md:1:1 ┘
+This from_numeral method is being called on a value whose type doesn't have
+that method.
 
-    The value's type, which does not have a method named `from_numeral`, is:
+0.0()
+^^^
 
-        ({}) -> _ret
+The value's type, which does not have a method named from_numeral, is:
+
+    ({}) -> _ret
 
 # TOKENS
 ~~~zig
@@ -39,7 +38,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 201)
+(e-call (constraint-fn-var 211)
 	(e-runtime-error (tag "erroneous_value_expr")))
 ~~~
 # TYPES

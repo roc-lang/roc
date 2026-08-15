@@ -113,8 +113,8 @@ pub const CommonIdents = extern struct {
     is_gt: Ident.Idx,
     is_gte: Ident.Idx,
     is_eq: Ident.Idx,
-    range_exclusive: Ident.Idx,
-    range_inclusive: Ident.Idx,
+    range_exclusive_to: Ident.Idx,
+    range_inclusive_to: Ident.Idx,
     to_hash: Ident.Idx,
     parser_for: Ident.Idx,
     encoder_for: Ident.Idx,
@@ -152,6 +152,7 @@ pub const CommonIdents = extern struct {
 
     // Fully-qualified type identifiers for type checking and layout generation
     builtin_iter: Ident.Idx,
+    builtin_range: Ident.Idx,
     builtin_try: Ident.Idx,
     builtin_numeral: Ident.Idx,
     builtin_str: Ident.Idx,
@@ -252,8 +253,8 @@ pub const CommonIdents = extern struct {
             .is_gt = try common.insertIdent(gpa, Ident.for_text("is_gt")),
             .is_gte = try common.insertIdent(gpa, Ident.for_text("is_gte")),
             .is_eq = try common.insertIdent(gpa, Ident.for_text("is_eq")),
-            .range_exclusive = try common.insertIdent(gpa, Ident.for_text("range_exclusive")),
-            .range_inclusive = try common.insertIdent(gpa, Ident.for_text("range_inclusive")),
+            .range_exclusive_to = try common.insertIdent(gpa, Ident.for_text("range_exclusive_to")),
+            .range_inclusive_to = try common.insertIdent(gpa, Ident.for_text("range_inclusive_to")),
             .to_hash = try common.insertIdent(gpa, Ident.for_text("to_hash")),
             .parser_for = try common.insertIdent(gpa, Ident.for_text("parser_for")),
             .encoder_for = try common.insertIdent(gpa, Ident.for_text("encoder_for")),
@@ -286,6 +287,7 @@ pub const CommonIdents = extern struct {
             .f64 = try common.insertIdent(gpa, Ident.for_text("F64")),
             .dec = try common.insertIdent(gpa, Ident.for_text("Dec")),
             .builtin_iter = try common.insertIdent(gpa, Ident.for_text("Builtin.Iter")),
+            .builtin_range = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Range")),
             .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
             .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
@@ -385,8 +387,8 @@ pub const CommonIdents = extern struct {
             .is_gt = common.findIdent("is_gt") orelse unreachable,
             .is_gte = common.findIdent("is_gte") orelse unreachable,
             .is_eq = common.findIdent("is_eq") orelse unreachable,
-            .range_exclusive = common.findIdent("range_exclusive") orelse unreachable,
-            .range_inclusive = common.findIdent("range_inclusive") orelse unreachable,
+            .range_exclusive_to = common.findIdent("range_exclusive_to") orelse unreachable,
+            .range_inclusive_to = common.findIdent("range_inclusive_to") orelse unreachable,
             .to_hash = common.findIdent("to_hash") orelse unreachable,
             .parser_for = common.findIdent("parser_for") orelse unreachable,
             .encoder_for = common.findIdent("encoder_for") orelse unreachable,
@@ -419,6 +421,7 @@ pub const CommonIdents = extern struct {
             .f64 = common.findIdent("F64") orelse unreachable,
             .dec = common.findIdent("Dec") orelse unreachable,
             .builtin_iter = common.findIdent("Builtin.Iter") orelse unreachable,
+            .builtin_range = common.findIdent("Builtin.Num.Range") orelse unreachable,
             .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
             .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
@@ -831,6 +834,19 @@ pub const RecordOmittedDefault = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A source node whose checked value is a rank-1 polymorphic type scheme.
+///
+/// Generalization records this explicitly because a partially generalized
+/// scheme can have a monomorphic structural root with quantified descendants.
+/// Consumers must therefore not infer scheme-ness from the root variable's
+/// rank. The table is kept sorted by `node_idx` for allocation-free imported
+/// lookup.
+pub const BindingScheme = extern struct {
+    node_idx: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -957,6 +973,9 @@ numeric_suffix_targets: NumericSuffixTarget.SafeList,
 scheme_uses: SchemeUseRecord.SafeList,
 /// Flat pool of (scheme var → fresh var) pairs backing `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
+/// Exact source bindings that checking generalized into rank-1 type schemes.
+/// Sorted by source node for allocation-free cross-module lookup.
+binding_schemes: BindingScheme.SafeList,
 /// Generated codec derivations validated by checking and consumed by checked
 /// artifact publication.
 generated_codec_derivations: GeneratedCodecDerivation.SafeList,
@@ -1085,6 +1104,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.method_defs.relocate(offset);
     self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
+    self.binding_schemes.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
     self.record_omitted_defaults.relocate(offset);
 
@@ -1181,6 +1201,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
+        .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
@@ -1211,6 +1232,7 @@ pub fn deinit(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.binding_schemes.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
@@ -1313,6 +1335,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.binding_schemes.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
@@ -1773,7 +1796,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("Variable ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is defined here and then never used.");
+            try report.headline.addReflowingText(" is defined here and then never used:");
 
             try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
             const ident_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{owned_ident});
@@ -1871,9 +1894,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is being redeclared.");
 
-            // Show where the redeclaration is
-            try report.document.addReflowingText("The redeclaration is here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 redeclared_region_info,
@@ -1886,7 +1906,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("But ");
             try report.document.addType(owned_type_name);
-            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addReflowingText(" was already declared in ");
+            try report.document.addSourceLocation(original_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -1909,8 +1931,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is being redeclared.");
 
-            try report.document.addReflowingText("The redeclaration is here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 redeclared_region_info,
@@ -1923,7 +1943,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("But ");
             try report.document.addType(owned_type_name);
-            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addReflowingText(" was already declared in ");
+            try report.document.addSourceLocation(original_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -1946,8 +1968,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is being redeclared.");
 
-            try report.document.addReflowingText("The redeclaration is here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 redeclared_region_info,
@@ -1960,7 +1980,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("But ");
             try report.document.addType(owned_type_name);
-            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addReflowingText(" was already declared in ");
+            try report.document.addSourceLocation(original_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -1982,6 +2004,29 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_stmt);
             try report.headline.addReflowingText(" is not allowed at the top level.");
             try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .invalid_associated_statement => |data| blk: {
+            const stmt_name = self.getString(data.stmt);
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Invalid Statement", "", .runtime_error);
+            const owned_stmt = try report.addOwnedString(stmt_name);
+            try report.headline.addReflowingText("The statement ");
+            try report.headline.addInlineCode(owned_stmt);
+            try report.headline.addReflowingText(" is not allowed in an associated block.");
+            try report.document.addReflowingText("Only associated values, type declarations, and type annotations are allowed in an associated block.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -2078,9 +2123,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addRecordField(owned_field_name);
             try report.headline.addReflowingText(" appears more than once in this record.");
 
-            // Show where the duplicate field is
-            try report.document.addReflowingText("This field is duplicated here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 duplicate_region_info,
@@ -2093,7 +2135,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("The field ");
             try report.document.addRecordField(owned_field_name);
-            try report.document.addReflowingText(" was first defined here:");
+            try report.document.addReflowingText(" was first defined in ");
+            try report.document.addSourceLocation(original_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -2301,9 +2345,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("The name ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is being redeclared here.");
+            try report.headline.addReflowingText(" is being redeclared here:");
 
-            // The main box shows the new declaration; point below it at the original.
+            // The primary region shows the new declaration; point below it at the original.
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 new_region_info,
@@ -2316,7 +2360,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("In this scope, ");
             try report.document.addUnqualifiedSymbol(owned_ident);
-            try report.document.addReflowingText(" was already defined here:");
+            try report.document.addReflowingText(" was already defined in ");
+            try report.document.addSourceLocation(original_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -2801,8 +2847,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_count);
             try report.headline.addReflowingText(" values, which exceeds the compiler limit.");
 
-            try report.document.addReflowingText("The export list starts here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -2822,8 +2866,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("where");
             try report.headline.addReflowingText(" clause inside a type declaration.");
 
-            try report.document.addReflowingText("You're attempting do this here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -3490,8 +3532,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("This type is declared here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -3504,7 +3544,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("And it references ");
             try report.document.addType(owned_other_name);
-            try report.document.addReflowingText(" declared here:");
+            try report.document.addReflowingText(" declared in ");
+            try report.document.addSourceLocation(other_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 other_region_info,
@@ -3683,6 +3725,7 @@ pub const Serialized = extern struct {
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
+    binding_schemes: BindingScheme.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
@@ -3795,6 +3838,7 @@ pub const Serialized = extern struct {
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
+        try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
@@ -3862,6 +3906,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
@@ -3929,6 +3974,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
@@ -3998,6 +4044,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
@@ -4143,6 +4190,29 @@ fn findSortedByNode(comptime T: type, entries: []const T, raw_node: u32) ?T {
     const slot = sortedNodeSlot(T, entries, raw_node);
     if (slot < entries.len and entries[slot].node_idx == raw_node) return entries[slot];
     return null;
+}
+
+/// Record that `node_idx` names a rank-1 polymorphic value scheme. This is
+/// checker-produced binding metadata, not a property reconstructed from the
+/// solved type graph.
+pub fn recordBindingScheme(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(
+        BindingScheme,
+        &self.binding_schemes,
+        self.gpa,
+        .{ .node_idx = @intFromEnum(node_idx) },
+    );
+}
+
+/// Whether checking classified `node_idx` as a rank-1 polymorphic value
+/// scheme. Imported value resolution uses this exact producer-authored bit to
+/// preserve the classification on its local type-graph copy.
+pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
+    return findSortedByNode(
+        BindingScheme,
+        self.binding_schemes.items.items,
+        @intFromEnum(node_idx),
+    ) != null;
 }
 
 /// Return the digits before the decimal point for a recorded numeral.

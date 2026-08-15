@@ -280,15 +280,7 @@ pub const LinkError = error{
     InvalidArguments,
     LLVMNotAvailable,
     WindowsSDKNotFound,
-    DarwinSysrootNotFound,
 } || std.zig.system.DetectError;
-
-const SelfExePathError = std.Io.Dir.ReadLinkError || error{
-    NameTooLong,
-    UnsupportedOs,
-};
-
-const SelfExeDirError = Allocator.Error || SelfExePathError;
 
 const PatchMachoStackSizeError = std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
     NotMacho64,
@@ -304,105 +296,6 @@ const ResignMachoError = Allocator.Error || CodeSignature.WriteError || std.Io.F
     NotMacho64,
     UnexpectedEof,
 };
-
-/// Resolve the path of the currently running executable, host-OS specific.
-///
-/// Zig 0.16 removed `std.fs.selfExePath` and the private std helpers live inside
-/// `std.Io.Threaded` / `std.Io.Dispatch`. We need a cross-host implementation
-/// because the linker runs on Linux/macOS/Windows but may target any OS.
-fn selfExePath(std_io: std.Io, buf: []u8) SelfExePathError![]const u8 {
-    switch (comptime builtin.os.tag) {
-        .macos, .ios, .tvos, .watchos, .visionos => {
-            var n: u32 = @intCast(buf.len);
-            if (std.c._NSGetExecutablePath(buf.ptr, &n) != 0) return error.NameTooLong;
-            return std.mem.sliceTo(buf, 0);
-        },
-        .linux => {
-            const len = try std.Io.Dir.readLinkAbsolute(std_io, "/proc/self/exe", buf);
-            return buf[0..len];
-        },
-        .windows => {
-            // The PEB's ImagePathName contains the full path to the running exe.
-            const image_path_name = std.os.windows.peb().ProcessParameters.ImagePathName;
-            const wide = image_path_name.sliceZ();
-            const written = std.unicode.wtf16LeToWtf8(buf, wide);
-            return buf[0..written];
-        },
-        .freestanding,
-        .other,
-        .contiki,
-        .fuchsia,
-        .hermit,
-        .managarm,
-        .haiku,
-        .hurd,
-        .illumos,
-        .plan9,
-        .rtems,
-        .serenity,
-        .dragonfly,
-        .driverkit,
-        .maccatalyst,
-        .uefi,
-        .freebsd,
-        .openbsd,
-        .netbsd,
-        .@"3ds",
-        .ps3,
-        .ps4,
-        .ps5,
-        .psp,
-        .vita,
-        .emscripten,
-        .wasi,
-        .amdhsa,
-        .amdpal,
-        .cuda,
-        .mesa3d,
-        .nvcl,
-        .opencl,
-        .opengl,
-        .vulkan,
-        => return error.UnsupportedOs,
-    }
-}
-
-/// Get the directory containing the currently running executable.
-fn getSelfExeDir(allocator: std.mem.Allocator, std_io: std.Io) SelfExeDirError![]const u8 {
-    var symlink_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const symlink_path = try selfExePath(std_io, &symlink_path_buf);
-    var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const exe_path_len = std.Io.Dir.cwd().realPathFile(std_io, symlink_path, &real_path_buf) catch return error.OutOfMemory;
-    const exe_path = real_path_buf[0..exe_path_len];
-    return allocator.dupe(u8, std.fs.path.dirname(exe_path) orelse return error.OutOfMemory);
-}
-
-/// Find the Darwin sysroot directory at runtime.
-/// First looks for a 'darwin' directory next to the executable (for distributed builds),
-/// then falls back to the compile-time path (for local development builds).
-fn findDarwinSysroot(allocator: std.mem.Allocator, std_io: std.Io) Allocator.Error![]const u8 {
-    const exe_dir = getSelfExeDir(allocator, std_io) catch |err| {
-        std.log.warn("Failed to resolve executable path: {}, falling back to compile-time path", .{err});
-        return build_options.darwin_sysroot;
-    };
-
-    // Try to find 'darwin' directory next to executable (for distributed builds)
-    const runtime_sysroot = std.fs.path.join(allocator, &.{ exe_dir, "darwin" }) catch {
-        return build_options.darwin_sysroot;
-    };
-
-    // Check if the runtime path exists and contains the expected libSystem.tbd
-    const tbd_path = std.fs.path.join(allocator, &.{ runtime_sysroot, "usr", "lib", "libSystem.tbd" }) catch {
-        return build_options.darwin_sysroot;
-    };
-
-    std.Io.Dir.cwd().access(std_io, tbd_path, .{}) catch {
-        // Runtime path doesn't exist, fall back to compile-time path (local dev builds)
-        return build_options.darwin_sysroot;
-    };
-
-    return runtime_sysroot;
-}
 
 /// Find a platform-provided sysroot for macOS cross-compilation.
 /// Looks for 'macos-sysroot' directory in the platform's files directory.
@@ -571,7 +464,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 // dependencies by choosing which frameworks to bundle in their sysroot.
                 try discoverAndLinkFrameworks(ctx.arena, ctx.io.std_io, &args, fw_path);
             } else {
-                const darwin_sysroot = findDarwinSysroot(ctx.arena, ctx.io.std_io) catch return LinkError.DarwinSysrootNotFound;
+                const darwin_sysroot = embedded_lld.darwin_sysroot.find(ctx.arena, ctx.io.std_io) catch return LinkError.OutOfMemory;
                 try args.append(darwin_sysroot);
             }
 

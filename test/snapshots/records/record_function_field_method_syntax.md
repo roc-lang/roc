@@ -12,18 +12,16 @@ result = r.f(1)
 # EXPECTED
 MISSING METHOD - record_function_field_method_syntax.md:3:12:3:13
 # PROBLEMS
+── ✗ missing method ──────────────── record_function_field_method_syntax.md:3:12
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `f` method is being called on a value whose type ────┐
-└┬───────────────┘  doesn't have that method.                                 │
- │                                                                            │
- │  result = r.f(1)                                                           │
- │             ‾                                                              │
- └─────────────────────────────── record_function_field_method_syntax.md:3:12 ┘
+This f method is being called on a value whose type doesn't have that method.
 
-    The value's type, which does not have a method named `f`, is:
+result = r.f(1)
+           ^
 
-        { f: a -> a }
+The value's type, which does not have a method named f, is:
+
+    { f: a -> a }
 
 # TOKENS
 ~~~zig

@@ -17,41 +17,36 @@ UNCONDITIONAL CONDITION - literal_patterns.md:1:7:1:13
 MISSING METHOD - literal_patterns.md:5:5:5:7
 TYPE MISMATCH - literal_patterns.md:3:13:3:20
 # PROBLEMS
+── ● unconditional condition ─────────────────────────── literal_patterns.md:1:7
 
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This match value is known at compile time, so ───┐
-└┬────────────────────────┘  this match will always inspect the same value.   │
- │                                                                            │
- │  match Answer {                                                            │
- │        ‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── literal_patterns.md:1:7 ┘
+This match value is known at compile time, so this match will always inspect
+the same value.
 
+match Answer {
+      ^^^^^^
 
+── ✗ missing method ──────────────────────────────────── literal_patterns.md:5:5
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  10 => 4                                                                   │
- │  ‾‾                                                                        │
- └─────────────────────────────────────────────────── literal_patterns.md:5:5 ┘
+This from_numeral method is being called on a value whose type doesn't have
+that method.
 
-    The value's type, which does not have a method named `from_numeral`, is:
+10 => 4
+^^
 
-        [Answer, Greeting, Zero, ..]
+The value's type, which does not have a method named from_numeral, is:
 
+    [Answer, Greeting, Zero, ..]
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  Zero => "hello"                                                           │
- │          ‾‾‾‾‾‾‾                                                           │
- └────────────────────────────────────────────────── literal_patterns.md:3:13 ┘
+── ✗ type mismatch ──────────────────────────────────── literal_patterns.md:3:13
 
-    The type was determined to be:
+This string literal is being used where a non-string type is needed.
 
-        Dec
+Zero => "hello"
+        ^^^^^^^
+
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig

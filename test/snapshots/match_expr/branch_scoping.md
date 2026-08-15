@@ -15,29 +15,26 @@ match result {
 # EXPECTED
 POLYMORPHIC VALUE - branch_scoping.md:1:1:6:2
 # PROBLEMS
+── ✗ polymorphic value ─────────────────────────────────── branch_scoping.md:1:1
 
-┌───────────────────┐
-│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
-└┬──────────────────┘  polymorphic type.                                      │
- │                                                                            │
- │  match result {                                                            │
- │      Ok(value) => value + 1                                                │
- │      Err(value) => value - 1                                               │
- │      Ok(different) => different * 2                                        │
- │      Err(different) => different / 2                                       │
- │  }                                                                         │
- │                                                                            │
- └───────────────────────────────────────────────────── branch_scoping.md:1:1 ┘
+This top-level value still has an unresolved polymorphic type.
 
-    Its type is:
-    a
-      where [
-        a.div_by : a, Dec -> a,
-        a.minus : a, Dec -> a,
-        a.plus : a, Dec -> a,
-        a.times : a, Dec -> a,
-      ]
-    Add an annotation or use this value in a way that fixes its concrete type.
+match result {
+    Ok(value) => value + 1
+    Err(value) => value - 1
+    Ok(different) => different * 2
+    Err(different) => different / 2
+}
+
+Its type is:
+a
+  where [
+    a.div_by : a, Dec -> a,
+    a.minus : a, Dec -> a,
+    a.plus : a, Dec -> a,
+    a.times : a, Dec -> a,
+  ]
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -100,7 +97,7 @@ match result {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 230)
+					(e-dispatch-call (method "plus") (constraint-fn-var 240)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))
@@ -111,7 +108,7 @@ match result {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "minus") (constraint-fn-var 243)
+					(e-dispatch-call (method "minus") (constraint-fn-var 253)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))
@@ -122,7 +119,7 @@ match result {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 254)
+					(e-dispatch-call (method "times") (constraint-fn-var 264)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "different"))))
@@ -133,7 +130,7 @@ match result {
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-dispatch-call (method "div_by") (constraint-fn-var 265)
+					(e-dispatch-call (method "div_by") (constraint-fn-var 275)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "different"))))

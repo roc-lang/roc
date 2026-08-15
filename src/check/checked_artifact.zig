@@ -4068,6 +4068,7 @@ pub const CheckedTypeStore = struct {
         imports: []const PublishImportArtifact,
         available: []const ImportedModuleView,
         source_nodes: *const CheckedSourceNodes,
+        selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
     ) Allocator.Error!CheckedTypePublication {
         const import_views = CheckedImportViews{
             .current_owner = current_owner,
@@ -4288,6 +4289,32 @@ pub const CheckedTypeStore = struct {
                 module.typeStoreConst(),
                 module.moduleEnvConst(),
                 module.defType(def_idx),
+            );
+            if (findCheckedTypeScheme(store.schemes.items, scheme_key) == null) {
+                const scheme_id: CheckedTypeSchemeId = @enumFromInt(@as(u32, @intCast(store.schemes.items.len)));
+                try store.schemes.append(allocator, .{
+                    .id = scheme_id,
+                    .key = scheme_key,
+                    .root = root,
+                });
+            }
+        }
+
+        // Selected roots own source schemes just like ordinary top-level
+        // values. Publish them explicitly so const and callable templates can
+        // name the exact scheme without relying on an unrelated definition
+        // having the same canonical key.
+        for (selected_hoisted_roots) |selected| {
+            const source_var = if (selected.pattern) |pattern|
+                ModuleEnv.varFrom(pattern)
+            else
+                module.exprType(selected.expr);
+            const root = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, source_var);
+            const scheme_key = try canonical_type_keys.schemeFromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.moduleEnvConst(),
+                source_var,
             );
             if (findCheckedTypeScheme(store.schemes.items, scheme_key) == null) {
                 const scheme_id: CheckedTypeSchemeId = @enumFromInt(@as(u32, @intCast(store.schemes.items.len)));
@@ -8612,7 +8639,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
 
-    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, artifact_key, &.{}, &.{}, &source_nodes);
+    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, artifact_key, &.{}, &.{}, &source_nodes, &.{});
     defer publication.deinit(allocator);
 
     const nominal_stmt = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
@@ -14906,6 +14933,81 @@ pub const CallableEvalTemplateTable = struct {
     }
 };
 
+/// Publication-only index for callable values produced by selected pattern
+/// extraction roots. The durable identity lives in the compile-time root,
+/// callable-eval template, and top-level procedure binding tables; this index
+/// only connects source lookups to those identities while resolved refs are
+/// being published.
+const SelectedHoistedCallableTable = struct {
+    by_pattern: []?TopLevelProcedureBindingRef = &.{},
+
+    fn fromRoots(
+        allocator: Allocator,
+        module: TypedCIR.Module,
+        checked_bodies: *const CheckedBodyStore,
+        roots: *const CompileTimeRootTable,
+        callable_eval_templates: *CallableEvalTemplateTable,
+        procedure_bindings: *TopLevelProcedureBindingTable,
+    ) Allocator.Error!SelectedHoistedCallableTable {
+        const by_pattern = try allocator.alloc(?TopLevelProcedureBindingRef, checked_bodies.patternCount());
+        errdefer allocator.free(by_pattern);
+        @memset(by_pattern, null);
+
+        for (roots.roots) |root| {
+            if (root.kind != .callable_binding) continue;
+            switch (root.source) {
+                .hoisted => {},
+                .def, .expr, .statement, .required_binding => continue,
+            }
+
+            const source_pattern = root.source_pattern orelse
+                checkedArtifactInvariant("selected callable root had no source pattern", .{});
+            if (!sourceTypeIsFunction(module, ModuleEnv.varFrom(source_pattern))) {
+                checkedArtifactInvariant("selected callable root source pattern was not function-typed", .{});
+            }
+            const checked_pattern = root.pattern orelse
+                checkedArtifactInvariant("selected callable root had no checked pattern", .{});
+            const source_scheme = try canonical_type_keys.schemeFromVar(
+                allocator,
+                module.typeStoreConst(),
+                module.moduleEnvConst(),
+                ModuleEnv.varFrom(source_pattern),
+            );
+            const callable_template = try callable_eval_templates.append(
+                allocator,
+                module.moduleIndex(),
+                checked_pattern,
+                root.id,
+                source_scheme,
+                root.checked_type,
+            );
+            const binding = try procedure_bindings.appendCallableEval(
+                allocator,
+                source_scheme,
+                callable_template,
+            );
+            const slot = &by_pattern[@intFromEnum(checked_pattern)];
+            if (slot.* != null) {
+                checkedArtifactInvariant("selected callable pattern was published more than once", .{});
+            }
+            slot.* = binding;
+        }
+
+        return .{ .by_pattern = by_pattern };
+    }
+
+    fn lookupByPattern(self: *const SelectedHoistedCallableTable, pattern: CheckedPatternId) ?TopLevelProcedureBindingRef {
+        const raw = @intFromEnum(pattern);
+        if (raw >= self.by_pattern.len) return null;
+        return self.by_pattern[raw];
+    }
+
+    fn deinit(self: *SelectedHoistedCallableTable, allocator: Allocator) void {
+        allocator.free(self.by_pattern);
+        self.* = .{};
+    }
+};
+
 /// Public `ImportedProcedureBindingRef` declaration.
 pub const ImportedProcedureBindingRef = struct {
     artifact: CheckedModuleArtifactKey,
@@ -15042,6 +15144,7 @@ pub const ResolvedValueRefTable = struct {
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         top_level_values: *const TopLevelValueTable,
+        selected_hoisted_callables: *const SelectedHoistedCallableTable,
         hoisted_constants: *const HoistedConstTable,
         checked_types: *const CheckedTypePublication,
         checked_bodies: *const CheckedBodyStore,
@@ -15083,6 +15186,7 @@ pub const ResolvedValueRefTable = struct {
                 platform_required_declarations,
                 platform_required_bindings,
                 top_level_values,
+                selected_hoisted_callables,
                 hoisted_constants,
                 &local_pattern_roles,
                 checked_bodies,
@@ -15116,6 +15220,7 @@ pub const ResolvedValueRefTable = struct {
             &records,
             by_checked_expr,
             checked_bodies,
+            selected_hoisted_callables,
             hoisted_constants,
             synthetic_expr_origins,
         );
@@ -15208,6 +15313,7 @@ fn appendSyntheticLocalLookupRefs(
     records: *std.ArrayList(ResolvedValueRefRecord),
     by_checked_expr: []?ResolvedValueRefId,
     checked_bodies: *const CheckedBodyStore,
+    selected_hoisted_callables: *const SelectedHoistedCallableTable,
     hoisted_constants: *const HoistedConstTable,
     synthetic_expr_origins: []const SyntheticExprOriginRecord,
 ) Allocator.Error!void {
@@ -15236,14 +15342,17 @@ fn appendSyntheticLocalLookupRefs(
                 const binder = checked_bodies.patternBinderForCheckedPattern(origin.result_pattern) orelse {
                     checkedArtifactInvariant("synthetic lookup local referenced a pattern without a checked binder", .{});
                 };
-                const hoisted = hoisted_constants.lookupByPattern(origin.result_pattern) orelse {
-                    checkedArtifactInvariant("synthetic pattern-extraction lookup had no selected hoisted const entry", .{});
-                };
+                const resolved_ref: ResolvedValueRef = if (selected_hoisted_callables.lookupByPattern(origin.result_pattern) != null)
+                    .{ .pattern_binder = .{ .binder = binder } }
+                else if (hoisted_constants.lookupByPattern(origin.result_pattern)) |hoisted|
+                    selectedHoistedConstUse(hoisted, .{ .binder = binder })
+                else
+                    checkedArtifactInvariant("synthetic pattern-extraction lookup had no selected root entry", .{});
 
                 const id: ResolvedValueRefId = @enumFromInt(@as(u32, @intCast(records.items.len)));
                 try records.append(allocator, .{
                     .expr = expr.id,
-                    .ref = selectedHoistedConstUse(hoisted, .{ .binder = binder }),
+                    .ref = resolved_ref,
                     .checked_ty = expr.ty,
                     .scope_depth = 0,
                 });
@@ -15292,6 +15401,7 @@ fn categorizeValueRef(
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     top_level_values: *const TopLevelValueTable,
+    selected_hoisted_callables: *const SelectedHoistedCallableTable,
     hoisted_constants: *const HoistedConstTable,
     local_pattern_roles: *const LocalPatternRoleIndex,
     checked_bodies: *const CheckedBodyStore,
@@ -15304,6 +15414,7 @@ fn categorizeValueRef(
             local.pattern_idx,
             hosted_procs,
             top_level_values,
+            selected_hoisted_callables,
             hoisted_constants,
             local_pattern_roles,
             checked_bodies,
@@ -15456,6 +15567,7 @@ fn categorizeLocalValueRef(
     pattern: CIR.Pattern.Idx,
     hosted_procs: *const HostedProcTable,
     top_level_values: *const TopLevelValueTable,
+    selected_hoisted_callables: *const SelectedHoistedCallableTable,
     hoisted_constants: *const HoistedConstTable,
     local_pattern_roles: *const LocalPatternRoleIndex,
     checked_bodies: *const CheckedBodyStore,
@@ -15493,6 +15605,17 @@ fn categorizeLocalValueRef(
         }
         unreachable;
     };
+
+    if (selected_hoisted_callables.lookupByPattern(checked_pattern)) |binding| {
+        return .{ .top_level_proc = .{
+            .binding = .{ .top_level = .{
+                .artifact = artifact_key,
+                .binding = binding,
+            } },
+            .source_fn_ty_template = .{},
+            .runtime_result_provenance = null,
+        } };
+    }
 
     if (hoisted_constants.lookupByPattern(checked_pattern)) |hoisted| {
         return selectedHoistedConstUse(hoisted, .{ .binder = binder });
@@ -23561,9 +23684,17 @@ pub const CompileTimeRootTable = struct {
                 ModuleEnv.varFrom(pattern)
             else
                 module.exprType(selected.expr);
-            if (sourceTypeIsFunction(module, source_ty)) {
-                checkedArtifactInvariant("function-typed selected hoisted root reached data-constant publication", .{});
-            }
+            const source_is_function = sourceTypeIsFunction(module, source_ty);
+            const kind: CompileTimeRootKind = switch (selected.value_kind) {
+                .data_constant => if (source_is_function)
+                    checkedArtifactInvariant("function-typed selected root was classified as a data constant", .{})
+                else
+                    .hoisted_constant,
+                .callable_binding => if (!source_is_function)
+                    checkedArtifactInvariant("non-function selected root was classified as a callable binding", .{})
+                else
+                    .callable_binding,
+            };
             const checked_expr = try checkedExprIdForSelectedHoistedRoot(
                 allocator,
                 module,
@@ -23575,7 +23706,7 @@ pub const CompileTimeRootTable = struct {
             const hoisted_body = try hoist_roots.cloneBody(allocator, selected.body);
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
-                .kind = .hoisted_constant,
+                .kind = kind,
                 .source = .{ .hoisted = .{
                     .index = @intCast(selected_index),
                     .expr = selected.expr,
@@ -31880,6 +32011,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_erroneous_value_expr,
             .diag_qualified_ident_does_not_exist,
             .diag_invalid_top_level_statement,
+            .diag_invalid_associated_statement,
             .diag_expr_not_canonicalized,
             .diag_invalid_string_interpolation,
             .diag_unreachable_string_pattern_capture,
@@ -32142,7 +32274,7 @@ pub fn publishFromTypedModule(
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, inputs.imports, inputs.available_artifacts, &source_nodes);
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, inputs.imports, inputs.available_artifacts, &source_nodes, inputs.hoisted_roots);
     defer checked_type_publication.deinitIndex(allocator);
     errdefer checked_type_publication.store.deinit(allocator);
     const checked_types = &checked_type_publication.store;
@@ -32308,6 +32440,16 @@ pub fn publishFromTypedModule(
     );
     errdefer hoisted_constants.deinit(allocator);
 
+    var selected_hoisted_callables = try SelectedHoistedCallableTable.fromRoots(
+        allocator,
+        module,
+        checked_bodies,
+        &compile_time_roots,
+        &callable_eval_templates,
+        &top_level_procedure_bindings,
+    );
+    defer selected_hoisted_callables.deinit(allocator);
+
     var resolved_value_refs = try ResolvedValueRefTable.fromModule(
         allocator,
         modules,
@@ -32320,6 +32462,7 @@ pub fn publishFromTypedModule(
         &platform_required_declarations,
         &platform_required_bindings,
         &top_level_values,
+        &selected_hoisted_callables,
         &hoisted_constants,
         &checked_type_publication,
         checked_bodies,
@@ -32735,7 +32878,7 @@ fn expectProvidedExportKind(
     );
     var builtin_source_nodes = try CheckedSourceNodes.init(allocator, builtin_module);
     defer builtin_source_nodes.deinit(allocator);
-    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, builtin_key, &.{}, &.{}, &builtin_source_nodes);
+    var builtin_checked_type_publication = try CheckedTypeStore.fromModule(allocator, builtin_module, &builtin_names, builtin_key, &.{}, &.{}, &builtin_source_nodes, &.{});
     defer builtin_checked_type_publication.deinit(allocator);
     const empty_checked_bodies = CheckedBodyStore{};
     const empty_checked_const_bodies = CheckedConstBodyTable{};
@@ -32866,7 +33009,7 @@ fn expectProvidedExportKind(
     var source_nodes = try CheckedSourceNodes.init(allocator, module);
     defer source_nodes.deinit(allocator);
 
-    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, &builtin_imports, &.{}, &source_nodes);
+    var checked_type_publication = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, artifact_key, &builtin_imports, &.{}, &source_nodes, &.{});
     defer checked_type_publication.deinit(allocator);
     const checked_types = &checked_type_publication.store;
 
@@ -33012,6 +33155,16 @@ fn expectProvidedExportKind(
     );
     defer hoisted_constants.deinit(allocator);
 
+    var selected_hoisted_callables = try SelectedHoistedCallableTable.fromRoots(
+        allocator,
+        module,
+        checked_bodies,
+        &compile_time_roots,
+        &callable_eval_templates,
+        &top_level_procedure_bindings,
+    );
+    defer selected_hoisted_callables.deinit(allocator);
+
     const provides = try publishProvidesMetadata(allocator, module, &canonical_names);
     defer allocator.free(provides);
 
@@ -33027,6 +33180,7 @@ fn expectProvidedExportKind(
         &platform_required_declarations,
         &platform_required_bindings,
         &top_level_values,
+        &selected_hoisted_callables,
         &hoisted_constants,
         &checked_type_publication,
         checked_bodies,

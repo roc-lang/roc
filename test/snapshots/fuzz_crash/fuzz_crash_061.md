@@ -14,68 +14,57 @@ UNEXPECTED TYPE SYNTAX - fuzz_crash_061.md:2:14:2:15
 EXPECTED CLOSING BRACE - fuzz_crash_061.md:1:1:1:9
 EXPECTED CLOSING BRACKET - fuzz_crash_061.md:2:16:2:22
 # PROBLEMS
+── ✗ unclosed string ───────────────────────────────────── fuzz_crash_061.md:1:9
 
-┌─────────────────┐
-│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  platform"                                                                 │
- │          ‾                                                                 │
- └───────────────────────────────────────────────────── fuzz_crash_061.md:1:9 ┘
+This string is missing a closing quote.
 
+platform"
+        ^
 
+── ✗ unexpected type syntax ───────────────────────────── fuzz_crash_061.md:2:14
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  requires{}{n:0[import S exposing[                                         │
- │               ‾                                                            │
- └──────────────────────────────────────────────────── fuzz_crash_061.md:2:14 ┘
+I was parsing a type annotation, and this token cannot start a type here.
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+requires{}{n:0[import S exposing[
+             ^
 
-    For example:
-        List(U64)
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
-    I found `0` here.
+For example:
+    List(U64)
 
+I found 0 here.
 
-┌────────────────────────┐
-│ EXPECTED CLOSING BRACE ├─ I was parsing a `requires` section, and I ────────┐
-└┬───────────────────────┘  expected a closing `}`.                           │
- │                                                                            │
- │  platform"                                                                 │
- │  ‾‾‾‾‾‾‾‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_061.md:1:1 ┘
+── ✗ expected closing brace ────────────────────────────── fuzz_crash_061.md:1:1
 
-    Close the requires record after the final entrypoint signature.
+I was parsing a `requires` section, and I expected a closing `}`.
 
-    For example:
-        requires { main : {} => I32 }
+platform"
+^^^^^^^^
 
-    I found `platform` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+Close the requires record after the final entrypoint signature.
 
+For example:
+    requires { main : {} => I32 }
 
-┌──────────────────────────┐
-│ EXPECTED CLOSING BRACKET ├─ I was parsing an import exposing clause, and ───┐
-└┬─────────────────────────┘  I expected a closing `]`.                       │
- │                                                                            │
- │  requires{}{n:0[import S exposing[                                         │
- │                 ‾‾‾‾‾‾                                                     │
- └──────────────────────────────────────────────────── fuzz_crash_061.md:2:16 ┘
+I found platform here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
-    Close the exposing list after the final imported name.
+── ✗ expected closing bracket ─────────────────────────── fuzz_crash_061.md:2:16
 
-    For example:
-        import Json exposing [decode, encode]
+I was parsing an import exposing clause, and I expected a closing `]`.
 
-    I found `import` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+requires{}{n:0[import S exposing[
+               ^^^^^^
+
+Close the exposing list after the final imported name.
+
+For example:
+    import Json exposing [decode, encode]
+
+I found import here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
 # TOKENS
 ~~~zig

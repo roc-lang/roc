@@ -196,6 +196,42 @@ test "instantiate - func with some generalized and some not preserve non-general
     try std.testing.expectEqual(var_b, var_b_inst);
 }
 
+test "instantiate type scheme copies a monomorphic structural spine" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const quantified = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+    const monomorphic = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .outermost);
+    const inner = try env.types.freshFromContentWithRank(
+        try env.mkFuncPure(&.{quantified}, quantified),
+        .outermost,
+    );
+    const scheme = try env.types.freshFromContentWithRank(
+        try env.mkFuncPure(&.{monomorphic}, inner),
+        .outermost,
+    );
+
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+    };
+    const instantiated = try instantiator.instantiateTypeScheme(scheme);
+
+    const outer_fn = env.types.resolveVar(instantiated).desc.content.structure.fn_pure;
+    const outer_args = env.types.sliceVars(outer_fn.args);
+    try std.testing.expectEqual(monomorphic, outer_args[0]);
+    try std.testing.expect(inner != outer_fn.ret);
+
+    const inner_fn = env.types.resolveVar(outer_fn.ret).desc.content.structure.fn_pure;
+    const inner_args = env.types.sliceVars(inner_fn.args);
+    try std.testing.expect(quantified != inner_args[0]);
+    try std.testing.expectEqual(inner_args[0], inner_fn.ret);
+}
+
 test "instantiate - tuple with multiple vars" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);

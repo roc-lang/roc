@@ -45,78 +45,64 @@ POLYMORPHIC VALUE - static_dispatch_scheme_position_matrix.md:22:1:22:13
 MISSING METHOD - static_dispatch_scheme_position_matrix.md:19:5:19:14
 MISSING METHOD - static_dispatch_scheme_position_matrix.md:28:9:28:19
 # PROBLEMS
+── ✗ unbound where receiver ──── static_dispatch_scheme_position_matrix.md:24:32
 
-┌────────────────────────┐
-│ UNBOUND WHERE RECEIVER ├─ The type variable `a` is not introduced by this ──┐
-└┬───────────────────────┘  annotation's type or a connected method           │
- │                          constraint, so this where clause cannot add the   │
- │                          `parse` method to it.                             │
- │                                                                            │
- │  parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]     │
- │                                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                         │
- └─────────────────────────── static_dispatch_scheme_position_matrix.md:24:32 ┘
+The type variable a is not introduced by this annotation's type or a connected
+method constraint, so this where clause cannot add the parse method to it.
 
-    A where clause receiver must be introduced by the annotation's type, or by
-    the method type of a receiver that is already connected to the annotation.
-    Connect `a` to the annotation, or remove this constraint.
+parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]
+                               ^^^^^^^^^^^^^^^^^^
 
+A where clause receiver must be introduced by the annotation's type, or by the
+method type of a receiver that is already connected to the annotation. Connect
+a to the annotation, or remove this constraint.
 
-┌────────────────────────┐
-│ UNBOUND WHERE RECEIVER ├─ The type variable `a` is not introduced by this ──┐
-└┬───────────────────────┘  annotation's type or a connected method           │
- │                          constraint, so this where clause cannot add the   │
- │                          `show` method to it.                              │
- │                                                                            │
- │  parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]     │
- │                                                     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾      │
- └─────────────────────────── static_dispatch_scheme_position_matrix.md:24:52 ┘
+── ✗ unbound where receiver ──── static_dispatch_scheme_position_matrix.md:24:52
 
-    A where clause receiver must be introduced by the annotation's type, or by
-    the method type of a receiver that is already connected to the annotation.
-    Connect `a` to the annotation, or remove this constraint.
+The type variable a is not introduced by this annotation's type or a connected
+method constraint, so this where clause cannot add the show method to it.
 
+parse_show : Str -> Str where [a.parse : Str -> a, a.show : a -> Str]
+                                                   ^^^^^^^^^^^^^^^^^
 
-┌───────────────────┐
-│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
-└┬──────────────────┘  polymorphic type.                                      │
- │                                                                            │
- │  unpinned_ret = gen({})                                                    │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └──────────────────────────── static_dispatch_scheme_position_matrix.md:22:1 ┘
+A where clause receiver must be introduced by the annotation's type, or by the
+method type of a receiver that is already connected to the annotation. Connect
+a to the annotation, or remove this constraint.
 
-    Its type is:
-    a where [a.gen : {} -> a]
-    Add an annotation or use this value in a way that fixes its concrete type.
+── ✗ polymorphic value ────────── static_dispatch_scheme_position_matrix.md:22:1
 
+This top-level value still has an unresolved polymorphic type.
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named `gen` on an ────┐
-└┬───────────────┘  unresolved type variable, but unresolved type variables   │
- │                  have no methods.                                          │
- │                                                                            │
- │  A.gen({})                                                                 │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └──────────────────────────── static_dispatch_scheme_position_matrix.md:19:5 ┘
+unpinned_ret = gen({})
+^^^^^^^^^^^^
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+Its type is:
+a where [a.gen : {} -> a]
+Add an annotation or use this value in a way that fixes its concrete type.
 
+── ✗ missing method ───────────── static_dispatch_scheme_position_matrix.md:19:5
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named `show` on an ───┐
-└┬───────────────┘  unresolved type variable, but unresolved type variables   │
- │                  have no methods.                                          │
- │                                                                            │
- │  v = A.parse(s)                                                            │
- │      ‾‾‾‾‾‾‾‾‾‾                                                            │
- └──────────────────────────── static_dispatch_scheme_position_matrix.md:28:9 ┘
+This is trying to dispatch a method named gen on an unresolved type variable,
+but unresolved type variables have no methods.
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+A.gen({})
+^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
+
+── ✗ missing method ───────────── static_dispatch_scheme_position_matrix.md:28:9
+
+This is trying to dispatch a method named show on an unresolved type variable,
+but unresolved type variables have no methods.
+
+v = A.parse(s)
+    ^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -326,7 +312,7 @@ roundtrip = parse_show("hi")
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 329)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 339)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -342,7 +328,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "I128") (builtin))))))
 	(d-let
 		(p-assign (ident "ok_arg"))
-		(e-call (constraint-fn-var 341)
+		(e-call (constraint-fn-var 352)
 			(e-lookup-local
 				(p-assign (ident "via_arg")))
 			(e-typed-int (value "5") (type "U8"))))
@@ -366,7 +352,7 @@ roundtrip = parse_show("hi")
 												(p-assign (ident "x")))
 											(rest-at (index 1)))))
 								(value
-									(e-dispatch-call (method "to_i128") (constraint-fn-var 357)
+									(e-dispatch-call (method "to_i128") (constraint-fn-var 368)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
@@ -390,7 +376,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "I128") (builtin))))))
 	(d-let
 		(p-assign (ident "ok_data"))
-		(e-call (constraint-fn-var 378)
+		(e-call (constraint-fn-var 390)
 			(e-lookup-local
 				(p-assign (ident "via_data")))
 			(e-list
@@ -416,7 +402,7 @@ roundtrip = parse_show("hi")
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "unpinned_ret"))
-		(e-call (constraint-fn-var 398)
+		(e-call (constraint-fn-var 414)
 			(e-lookup-local
 				(p-assign (ident "gen")))
 			(e-empty_record)))
@@ -431,7 +417,7 @@ roundtrip = parse_show("hi")
 				(s-let
 					(p-assign (ident "v"))
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-dispatch-call (method "show") (constraint-fn-var 407)
+				(e-dispatch-call (method "show") (constraint-fn-var 423)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "v"))))

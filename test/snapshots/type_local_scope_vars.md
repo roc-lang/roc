@@ -41,22 +41,20 @@ main! = |_| {}
 # EXPECTED
 TYPE MISMATCH - type_local_scope_vars.md:19:14:19:14
 # PROBLEMS
+── ✗ type mismatch ────────────────────────────── type_local_scope_vars.md:19:16
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │  _result2 = f(b)                                                           │
- │               ‾                                                            │
- └──────────────────────────────────────────── type_local_scope_vars.md:19:16 ┘
+The first argument being passed to this function has the wrong type.
 
-    This argument has the type:
+_result2 = f(b)
+             ^
 
-        b
+This argument has the type:
 
-    But `f` needs the first argument to be:
+    b
 
-        a
+But f needs the first argument to be:
+
+    a
 
 # TOKENS
 ~~~zig
@@ -220,7 +218,7 @@ main! = |_| {}
 							(p-assign (ident "z")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 261)
+					(e-call (constraint-fn-var 271)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-lookup-local
@@ -230,14 +228,14 @@ main! = |_| {}
 					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "_result3"))
-					(e-call (constraint-fn-var 268)
+					(e-call (constraint-fn-var 278)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
 							(p-assign (ident "a")))))
 				(s-let
 					(p-assign (ident "_result4"))
-					(e-call (constraint-fn-var 273)
+					(e-call (constraint-fn-var 283)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local

@@ -30,67 +30,59 @@ UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
 MISSING METHOD - lambda_multi_arg_mismatch.md:13:5:13:9
 MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 # PROBLEMS
+── ● unused variable ───────────────────────── lambda_multi_arg_mismatch.md:3:25
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `x3` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|                           │
- │                          ‾‾                                                │
- └───────────────────────────────────────── lambda_multi_arg_mismatch.md:3:25 ┘
+Variable x3 is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_x3` to
-    suppress this warning.
+multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
+                        ^^
 
+If you don't need this variable, prefix it with an underscore like _x3 to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `x5` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|                           │
- │                                  ‾‾                                        │
- └───────────────────────────────────────── lambda_multi_arg_mismatch.md:3:33 ┘
+── ● unused variable ───────────────────────── lambda_multi_arg_mismatch.md:3:33
 
-    If you don't need this variable, prefix it with an underscore like `_x5` to
-    suppress this warning.
+Variable x5 is defined here and then never used:
 
+multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
+                                ^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `x7` is defined here and then never used. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|                           │
- │                                          ‾‾                                │
- └───────────────────────────────────────── lambda_multi_arg_mismatch.md:3:41 ┘
+If you don't need this variable, prefix it with an underscore like _x5 to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like `_x7` to
-    suppress this warning.
+── ● unused variable ───────────────────────── lambda_multi_arg_mismatch.md:3:41
 
+Variable x7 is defined here and then never used:
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH                     │
- │  ‾‾‾‾                                                                      │
- └───────────────────────────────────────── lambda_multi_arg_mismatch.md:13:5 ┘
+multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8| 
+                                        ^^
 
-    The value's type, which does not have a method named `from_numeral`, is:
+If you don't need this variable, prefix it with an underscore like _x7 to
+suppress this warning.
 
-        [True, ..]
+── ✗ missing method ────────────────────────── lambda_multi_arg_mismatch.md:13:5
 
+This from_numeral method is being called on a value whose type doesn't have
+that method.
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  "world",   # x3: Str (should be 'a' = U64) - MISMATCH                     │
- │  ‾‾‾‾‾‾‾                                                                   │
- └───────────────────────────────────────── lambda_multi_arg_mismatch.md:11:5 ┘
+3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
+^^^^
 
-    The value's type, which does not have a method named `from_quote`, is:
+The value's type, which does not have a method named from_numeral, is:
 
-        [True, ..]
+    [True, ..]
+
+── ✗ missing method ────────────────────────── lambda_multi_arg_mismatch.md:11:5
+
+This from_quote method is being called on a value whose type doesn't have that
+method.
+
+"world",   # x3: Str (should be 'a' = U64) - MISMATCH  
+^^^^^^^
+
+The value's type, which does not have a method named from_quote, is:
+
+    [True, ..]
 
 # TOKENS
 ~~~zig
@@ -231,7 +223,7 @@ result = multi_arg_fn(
 					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 325)
+		(e-call (constraint-fn-var 335)
 			(e-lookup-local
 				(p-assign (ident "multi_arg_fn")))
 			(e-runtime-error (tag "erroneous_value_expr"))

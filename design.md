@@ -1706,6 +1706,36 @@ reference to an imported scheme copy; the def itself still checks with its
 annotation generated in its body's frame, sharing vars with the scheme the
 checked module outputs, which checked dispatch-evidence resolution relies on.
 
+Roc generalization is exclusively rank-1. Quantification belongs to a value
+binding; an arbitrary expression does not acquire a scheme, and the result of
+calling a polymorphic function is a monotype even when that result contains a
+function. In particular, `mk : {} -> (a -> a)` permits separate calls to `mk`
+to choose separate `a`s, but one stored result of `mk({})` cannot subsequently
+be called at two different types. Roc has no rank-2 or rank-n interpretation
+under which that returned function could itself retain `forall a`.
+
+The checker records scheme-ness as explicit binding metadata at each
+generalization boundary. After rank adjustment, it walks the binding's type
+interface once and classifies the binding as a scheme exactly when a reachable
+variable was promoted to generalized rank. This producer-side classification
+is necessary because generalization is per variable: a partially generalized
+scheme can have a monomorphic structural root and quantified descendants. Root
+rank is therefore not a valid proxy for whether a binding is a scheme.
+
+Every source alias for the binding (expression, pattern, definition, or closure
+wrapper) receives the same classification explicitly. Checked module output
+stores the classified source nodes in a sorted table, and imported binding
+copies carry that recorded classification into the importing checker. A
+same-module value lookup, stored-value construction edge, or immediate-callee
+edge instantiates exactly when its source binding is classified as a scheme.
+Scheme instantiation force-copies the structural root so the rank-aware copy
+can reach and freshen quantified descendants while sharing escaped monomorphic
+variables. Same-module monotype lookups share their existing graph and allocate
+nothing. Imported checked types remain generalized cache templates and receive
+an independent copy per use as before; the recorded source classification is
+preserved on that copy. No consumer scans solved types or source syntax to
+rediscover this decision.
+
 The recursion rule is the ML binding-group rule. A recursive group gets one
 shared rank frame: members' patterns are ranked in it first, an in-group
 reference to an unannotated member unifies monomorphically with the member's
@@ -3309,12 +3339,39 @@ Stream(item) :: {
     len_if_known : [Known(U64), Unknown],
     step! : () => [One({ item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
 }
+
+Range(num) :: {
+    lower : num,
+    upper : num,
+    step : num,
+    upper_bound : [Exclusive, Inclusive],
+    direction : [To, From],
+    len_if_known : [Known(U64), Unknown],
+}
 ```
 
 Adapters, custom sources, and consumers remain ordinary Roc functions. There is
 no public chain type, iterator trait, extra public step tag, or source-visible
 compiler representation. Internal representation data is attached only after
 checking, when Monotype creates concrete iterator call results.
+
+Range syntax produces a reusable `Range(num)`, not an `Iter(num)`. The
+exclusive and inclusive operators dispatch to `num.range_exclusive_to` and
+`num.range_inclusive_to`, respectively. `Range.step_by` replaces the stored
+absolute step with another value of `num`; it does not compose or multiply
+steps. `Range.size_hint` returns the stored exact count when that count fits in
+`U64`, otherwise `Unknown`. `Range.iter` delegates to `num.range_iter` and
+propagates that hint into the resulting iterator.
+
+Reverse iteration is an explicit numeric capability. `Range.iter_rev`
+reconstructs the opposite direction through `num.range_exclusive_from` or
+`num.range_inclusive_from`, reapplies the stored step, and iterates that range.
+Integers and `Dec` provide both `_to` and `_from` constructors. `F32` and `F64`
+provide only `_to`, so their ranges deliberately have no `iter_rev` dispatch.
+`Range.custom` permits third-party number types to construct the same stored
+representation and participate by implementing the explicit range methods;
+range behavior comes only from those explicit methods, and arithmetic method
+names are not consulted.
 
 #### Explicit Iterator Representation Tiers
 
@@ -3335,8 +3392,7 @@ const IteratorKind = enum(u8) {
     list_rev,
     str,
     single,
-    range_exclusive,
-    range_inclusive,
+    range,
     numeric_until,
     numeric_to,
     map,
@@ -3600,14 +3656,22 @@ a known iterator constructor, SpecConstr can:
 
 When the continuation observes only part of a compiler-generated tuple loop
 result, SpecConstr may narrow the loop's exit ABI without narrowing its
-back-edge state. That rewrite is lexical: the ordinary full expression clone
-carries the selected exit ABI while cloning the owning loop body, rewrites
-every `break` owned by that loop wherever it occurs (including inside mixed
-value-producing branch arms and statement values), and pushes an explicit null
-selection while cloning a nested loop body. Initial values remain in the
-enclosing lexical loop context. Re-cloned output breaks carry an explicit
-SpecConstr-owned selected-ABI stamp, so normalization propagates the already
-completed transfer instead of trying to recognize it from its scalar shape.
+back-edge state. Exit selection is a distinct final clone phase after the
+specialization graph is complete. Ordinary specialization and body-rewrite
+clones never initiate it. The exit-selection clone keeps calls opaque, does not
+rewrite call patterns, and cannot emit callable workers, so it cannot reopen
+the specialization graph through recursive call edges. Its recursive input is
+limited to the selected function's finite, acyclic expression ownership.
+
+That rewrite is lexical: the dedicated full expression clone carries the
+selected exit ABI while cloning the owning loop body, rewrites every `break`
+owned by that loop wherever it occurs (including inside mixed value-producing
+branch arms and statement values), and pushes an explicit null selection while
+cloning a nested loop body. Initial values remain in the enclosing lexical loop
+context. Re-cloned output breaks carry an explicit SpecConstr-owned selected-ABI
+stamp, so the exit-selection clone's internal normalization propagates the
+already completed transfer instead of trying to recognize it from its scalar
+shape.
 It is invalid to change the loop result type after rewriting only a terminating
 spine or a subset of exits; every selected exit must transfer exactly the
 explicitly selected tuple items.
@@ -4208,10 +4272,12 @@ of the same raw edge reuses its recorded target; type traversal and digest
 construction occur only when selecting a target for a new derived edge, and
 an edge selected with no parent records no digest at all.
 
-Only roots actually promoted to generalized rank can instantiate a side-table
-scheme. A mixed recursive group can provisionally capture requirements for a
-value-restricted member before generalization; the checker removes that entry
-as soon as the generalizer leaves the root non-generalized. A requirement is
+Only bindings explicitly classified as schemes can instantiate a side-table
+scheme; the root itself need not have generalized rank when quantified
+descendants make the binding a partial scheme. A mixed recursive group can
+provisionally capture requirements for a value-restricted member before
+generalization; the checker removes that entry as soon as the generalization
+boundary does not classify the binding as a scheme. A requirement is
 retired only after static-dispatch checking actually consumes or rejects its
 exact callable relation; a concrete, aliased, rigid, generalized, or erroneous
 receiver is not evidence of discharge. A creation relation whose generalized
@@ -6026,17 +6092,19 @@ payloads use payload position order. Monotype lowering copies those spans
 directly. It does not sort by display text, declaration spelling, runtime
 encoding, or incidental map iteration.
 
-Nominal records additionally carry their declared field order as separate
-explicit data, because their runtime layout follows declaration order rather
-than the lexicographic row order (see Nominal Record Field Order). The
-lexicographic row order remains the identity used for field-name resolution;
-declared order feeds only layout. In CheckedModule data this is a flat
-`CheckedDeclaredField` pool. A named entry stores the record-field label that
-must be matched against the lexicographic backing row; a padding entry stores
-the ordinal of the corresponding checked padding type in
+Checked nominal records preserve their declared field order as separate
+explicit data so source-level unnamed fields are not lost when the backing row
+is sorted lexicographically (see Nominal Record Field Order). The lexicographic
+row order remains the identity used for field-name resolution. In CheckedModule
+data the source order is a flat `CheckedDeclaredField` pool. A named entry stores
+the record-field label that matches the lexicographic backing row; a padding
+entry stores the ordinal of the corresponding checked padding type in
 `padding_field_types`. The padding type itself is not duplicated in the
-declared-order entry, so generic nominal instantiation substitutes padding
-types in exactly one place. These stay two separate data.
+declared-order entry, so generic nominal instantiation substitutes padding types
+in exactly one place. Monotype preserves this field metadata because boxy
+aggregate descriptors also consume it. Layout selection is independent:
+without padding, LSS and boxy's runtime layout path reuse the structural
+backing; with padding, they propagate an explicit declared-order policy.
 
 For named types, checking outputs:
 
@@ -7294,21 +7362,25 @@ caches of explicit checked and boxy lowering data. They must not recover missing
 data from source syntax, type display strings, backend symbols, or runtime
 bytes.
 
-Boxy representation planning consumes checked nominal declared-order entries
-directly. For usage payloads whose finalized representation points at a local or
-imported box-payload capability, the planner obtains the instantiated backing
-root and padding roots from that capability rather than treating empty
+Boxy representation planning preserves checked nominal declared-field entries
+as explicit aggregate metadata for runtime descriptor lowering. Separately, an
+unnamed field selects declared-order runtime layout. For usage payloads whose
+finalized representation points at a local or imported box-payload capability,
+the planner obtains the instantiated backing root and padding roots from that
+capability rather than treating empty
 `padding_field_types` on the usage payload as absence of padding. Imported
 capability roots are source-module checked ids; the planner maps them into the
-root checked type store by their exported checked type digests. Named
-declared fields from imported declarations are matched against the mapped
-root backing row through checked field-label text, not by assuming equal
-module-local label ids. The planner lowers each named entry to the matching
-backing-row child and each padding entry to the instantiated padding type
-referenced by its ordinal. The boxy layout planner then emits a nominal struct
-node in that declared order and marks it with the shared layout graph's
-nominal-struct marker. The ordinary layout store verifies or repairs the field
-order; boxy does not implement a separate nominal layout algorithm.
+root checked type store by their exported checked type digests. Named declared
+fields from imported declarations are matched against the mapped root backing
+row through checked field-label text, not by assuming equal module-local label
+ids. The planner lowers each named entry to the matching backing-row child and
+each padding entry to the instantiated padding type referenced by its ordinal.
+For descriptor payloads the boxy layout planner can emit a structurally ordered
+span from the declared-field metadata. For ordinary runtime layout, it emits a
+declared-order span only when padding selects that policy; without padding it
+reuses the structural backing representation. The ordinary layout store commits
+the selected policy; boxy does not implement a separate nominal layout
+algorithm.
 
 Boxy tag-union planning stores tag variants explicitly, separately from payload
 children. The representation's child span still contains payload children in
@@ -8272,20 +8344,22 @@ alignment to the struct, so pure padding never inflates a struct's alignment.
 Using an unnamed field in a structural record type is rejected during
 canonicalization.
 
-Declared field order is explicit data. Record rows are sorted lexicographically
-by name at several stages (checking, Monotype row lowering, and Monotype
-instantiation) because field-name resolution and digests depend on a single
-fixed order, so the declared order is not recoverable from the lowered record
-itself. Canonicalization preserves it—a nominal declaration's record
+Declared field order is explicit checked data. Record rows are sorted
+lexicographically by name at several stages (checking, Monotype row lowering,
+and Monotype instantiation) because field-name resolution and digests depend on
+a single fixed order, so the declared order is not recoverable from the lowered
+record itself. Canonicalization preserves it—a nominal declaration's record
 annotation keeps its fields in source order—and checking records it as
 explicit CheckedModule data distinct from the (lexicographic) backing row,
-so later stages consume it without rescanning declarations. Monotype lowering,
-boxy planning, and layout lowering all use this checked datum. The struct
-commit uses
-it only for the unnamed-field opt-in described above; otherwise nominal records
-use the structural order of their backing row. Field-name resolution continues
-to use the lexicographic row order, independent of the layout offset map. The
-same data is consumed by the interpreter's layout store, so all backends agree.
+so later stages never rescan declarations. Monotype lowering preserves this
+metadata for boxy aggregate descriptor planning. LSS and boxy representation
+planning use the presence of explicit checked padding types to select the
+declared-order layout policy; otherwise their runtime layout path reuses the
+structural backing row. The layout graph records the selected policy on the
+struct span, and the store commits it without probing or reconstructing intent.
+Field-name resolution continues to use the lexicographic row order, independent
+of the layout offset map. The same policy is consumed by the interpreter's
+layout store, so all backends agree.
 
 ### Pattern Lowering
 
@@ -8990,6 +9064,47 @@ parameter-benefit mask consumed by variant admission; the caller does not
 rediscover the benefit from field reads or uniqueness checks. The base emission
 keeps the borrowed schedule untouched.
 
+Ownership-complete aggregate reads extend that schedule across wrappers without
+scalarizing them. An aggregate read is ownership-complete when, for the
+runtime shape established by the read, it contains every refcounted field the
+source owns: a struct field is its struct's sole refcounted field, a whole tag
+payload contains all refcounted data of the active variant, or an individual
+tag-payload field is that payload struct's sole refcounted field. The tag read's
+variant and discriminant metadata is the explicit proof of the active shape;
+no layout shape is treated as evidence that a variant is active.
+
+Ownership-complete aggregate reads and borrowed pure aliases form explicit
+ownership places. The place graph is solved to a fixpoint, so a nested read
+chain such as tag payload to struct field keeps the root aggregate's unit key.
+If the final read result binds owned, that read moves the unit only when the
+root unit is present and the root's liveness group has no later use on that
+path; otherwise it retains exactly as an ordinary read would. A borrowed result
+keeps the root unit key until a later consuming operation makes the same
+path-sensitive decision. This applies to ordinary owned locals and to owned
+join parameters; join parameters are not themselves assigned one global place
+origin because each incoming edge defines the join cell independently.
+
+On another control-flow path where the aggregate read did not run, the root
+still holds the unit and receives its ordinary whole release. Consequently no
+runtime discriminant, drop flag, expanded join parameter, scalarized wrapper,
+or residual storage is introduced.
+
+When such an ownership place is passed to a callee parameter with an
+owned-only take benefit, the source procedure parameter has that same benefit.
+Benefits are solved to a fixpoint over direct call edges and pure
+whole-parameter forwarding, so an arbitrary chain of ownership-neutral wrappers
+does not stop the move. In the owned emission, moving the aggregate-read value
+clears the source parameter's unit. The borrowed base emission is unchanged
+because it never holds that unit.
+
+An exact field-take benefit may materialize an owned mode variant even when
+general optimization-level specialization is disabled. This exception is
+demand-driven: only a dying argument whose callee benefit removes real RC work
+requests the variant, and variants are interned by their ownership vector.
+Without that variant the caller must manufacture a second unit, which changes
+the runtime ownership schedule rather than merely foregoing optional inlining
+or uniqueness seeding.
+
 Which consuming reads become takes is decided per field by a forward
 dataflow from the container's definition over the control-flow graph,
 tracking for each refcounted field whether it may and whether it must have
@@ -9029,25 +9144,34 @@ nothing beyond its visit in one linear statement scan, preserving the rule
 that ARC memory scales with ownership work actually demanded.
 
 The certifier verifies takes from the emitted LIR alone, with no side tables,
-by deferred claims. A field read still binds its result at balance zero, but
-the result value remembers which container value and field it came from. When
-such a value is consumed or released without a unit—where the certifier
-previously failed outright—the consumption instead claims that field's
-stored unit from the container, provided the container still holds its own
-unit unconditionally and the field is unclaimed; a second claim of the same
-field fails as before. Aggregate moves keep their transient-negative
-discipline: negative balances attempt their claims when the path's outcome is
-fixed, at a terminal's leak check or a jump's quotient. The container's
-balance stays at one throughout—borrowed reads of its unclaimed bytes
-remain legitimate after any claim—and a claim set covering every refcounted
-field marks the unit spent: a terminal treats it as balanced and a jump's
-carry check exempts it, while anything less fails as an unspent stored unit.
-A claimed container can be neither consumed, moved into an aggregate, nor
-released whole.
-Claims and claim targets cross join quotients on the summary: owned entries
-carry their container's claim set, and borrowed field-read entries carry
-their container's representative and field so a claim deferred past a join
-still lands.
+by deferred claims. A field or payload read still binds its result at balance
+zero, but the result value remembers its container and encoded read operation.
+When such a value is consumed or released without a unit—where the certifier
+previously failed outright—the consumption instead claims the read's stored
+unit from the container, provided the container still holds its own unit
+unconditionally or can claim itself through an ownership-complete aggregate
+read from its parent. The latter recursively certifies nested places without
+changing their runtime representation: the parent claim and the child's
+conceptual balance are two views of the same unit. Struct fields claim
+independently; a tag payload claims the tag's unit only when the layouts prove
+the aggregate read ownership-complete for the read's explicit variant. A
+partial tag payload can never claim, and a second claim of the same unit fails
+as before. Aggregate moves keep their transient-negative discipline: negative
+balances attempt their claims when the path's outcome is fixed, at a terminal's
+leak check or a jump's quotient. A claimed container keeps its conceptual
+balance at one—borrowed reads of its unclaimed bytes remain legitimate—and a
+complete claim set marks that unit spent: a terminal treats it as balanced and
+a jump's carry check exempts it, while anything less fails as an unspent stored
+unit. A claimed container can be neither consumed, moved into an aggregate, nor
+released whole. Claims and complete read chains cross join quotients on the
+summary: owned entries carry their container's claim set, and borrowed field or
+payload entries carry their immediate container's representative and encoded
+read operation. When such a read value is relevant after the join but its
+nearest unit-holding container is not independently relevant, quotienting
+claims the stored unit and makes the join value its carrier; when that
+container is independently relevant, the read stays borrowed. Restoration of
+the remaining read chains happens only after all representatives exist, so
+correctness is independent of local numbering.
 
 Partial dismantling across diverging paths -- a field consumed in one switch
 arm and not another -- is future work: it needs per-path residual masks, and
@@ -10075,12 +10199,24 @@ The host may read, store, return, or release an owned argument. It must account
 for that ownership explicitly:
 
 ```text
-read and discard: decref the argument when done
+read and discard: release the argument when done
 store past return: move the argument ownership into storage, or incref a stored
-                   copy and then decref the call argument
+                   copy and then release the call argument
 return the same value: move the argument ownership into the return slot, or
-                       incref/decref so exactly one returned ownership remains
+                       incref/release so exactly one returned ownership remains
 ```
+
+Releasing an owned argument means the same operation compiled Roc code performs
+when it drops a value it owns, which for a container is not a decrement of the
+container's own count alone. A retain of a container is shallow—sharing a
+`List(T)` never touches item counts—so the matching release drops the items
+only when the container's own count reaches zero. A release that drops the
+items unconditionally frees them twice whenever the Roc caller still holds the
+container, and a release that never drops them leaks every item.
+Generated glue must therefore give the host a named release for every type
+reachable from a hosted or provided signature whose release is more than a
+single count decrement, and must name that release at the hosted signature: the
+container's own `decref` is a primitive, not a release, and must say so.
 
 The compiler must not infer different ownership behavior from hosted function
 names, return types, or body absence. Hosted-argument ownership is an ABI rule,
@@ -10433,13 +10569,18 @@ reports that the user must restart `roc --watch` and leaves the previous
 `RunImage` active.
 
 Successful rebuild workers write a fresh shared-memory image descriptor plus a
-new dev `RunImage` into either a compiler-selected free image region or the
-append position of the same mapping. Descriptor slots are managed separately
-from image bytes and are reused only as descriptors, never as code or data. The
-descriptor records the generation, `RunImage` header offset, image bound, image
-allocation start/end, lifecycle state, and atomic reference count. The worker
-commits the descriptor offset through the hot-load control block with
-release/acquire atomics. The host shim checks that control
+new dev `RunImage` candidate into either a compiler-selected free image region
+or the append position of the same mapping. Descriptor slots are managed
+separately from image bytes and are reused only as descriptors, never as code or
+data. The descriptor records the generation, `RunImage` header offset, image
+bound, image allocation start/end, lifecycle state, and atomic reference count.
+The worker leaves that descriptor in the writing state and exits after recording
+the exact source-input states it consumed. The parent installs the refreshed
+watch set, compares those recorded states with the current source-input states,
+and commits the descriptor offset through the hot-load control block only when
+they still match. A stale candidate is reclaimed without becoming visible to the
+host, and the parent starts a rebuild from the newer input states. The host shim
+checks that control
 block at Roc entrypoint boundaries. If a newer generation is available, the shim
 retains the latest descriptor, validates and relocates the replacement
 `RunImage` in place, marks its code pages read/execute in the shared mapping,
@@ -10457,8 +10598,8 @@ only retains and releases descriptor references. Calls that entered old code
 before the swap keep executing old code safely while new entrypoint calls use
 the new image.
 
-The compiler parent process is the sole owner of shared-memory image-byte
-reclamation. It keeps unbounded process-local lists of descriptor offsets,
+The compiler parent process is the sole owner of committing candidate descriptor offsets
+and shared-memory image-byte reclamation. It keeps unbounded process-local lists of descriptor offsets,
 reclaimed descriptor slots, and reclaimed image regions. After a rebuild commits
 a descriptor, after the host acknowledges, and before choosing storage for
 another rebuild, the parent sweeps all known descriptors. The current descriptor
@@ -10516,6 +10657,14 @@ solving, adapted for Roc's checked module boundary and existing LIR.
 - Lambda Mono removes function types by turning finite function values into
   ordinary generated tag unions and erased function values into packed erased
   callables.
+
+Cor's LSS checker represents quantification explicitly on binding schemes:
+lookup instantiates a scheme, while a monotype is reused, and a call always
+produces a fresh monomorphic result. Roc's checked type store retains rank-based
+quantified variables for its richer solver, but its explicit binding-scheme
+classification preserves that same rank-1 behavior. In both designs the decision
+to instantiate comes from the binding, never from treating a function nested
+inside an arbitrary expression result as polymorphic.
 
 Roc adds language and implementation data that Cor's experiment does not need:
 

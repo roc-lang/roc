@@ -13,21 +13,18 @@ match (value, other) {
 # EXPECTED
 POLYMORPHIC VALUE - variable_shadowing.md:1:1:4:2
 # PROBLEMS
+── ✗ polymorphic value ─────────────────────────────── variable_shadowing.md:1:1
 
-┌───────────────────┐
-│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
-└┬──────────────────┘  polymorphic type.                                      │
- │                                                                            │
- │  match (value, other) {                                                    │
- │      (Some(x), y) => x + y                                                 │
- │      (None, x) => x * 2                                                    │
- │  }                                                                         │
- │                                                                            │
- └───────────────────────────────────────────────── variable_shadowing.md:1:1 ┘
+This top-level value still has an unresolved polymorphic type.
 
-    Its type is:
-    a where [a.plus : a, _arg -> a, a.times : a, Dec -> a]
-    Add an annotation or use this value in a way that fixes its concrete type.
+match (value, other) {
+    (Some(x), y) => x + y
+    (None, x) => x * 2
+}
+
+Its type is:
+a where [a.plus : a, _arg -> a, a.times : a, Dec -> a]
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -85,7 +82,7 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "y"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 214)
+					(e-dispatch-call (method "plus") (constraint-fn-var 224)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -100,7 +97,7 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "x"))))))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 224)
+					(e-dispatch-call (method "times") (constraint-fn-var 234)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

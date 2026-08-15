@@ -11,16 +11,14 @@ a=0->b
 # EXPECTED
 NAME NOT IN SCOPE - formatter_idempotence_issue_8851_comment1.md:1:6:1:7
 # PROBLEMS
+── ✗ name not in scope ──────── formatter_idempotence_issue_8851_comment1.md:1:6
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  a=0->b                                                                    │
- │       ‾                                                                    │
- └────────────────────────── formatter_idempotence_issue_8851_comment1.md:1:6 ┘
+Nothing is named b in this scope.
 
-    Is it misspelled, or is there an import missing?
+a=0->b
+     ^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

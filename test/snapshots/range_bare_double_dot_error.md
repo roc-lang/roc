@@ -11,31 +11,27 @@ r = 1..5
 NOT A RANGE OPERATOR - range_bare_double_dot_error.md:1:8:1:9
 UNRECOGNIZED SYNTAX - range_bare_double_dot_error.md:1:8:1:9
 # PROBLEMS
+── ✗ not a range operator ─────────────────── range_bare_double_dot_error.md:1:8
 
-┌──────────────────────┐
-│ NOT A RANGE OPERATOR ├─ I was parsing an expression, and `..` is not a ─────┐
-└┬─────────────────────┘  range operator.                                     │
- │                                                                            │
- │  r = 1..5                                                                  │
- │         ‾                                                                  │
- └──────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
+I was parsing an expression, and `..` is not a range operator.
 
-    Use `..<` for an exclusive range or `..=` for an inclusive range.
+r = 1..5
+       ^
 
-    For example:
-        1..<10
-        1..=10
+Use ..< for an exclusive range or ..= for an inclusive range.
 
+For example:
+    1..<10
+    1..=10
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  r = 1..5                                                                  │
- │         ‾                                                                  │
- └──────────────────────────────────────── range_bare_double_dot_error.md:1:8 ┘
+── ✗ unrecognized syntax ──────────────────── range_bare_double_dot_error.md:1:8
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+I don't recognize this syntax.
+
+r = 1..5
+       ^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 # TOKENS
 ~~~zig

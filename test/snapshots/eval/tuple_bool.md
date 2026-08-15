@@ -13,57 +13,49 @@ MISSING METHOD - tuple_bool.md:1:45:1:51
 MISSING METHOD - tuple_bool.md:1:69:1:74
 MISSING METHOD - tuple_bool.md:1:78:1:83
 # PROBLEMS
+── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:38
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
-└┬───────────────┘  doesn't have that method.                                 │
- │                                                                            │
- │  ….False, !True, !False, True and False, !True or !True)                   │
- │           ‾‾‾‾‾                                                            │
- └──────────────────────────────────────────────────────── tuple_bool.md:1:38 ┘
+This not method is being called on a value whose type doesn't have that method.
 
-    The value's type, which does not have a method named `not`, is:
+(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
+                                     ^^^^^
 
-        [True, ..]
+The value's type, which does not have a method named not, is:
 
+    [True, ..]
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
-└┬───────────────┘  doesn't have that method.                                 │
- │                                                                            │
- │  … !True, !False, True and False, !True or !True)                          │
- │           ‾‾‾‾‾‾                                                           │
- └──────────────────────────────────────────────────────── tuple_bool.md:1:45 ┘
+── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:45
 
-    The value's type, which does not have a method named `not`, is:
+This not method is being called on a value whose type doesn't have that method.
 
-        [False, ..]
+(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
+                                            ^^^^^^
 
+The value's type, which does not have a method named not, is:
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
-└┬───────────────┘  doesn't have that method.                                 │
- │                                                                            │
- │  … False, !True or !True)                                                  │
- │           ‾‾‾‾‾                                                            │
- └──────────────────────────────────────────────────────── tuple_bool.md:1:69 ┘
+    [False, ..]
 
-    The value's type, which does not have a method named `not`, is:
+── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:69
 
-        [True, ..]
+This not method is being called on a value whose type doesn't have that method.
 
+(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
+                                                                    ^^^^^
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
-└┬───────────────┘  doesn't have that method.                                 │
- │                                                                            │
- │  …True or !True)                                                           │
- │           ‾‾‾‾‾                                                            │
- └──────────────────────────────────────────────────────── tuple_bool.md:1:78 ┘
+The value's type, which does not have a method named not, is:
 
-    The value's type, which does not have a method named `not`, is:
+    [True, ..]
 
-        [True, ..]
+── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:78
+
+This not method is being called on a value whose type doesn't have that method.
+
+(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
+                                                                             ^^^^^
+
+The value's type, which does not have a method named not, is:
+
+    [True, ..]
 
 # TOKENS
 ~~~zig

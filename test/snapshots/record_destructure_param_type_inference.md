@@ -166,7 +166,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 273)
+			(e-call (constraint-fn-var 283)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-lookup-local
@@ -181,7 +181,7 @@ NO CHANGE
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "destructured"))
-		(e-call (constraint-fn-var 317)
+		(e-call (constraint-fn-var 327)
 			(e-lookup-local
 				(p-assign (ident "apply")))
 			(e-record
@@ -203,21 +203,21 @@ NO CHANGE
 				(e-block
 					(s-let
 						(p-assign (ident "hi_shifted"))
-						(e-dispatch-call (method "shl_wrap") (constraint-fn-var 311)
+						(e-dispatch-call (method "shl_wrap") (constraint-fn-var 321)
 							(receiver
-								(e-dispatch-call (method "to_u64") (constraint-fn-var 302)
+								(e-dispatch-call (method "to_u64") (constraint-fn-var 312)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "hi"))))
 									(args)))
 							(args
 								(e-num (value "32")))))
-					(e-dispatch-call (method "bitwise_or") (constraint-fn-var 315)
+					(e-dispatch-call (method "bitwise_or") (constraint-fn-var 325)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "hi_shifted"))))
 						(args
-							(e-dispatch-call (method "to_u64") (constraint-fn-var 313)
+							(e-dispatch-call (method "to_u64") (constraint-fn-var 323)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "lo"))))
@@ -226,7 +226,7 @@ NO CHANGE
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "field_access"))
-		(e-call (constraint-fn-var 365)
+		(e-call (constraint-fn-var 375)
 			(e-lookup-local
 				(p-assign (ident "apply")))
 			(e-record
@@ -241,9 +241,9 @@ NO CHANGE
 				(e-block
 					(s-let
 						(p-assign (ident "hi_shifted"))
-						(e-dispatch-call (method "shl_wrap") (constraint-fn-var 352)
+						(e-dispatch-call (method "shl_wrap") (constraint-fn-var 362)
 							(receiver
-								(e-dispatch-call (method "to_u64") (constraint-fn-var 343)
+								(e-dispatch-call (method "to_u64") (constraint-fn-var 353)
 									(receiver
 										(e-field-access
 											(receiver
@@ -254,12 +254,12 @@ NO CHANGE
 									(args)))
 							(args
 								(e-num (value "32")))))
-					(e-dispatch-call (method "bitwise_or") (constraint-fn-var 361)
+					(e-dispatch-call (method "bitwise_or") (constraint-fn-var 371)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "hi_shifted"))))
 						(args
-							(e-dispatch-call (method "to_u64") (constraint-fn-var 359)
+							(e-dispatch-call (method "to_u64") (constraint-fn-var 369)
 								(receiver
 									(e-field-access
 										(receiver

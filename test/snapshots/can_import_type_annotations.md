@@ -63,198 +63,151 @@ MOD NOT FOUND - can_import_type_annotations.md:24:53:24:59
 MOD NOT FOUND - can_import_type_annotations.md:24:72:24:78
 NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
+── ● duplicate definition ─────────────────── can_import_type_annotations.md:2:1
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json                                                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────────── can_import_type_annotations.md:2:1 ┘
+The name Json is being redeclared here:
 
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import http.Client as Http exposing [Request, Response]              │
-      │  ‾                                                                    │
-      └─────────────────────────────────── can_import_type_annotations.md:1:1 ┘
+import json.Json
+^^^^^^^^^^^^^^^^
 
+In this scope, Json was already defined in can_import_type_annotations.md:1:1:
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Request` is not declared in this scope. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processRequest : Request -> Response                                      │
- │                   ‾‾‾‾‾‾‾                                                  │
- └─────────────────────────────────────── can_import_type_annotations.md:5:18 ┘
+import http.Client as Http exposing [Request, Response]
+^
 
+── ✗ undeclared type ─────────────────────── can_import_type_annotations.md:5:18
 
+The type Request is not declared in this scope.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Response` is not declared in this scope. ──────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processRequest : Request -> Response                                      │
- │                              ‾‾‾‾‾‾‾‾                                      │
- └─────────────────────────────────────── can_import_type_annotations.md:5:29 ┘
+processRequest : Request -> Response
+                 ^^^^^^^
 
+── ✗ undeclared type ─────────────────────── can_import_type_annotations.md:5:29
 
+The type Response is not declared in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `defaultResponse` in this scope. ─────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  processRequest = |req| Http.defaultResponse                               │
- │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
- └─────────────────────────────────────── can_import_type_annotations.md:6:24 ┘
+processRequest : Request -> Response
+                            ^^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ───────────────────── can_import_type_annotations.md:6:24
 
+Nothing is named defaultResponse in this scope.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `req` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processRequest = |req| Http.defaultResponse                               │
- │                    ‾‾‾                                                     │
- └─────────────────────────────────────── can_import_type_annotations.md:6:19 ┘
+processRequest = |req| Http.defaultResponse
+                       ^^^^^^^^^^^^^^^^^^^^
 
-    If you don't need this variable, prefix it with an underscore like `_req`
-    to suppress this warning.
+Is it misspelled, or is there an import missing?
 
+── ● unused variable ─────────────────────── can_import_type_annotations.md:6:19
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Value` type is declared to be in `json.Json`, ────┐
-└┬─────────────────┘  which does not exist.                                   │
- │                                                                            │
- │  parseJson : Str -> Json.Value                                             │
- │                         ‾‾‾‾‾‾                                             │
- └─────────────────────────────────────── can_import_type_annotations.md:8:24 ┘
+Variable req is defined here and then never used:
 
+processRequest = |req| Http.defaultResponse
+                  ^^^
 
+If you don't need this variable, prefix it with an underscore like _req to
+suppress this warning.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `parse` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  parseJson = |input| Json.parse(input)                                     │
- │                      ‾‾‾‾‾‾‾‾‾‾                                            │
- └─────────────────────────────────────── can_import_type_annotations.md:9:21 ┘
+── ✗ mod not found ────────────────────── can_import_type_annotations.md:8:24
 
-    Is it misspelled, or is there an import missing?
+This Value type is declared to be in json.Json, which does not exist.
 
+parseJson : Str -> Json.Value
+                       ^^^^^^
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Request` type is declared to be in ───────────────┐
-└┬─────────────────┘  `http.Client`, which does not exist.                    │
- │                                                                            │
- │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                │
- │                  ‾‾‾‾‾‾‾‾                                                  │
- └────────────────────────────────────── can_import_type_annotations.md:11:17 ┘
+── ✗ name not in scope ───────────────────── can_import_type_annotations.md:9:21
 
+Nothing is named parse in this scope.
 
+parseJson = |input| Json.parse(input)
+                    ^^^^^^^^^^
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Response` type is declared to be in ──────────────┐
-└┬─────────────────┘  `http.Client`, which does not exist.                    │
- │                                                                            │
- │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                │
- │                                      ‾‾‾‾‾‾‾‾‾                             │
- └────────────────────────────────────── can_import_type_annotations.md:11:37 ┘
+Is it misspelled, or is there an import missing?
 
+── ✗ mod not found ───────────────────── can_import_type_annotations.md:11:17
 
+This Request type is declared to be in http.Client, which does not exist.
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Error` type is declared to be in `json.Json`, ────┐
-└┬─────────────────┘  which does not exist.                                   │
- │                                                                            │
- │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                │
- │                                                     ‾‾‾‾‾‾                 │
- └────────────────────────────────────── can_import_type_annotations.md:11:52 ┘
+handleApi : Http.Request -> Try(Http.Response, Json.Error)
+                ^^^^^^^^
 
+── ✗ mod not found ───────────────────── can_import_type_annotations.md:11:37
 
+This Response type is declared to be in http.Client, which does not exist.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  result = Json.decode(request.body)                                        │
- │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └────────────────────────────────────── can_import_type_annotations.md:13:14 ┘
+handleApi : Http.Request -> Try(Http.Response, Json.Error)
+                                    ^^^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+── ✗ mod not found ───────────────────── can_import_type_annotations.md:11:52
 
+This Error type is declared to be in json.Json, which does not exist.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `success` in this scope. ─────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Ok(data) => Ok(Http.success(data))                                        │
- │                 ‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └────────────────────────────────────── can_import_type_annotations.md:15:24 ┘
+handleApi : Http.Request -> Try(Http.Response, Json.Error)
+                                                   ^^^^^^
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ──────────────────── can_import_type_annotations.md:13:14
 
+Nothing is named decode in this scope.
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Config` type is declared to be in `json.Json`, ───┐
-└┬─────────────────┘  which does not exist.                                   │
- │                                                                            │
- │  config : Json.Config                                                      │
- │               ‾‾‾‾‾‾‾                                                      │
- └────────────────────────────────────── can_import_type_annotations.md:20:14 ┘
+result = Json.decode(request.body)
+         ^^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ──────────────────── can_import_type_annotations.md:15:24
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `defaultConfig` in this scope. ───────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  config = Json.defaultConfig                                               │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └────────────────────────────────────── can_import_type_annotations.md:21:10 ┘
+Nothing is named success in this scope.
 
-    Is it misspelled, or is there an import missing?
+Ok(data) => Ok(Http.success(data))
+               ^^^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Parser.Config` type is declared to be in ─────────┐
-└┬─────────────────┘  `json.Json`, which does not exist.                      │
- │                                                                            │
- │  …n.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)               │
- │           ‾‾‾‾‾‾‾                                                          │
- └────────────────────────────────────── can_import_type_annotations.md:24:29 ┘
+── ✗ mod not found ───────────────────── can_import_type_annotations.md:20:14
 
+This Config type is declared to be in json.Json, which does not exist.
 
+config : Json.Config
+             ^^^^^^^
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Value` type is declared to be in `json.Json`, ────┐
-└┬─────────────────┘  which does not exist.                                   │
- │                                                                            │
- │  …Try(Json.Value, Json.Parser.Error)                                       │
- │           ‾‾‾‾‾‾                                                           │
- └────────────────────────────────────── can_import_type_annotations.md:24:53 ┘
+── ✗ name not in scope ──────────────────── can_import_type_annotations.md:21:10
 
+Nothing is named defaultConfig in this scope.
 
+config = Json.defaultConfig
+         ^^^^^^^^^^^^^^^^^^
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Parser.Error` type is declared to be in ──────────┐
-└┬─────────────────┘  `json.Json`, which does not exist.                      │
- │                                                                            │
- │  …n.Parser.Error)                                                          │
- │           ‾‾‾‾‾‾                                                           │
- └────────────────────────────────────── can_import_type_annotations.md:24:72 ┘
+Is it misspelled, or is there an import missing?
 
+── ✗ mod not found ───────────────────── can_import_type_annotations.md:24:29
 
+This Parser.Config type is declared to be in json.Json, which does not exist.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `parseWith` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  … input| Json.Parser.parseWith(parserConfig, input)                       │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └────────────────────────────────────── can_import_type_annotations.md:25:40 ┘
+advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
+                            ^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+── ✗ mod not found ───────────────────── can_import_type_annotations.md:24:53
+
+This Value type is declared to be in json.Json, which does not exist.
+
+advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
+                                                    ^^^^^^
+
+── ✗ mod not found ───────────────────── can_import_type_annotations.md:24:72
+
+This Parser.Error type is declared to be in json.Json, which does not exist.
+
+advancedParser : Json.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)
+                                                                       ^^^^^^
+
+── ✗ name not in scope ──────────────────── can_import_type_annotations.md:25:40
+
+Nothing is named parseWith in this scope.
+
+advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input)
+                                       ^^^^^^^^^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

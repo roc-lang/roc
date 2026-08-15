@@ -22,21 +22,20 @@ result = do_something()
 # EXPECTED
 TYPE MISMATCH - issue8738_question_on_non_try.md:9:7:9:30
 # PROBLEMS
+── ✗ type mismatch ──────────────────────── issue8738_question_on_non_try.md:9:7
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The `?` operator expects a `Try` type (a tag union ────────┐
-└┬──────────────┘  containing ONLY `Ok` and `Err` tags), but I found.         │
- │                                                                            │
- │  _x = ok_or(Err(""), Exit(5))?                                             │
- │       ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
- └────────────────────────────────────── issue8738_question_on_non_try.md:9:7 ┘
+The ? operator expects a Try type (a tag union containing ONLY Ok and Err
+tags), but I found.
 
-    This expression has type:
+_x = ok_or(Err(""), Exit(5))?
+     ^^^^^^^^^^^^^^^^^^^^^^^
 
-        [Exit(a), ..] where [a.from_numeral : Numeral -> Try(a,
-        [InvalidNumeral(Str)])]
+This expression has type:
 
-    Tip: Maybe wrap a value using `Ok(value)` or `Err(value)`.
+    [Exit(a), ..] where [a.from_numeral : Numeral -> Try(a,
+    [InvalidNumeral(Str)])]
+
+Tip: Maybe wrap a value using Ok(value) or Err(value).
 
 # TOKENS
 ~~~zig
@@ -149,7 +148,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 325)
+		(e-call (constraint-fn-var 336)
 			(e-lookup-local
 				(p-assign (ident "do_something"))))))
 ~~~

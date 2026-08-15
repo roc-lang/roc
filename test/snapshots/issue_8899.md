@@ -25,60 +25,50 @@ DEPRECATED NUMBER SUFFIX - issue_8899.md:11:20:11:25
 DEPRECATED NUMBER SUFFIX - issue_8899.md:11:27:11:32
 DEPRECATED NUMBER SUFFIX - issue_8899.md:11:34:11:39
 # PROBLEMS
+── ✗ deprecated number suffix ─────────────────────────────── issue_8899.md:3:22
 
-┌──────────────────────────┐
-│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses an old suffix syntax. ─┐
-└┬─────────────────────────┘                                                  │
- │                                                                            │
- │  var $total = 0i64                                                         │
- │               ‾‾‾‾                                                         │
- └──────────────────────────────────────────────────────── issue_8899.md:3:22 ┘
+This number literal uses an old suffix syntax.
 
-    The suffix `i64` is deprecated. Write `0.I64` instead.
+var $total = 0i64
+             ^^^^
 
+The suffix i64 is deprecated. Write 0.I64 instead.
 
-┌──────────────────────────┐
-│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses an old suffix syntax. ─┐
-└┬─────────────────────────┘                                                  │
- │                                                                            │
- │  var $acc = [0i64]                                                         │
- │              ‾‾‾‾                                                          │
- └──────────────────────────────────────────────────────── issue_8899.md:4:21 ┘
+── ✗ deprecated number suffix ─────────────────────────────── issue_8899.md:4:21
 
-    The suffix `i64` is deprecated. Write `0.I64` instead.
+This number literal uses an old suffix syntax.
 
+var $acc = [0i64]
+            ^^^^
 
-┌──────────────────────────┐
-│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses an old suffix syntax. ─┐
-└┬─────────────────────────┘                                                  │
- │                                                                            │
- │  sum_with_last([10i64, 20i64, 30i64])                                      │
- │                 ‾‾‾‾‾                                                      │
- └─────────────────────────────────────────────────────── issue_8899.md:11:20 ┘
+The suffix i64 is deprecated. Write 0.I64 instead.
 
-    The suffix `i64` is deprecated. Write `10.I64` instead.
+── ✗ deprecated number suffix ────────────────────────────── issue_8899.md:11:20
 
+This number literal uses an old suffix syntax.
 
-┌──────────────────────────┐
-│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses an old suffix syntax. ─┐
-└┬─────────────────────────┘                                                  │
- │                                                                            │
- │  sum_with_last([10i64, 20i64, 30i64])                                      │
- │                        ‾‾‾‾‾                                               │
- └─────────────────────────────────────────────────────── issue_8899.md:11:27 ┘
+sum_with_last([10i64, 20i64, 30i64])
+               ^^^^^
 
-    The suffix `i64` is deprecated. Write `20.I64` instead.
+The suffix i64 is deprecated. Write 10.I64 instead.
 
+── ✗ deprecated number suffix ────────────────────────────── issue_8899.md:11:27
 
-┌──────────────────────────┐
-│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses an old suffix syntax. ─┐
-└┬─────────────────────────┘                                                  │
- │                                                                            │
- │  sum_with_last([10i64, 20i64, 30i64])                                      │
- │                               ‾‾‾‾‾                                        │
- └─────────────────────────────────────────────────────── issue_8899.md:11:34 ┘
+This number literal uses an old suffix syntax.
 
-    The suffix `i64` is deprecated. Write `30.I64` instead.
+sum_with_last([10i64, 20i64, 30i64])
+                      ^^^^^
+
+The suffix i64 is deprecated. Write 20.I64 instead.
+
+── ✗ deprecated number suffix ────────────────────────────── issue_8899.md:11:34
+
+This number literal uses an old suffix syntax.
+
+sum_with_last([10i64, 20i64, 30i64])
+                             ^^^^^
+
+The suffix i64 is deprecated. Write 30.I64 instead.
 
 # TOKENS
 ~~~zig
@@ -190,7 +180,7 @@ EndOfFile,
 					(e-block
 						(s-reassign
 							(p-assign (ident "$acc"))
-							(e-call (constraint-fn-var 295)
+							(e-call (constraint-fn-var 305)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local
@@ -202,7 +192,7 @@ EndOfFile,
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 308)
+										(e-call (constraint-fn-var 318)
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
@@ -213,7 +203,7 @@ EndOfFile,
 												(pattern (degenerate false)
 													(p-applied-tag)))
 											(value
-												(e-dispatch-call (method "plus") (constraint-fn-var 313)
+												(e-dispatch-call (method "plus") (constraint-fn-var 323)
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "$total"))))
@@ -230,7 +220,7 @@ EndOfFile,
 						(e-empty_record)))
 				(e-lookup-local
 					(p-assign (ident "$total"))))))
-	(e-call (constraint-fn-var 350)
+	(e-call (constraint-fn-var 362)
 		(e-lookup-local
 			(p-assign (ident "sum_with_last")))
 		(e-list

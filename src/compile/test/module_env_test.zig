@@ -32,6 +32,9 @@ test "ModuleEnv.Serialized roundtrip" {
 
     try original.common.calcLineStarts(gpa);
     try original.recordRejectedStaticDispatch(@enumFromInt(1234));
+    try original.recordBindingScheme(@enumFromInt(42));
+    try original.recordBindingScheme(@enumFromInt(7));
+    try original.recordBindingScheme(@enumFromInt(42));
     _ = try original.provided_low_level_defs.append(gpa, .{
         .def_idx = 7,
         .op = .num_plus_wrap,
@@ -104,6 +107,10 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqual(@as(usize, 2), env.imports.map.count());
     try std.testing.expectEqual(@as(usize, 1), env.rejectedStaticDispatches().len);
     try std.testing.expectEqual(@as(types.Var, @enumFromInt(1234)), env.rejectedStaticDispatches()[0].fnVar());
+    try std.testing.expect(env.nodeIsBindingScheme(@enumFromInt(7)));
+    try std.testing.expect(env.nodeIsBindingScheme(@enumFromInt(42)));
+    try std.testing.expect(!env.nodeIsBindingScheme(@enumFromInt(41)));
+    try std.testing.expectEqual(@as(usize, 2), env.binding_schemes.items.items.len);
     try std.testing.expectEqual(base.LowLevel.num_plus_wrap, env.providedLowLevelForDef(@enumFromInt(7)).?);
     try std.testing.expectEqual(base.LowLevel.num_bitwise_xor, env.providedLowLevelForDef(@enumFromInt(11)).?);
     try std.testing.expect(env.providedLowLevelForDef(@enumFromInt(9)) == null);
@@ -131,10 +138,11 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
     // Plus 4 fully qualified Crypto builtin type names: SHA256/BLAKE3 Digest and Hasher
-    // Plus 2 range method identifiers: range_exclusive, range_inclusive
+    // Plus the fully qualified Range type name and 2 range method identifiers:
+    // Builtin.Num.Range, range_exclusive_to, range_inclusive_to
     // Count reflects the merged builtin set, including structural parser/encoder
     // method identifiers, Builtin.Json.Encoding's parse/encode helpers, and Crypto.
-    try testing.expectEqual(@as(u32, 120), original.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 121), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -145,7 +153,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // First verify that the CommonEnv data was preserved after deserialization
     // Should have same identifiers as original, including the builtin structural method identifiers.
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 120), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 121), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

@@ -123,7 +123,7 @@ from_method = thing.f(10)
 			(args
 				(p-underscore)
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "minus") (constraint-fn-var 260)
+			(e-dispatch-call (method "minus") (constraint-fn-var 270)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))
@@ -142,7 +142,7 @@ from_method = thing.f(10)
 					(e-lambda
 						(args
 							(p-assign (ident "value")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 276)
+						(e-dispatch-call (method "plus") (constraint-fn-var 286)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "value"))))
@@ -152,7 +152,7 @@ from_method = thing.f(10)
 			(ty-lookup (name "Thing") (local))))
 	(d-let
 		(p-assign (ident "from_field"))
-		(e-call (constraint-fn-var 312)
+		(e-call (constraint-fn-var 326)
 			(e-field-access
 				(receiver
 					(e-lookup-local
@@ -164,7 +164,7 @@ from_method = thing.f(10)
 			(ty-lookup (name "I64") (builtin))))
 	(d-let
 		(p-assign (ident "from_method"))
-		(e-dispatch-call (method "f") (constraint-fn-var 322)
+		(e-dispatch-call (method "f") (constraint-fn-var 336)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "thing"))))

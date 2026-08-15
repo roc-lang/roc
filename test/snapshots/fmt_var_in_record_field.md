@@ -10,17 +10,15 @@ f=||{var c:[]}
 # EXPECTED
 UNUSED VARIABLE - fmt_var_in_record_field.md:1:6:1:14
 # PROBLEMS
+── ● unused variable ──────────────────────────── fmt_var_in_record_field.md:1:6
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `c` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  f=||{var c:[]}                                                            │
- │       ‾‾‾‾‾‾‾‾                                                             │
- └──────────────────────────────────────────── fmt_var_in_record_field.md:1:6 ┘
+Variable c is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_c` to
-    suppress this warning.
+f=||{var c:[]}
+     ^^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like _c to
+suppress this warning.
 
 # TOKENS
 ~~~zig

@@ -2156,7 +2156,7 @@ pub const Coordinator = struct {
             for (pkg.modules.items) |*mod| {
                 for (mod.reports.items) |rep| {
                     switch (rep.severity) {
-                        .info, .warning => {},
+                        .warning => {},
                         .runtime_error, .fatal => return true,
                     }
                 }
@@ -2465,8 +2465,11 @@ pub const Coordinator = struct {
         for (artifact.compile_time_roots.roots) |root| {
             switch (root.kind) {
                 .hoisted_constant => count += 1,
+                .callable_binding => switch (root.source) {
+                    .hoisted => count += 1,
+                    .def, .expr, .statement, .required_binding => {},
+                },
                 .constant,
-                .callable_binding,
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
@@ -2487,8 +2490,11 @@ pub const Coordinator = struct {
         for (artifact.compile_time_roots.roots) |root| {
             switch (root.kind) {
                 .hoisted_constant => {},
+                .callable_binding => switch (root.source) {
+                    .hoisted => {},
+                    .def, .expr, .statement, .required_binding => continue,
+                },
                 .constant,
-                .callable_binding,
                 .expect,
                 .numeral_conversion,
                 .quote_conversion,
@@ -2501,14 +2507,24 @@ pub const Coordinator = struct {
                 .expr,
                 .statement,
                 .required_binding,
-                => coordinatorInvariant("hoisted constant root had non-expression source", .{}),
+                => coordinatorInvariant("selected hoisted root had non-expression source", .{}),
             };
             const body = root.hoisted_body orelse
-                coordinatorInvariant("hoisted constant root was missing selected-root body", .{});
+                coordinatorInvariant("selected hoisted root was missing its body", .{});
             roots[i] = .{
                 .expr = source_expr,
                 .pattern = root.source_pattern,
                 .body = try check.HoistRoots.cloneBody(allocator, body),
+                .value_kind = switch (root.kind) {
+                    .hoisted_constant => .data_constant,
+                    .callable_binding => .callable_binding,
+                    .constant,
+                    .expect,
+                    .numeral_conversion,
+                    .quote_conversion,
+                    .field_default,
+                    => unreachable,
+                },
             };
             initialized += 1;
             i += 1;
@@ -5377,6 +5393,9 @@ const PatternExtractionRegionStatsError = error{
     PatternExtractionValueWasNotSyntheticLookup,
     PatternExtractionLookupPatternMismatch,
     PatternExtractionLookupWasNotResolved,
+    PatternExtractionResolvedRefMissing,
+    PatternExtractionCallableLookupWasNotLexical,
+    PatternExtractionConstantLookupWasNotHoisted,
 };
 
 var shared_test_builtins: ?eval.BuiltinModules = null;
@@ -6309,7 +6328,20 @@ fn hashPatternExtractionRegionsForView(
     view: check.CheckedArtifact.ImportedModuleView,
 ) PatternExtractionRegionStatsError!void {
     for (view.compile_time_roots.roots) |root| {
-        if (root.kind != .hoisted_constant) continue;
+        const is_selected_root = switch (root.kind) {
+            .hoisted_constant => true,
+            .callable_binding => switch (root.source) {
+                .hoisted => true,
+                .def, .expr, .statement, .required_binding => false,
+            },
+            .constant,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            .field_default,
+            => false,
+        };
+        if (!is_selected_root) continue;
         const body = root.hoisted_body orelse continue;
         const extraction = switch (body) {
             .expr => continue,
@@ -6353,6 +6385,19 @@ fn hashPatternExtractionRegionsForView(
         const lookup = synthetic_lookup.data.lookup_local;
         if (lookup.pattern != root_pattern) return error.PatternExtractionLookupPatternMismatch;
         if (lookup.resolved == null) return error.PatternExtractionLookupWasNotResolved;
+        const resolved_index = @intFromEnum(lookup.resolved.?);
+        if (resolved_index >= view.resolved_value_refs.records.len) return error.PatternExtractionResolvedRefMissing;
+        const resolved = view.resolved_value_refs.records[resolved_index].ref;
+        switch (root.kind) {
+            .callable_binding => if (resolved != .pattern_binder) return error.PatternExtractionCallableLookupWasNotLexical,
+            .hoisted_constant => if (resolved != .selected_hoisted_const) return error.PatternExtractionConstantLookupWasNotHoisted,
+            .constant,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            .field_default,
+            => unreachable,
+        }
 
         hasher.update(&view.key.bytes);
         hashU32IntoSha256(hasher, @intFromEnum(root.id));
@@ -6634,11 +6679,15 @@ test "Coordinator checked module cache preserves hoisted roots on hit" {
         \\    Ok(value) => value
         \\}
         \\
+        \\ops : { scale : I64 -> I64, other : I64 }
+        \\ops = { scale: |x| x + 2.I64, other: 0 }
+        \\{ scale, .. } = ops
+        \\
         \\main! = |args| {
         \\    pair = (top, 2.I64)
         \\    (left, right) = pair
         \\    Ok(tag_value) = Ok(45.I64)
-        \\    _ = left + right + tag_value + List.len(args).to_i64_wrap()
+        \\    _ = scale(left + right) + tag_value + List.len(args).to_i64_wrap()
         \\    Echo.line!(message)
         \\    Ok({})
         \\}
@@ -6681,7 +6730,7 @@ test "Coordinator checked module cache preserves hoisted roots on hit" {
 
     const first = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);
     try std.testing.expect(first.hoisted_constants >= 2);
-    try std.testing.expect(first.pattern_extraction_regions.count >= 3);
+    try std.testing.expect(first.pattern_extraction_regions.count >= 4);
     try std.testing.expect(first.exhaustiveness_sites.count > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, app_path);

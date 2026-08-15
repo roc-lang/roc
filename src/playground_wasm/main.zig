@@ -1073,7 +1073,7 @@ fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
     for (reports.items) |report| {
         switch (report.severity) {
             .runtime_error, .fatal => return true,
-            .info, .warning => {},
+            .warning => {},
         }
     }
     return false;
@@ -2235,7 +2235,6 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
     var warnings: u32 = 0;
     for (reports) |report| {
         switch (report.severity) {
-            .info => {},
             .warning => warnings += 1,
             .runtime_error, .fatal => errors += 1,
         }
@@ -2263,7 +2262,6 @@ fn extractDiagnosticsFromReports(
         const message = try report.addOwnedString(report.title);
         for (@constCast(message)) |*c| c.* = std.ascii.toUpper(c.*);
         const diagnostic_severity = switch (report.severity) {
-            .info => DiagnosticSeverity.info,
             .warning => DiagnosticSeverity.warning,
             .runtime_error => DiagnosticSeverity.@"error",
             .fatal => DiagnosticSeverity.@"error",

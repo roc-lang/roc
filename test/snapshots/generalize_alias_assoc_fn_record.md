@@ -17,18 +17,16 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:42:8:45
 # PROBLEMS
+── ✗ type mismatch ──────────────────── generalize_alias_assoc_fn_record.md:8:42
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))                      │
- │                                           ‾‾‾                              │
- └────────────────────────────────── generalize_alias_assoc_fn_record.md:8:42 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
+                                         ^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -114,7 +112,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 240)
+			(e-dispatch-call (method "len") (constraint-fn-var 250)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -135,7 +133,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 279)
+				(e-call (constraint-fn-var 290)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -147,7 +145,7 @@ main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 							(e-num (value "1"))
 							(e-num (value "2"))
 							(e-num (value "3")))))
-				(e-call (constraint-fn-var 299)
+				(e-call (constraint-fn-var 310)
 					(e-field-access
 						(receiver
 							(e-lookup-local

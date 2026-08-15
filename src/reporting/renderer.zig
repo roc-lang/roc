@@ -13,6 +13,7 @@ const Annotation = @import("document.zig").Annotation;
 const SourceCodeDisplayRegion = @import("document.zig").SourceCodeDisplayRegion;
 const SourceCodeWithUnderlines = @import("document.zig").SourceCodeWithUnderlines;
 const SourceCodeMultiRegion = @import("document.zig").SourceCodeMultiRegion;
+const SourceLocation = @import("document.zig").SourceLocation;
 const UnderlineRegion = @import("document.zig").UnderlineRegion;
 const ColorPalette = @import("style.zig").ColorPalette;
 const ColorUtils = @import("style.zig").ColorUtils;
@@ -23,7 +24,7 @@ pub const ReportingConfig = @import("config.zig").ReportingConfig;
 /// Makes a file path relative for error reporting.
 /// For snapshot files, returns just the filename.
 /// For other files, returns the original path.
-fn sanitisePathForSnapshots(path: []const u8) []const u8 {
+pub fn sanitisePathForSnapshots(path: []const u8) []const u8 {
 
     // Check if this is a snapshot file (contains /snapshots/ or \snapshots\)
     if (std.mem.find(u8, path, "/snapshots/") != null or
@@ -57,11 +58,11 @@ pub const RenderTarget = enum {
 };
 
 /// In debug builds, enforce that a report's headline reads as a complete
-/// sentence: its last non-whitespace character must be a period. The headline
-/// is the one-sentence summary on the box's top edge (or under the title in the
-/// markdown/HTML/LSP layouts). Compiled out of release builds. Reports that have
-/// not yet been migrated to a headline (none of the elements carry text) are
-/// exempt.
+/// sentence (ending in a period) or introduces a code block (ending in a
+/// colon). The headline is the one-sentence summary below the diagnostic header
+/// (or below the title in markdown/HTML/LSP). Compiled out of
+/// release builds. Reports that have not yet been migrated to a headline
+/// (none of the elements carry text) are exempt.
 fn assertValidHeadline(report: *const Report) void {
     if (builtin.mode != .Debug) return;
 
@@ -79,7 +80,7 @@ fn assertValidHeadline(report: *const Report) void {
     }
     // `last` stays 0 when the headline has no text content at all (legacy
     // reports without a headline)—those are exempt.
-    std.debug.assert(last == 0 or last == '.');
+    std.debug.assert(last == 0 or last == '.' or last == ':');
 }
 
 /// The default reporting configuration for a render target.
@@ -110,7 +111,7 @@ pub fn renderReportWithConfig(report: *const Report, writer: *std.Io.Writer, con
 
 /// Render a report to terminal with color support.
 pub fn renderReportToTerminal(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
-    try renderReportBoxed(report, writer, palette, config);
+    try renderReportToTerminalLayout(report, writer, palette, config);
 }
 
 /// Render a report to plain markdown. This is the stable, machine-friendly
@@ -128,42 +129,46 @@ pub fn renderReportToMarkdown(report: *const Report, writer: *std.Io.Writer, con
     try writer.writeAll("\n\n");
 }
 
-/// Render a report as a plain-text box (the terminal box layout without ANSI
-/// color). Used for snapshot PROBLEMS sections and non-TTY user output.
-pub fn renderReportToBoxPlain(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
-    try renderReportBoxed(report, writer, ColorPalette.NO_COLOR, config);
+/// Render a report as plain text using the terminal layout without ANSI color.
+/// Used for snapshot PROBLEMS sections and non-TTY user output.
+pub fn renderReportToPlain(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
+    try renderReportToTerminalLayout(report, writer, ColorPalette.NO_COLOR, config);
 }
 
-// Boxed report rendering.
+// Header-based report rendering.
 //
-// Lays a report out as a box drawn around the offending source snippet, with an
-// ALL-CAPS label box in the upper-left poking one column out past the main box:
+// Lays a report out as a header line followed by the content, for example:
 //
-//     ┌───────────────┐
-//     │ TYPE MISMATCH ├─ <one-line summary> ───────────── ... ─────┐
-//     └┬──────────────┘                                            │
-//      │                                                           │
-//      │  <source code>                                            │
-//      │         ‾‾‾‾‾                                              │
-//      └──────────────────────────────── path/to/file.roc:6:8 ─────┘
+// Header line: ✗ type mismatch, followed by location.
 //
-//        <detailed explanation, indented under the box>
+// <one-line summary>
 //
-// The summary rides the top edge (wrapping under its own start when long, and
-// growing the box for 3+ lines). The location is tucked into the bottom-right
-// corner, right-aligned; if it would overrun the wall it drops to its own line
-// beneath instead. There is always a blank row above the snippet, and a
-// blank-equivalent row above the bottom edge (a single-line region's underline
-// counts as blank). The same layout is used for the colored terminal output and
-// the plain markdown/snapshot output—the only difference is the palette (ANSI
-// vs NO_COLOR).
+// <source code>
+//  ^^^^^^
+//
+// <detailed explanation>
+//
+// The header line starts with a unicode icon representing the severity,
+// followed by the title in lowercase, a dash-filled separator, and the location.
+// The same layout is used for the colored terminal output and the plain
+// markdown/snapshot output—the only difference is the palette (ANSI vs NO_COLOR).
 
-/// The thin red rule under the offending span. U+203E sits at the top of its
-/// cell so it visually underlines the source line above it.
-const box_underline = "‾";
+const IconAndColor = struct {
+    icon: []const u8,
+    color: []const u8,
+    width: usize,
+};
 
-/// A source region pulled out of a document, normalized for box rendering.
-const BoxedRegion = struct {
+fn getSeverityIcon(severity: @import("severity.zig").Severity, title: []const u8, palette: ColorPalette) IconAndColor {
+    if (std.mem.eql(u8, title, "FAIL")) return .{ .icon = "✗", .color = palette.error_color, .width = 1 };
+    return switch (severity) {
+        .fatal, .runtime_error => .{ .icon = "✗", .color = palette.error_color, .width = 1 },
+        .warning => .{ .icon = "●", .color = palette.warning, .width = 1 },
+    };
+}
+
+/// A source region pulled out of a document, normalized for rendering.
+const PrimaryRegion = struct {
     index: usize,
     filename: ?[]const u8,
     start_line: u32,
@@ -173,7 +178,7 @@ const BoxedRegion = struct {
     line_text: []const u8,
 };
 
-fn findBoxedRegion(elements: []const DocumentElement) ?BoxedRegion {
+fn findPrimaryRegion(elements: []const DocumentElement) ?PrimaryRegion {
     for (elements, 0..) |el, i| {
         switch (el) {
             .source_code_region => |r| return .{
@@ -217,6 +222,7 @@ fn findBoxedRegion(elements: []const DocumentElement) ?BoxedRegion {
             .vertical_stack,
             .horizontal_concat,
             .source_code_multi_region,
+            .source_location,
             => {},
         }
     }
@@ -224,47 +230,13 @@ fn findBoxedRegion(elements: []const DocumentElement) ?BoxedRegion {
 }
 
 /// Append the plain text of a run of elements (line breaks become spaces), and
-/// record the terminal color of each appended byte so the box's top edge can
+/// record the terminal color of each appended byte so the summary text can
 /// keep inline code, symbols, etc. colored. `colors` ends up the same length as
 /// `plain`. In a no-color palette every color is "" and this is just plain text.
-/// Whether an annotation marks a code span (identifier, keyword, operator,
-/// type, …)—the spans the markdown renderer wraps in backticks. The box
-/// renderers wrap these in backticks too, but only when there's no color to
-/// distinguish them (see `wantsBacktick`).
-fn isCodeAnnotation(a: Annotation) bool {
-    return switch (a) {
-        .keyword,
-        .inline_code,
-        .symbol,
-        .symbol_qualified,
-        .symbol_unqualified,
-        .record_field,
-        .tag_name,
-        .binary_operator,
-        => true,
-        .emphasized,
-        .type_variable,
-        .error_highlight,
-        .warning_highlight,
-        .suggestion,
-        .code_block,
-        .path,
-        .literal,
-        .comment,
-        .underline,
-        .dimmed,
-        .module_name,
-        .source_region,
-        .reflowing_text,
-        => false,
-    };
-}
-
-/// In a no-color palette, code spans get backticks (since color can't set them
-/// apart); with color, the color does the distinguishing and backticks would be
-/// redundant noise. A palette is "no color" when its reset sequence is empty.
-fn wantsBacktick(palette: ColorPalette, a: Annotation) bool {
-    return palette.reset.len == 0 and isCodeAnnotation(a);
+/// Terminal output never adds markup characters. ANSI color distinguishes code
+/// spans when enabled; plain output remains literal text suitable for copying.
+fn wantsBacktick(_: ColorPalette, _: Annotation) bool {
+    return false;
 }
 
 fn collectStyledText(
@@ -277,7 +249,7 @@ fn collectStyledText(
         switch (el) {
             .text, .reflowing_text, .raw => |t| for (t) |b| {
                 try plain.append(b);
-                try colors.append(palette.secondary);
+                try colors.append("");
             },
             .annotated => |a| {
                 const c = palette.colorForAnnotation(a.annotation);
@@ -297,13 +269,13 @@ fn collectStyledText(
             },
             .line_break => {
                 try plain.append(' ');
-                try colors.append(palette.secondary);
+                try colors.append("");
             },
             .space => |n| {
                 var i: u32 = 0;
                 while (i < n) : (i += 1) {
                     try plain.append(' ');
-                    try colors.append(palette.secondary);
+                    try colors.append("");
                 }
             },
             .indent,
@@ -316,34 +288,38 @@ fn collectStyledText(
             .source_code_region,
             .source_code_multi_region,
             .source_code_with_underlines,
+            .source_location,
             => {},
         }
     }
 }
 
-/// Emit `line` (a slice of `plain`) with its per-byte `colors`, then reset to
-/// `sec`. The ANSI color codes don't count toward display width, so the caller's
-/// column accounting (computed from the plain text) stays correct.
+/// Emit `line` (a slice of `plain`) with its per-byte colors. Unstyled bytes do
+/// not emit an ANSI sequence; moving from a colored span back to plain text
+/// emits one reset. ANSI sequences do not count toward display width.
 fn writeColoredSummary(
     writer: *std.Io.Writer,
     line: []const u8,
     plain: []const u8,
     colors: []const []const u8,
-    sec: []const u8,
+    palette: ColorPalette,
 ) error{WriteFailed}!void {
     if (line.len == 0) return;
     const base = @intFromPtr(line.ptr) - @intFromPtr(plain.ptr);
-    var cur: usize = 0;
+    var current: []const u8 = "";
     for (line, 0..) |b, k| {
         const c = colors[base + k];
-        const cp = @intFromPtr(c.ptr);
-        if (cp != cur) {
-            try writer.writeAll(c);
-            cur = cp;
+        if (!std.mem.eql(u8, c, current)) {
+            if (c.len == 0) {
+                if (current.len > 0) try writer.writeAll(palette.reset);
+            } else {
+                try writer.writeAll(c);
+            }
+            current = c;
         }
         try writer.writeByte(b);
     }
-    try writer.writeAll(sec);
+    if (current.len > 0) try writer.writeAll(palette.reset);
 }
 
 /// Greedy word-wrap `text` into lines no wider than `width` columns.
@@ -377,34 +353,26 @@ fn wrapSummary(text: []const u8, width: usize, out: *std.array_list.Managed([]co
     }
 }
 
-fn padTo(writer: *std.Io.Writer, from_col: usize, to_col: usize) error{WriteFailed}!void {
-    if (to_col > from_col) try writer.splatByteAll(' ', to_col - from_col);
-}
-
-/// Write `s` with every ASCII letter uppercased. Titles are authored in title
-/// case (so the markdown renderer can preserve it), and shouted in ALL CAPS in
-/// the box/HTML/LSP/plain renderers. Titles are validated as ASCII, so a byte
-/// uppercase is sufficient. Also used by the snapshot tool's EXPECTED sections,
-/// which shout titles the same way.
+/// Write `s` with every ASCII letter uppercased. Snapshot EXPECTED sections use
+/// uppercase titles even though rendered diagnostic headers use lowercase.
 pub fn writeShouted(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}!void {
     for (s) |c| {
         try writer.writeByte(if (c >= 'a' and c <= 'z') c - ('a' - 'A') else c);
     }
 }
 
-/// Pad with spaces and write the right wall `│` at column `rw`.
-fn closeRow(writer: *std.Io.Writer, palette: ColorPalette, col: usize, rw: usize) error{WriteFailed}!void {
-    try writer.splatByteAll(' ', (rw -| 1) -| col);
-    try writer.writeAll(palette.secondary);
-    try writer.writeAll("│");
-    try writer.writeAll(palette.reset);
-    try writer.writeByte('\n');
+/// Write `s` to `writer`, converting ASCII characters to lowercase. Used for
+/// the header text. Titles are validated as ASCII, so a byte
+/// iterator suffices.
+pub fn writeLowercased(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}!void {
+    for (s) |c| {
+        try writer.writeByte(std.ascii.toLower(c));
+    }
 }
 
 /// Write a `path/to/Scalar.roc:141:1` location, with the filename itself in the
-/// default foreground (the same color as the source snippet) so it stands out
-/// from the dim directories, `:line:col`, and box border around it. Leaves the
-/// writer in the secondary color, ready for whatever border follows.
+/// cyan so it stands out from the dim directories, `:line:col`, and horizontal
+/// rule around it. Leaves the writer in the secondary color.
 fn writeLocation(
     writer: *std.Io.Writer,
     palette: ColorPalette,
@@ -417,93 +385,70 @@ fn writeLocation(
         try writer.writeAll(palette.secondary);
         try writer.writeAll(path[0..start]);
     }
-    try writer.writeAll(palette.reset);
+    try writer.writeAll(palette.primary);
     try writer.writeAll(path[start..]);
     try writer.writeAll(palette.secondary);
     try writer.print(":{d}:{d}", .{ line, column });
 }
 
-/// Display width of what `writeLocation` writes (the color codes take no space).
-fn locationWidth(path: []const u8, line: u32, column: u32) usize {
-    return source_region.displayWidth(path) + 1 + decimalWidth(line) + 1 + decimalWidth(column);
-}
+fn renderHeaderLine(
+    writer: *std.Io.Writer,
+    palette: ColorPalette,
+    config: ReportingConfig,
+    icon_info: IconAndColor,
+    title: []const u8,
+    filename: ?[]const u8,
+    start_line: u32,
+    start_column: u32,
+) error{WriteFailed}!void {
+    const total_w = @min(config.getMaxLineWidth(), 120);
+    const icon_w: usize = icon_info.width;
+    const prefix_w = 3 + icon_w + 1 + source_region.displayWidth(title) + 1;
 
-/// The byte offset in `line` at display column `target_col`, clamped to a UTF-8
-/// boundary and never overshooting `target_col`. Tabs count as one column.
-fn byteAtDisplayCol(line: []const u8, target_col: usize) usize {
-    var i: usize = 0;
-    var col: usize = 0;
-    while (i < line.len and col < target_col) {
-        const seq = std.unicode.utf8ByteSequenceLength(line[i]) catch 1;
-        const next = @min(i + seq, line.len);
-        const w = source_region.displayWidth(line[i..next]);
-        if (col + w > target_col) break;
-        col += w;
-        i = next;
+    var loc_len: usize = 0;
+    const fname = if (filename) |f| sanitisePathForSnapshots(f) else null;
+    if (fname) |f| {
+        loc_len = 1 + source_region.displayWidth(f) + 1 + decimalWidth(start_line) + 1 + decimalWidth(start_column);
     }
-    return i;
-}
 
-/// A windowed view of a source line, used when the line is too wide for the box.
-const CodeWindow = struct {
-    start_byte: usize,
-    end_byte: usize,
-    left_ellipsis: bool,
-    right_ellipsis: bool,
-};
+    const dashes = @max(total_w -| prefix_w -| loc_len, 1);
 
-/// Choose a slice of `line` to show within `avail` display columns that keeps
-/// the byte offset `focus` (the start of the underlined span) visible, with a
-/// little left context, eliding the rest with `…`.
-fn windowSourceLine(line: []const u8, focus: usize, avail: usize) CodeWindow {
-    if (source_region.displayWidth(line) <= avail) {
-        return .{ .start_byte = 0, .end_byte = line.len, .left_ellipsis = false, .right_ellipsis = false };
+    try writer.writeAll(palette.secondary);
+    try writer.writeAll("── ");
+    try writer.writeAll(icon_info.color);
+    try writer.writeAll(icon_info.icon);
+    try writer.writeByte(' ');
+    try writeLowercased(writer, title);
+    try writer.writeByte(' ');
+    try writer.writeAll(palette.secondary);
+    try writer.splatBytesAll("─", dashes);
+    if (fname) |f| {
+        try writer.writeByte(' ');
+        try writeLocation(writer, palette, f, start_line, start_column);
     }
-    const budget = avail -| 2; // leave room for an ellipsis on each side
-    const focus_col = source_region.displayWidth(line[0..focus]);
-    const left_context = @min(@as(usize, 8), budget / 4);
-    const start_byte = byteAtDisplayCol(line, focus_col -| left_context);
-    const start_col = source_region.displayWidth(line[0..start_byte]);
-    const end_byte = byteAtDisplayCol(line, start_col + budget);
-    return .{
-        .start_byte = start_byte,
-        .end_byte = end_byte,
-        .left_ellipsis = start_byte > 0,
-        .right_ellipsis = end_byte < line.len,
-    };
-}
-
-/// Render the report as a box around its source snippet.
-pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
-    assertValidHeadline(report);
-    // Each report is framed by a blank line above and below, so consecutive
-    // reports are separated by two blank lines, and the first/last report keeps
-    // exactly one blank line at the top/bottom of the run.
+    try writer.writeAll(palette.reset);
     try writer.writeByte('\n');
+}
+
+/// Render the report with a header and its source snippet.
+fn renderReportToTerminalLayout(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
+    assertValidHeadline(report);
     const gpa = report.document.allocator;
     const elements = report.document.elements.items;
 
-    const region = findBoxedRegion(elements) orelse {
+    const region = findPrimaryRegion(elements) orelse {
         try renderReportPlainFallback(report, writer, palette, config);
-        try writer.writeByte('\n');
         return;
     };
 
-    // The headline rides the box's top edge. When the report supplies one
-    // explicitly, the whole document goes below the box. Otherwise (reports
-    // not yet migrated to a required headline) fall back to deriving it from
-    // the lead text up to the first line break before the region.
     var summary_buf = std.array_list.Managed(u8).init(gpa);
     defer summary_buf.deinit();
     var color_buf = std.array_list.Managed([]const u8).init(gpa);
     defer color_buf.deinit();
     var below_start: usize = 0;
     if (report.headline.elementCount() > 0) {
-        // The rich headline rides the top edge; keep its inline styling.
         try collectStyledText(report.headline.elements.items, palette, &summary_buf, &color_buf);
     } else {
-        // Fallback: derive the summary from the lead text up to the first line
-        // break before the region (reports with an empty headline).
         var summary_end = region.index;
         var i: usize = 0;
         while (i < region.index) : (i += 1) {
@@ -516,116 +461,25 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
         below_start = if (summary_end < region.index) summary_end + 1 else region.index;
     }
     const summary = std.mem.trim(u8, summary_buf.items, " ");
-
     const title = report.title;
+    const icon_info = getSeverityIcon(report.severity, title, palette);
 
-    // The label box sits flush left and sticks out one column to the left of the
-    // indented main box; the title's name rides its middle row, with the summary
-    // flowing to the right.
-    const inner_len = title.len + 2; // " TITLE "
-    const tbw = inner_len + 2; // label box width
-    // Grow the box past the configured width if the title is so wide that the
-    // label box plus a minimal summary slot wouldn't otherwise fit—so the
-    // walls stay aligned on narrow terminals (the whole box just wraps in the
-    // terminal) instead of overrunning.
-    const total: usize = @max(config.getMaxLineWidth(), tbw + 15);
-    const rw = total -| 1; // main box right wall column
-    // Every summary line starts at this column (just past "│ TITLE ├─ "), so the
-    // headline's left edge is consistent however many lines it wraps to.
-    const sum_indent = tbw + 2;
-    const avail: usize = @max((rw -| sum_indent) -| 3, 8);
+    try renderHeaderLine(writer, palette, config, icon_info, title, region.filename, region.start_line, region.start_column);
 
-    var lines = std.array_list.Managed([]const u8).init(gpa);
-    defer lines.deinit();
-    try wrapSummary(summary, avail, &lines);
+    if (summary.len > 0) {
+        try writer.writeByte('\n');
+        var lines = std.array_list.Managed([]const u8).init(gpa);
+        defer lines.deinit();
+        const avail: usize = config.getMaxLineWidth();
+        try wrapSummary(summary, avail, &lines);
+        for (lines.items) |ln| {
+            try writeColoredSummary(writer, ln, summary_buf.items, color_buf.items, palette);
+            try writer.writeByte('\n');
+        }
+    }
 
-    const sec = palette.secondary;
-    const rst = palette.reset;
-
-    // Row 1: label box top, flush left.
-    try writer.writeAll(sec);
-    try writer.writeAll("┌");
-    try writer.splatBytesAll("─", inner_len);
-    try writer.writeAll("┐");
-    try writer.writeAll(rst);
     try writer.writeByte('\n');
 
-    // Row 2: "│ TITLE ├─ <summary[0]> ─…─┐".
-    {
-        var col: usize = 0;
-        try writer.writeAll(sec);
-        try writer.writeAll("│ ");
-        col += 2;
-        try writer.writeAll(palette.bold);
-        try writer.writeAll(palette.primary);
-        try writeShouted(writer, title);
-        try writer.writeAll(rst);
-        col += title.len;
-        try writer.writeAll(sec);
-        try writer.writeAll(" ├─ ");
-        col += 4;
-        const line0: []const u8 = if (lines.items.len > 0) lines.items[0] else "";
-        try writeColoredSummary(writer, line0, summary_buf.items, color_buf.items, sec);
-        col += source_region.displayWidth(line0);
-        try writer.writeAll(" ");
-        col += 1;
-        try writer.splatBytesAll("─", (rw -| 1) -| col);
-        try writer.writeAll("┐");
-        try writer.writeAll(rst);
-        try writer.writeByte('\n');
-    }
-
-    // Row 3: "└┬─…─┘"—the ┬ becomes the indented main left wall—then summary
-    // line 1 (if any), aligned under summary line 0.
-    {
-        var col: usize = 0;
-        try writer.writeAll(sec);
-        try writer.writeAll("└┬");
-        col += 2;
-        try writer.splatBytesAll("─", tbw -| 3);
-        col += tbw -| 3;
-        try writer.writeAll("┘");
-        col += 1;
-        if (lines.items.len > 1) {
-            try padTo(writer, col, sum_indent);
-            col = @max(col, sum_indent);
-            try writer.writeAll(sec);
-            try writeColoredSummary(writer, lines.items[1], summary_buf.items, color_buf.items, sec);
-            col += source_region.displayWidth(lines.items[1]);
-        }
-        try closeRow(writer, palette, col, rw);
-    }
-
-    // Summary lines 2+ each get their own row: the indented left wall, then the
-    // summary aligned under line 0.
-    if (lines.items.len > 2) {
-        for (lines.items[2..]) |ln| {
-            try writer.writeByte(' ');
-            try writer.writeAll(sec);
-            try writer.writeAll("│");
-            try writer.writeAll(rst);
-            try padTo(writer, 2, sum_indent);
-            try writer.writeAll(sec);
-            try writeColoredSummary(writer, ln, summary_buf.items, color_buf.items, sec);
-            try closeRow(writer, palette, sum_indent + source_region.displayWidth(ln), rw);
-        }
-    }
-
-    // Blank separator row, then the source line(s) and underline. Each body row
-    // is indented one column (the label box sticks out left of it). Lines that
-    // would overrun the right wall are windowed around the underlined span.
-    const code_avail = rw -| 5;
-    {
-        try writer.writeByte(' ');
-        try writer.writeAll(sec);
-        try writer.writeAll("│");
-        try writer.writeAll(rst);
-        try closeRow(writer, palette, 2, rw);
-    }
-    // Normalize snippet indentation: expand leading tabs to 4 spaces, then strip
-    // the common leading-space prefix shared by every non-blank line. This keeps
-    // relative indentation intact while left-aligning the whole snippet, so the
-    // box supplies the only indentation the reader sees.
     var snippet = std.array_list.Managed([]u8).init(gpa);
     defer {
         for (snippet.items) |l| gpa.free(l);
@@ -649,16 +503,12 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
             try leads.append(lead);
         }
     }
-    // The common indent is the smallest expanded leading-space count across the
-    // non-blank lines (a line is blank when nothing follows its whitespace).
     var common: usize = std.math.maxInt(usize);
     for (snippet.items, leads.items) |l, lead| {
         if (lead < l.len) common = @min(common, lead);
     }
     if (common == std.math.maxInt(usize)) common = 0;
 
-    // Shift the underline columns (1-based byte offsets into the first line) to
-    // track tab expansion and the stripped common indent.
     var start_col_adj = region.start_column;
     var end_col_adj = region.end_column;
     {
@@ -677,125 +527,41 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
         for (snippet.items) |full_line| {
             const code_line = full_line[@min(common, full_line.len)..];
             const is_underline_line = region.start_line == region.end_line and line_no == region.start_line;
-            // Underline byte span (meaningful only on the underlined line); also
-            // the window's focus so the span stays visible when the line is long.
-            const start_byte = @min(@as(usize, start_col_adj -| 1), code_line.len);
-            const end_byte = @max(@min(@as(usize, end_col_adj -| 1), code_line.len), start_byte);
-            const win = windowSourceLine(code_line, if (is_underline_line) start_byte else 0, code_avail);
-            const shown = code_line[win.start_byte..win.end_byte];
 
-            var col: usize = 0;
-            try writer.writeByte(' ');
-            col += 1;
-            try writer.writeAll(sec);
-            try writer.writeAll("│");
-            try writer.writeAll(rst);
-            col += 1;
-            try writer.writeAll("  ");
-            col += 2;
-            if (win.left_ellipsis) {
-                try writer.writeAll("…");
-                col += 1;
-            }
-            // Render tabs as single spaces: a literal tab would otherwise throw
-            // off both the right wall and the underline below it.
-            for (shown) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
-            col += source_region.displayWidth(shown);
-            if (win.right_ellipsis) {
-                try writer.writeAll("…");
-                col += 1;
-            }
-            try closeRow(writer, palette, col, rw);
+            for (code_line) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
+            try writer.writeByte('\n');
 
             if (is_underline_line) {
-                var ucol: usize = 0;
-                try writer.writeByte(' ');
-                ucol += 1;
-                try writer.writeAll(sec);
-                try writer.writeAll("│");
-                try writer.writeAll(rst);
-                ucol += 1;
-                try writer.writeAll("  ");
-                ucol += 2;
-                // The underline span clipped to the visible window, mapped from
-                // byte offsets to display columns so it lines up under
-                // wide/multi-byte chars.
-                const vs = @max(start_byte, win.start_byte);
-                const ve = @min(end_byte, win.end_byte);
-                const lead = @as(usize, if (win.left_ellipsis) 1 else 0) +
-                    source_region.displayWidth(code_line[win.start_byte..vs]);
-                try writer.splatByteAll(' ', lead);
-                ucol += lead;
-                const span_width = if (ve > vs) source_region.displayWidth(code_line[vs..ve]) else 0;
+                const start_byte = @min(@as(usize, start_col_adj -| 1), code_line.len);
+                const end_byte = @max(@min(@as(usize, end_col_adj -| 1), code_line.len), start_byte);
+
+                const lead = source_region.displayWidth(code_line[0..start_byte]);
+                try source_region.printSpaces(writer, @intCast(lead));
+
+                const span_width = if (end_byte > start_byte) source_region.displayWidth(code_line[start_byte..end_byte]) else 0;
                 const ulen = if (span_width > 0) span_width else 1;
-                try writer.writeAll(palette.error_color);
-                try writer.splatBytesAll(box_underline, ulen);
-                try writer.writeAll(rst);
-                ucol += ulen;
-                try closeRow(writer, palette, ucol, rw);
+
+                try writer.writeAll(icon_info.color);
+                try writer.splatBytesAll("^", ulen);
+                try writer.writeAll(palette.reset);
+                try writer.writeByte('\n');
             }
             line_no += 1;
         }
     }
 
-    // Keep a blank-equivalent row directly above the bottom edge. A single-line
-    // region's underline already reads as blank, so only multi-line snippets
-    // (which have no underline) need an explicit blank row added here.
-    if (region.start_line != region.end_line) {
-        try writer.writeByte(' ');
-        try writer.writeAll(sec);
-        try writer.writeAll("│");
-        try writer.writeAll(rst);
-        try closeRow(writer, palette, 2, rw);
-    }
-
-    // Bottom edge with the location tucked into the bottom-right corner
-    // (`└─…─ file:line:col ┘`). If the location is too long to fit inside the
-    // box without overrunning a wall, fall back to a plain rule with the
-    // location on its own line beneath.
-    {
-        const fname = if (region.filename) |f| sanitisePathForSnapshots(f) else "<source>";
-        const loc_w = locationWidth(fname, region.start_line, region.start_column);
-
-        try writer.writeByte(' ');
-        try writer.writeAll(sec);
-        try writer.writeAll("└");
-        if (loc_w + 5 <= rw) {
-            // Fits: └ + dashes + " loc " + ┘, with the location right-aligned.
-            try writer.splatBytesAll("─", (rw -| 5) -| loc_w);
-            try writer.writeAll(" ");
-            try writeLocation(writer, palette, fname, region.start_line, region.start_column);
-            try writer.writeAll(" ┘");
-            try writer.writeAll(rst);
-            try writer.writeByte('\n');
-        } else {
-            // Too long: plain rule, location on its own line beneath.
-            try writer.splatBytesAll("─", rw -| 3);
-            try writer.writeAll("┘");
-            try writer.writeAll(rst);
-            try writer.writeByte('\n');
-            try writer.writeAll("    ");
-            try writeLocation(writer, palette, fname, region.start_line, region.start_column);
-            try writer.writeAll(rst);
-            try writer.writeByte('\n');
-        }
-    }
-
-    // Detailed explanation below the box, indented 4 spaces.
-    try renderBelowContent(writer, palette, config, elements, below_start, region.index, rw, gpa);
-    try writer.writeByte('\n');
+    try renderBelowContent(writer, palette, config, icon_info.color, elements, below_start, region.index, gpa);
 }
 
-/// Render the elements after the summary's first line (excluding the region),
-/// indented by 4 spaces beneath the box.
+/// Render the elements after the summary's first line (excluding the region)
 fn renderBelowContent(
     writer: *std.Io.Writer,
     palette: ColorPalette,
     config: ReportingConfig,
+    highlight_color: []const u8,
     elements: []const DocumentElement,
     below_start: usize,
     region_idx: usize,
-    rw: usize,
     gpa: Allocator,
 ) (Allocator.Error || error{WriteFailed})!void {
     const width: usize = config.getMaxLineWidth();
@@ -805,30 +571,21 @@ fn renderBelowContent(
     defer ann.deinit();
     var ctx = RenderCtx{ .config = config, .palette = palette, .annotation_stack = &ann };
 
-    // Walk the below-the-box elements (everything except the main box's region).
-    // Prose accumulates in `buf` and is flushed—word-wrapped and indented—
-    // whenever we reach a source region, which renders as its own embedded box.
-    // `started` tracks whether the one leading blank line (which separates the
-    // below-content from the box) has been emitted yet.
     var started = false;
     var idx = @min(below_start, region_idx);
     while (idx < elements.len) : (idx += 1) {
         if (idx == region_idx) continue;
         switch (elements[idx]) {
             .source_code_region => |r| {
-                try flushBelowText(writer, &buf, width, &started);
+                const text = std.mem.trim(u8, buf.written(), " \n\r\t");
                 if (!started) {
                     try writer.writeByte('\n');
                     started = true;
                 }
-                try renderEmbeddedBox(writer, palette, rw, r.region_annotation, r.filename, r.start_line, r.start_column, r.end_line, r.end_column, r.line_text);
+                try renderSecondaryRegion(writer, palette, highlight_color, r.start_line, r.start_column, r.end_line, r.end_column, r.line_text, text, gpa);
+                buf.clearRetainingCapacity();
             },
             .source_code_with_underlines => |d| {
-                try flushBelowText(writer, &buf, width, &started);
-                if (!started) {
-                    try writer.writeByte('\n');
-                    started = true;
-                }
                 const dr = d.display_region;
                 var sc = dr.start_column;
                 var ec = dr.end_column;
@@ -836,7 +593,13 @@ fn renderBelowContent(
                     sc = d.underline_regions[0].start_column;
                     ec = d.underline_regions[0].end_column;
                 }
-                try renderEmbeddedBox(writer, palette, rw, dr.region_annotation, dr.filename, dr.start_line, sc, dr.end_line, ec, dr.line_text);
+                const text = std.mem.trim(u8, buf.written(), " \n\r\t");
+                if (!started) {
+                    try writer.writeByte('\n');
+                    started = true;
+                }
+                try renderSecondaryRegion(writer, palette, highlight_color, dr.start_line, sc, dr.end_line, ec, dr.line_text, text, gpa);
+                buf.clearRetainingCapacity();
             },
             .text,
             .annotated,
@@ -852,15 +615,15 @@ fn renderBelowContent(
             .vertical_stack,
             .horizontal_concat,
             .source_code_multi_region,
+            .source_location,
             => try renderElementAs(.color_terminal, elements[idx], &buf.writer, &ctx),
         }
     }
     try flushBelowText(writer, &buf, width, &started);
-    if (!started) try writer.writeByte('\n');
+    try writer.writeByte('\n');
 }
 
-/// Flush accumulated below-the-box prose (`buf`) as word-wrapped, indented text,
-/// emitting the one-time leading blank line first. Clears `buf`.
+/// Flush accumulated prose (`buf`) as word-wrapped text.
 fn flushBelowText(
     writer: *std.Io.Writer,
     buf: *std.Io.Writer.Allocating,
@@ -877,129 +640,103 @@ fn flushBelowText(
         started.* = true;
     }
     var it = std.mem.splitScalar(u8, trimmed, '\n');
-    while (it.next()) |ln| try wrapAndEmitBelowLine(writer, ln, 4, width);
+    while (it.next()) |ln| try wrapAndEmitBelowLine(writer, ln, 0, width);
     buf.clearRetainingCapacity();
 }
 
-/// Render a secondary source region (e.g. the original definition pointed at by
-/// "…was already defined here:") as a box mirroring the main report box—full
-/// border with the location tucked into the bottom-right corner—but with the
-/// line number rendered in a gutter to the LEFT of the box, outside it.
-fn renderEmbeddedBox(
+/// Render a secondary source region after its structured introductory prose.
+fn renderSecondaryRegion(
     writer: *std.Io.Writer,
     palette: ColorPalette,
-    rw: usize,
-    annotation: Annotation,
-    filename: ?[]const u8,
+    highlight_color: []const u8,
     start_line: u32,
     start_column: u32,
     end_line: u32,
     end_column: u32,
     line_text: []const u8,
+    preceding_text: []const u8,
+    gpa: Allocator,
 ) error{WriteFailed}!void {
-    const sec = palette.secondary;
-    const rst = palette.reset;
-    const indent: usize = 4;
-    const lnw: usize = source_region.calculateLineNumberWidth(end_line);
-    const wall = indent + lnw + 2; // 1-based column of the box's left wall
-    const code_avail = rw -| wall -| 3;
+    const body = std.mem.trim(u8, preceding_text, " \n\r\t");
 
-    // Top edge (the gutter to its left is blank).
-    try writer.splatByteAll(' ', wall -| 1);
-    try writer.writeAll(sec);
-    try writer.writeAll("┌");
-    try writer.splatBytesAll("─", (rw -| wall) -| 1);
-    try writer.writeAll("┐");
-    try writer.writeAll(rst);
-    try writer.writeByte('\n');
+    if (body.len > 0) {
+        try writer.writeAll(body);
+        try writer.writeByte('\n');
+    }
 
-    var line_no = start_line;
-    var it = std.mem.splitScalar(u8, line_text, '\n');
-    while (it.next()) |code_line| {
-        const is_underline_line = start_line == end_line and line_no == start_line;
-        const start_byte = @min(@as(usize, start_column -| 1), code_line.len);
-        const end_byte = @max(@min(@as(usize, end_column -| 1), code_line.len), start_byte);
-        const win = windowSourceLine(code_line, if (is_underline_line) start_byte else 0, code_avail);
-        const shown = code_line[win.start_byte..win.end_byte];
-
-        // Code row: the line number sits in the gutter, then the boxed code.
-        var col: usize = 0;
-        try writer.splatByteAll(' ', indent);
-        col += indent;
-        try writer.writeAll(sec);
-        try source_region.formatLineNumber(writer, line_no, @intCast(lnw));
-        col += lnw;
-        try writer.writeByte(' ');
-        col += 1;
-        try writer.writeAll("│");
-        try writer.writeAll(rst);
-        col += 1;
-        try writer.writeAll("  ");
-        col += 2;
-        if (win.left_ellipsis) {
-            try writer.writeAll("…");
-            col += 1;
-        }
-        for (shown) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
-        col += source_region.displayWidth(shown);
-        if (win.right_ellipsis) {
-            try writer.writeAll("…");
-            col += 1;
-        }
-        try writer.splatByteAll(' ', (rw -| 1) -| col);
-        try writer.writeAll(sec);
-        try writer.writeAll("│");
-        try writer.writeAll(rst);
+    if (line_text.len > 0) {
         try writer.writeByte('\n');
 
-        if (is_underline_line) {
-            var ucol: usize = 0;
-            try writer.splatByteAll(' ', wall -| 1);
-            ucol += wall -| 1;
-            try writer.writeAll(sec);
-            try writer.writeAll("│");
-            try writer.writeAll(rst);
-            ucol += 1;
-            try writer.writeAll("  ");
-            ucol += 2;
-            const vs = @max(start_byte, win.start_byte);
-            const ve = @min(end_byte, win.end_byte);
-            const lead = @as(usize, if (win.left_ellipsis) 1 else 0) +
-                source_region.displayWidth(code_line[win.start_byte..vs]);
-            try writer.splatByteAll(' ', lead);
-            ucol += lead;
-            const span_width = if (ve > vs) source_region.displayWidth(code_line[vs..ve]) else 0;
-            const ulen = if (span_width > 0) span_width else 1;
-            try writer.writeAll(palette.colorForAnnotation(annotation));
-            try writer.splatBytesAll(box_underline, ulen);
-            try writer.writeAll(rst);
-            ucol += ulen;
-            try writer.splatByteAll(' ', (rw -| 1) -| ucol);
-            try writer.writeAll(sec);
-            try writer.writeAll("│");
-            try writer.writeAll(rst);
-            try writer.writeByte('\n');
+        var snippet = std.array_list.Managed([]u8).init(gpa);
+        defer {
+            for (snippet.items) |l| gpa.free(l);
+            snippet.deinit();
         }
-        line_no += 1;
-    }
+        var leads = std.array_list.Managed(usize).init(gpa);
+        defer leads.deinit();
+        {
+            var it = std.mem.splitScalar(u8, line_text, '\n');
+            while (it.next()) |line| {
+                var i: usize = 0;
+                var lead: usize = 0;
+                while (i < line.len and (line[i] == ' ' or line[i] == '\t')) : (i += 1) {
+                    lead += if (line[i] == '\t') 4 else 1;
+                }
+                const rest = line[i..];
+                const buf = gpa.alloc(u8, lead + rest.len) catch return error.WriteFailed;
+                @memset(buf[0..lead], ' ');
+                @memcpy(buf[lead..], rest);
+                snippet.append(buf) catch return error.WriteFailed;
+                leads.append(lead) catch return error.WriteFailed;
+            }
+        }
+        var common: usize = std.math.maxInt(usize);
+        for (snippet.items, leads.items) |l, lead| {
+            if (lead < l.len) common = @min(common, lead);
+        }
+        if (common == std.math.maxInt(usize)) common = 0;
 
-    // Bottom edge with the location tucked into the bottom-right corner.
-    const fname = if (filename) |f| sanitisePathForSnapshots(f) else "<source>";
-    const loc_w = locationWidth(fname, start_line, start_column);
-    try writer.splatByteAll(' ', wall -| 1);
-    try writer.writeAll(sec);
-    try writer.writeAll("└");
-    if (loc_w + 4 <= rw -| wall) {
-        try writer.splatBytesAll("─", ((rw -| wall) -| loc_w) -| 3);
-        try writer.writeByte(' ');
-        try writeLocation(writer, palette, fname, start_line, start_column);
-        try writer.writeAll(" ┘");
-    } else {
-        try writer.splatBytesAll("─", (rw -| wall) -| 1);
-        try writer.writeAll("┘");
+        var start_col_adj = start_column;
+        var end_col_adj = end_column;
+        {
+            var orig_lead: usize = 0;
+            while (orig_lead < line_text.len and
+                (line_text[orig_lead] == ' ' or line_text[orig_lead] == '\t')) : (orig_lead += 1)
+            {}
+            const exp0: i64 = if (leads.items.len > 0) @intCast(leads.items[0]) else 0;
+            const delta: i64 = exp0 - @as(i64, @intCast(common)) - @as(i64, @intCast(orig_lead));
+            start_col_adj = @intCast(@max(@as(i64, @intCast(start_column)) + delta, 1));
+            end_col_adj = @intCast(@max(@as(i64, @intCast(end_column)) + delta, 1));
+        }
+
+        {
+            var line_no = start_line;
+            for (snippet.items) |full_line| {
+                const code_line = full_line[@min(common, full_line.len)..];
+                const is_underline_line = start_line == end_line and line_no == start_line;
+
+                for (code_line) |ch| try writer.writeByte(if (ch == '\t') ' ' else ch);
+                try writer.writeByte('\n');
+
+                if (is_underline_line) {
+                    const start_byte = @min(@as(usize, start_col_adj -| 1), code_line.len);
+                    const end_byte = @max(@min(@as(usize, end_col_adj -| 1), code_line.len), start_byte);
+
+                    const lead = source_region.displayWidth(code_line[0..start_byte]);
+                    try source_region.printSpaces(writer, @intCast(lead));
+
+                    const span_width = if (end_byte > start_byte) source_region.displayWidth(code_line[start_byte..end_byte]) else 0;
+                    const ulen = if (span_width > 0) span_width else 1;
+
+                    try writer.writeAll(highlight_color);
+                    try writer.splatBytesAll("^", ulen);
+                    try writer.writeAll(palette.reset);
+                    try writer.writeByte('\n');
+                }
+                line_no += 1;
+            }
+        }
     }
-    try writer.writeAll(rst);
-    try writer.writeByte('\n');
 }
 
 /// Length of the ANSI escape sequence starting at `bytes[i]`, or 0 if there
@@ -1013,11 +750,16 @@ fn ansiEscLen(bytes: []const u8, i: usize) usize {
     return j - i;
 }
 
-/// Emit a single below-the-box line indented by `base_indent`, word-wrapping it
+/// Emit a single trailing line indented by `base_indent`, word-wrapping it
 /// to `width` display columns. Wrapped continuation lines line up under the
 /// first line's text (preserving any leading indent the line already had, e.g.
 /// for a code block). ANSI escapes pass through and don't count toward width.
-fn wrapAndEmitBelowLine(writer: *std.Io.Writer, line: []const u8, base_indent: usize, width: usize) error{WriteFailed}!void {
+fn wrapAndEmitBelowLine(
+    writer: *std.Io.Writer,
+    line: []const u8,
+    base_indent: usize,
+    width: usize,
+) error{WriteFailed}!void {
     if (line.len == 0) {
         try writer.writeByte('\n');
         return;
@@ -1091,11 +833,8 @@ fn wrapAndEmitBelowLine(writer: *std.Io.Writer, line: []const u8, base_indent: u
 
 /// Fallback for reports with no source region: title line then the body.
 fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
-    try writer.writeAll(palette.bold);
-    try writer.writeAll(palette.primary);
-    try writeShouted(writer, report.title);
-    try writer.writeAll(palette.reset);
-    try writer.writeByte('\n');
+    const icon_info = getSeverityIcon(report.severity, report.title, palette);
+    try renderHeaderLine(writer, palette, config, icon_info, report.title, null, 0, 0);
     if (report.headline.elementCount() > 0) {
         try writer.writeByte('\n');
         var hbuf = std.Io.Writer.Allocating.init(report.document.allocator);
@@ -1107,7 +846,11 @@ fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, pale
             try wrapAndEmitBelowLine(writer, ln, 0, width);
         }
     }
-    try renderDocumentToTerminal(&report.document, writer, palette, config);
+    if (!report.document.isEmpty()) {
+        try writer.writeByte('\n');
+        try renderDocumentToTerminal(&report.document, writer, palette, config);
+        try writer.writeByte('\n');
+    }
     try writer.writeByte('\n');
 }
 
@@ -1115,7 +858,6 @@ fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, pale
 pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     assertValidHeadline(report);
     const title_class = switch (report.severity) {
-        .info => "info",
         .fatal => "error",
         .runtime_error => "error",
         .warning => "warning",
@@ -1123,7 +865,7 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
 
     try writer.print("<div class=\"report {s}\">\n", .{title_class});
     try writer.writeAll("<h1 class=\"report-title\">");
-    try writeShouted(writer, report.title);
+    try writeLowercased(writer, report.title);
     try writer.writeAll("</h1>\n");
     try writer.writeAll("<div class=\"report-content\">\n");
     if (report.headline.elementCount() > 0) {
@@ -1138,7 +880,7 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
 pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     assertValidHeadline(report);
     // LSP typically wants plain text without formatting
-    try writeShouted(writer, report.title);
+    try writeLowercased(writer, report.title);
     try writer.writeAll("\n\n");
     if (report.headline.elementCount() > 0) {
         try renderDocumentToLsp(&report.headline, writer, config);
@@ -1224,7 +966,7 @@ const markdown_spans = std.enums.EnumArray(Annotation, Span).init(.{
     .keyword = .{ .open = "`", .close = "`" },
     .type_variable = .{ .open = "_", .close = "_" },
     .error_highlight = .{ .open = "**", .close = "**" },
-    .warning_highlight = .{ .open = "**⚠ ", .close = "**" },
+    .warning_highlight = .{ .open = "**● ", .close = "**" },
     .suggestion = .{ .open = "**", .close = "**" },
     .code_block = .{ .open = "```roc\n", .close = "\n```" },
     .inline_code = .{ .open = "`", .close = "`" },
@@ -1347,6 +1089,7 @@ fn renderElementAs(comptime target: RenderTarget, element: DocumentElement, writ
         .source_code_region => |region| try S.writeSourceRegion(ctx, writer, region),
         .source_code_with_underlines => |data| try S.writeSourceUnderlines(ctx, writer, data),
         .source_code_multi_region => |multi| try S.writeMultiRegion(ctx, writer, multi),
+        .source_location => |location| try S.writeSourceLocation(ctx, writer, location),
     }
 }
 
@@ -1459,19 +1202,27 @@ const TerminalStyle = struct {
 
     fn closeInline(ctx: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
         if (wantsBacktick(ctx.palette, annotation)) try writer.writeByte('`');
-        try writer.writeAll(ctx.palette.reset);
+        if (ctx.palette.colorForAnnotation(annotation).len > 0) {
+            try writer.writeAll(ctx.palette.reset);
+            if (ctx.annotation_stack.items.len > 0) {
+                const prev = ctx.annotation_stack.items[ctx.annotation_stack.items.len - 1];
+                try writer.writeAll(ctx.palette.colorForAnnotation(prev));
+            }
+        }
     }
 
     fn openRegion(ctx: *RenderCtx, writer: *std.Io.Writer, annotation: Annotation) error{WriteFailed}!void {
         try writer.writeAll(ctx.palette.colorForAnnotation(annotation));
     }
 
-    fn closeRegion(ctx: *RenderCtx, writer: *std.Io.Writer, _: Annotation) error{WriteFailed}!void {
-        try writer.writeAll(ctx.palette.reset);
-        // Re-apply the enclosing annotation region's color, if any.
-        if (ctx.annotation_stack.items.len > 0) {
-            const prev = ctx.annotation_stack.items[ctx.annotation_stack.items.len - 1];
-            try writer.writeAll(ctx.palette.colorForAnnotation(prev));
+    fn closeRegion(ctx: *RenderCtx, writer: *std.Io.Writer, popped: Annotation) error{WriteFailed}!void {
+        if (ctx.palette.colorForAnnotation(popped).len > 0) {
+            try writer.writeAll(ctx.palette.reset);
+            // Re-apply the enclosing annotation region's color, if any.
+            if (ctx.annotation_stack.items.len > 0) {
+                const prev = ctx.annotation_stack.items[ctx.annotation_stack.items.len - 1];
+                try writer.writeAll(ctx.palette.colorForAnnotation(prev));
+            }
         }
     }
 
@@ -1484,7 +1235,6 @@ const TerminalStyle = struct {
     fn writeSourceRegion(ctx: *RenderCtx, writer: *std.Io.Writer, region: SourceCodeDisplayRegion) error{WriteFailed}!void {
         const palette = ctx.palette;
         const line_num_width = source_region.calculateLineNumberWidth(region.end_line);
-        try renderSourceLocationHeader(writer, palette, ctx.config, line_num_width, region.filename, region.start_line, region.start_column);
 
         const underline = regionUnderline(region);
         const color = palette.colorForAnnotation(region.region_annotation);
@@ -1509,7 +1259,6 @@ const TerminalStyle = struct {
         const palette = ctx.palette;
         const display = data.display_region;
         const line_num_width = source_region.calculateLineNumberWidth(display.end_line);
-        try renderSourceLocationHeader(writer, palette, ctx.config, line_num_width, display.filename, display.start_line, display.start_column);
 
         var line_num = display.start_line;
         var iter = std.mem.splitScalar(u8, display.line_text, '\n');
@@ -1528,9 +1277,6 @@ const TerminalStyle = struct {
 
     fn writeMultiRegion(ctx: *RenderCtx, writer: *std.Io.Writer, multi: SourceCodeMultiRegion) error{WriteFailed}!void {
         const palette = ctx.palette;
-        if (multi.filename) |filename| {
-            try writer.print("{s}: ", .{sanitisePathForSnapshots(filename)});
-        }
         try writer.writeAll(multi.source);
         try writer.writeByte('\n');
         for (multi.regions) |region| {
@@ -1538,6 +1284,12 @@ const TerminalStyle = struct {
             try writer.print("  {}:{}-{}:{}\n", .{ region.start_line, region.start_column, region.end_line, region.end_column });
             try writer.writeAll(palette.reset);
         }
+    }
+
+    fn writeSourceLocation(ctx: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) error{WriteFailed}!void {
+        const path = sanitisePathForSnapshots(location.filename orelse "<source>");
+        try writeLocation(writer, ctx.palette, path, location.line, location.column);
+        try writer.writeAll(ctx.palette.reset);
     }
 };
 
@@ -1575,9 +1327,6 @@ const MarkdownStyle = struct {
     }
 
     fn writeSourceRegion(ctx: *RenderCtx, writer: *std.Io.Writer, region: SourceCodeDisplayRegion) error{WriteFailed}!void {
-        if (region.filename) |filename| {
-            try writer.print("**{s}:{d}:{d}:{d}:{d}:**\n", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
-        }
         try writer.writeAll("```roc\n");
         try writer.writeAll(region.line_text);
         try writer.writeAll("\n```\n");
@@ -1595,9 +1344,6 @@ const MarkdownStyle = struct {
 
     fn writeSourceUnderlines(ctx: *RenderCtx, writer: *std.Io.Writer, data: SourceCodeWithUnderlines) error{WriteFailed}!void {
         const display = data.display_region;
-        if (display.filename) |filename| {
-            try writer.print("**{s}:{}:{}:**\n", .{ sanitisePathForSnapshots(filename), display.start_line, display.start_column });
-        }
         try writer.writeAll("```roc\n");
         try writer.writeAll(display.line_text);
         try writer.writeAll("\n```\n");
@@ -1613,15 +1359,17 @@ const MarkdownStyle = struct {
     }
 
     fn writeMultiRegion(_: *RenderCtx, writer: *std.Io.Writer, multi: SourceCodeMultiRegion) error{WriteFailed}!void {
-        if (multi.filename) |filename| {
-            try writer.print("**{s}:**\n", .{sanitisePathForSnapshots(filename)});
-        }
         try writer.writeAll("```roc\n");
         try writer.writeAll(multi.source);
         try writer.writeAll("\n```\n");
         for (multi.regions) |region| {
             try writer.print("- Line {d}:{d}-{d}:{d}\n", .{ region.start_line, region.start_column, region.end_line, region.end_column });
         }
+    }
+
+    fn writeSourceLocation(_: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) error{WriteFailed}!void {
+        const path = sanitisePathForSnapshots(location.filename orelse "<source>");
+        try writer.print("{s}:{d}:{d}", .{ path, location.line, location.column });
     }
 };
 
@@ -1670,9 +1418,6 @@ const HtmlStyle = struct {
 
     fn writeSourceRegion(_: *RenderCtx, writer: *std.Io.Writer, region: SourceCodeDisplayRegion) error{WriteFailed}!void {
         try writer.writeAll("<div class=\"source-region\">");
-        if (region.filename) |filename| {
-            try writer.print("<span class=\"filename\">{s}:{}:{}:{}:{}:</span> ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
-        }
         try writer.print("<pre class=\"{s}\">", .{region.region_annotation.semanticName()});
         try writeEscapedHtml(writer, region.line_text);
         try writer.writeAll("</pre></div>");
@@ -1681,9 +1426,6 @@ const HtmlStyle = struct {
     fn writeSourceUnderlines(_: *RenderCtx, writer: *std.Io.Writer, data: SourceCodeWithUnderlines) error{WriteFailed}!void {
         const display = data.display_region;
         try writer.writeAll("<div class=\"source-region\">");
-        if (display.filename) |filename| {
-            try writer.print("<div class=\"source-location\">{s}:{}:{}</div>", .{ sanitisePathForSnapshots(filename), display.start_line, display.start_column });
-        }
         try writer.writeAll("<pre class=\"source-code\">");
         try writeEscapedHtml(writer, display.line_text);
         try writer.writeAll("</pre></div>");
@@ -1691,9 +1433,6 @@ const HtmlStyle = struct {
 
     fn writeMultiRegion(_: *RenderCtx, writer: *std.Io.Writer, multi: SourceCodeMultiRegion) error{WriteFailed}!void {
         try writer.writeAll("<div class=\"source-multi-region\">");
-        if (multi.filename) |filename| {
-            try writer.print("<span class=\"filename\">{s}:</span> ", .{sanitisePathForSnapshots(filename)});
-        }
         try writer.writeAll("<pre>");
         try writeEscapedHtml(writer, multi.source);
         try writer.writeAll("</pre>\n<ul class=\"regions\">");
@@ -1701,6 +1440,13 @@ const HtmlStyle = struct {
             try writer.print("<li class=\"{s}\">{d}:{d}-{d}:{d}</li>", .{ region.annotation.semanticName(), region.start_line, region.start_column, region.end_line, region.end_column });
         }
         try writer.writeAll("</ul></div>");
+    }
+
+    fn writeSourceLocation(_: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) error{WriteFailed}!void {
+        const path = sanitisePathForSnapshots(location.filename orelse "<source>");
+        try writer.writeAll("<span class=\"source-location\"><span class=\"filename\">");
+        try writeEscapedHtml(writer, path);
+        try writer.print("</span>:{d}:{d}</span>", .{ location.line, location.column });
     }
 };
 
@@ -1734,78 +1480,29 @@ const LspStyle = struct {
     }
 
     fn writeSourceRegion(_: *RenderCtx, writer: *std.Io.Writer, region: SourceCodeDisplayRegion) error{WriteFailed}!void {
-        if (region.filename) |filename| {
-            try writer.print("{s}:{}:{}:{}:{}: ", .{ sanitisePathForSnapshots(filename), region.start_line, region.start_column, region.end_line, region.end_column });
-        }
         try writer.writeAll(region.line_text);
         try writer.writeByte('\n');
     }
 
     fn writeSourceUnderlines(_: *RenderCtx, writer: *std.Io.Writer, data: SourceCodeWithUnderlines) error{WriteFailed}!void {
         const display = data.display_region;
-        if (display.filename) |filename| {
-            try writer.print("{s}:{}:{}: ", .{ sanitisePathForSnapshots(filename), display.start_line, display.start_column });
-        }
         try writer.writeAll(display.line_text);
         try writer.writeByte('\n');
     }
 
     fn writeMultiRegion(_: *RenderCtx, writer: *std.Io.Writer, multi: SourceCodeMultiRegion) error{WriteFailed}!void {
-        if (multi.filename) |filename| {
-            try writer.print("{s}: ", .{sanitisePathForSnapshots(filename)});
-        }
         try writer.writeAll(multi.source);
         try writer.writeByte('\n');
         for (multi.regions) |region| {
             try writer.print("  {}:{}-{}:{}\n", .{ region.start_line, region.start_column, region.end_line, region.end_column });
         }
     }
+
+    fn writeSourceLocation(_: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) error{WriteFailed}!void {
+        const path = sanitisePathForSnapshots(location.filename orelse "<source>");
+        try writer.print("{s}:{d}:{d}", .{ path, location.line, location.column });
+    }
 };
-
-/// Render the `┌─` location header line plus the `│` separator beneath it.
-///
-/// The box-drawing run stretches to the full terminal width so the
-/// `filename:line:col` is right-aligned to the terminal edge:
-///
-///     ┌──────────────────────────── examples/foo.roc:12:34
-///     │
-fn renderSourceLocationHeader(
-    writer: *std.Io.Writer,
-    palette: ColorPalette,
-    config: ReportingConfig,
-    line_num_width: u32,
-    filename: ?[]const u8,
-    start_line: u32,
-    start_column: u32,
-) error{WriteFailed}!void {
-    const total_width: usize = config.getMaxLineWidth();
-
-    // Display width of the trailing "filename:line:col" (or "<source>:line:col").
-    const path = if (filename) |f| sanitisePathForSnapshots(f) else "<source>";
-    const loc_len = path.len + 1 + decimalWidth(start_line) + 1 + decimalWidth(start_column);
-
-    // Layout: [gutter spaces] " ┌" [─ fill] " " [location]
-    // Everything before the fill occupies `line_num_width + 2` columns, plus a
-    // single space before the location, so fill the remainder with ─ to push
-    // the location flush against the terminal edge.
-    const used = @as(usize, line_num_width) + 2 + 1 + loc_len;
-    const fill = if (total_width > used) total_width - used else 1;
-
-    try source_region.printSpaces(writer, line_num_width);
-    try writer.writeAll(palette.secondary);
-    try writer.writeAll(" ┌");
-    try writer.splatBytesAll("─", fill);
-    try writer.writeAll(" ");
-    try writeLocation(writer, palette, path, start_line, start_column);
-    try writer.writeByte('\n');
-    try writer.writeAll(palette.reset);
-
-    // Separator line beneath the header, with the `│` under the `┌`.
-    try source_region.printSpaces(writer, line_num_width);
-    try writer.writeAll(palette.secondary);
-    try writer.writeAll(" │\n");
-    try writer.writeAll(palette.reset);
-}
 
 /// Number of decimal digits needed to print `n` (e.g. 1 for 7, 4 for 1242).
 fn decimalWidth(n: u32) usize {

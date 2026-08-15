@@ -13,20 +13,18 @@ main! = |_args| {
 # EXPECTED
 NON EXHAUSTIVE DESTRUCTURE - for_loop_refutable_literal_pattern.md:2:9:2:10
 # PROBLEMS
+── ✗ non exhaustive destructure ────── for_loop_refutable_literal_pattern.md:2:9
 
-┌────────────────────────────┐
-│ NON EXHAUSTIVE DESTRUCTURE ├─ This destructuring pattern doesn't cover ─────┐
-└┬───────────────────────────┘  all possible cases.                           │
- │                                                                            │
- │  for 1 in [1, 2] {}                                                        │
- │      ‾                                                                     │
- └───────────────────────────────── for_loop_refutable_literal_pattern.md:2:9 ┘
+This destructuring pattern doesn't cover all possible cases.
 
-    The value being destructured has type:
-            Dec
+for 1 in [1, 2] {}
+    ^
 
-    Missing patterns:
-            _
+The value being destructured has type:
+        Dec
+
+Missing patterns:
+        _
 
 # TOKENS
 ~~~zig
