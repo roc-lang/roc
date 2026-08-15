@@ -3,9 +3,16 @@
 const std = @import("std");
 const roc_target = @import("roc_target");
 
-const BuildEnv = @import("../compile_build.zig").BuildEnv;
+const compile_build = @import("../compile_build.zig");
+const BuildEnv = compile_build.BuildEnv;
 
-fn expectDuplicateDefinition(source: []const u8) !void {
+const ExpectDuplicateDefinitionError = std.Io.Dir.WriteFileError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    compile_build.InitError ||
+    compile_build.BuildRootError ||
+    error{TestUnexpectedResult};
+
+fn expectDuplicateDefinition(source: []const u8) ExpectDuplicateDefinitionError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 
