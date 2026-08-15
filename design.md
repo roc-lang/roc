@@ -6047,13 +6047,20 @@ has explicitly resolved `optional` or `defaulted`; an unresolved or required
 kind still violates the relation. The mode travels with every pending relation
 and its processed-relation stamp, so nested construction structure cannot lose
 the judgment or be mistaken for a previously processed exact relation. A
-pristine checked procedure template relates to its caller-specialized request
+fresh checked procedure-template instance relates to its caller-specialized request
 with construction width because the template body owns that construction;
 relating a finished Monotype or an ordinary committed interface remains exact.
-Absorption joins the construction to the target record class, making omitted
-optional/defaulted fields explicit before body lowering materializes Missing or
-the archived default. No row shape or slot representation is inspected to make
-this decision.
+When a request carries compiler-generated private representation, the same
+row-width mode travels through every ordinary descendant. A live graph may use
+the explicit construction-selection capability to retain the producer's
+private backing while joining the widened surrounding container. A finished
+Monotype remains immutable instead: its public/private records stay distinct,
+and the explicit construction relation authorizes the omitted field for
+boundary adaptation. Outside a representation boundary, absorption joins the
+construction to the target record class, making omitted optional/defaulted
+fields explicit before body lowering materializes Missing or the archived
+default. No row shape or slot representation is inspected to make this
+decision.
 
 A Monotype imported into another specialization graph is a finished snapshot,
 never a refreshable view: a specialization that needs more than its requested

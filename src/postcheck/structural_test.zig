@@ -379,7 +379,9 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     try expectContains(selection, "containsFinishedMono(public_node)");
     try expectContains(selection, "containsFinishedMono(private_node)");
     try expectContains(selection, "finished Monotype reached generated-private representation selection");
-    try expectContains(selection, "unifyRootsTransitively(public_node, private_node, true, .exact)");
+    try expectContains(selection, "selectGeneratedPrivateRepresentationAtWidth(public_node, private_node, .exact)");
+    try expectContains(selection, "selectGeneratedPrivateRepresentationAtWidth(public_node, private_node, .construction)");
+    try expectContains(selection, "unifyRootsTransitively(public_node, private_node, true, row_width)");
 
     const ordinary_unify = sourceSliceBetween(
         solve_source,

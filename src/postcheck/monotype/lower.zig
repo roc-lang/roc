@@ -688,69 +688,113 @@ fn enterEvidenceScope(
 }
 
 fn relateFunctionRequestInterface(graph: *InstGraph, public_fn: NodeId, private_fn: NodeId) Allocator.Error!void {
-    if (try graph.containsGeneratedPrivate(public_fn) or try graph.containsGeneratedPrivate(private_fn)) {
-        try relateRequestComponent(graph, public_fn, private_fn);
-    } else {
-        try graph.unify(public_fn, private_fn);
-    }
+    try relateRequestComponentAtWidth(graph, public_fn, private_fn, .exact);
 }
 
-/// Relate a pristine checked procedure template to a caller request that the
+/// Relate a fresh checked procedure-template instance to a caller request that the
 /// checker formed through a construction-width relation. Ordinary structure
 /// still unifies exactly; only explicit optional/defaulted record fields may
 /// be absorbed by a closed row.
 fn relateConstructionFunctionRequestInterface(graph: *InstGraph, checked_fn: NodeId, request_fn: NodeId) Allocator.Error!void {
-    if (try graph.containsGeneratedPrivate(checked_fn)) {
-        Common.invariant("pristine checked template root contained generated-private representation");
-    }
-    if (try graph.containsGeneratedPrivate(request_fn)) {
-        const public_request = graph.requestSourceInterface(request_fn) orelse
-            Common.invariant("generated-private construction request had no public source interface");
-        try graph.unifyConstruction(checked_fn, public_request);
-        try relateFunctionRequestInterface(graph, public_request, request_fn);
-        return;
-    }
-    try graph.unifyConstruction(checked_fn, request_fn);
+    try relateRequestComponentAtWidth(graph, checked_fn, request_fn, .construction);
 }
 
 fn relateRequestComponent(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!void {
+    try relateRequestComponentAtWidth(graph, left_node, right_node, .exact);
+}
+
+fn unifyRequestComponentAtWidth(
+    graph: *InstGraph,
+    left_node: NodeId,
+    right_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!void {
+    switch (row_width) {
+        .exact => try graph.unify(left_node, right_node),
+        .construction => try graph.unifyConstruction(left_node, right_node),
+    }
+}
+
+fn relateOpaqueRequestComponentAtWidth(
+    graph: *InstGraph,
+    public_node: NodeId,
+    private_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!void {
+    switch (row_width) {
+        .exact => try graph.relateOpaqueInterface(public_node, private_node),
+        .construction => try graph.relateOpaqueConstructionInterface(public_node, private_node),
+    }
+}
+
+fn relatePublicPrivateRequestComponentAtWidth(
+    graph: *InstGraph,
+    public_node: NodeId,
+    private_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!void {
+    switch (row_width) {
+        .exact => try graph.relateOpaqueInterface(public_node, private_node),
+        .construction => {
+            if (try graph.containsFinishedMono(public_node) or
+                try graph.containsFinishedMono(private_node))
+            {
+                try graph.relateOpaqueConstructionInterface(public_node, private_node);
+            } else {
+                try graph.selectGeneratedPrivateConstructionRepresentation(public_node, private_node);
+            }
+        },
+    }
+}
+
+fn relateRequestComponentAtWidth(
+    graph: *InstGraph,
+    left_node: NodeId,
+    right_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!void {
     const left_root_private = isGeneratedPrivateRootNode(graph, left_node);
     const right_root_private = isGeneratedPrivateRootNode(graph, right_node);
     if (left_root_private and right_root_private) {
-        try graph.unify(left_node, right_node);
+        try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width);
         return;
     }
     if (right_root_private) {
-        try graph.relateOpaqueInterface(left_node, right_node);
+        try relatePublicPrivateRequestComponentAtWidth(graph, left_node, right_node, row_width);
         return;
     }
     if (left_root_private) {
-        try graph.relateOpaqueInterface(right_node, left_node);
+        try relatePublicPrivateRequestComponentAtWidth(graph, right_node, left_node, row_width);
         return;
     }
 
     const left_private = try graph.containsGeneratedPrivate(left_node);
     const right_private = try graph.containsGeneratedPrivate(right_node);
     if (left_private and right_private) {
-        if (try relateMatchingRequestContainers(graph, left_node, right_node)) return;
-        try graph.unify(left_node, right_node);
+        if (try relateMatchingRequestContainers(graph, left_node, right_node, row_width)) return;
+        try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width);
     } else if (right_private) {
-        try graph.relateOpaqueInterface(left_node, right_node);
+        try relatePublicPrivateRequestComponentAtWidth(graph, left_node, right_node, row_width);
     } else if (left_private) {
-        try graph.relateOpaqueInterface(right_node, left_node);
+        try relatePublicPrivateRequestComponentAtWidth(graph, right_node, left_node, row_width);
     } else {
-        try graph.unify(left_node, right_node);
+        try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width);
     }
 }
 
-fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!bool {
+fn relateMatchingRequestContainers(
+    graph: *InstGraph,
+    left_node: NodeId,
+    right_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!bool {
     if (graph.sameClass(left_node, right_node)) return true;
     const left_content = graph.content(left_node);
     const right_content = graph.content(right_node);
     switch (left_content) {
         .list => |left_elem| switch (right_content) {
             .list => |right_elem| {
-                try relateRequestComponent(graph, left_elem, right_elem);
+                try relateRequestComponentAtWidth(graph, left_elem, right_elem, row_width);
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
             },
@@ -758,7 +802,7 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
         },
         .box => |left_elem| switch (right_content) {
             .box => |right_elem| {
-                try relateRequestComponent(graph, left_elem, right_elem);
+                try relateRequestComponentAtWidth(graph, left_elem, right_elem, row_width);
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
             },
@@ -770,7 +814,7 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
                     Common.invariant("request component relation received tuples of different arity");
                 }
                 for (left_items, right_items) |left_item, right_item| {
-                    try relateRequestComponent(graph, left_item, right_item);
+                    try relateRequestComponentAtWidth(graph, left_item, right_item, row_width);
                 }
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
@@ -783,9 +827,9 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
                     Common.invariant("request component relation received functions of different arity");
                 }
                 for (left_fn.args, right_fn.args) |left_arg, right_arg| {
-                    try relateRequestComponent(graph, left_arg, right_arg);
+                    try relateRequestComponentAtWidth(graph, left_arg, right_arg, row_width);
                 }
-                try relateRequestComponent(graph, left_fn.ret, right_fn.ret);
+                try relateRequestComponentAtWidth(graph, left_fn.ret, right_fn.ret, row_width);
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
             },
@@ -793,7 +837,7 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
         },
         .tag_union => switch (right_content) {
             .tag_union => {
-                try graph.relateOpaqueInterface(left_node, right_node);
+                try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
             },
@@ -801,7 +845,7 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
         },
         .record => switch (right_content) {
             .record => {
-                try graph.relateOpaqueInterface(left_node, right_node);
+                try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
             },
@@ -816,11 +860,11 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
                     return false;
                 }
                 for (left_named.args, right_named.args) |left_arg, right_arg| {
-                    try relateRequestComponent(graph, left_arg, right_arg);
+                    try relateRequestComponentAtWidth(graph, left_arg, right_arg, row_width);
                 }
                 if (left_named.backing) |left_backing| {
                     const right_backing = right_named.backing orelse return false;
-                    try relateRequestComponent(graph, left_backing.node, right_backing.node);
+                    try relateRequestComponentAtWidth(graph, left_backing.node, right_backing.node, row_width);
                 } else if (right_named.backing != null) {
                     return false;
                 }
@@ -1218,7 +1262,7 @@ fn checkedMonoRequestNode(
     row_width: solve.RowWidthRelation,
 ) Allocator.Error!NodeId {
     if (try graph.containsGeneratedPrivate(mono_node)) {
-        try graph.relateOpaqueInterface(checked_node, mono_node);
+        try relateRequestComponentAtWidth(graph, checked_node, mono_node, row_width);
         return mono_node;
     }
     var seen = std.AutoHashMap(CheckedMonoRequestPair, void).init(graph.allocator);
@@ -1246,7 +1290,7 @@ fn relateCheckedMonoRequestNodeAt(
     if (try graph.containsGeneratedPrivate(checked_root) or
         try graph.containsGeneratedPrivate(request_root))
     {
-        try relateRequestComponent(graph, checked_root, request_root);
+        try relateRequestComponentAtWidth(graph, checked_root, request_root, row_width);
         return;
     }
 
@@ -17013,7 +17057,7 @@ const BodyContext = struct {
                 request_fn_node,
             );
         } else {
-            try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
+            try relateConstructionFunctionRequestInterface(self.graph, root_node, request_fn_node);
         }
         try callee_ctx.instantiateTemplateDispatchRelations(template, null);
 

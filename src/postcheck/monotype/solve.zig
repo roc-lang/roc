@@ -2218,14 +2218,34 @@ pub const InstGraph = struct {
     /// specialization lowers its callable body against `private_node`, which
     /// also supplies the specialization identity.
     pub fn relateOpaqueInterface(self: *InstGraph, public_node: NodeId, private_node: NodeId) Allocator.Error!void {
+        try self.relateOpaqueInterfaceAtWidth(public_node, private_node, .exact);
+    }
+
+    /// Construction-width counterpart of `relateOpaqueInterface`. Generated-
+    /// private representation boundaries remain distinct, while ordinary
+    /// descendants replay the checker's explicit construction-width judgment.
+    pub fn relateOpaqueConstructionInterface(
+        self: *InstGraph,
+        public_node: NodeId,
+        private_node: NodeId,
+    ) Allocator.Error!void {
+        try self.relateOpaqueInterfaceAtWidth(public_node, private_node, .construction);
+    }
+
+    fn relateOpaqueInterfaceAtWidth(
+        self: *InstGraph,
+        public_node: NodeId,
+        private_node: NodeId,
+        row_width: RowWidthRelation,
+    ) Allocator.Error!void {
         self.requireRelationProduction();
         var pending = std.ArrayList(NodePair).empty;
         defer pending.deinit(self.allocator);
         var related = std.AutoHashMap(NodePair, void).init(self.allocator);
         defer related.deinit();
-        try pending.append(self.allocator, .{ .left = public_node, .right = private_node });
+        try pending.append(self.allocator, .{ .left = public_node, .right = private_node, .row_width = row_width });
         while (pending.pop()) |pair| {
-            try self.relateOpaqueInterfacePair(pair.left, pair.right, &pending, &related);
+            try self.relateOpaqueInterfacePair(pair, &pending, &related);
         }
     }
 
@@ -2239,6 +2259,25 @@ pub const InstGraph = struct {
         public_node: NodeId,
         private_node: NodeId,
     ) Allocator.Error!void {
+        try self.selectGeneratedPrivateRepresentationAtWidth(public_node, private_node, .exact);
+    }
+
+    /// Select generated-private evidence while replaying checker-approved
+    /// construction width through the surrounding live graph.
+    pub fn selectGeneratedPrivateConstructionRepresentation(
+        self: *InstGraph,
+        public_node: NodeId,
+        private_node: NodeId,
+    ) Allocator.Error!void {
+        try self.selectGeneratedPrivateRepresentationAtWidth(public_node, private_node, .construction);
+    }
+
+    fn selectGeneratedPrivateRepresentationAtWidth(
+        self: *InstGraph,
+        public_node: NodeId,
+        private_node: NodeId,
+        row_width: RowWidthRelation,
+    ) Allocator.Error!void {
         self.requireRelationProduction();
         if (try self.containsGeneratedPrivate(public_node) or !try self.containsGeneratedPrivate(private_node)) {
             Common.invariant("generated-private representation selection received incorrect public/private direction");
@@ -2246,27 +2285,30 @@ pub const InstGraph = struct {
         if (try self.containsFinishedMono(public_node) or try self.containsFinishedMono(private_node)) {
             Common.invariant("finished Monotype reached generated-private representation selection");
         }
-        try self.unifyRootsTransitively(public_node, private_node, true, .exact);
+        try self.unifyRootsTransitively(public_node, private_node, true, row_width);
     }
 
     fn relateOpaqueInterfacePair(
         self: *InstGraph,
-        raw_public: NodeId,
-        raw_private: NodeId,
+        raw_pair: NodePair,
         pending: *std.ArrayList(NodePair),
         related: *std.AutoHashMap(NodePair, void),
     ) Allocator.Error!void {
-        const public_node = self.find(raw_public);
-        const private_node = self.find(raw_private);
+        const public_node = self.find(raw_pair.left);
+        const private_node = self.find(raw_pair.right);
         if (public_node == private_node) return;
-        const pair = NodePair{ .left = public_node, .right = private_node };
+        const pair = NodePair{
+            .left = public_node,
+            .right = private_node,
+            .row_width = raw_pair.row_width,
+        };
         if (related.contains(pair)) return;
         try related.put(pair, {});
 
         const public_content = self.nodes.items[@intFromEnum(public_node)];
         const private_content = self.nodes.items[@intFromEnum(private_node)];
         if (isGeneratedPrivateRootContent(public_content) and isGeneratedPrivateRootContent(private_content)) {
-            try self.unify(public_node, private_node);
+            try self.unifyAtRowWidth(public_node, private_node, pair.row_width);
             return;
         }
         const private_contains_generated = try self.containsGeneratedPrivate(private_node);
@@ -2281,6 +2323,7 @@ pub const InstGraph = struct {
                             try self.relateGeneratedOpaquePair(
                                 self.nodes.items[@intFromEnum(self.find(public_node))],
                                 private_named,
+                                pair.row_width,
                                 pending,
                             );
                             return;
@@ -2289,12 +2332,12 @@ pub const InstGraph = struct {
                             return;
                         }
                     }
-                    try self.relateGeneratedOpaquePair(public_content, private_named, pending);
+                    try self.relateGeneratedOpaquePair(public_content, private_named, pair.row_width, pending);
                     return;
                 }
             }
         } else if (private_content == .unresolved) {
-            try self.unify(public_node, private_node);
+            try self.unifyAtRowWidth(public_node, private_node, pair.row_width);
             return;
         }
 
@@ -2309,7 +2352,7 @@ pub const InstGraph = struct {
                             public_var,
                             private_named,
                         );
-                        try self.relatePublicNamedOpaquePair(public_named, private_named, pending);
+                        try self.relatePublicNamedOpaquePair(public_named, private_named, pair.row_width, pending);
                         try self.union_(private_node, public_node);
                         return;
                     }
@@ -2317,13 +2360,14 @@ pub const InstGraph = struct {
                         public_node,
                         public_var,
                         private_content,
+                        pair.row_width,
                         pending,
                     )) {
                         return;
                     }
                     Common.invariant("opaque interface relation received unresolved checked structure for generated evidence");
                 }
-                try self.unify(public_node, private_node);
+                try self.unifyAtRowWidth(public_node, private_node, pair.row_width);
             },
             .primitive => |public_primitive| {
                 if (private_content != .primitive) Common.invariant("opaque interface relation received different type structure");
@@ -2333,11 +2377,11 @@ pub const InstGraph = struct {
             },
             .list => |public_elem| {
                 if (private_content != .list) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueChild(public_elem, private_content.list, pending);
+                try self.relateOpaqueChild(public_elem, private_content.list, pair.row_width, pending);
             },
             .box => |public_elem| {
                 if (private_content != .box) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueChild(public_elem, private_content.box, pending);
+                try self.relateOpaqueChild(public_elem, private_content.box, pair.row_width, pending);
             },
             .tuple => |public_items| {
                 if (private_content != .tuple) Common.invariant("opaque interface relation received different type structure");
@@ -2346,7 +2390,7 @@ pub const InstGraph = struct {
                     Common.invariant("opaque interface relation received tuples of different arity");
                 }
                 for (public_items, private_items) |public_item, private_item| {
-                    try self.relateOpaqueChild(public_item, private_item, pending);
+                    try self.relateOpaqueChild(public_item, private_item, pair.row_width, pending);
                 }
             },
             .func => |public_fn| {
@@ -2356,17 +2400,17 @@ pub const InstGraph = struct {
                     Common.invariant("opaque interface relation received functions of different arity");
                 }
                 for (public_fn.args, private_fn.args) |public_arg, private_arg| {
-                    try self.relateOpaqueChild(public_arg, private_arg, pending);
+                    try self.relateOpaqueChild(public_arg, private_arg, pair.row_width, pending);
                 }
-                try self.relateOpaqueChild(public_fn.ret, private_fn.ret, pending);
+                try self.relateOpaqueChild(public_fn.ret, private_fn.ret, pair.row_width, pending);
             },
             .tag_union => {
                 if (private_content != .tag_union) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueTagRows(public_node, private_node, pending);
+                try self.relateOpaqueTagRows(public_node, private_node, pair.row_width, pending);
             },
             .record => {
                 if (private_content != .record) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueRecordRows(public_node, private_node, pending);
+                try self.relateOpaqueRecordRows(public_node, private_node, pair.row_width, pending);
             },
             .empty_tag_union => if (private_content != .empty_tag_union)
                 Common.invariant("opaque interface relation received different type structure"),
@@ -2374,7 +2418,7 @@ pub const InstGraph = struct {
                 Common.invariant("opaque interface relation received different type structure"),
             .named => |public_named| {
                 if (private_content != .named) Common.invariant("opaque interface relation received different type structure");
-                try self.relatePublicNamedOpaquePair(public_named, private_content.named, pending);
+                try self.relatePublicNamedOpaquePair(public_named, private_content.named, pair.row_width, pending);
             },
             .erased => |public_digest| {
                 if (private_content != .erased) Common.invariant("opaque interface relation received different type structure");
@@ -2398,6 +2442,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         public_node: NodeId,
         private_node: NodeId,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         const flat_public = try self.flattenTagRow(public_node);
@@ -2420,7 +2465,7 @@ pub const InstGraph = struct {
                     Common.invariant("opaque interface relation received one tag at two payload arities");
                 }
                 for (public_tag.payloads, private_tag.payloads) |public_payload, private_payload| {
-                    try self.relateOpaqueChild(public_payload, private_payload, pending);
+                    try self.relateOpaqueChild(public_payload, private_payload, row_width, pending);
                 }
             } else {
                 try only_public.append(self.allocator, public_tag);
@@ -2451,11 +2496,11 @@ pub const InstGraph = struct {
             Common.invariant("opaque interface relation widened a closed tag union");
         }
         if (only_public.items.len == 0 and only_private.items.len == 0) {
-            try self.relateOpaqueChild(flat_public.ext, flat_private.ext, pending);
+            try self.relateOpaqueChild(flat_public.ext, flat_private.ext, row_width, pending);
         } else if (only_public.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_public.ext, only_private.items, flat_private.ext, .exact, pending);
+            try self.writeOrQueueTagRest(flat_public.ext, only_private.items, flat_private.ext, row_width, pending);
         } else if (only_private.items.len == 0) {
-            try self.writeOrQueueTagRest(flat_private.ext, only_public.items, flat_public.ext, .exact, pending);
+            try self.writeOrQueueTagRest(flat_private.ext, only_public.items, flat_public.ext, row_width, pending);
         } else {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
             if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
@@ -2463,10 +2508,10 @@ pub const InstGraph = struct {
                 defer rest.deinit(self.allocator);
                 try rest.appendSlice(self.allocator, only_public.items);
                 try rest.appendSlice(self.allocator, only_private.items);
-                try self.writeOrQueueTagRest(flat_public.ext, rest.items, new_ext, .exact, pending);
+                try self.writeOrQueueTagRest(flat_public.ext, rest.items, new_ext, row_width, pending);
             } else {
-                try self.writeOrQueueTagRest(flat_public.ext, only_private.items, new_ext, .exact, pending);
-                try self.writeOrQueueTagRest(flat_private.ext, only_public.items, new_ext, .exact, pending);
+                try self.writeOrQueueTagRest(flat_public.ext, only_private.items, new_ext, row_width, pending);
+                try self.writeOrQueueTagRest(flat_private.ext, only_public.items, new_ext, row_width, pending);
             }
         }
     }
@@ -2476,6 +2521,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         public_node: NodeId,
         private_node: NodeId,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         const flat_public = try self.flattenRecordRow(public_node);
@@ -2503,9 +2549,10 @@ pub const InstGraph = struct {
                 try self.relateOpaqueChild(
                     public_field.value_ty orelse public_field.ty,
                     private_field.value_ty orelse private_field.ty,
+                    row_width,
                     pending,
                 );
-                try self.relateOpaqueChild(public_field.ty, private_field.ty, pending);
+                try self.relateOpaqueChild(public_field.ty, private_field.ty, row_width, pending);
             } else {
                 try only_public.append(self.allocator, public_field);
             }
@@ -2527,28 +2574,33 @@ pub const InstGraph = struct {
             }
         }
 
-        if (self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .record) or
-            self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .record))
+        const public_absorbs_private = self.closedRecordAbsorbsFields(flat_public.ext, only_private.items, row_width);
+        const private_absorbs_public = self.closedRecordAbsorbsFields(flat_private.ext, only_public.items, row_width);
+        if ((!public_absorbs_private and self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .record)) or
+            (!private_absorbs_public and self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .record)))
         {
             Common.invariant("opaque interface relation widened a closed record");
         }
-        if (only_public.items.len == 0 and only_private.items.len == 0) {
-            try self.relateOpaqueChild(flat_public.ext, flat_private.ext, pending);
-        } else if (only_public.items.len == 0) {
-            try self.writeOrQueueRecordRest(flat_public.ext, only_private.items, flat_private.ext, .exact, pending);
-        } else if (only_private.items.len == 0) {
-            try self.writeOrQueueRecordRest(flat_private.ext, only_public.items, flat_public.ext, .exact, pending);
+
+        const add_to_public = if (public_absorbs_private) &.{} else only_private.items;
+        const add_to_private = if (private_absorbs_public) &.{} else only_public.items;
+        if (add_to_public.len == 0 and add_to_private.len == 0) {
+            try self.relateOpaqueChild(flat_public.ext, flat_private.ext, row_width, pending);
+        } else if (add_to_private.len == 0) {
+            try self.writeOrQueueRecordRest(flat_public.ext, add_to_public, flat_private.ext, row_width, pending);
+        } else if (add_to_public.len == 0) {
+            try self.writeOrQueueRecordRest(flat_private.ext, add_to_private, flat_public.ext, row_width, pending);
         } else {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
             if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
                 var rest = std.ArrayList(InstField).empty;
                 defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_public.items);
-                try rest.appendSlice(self.allocator, only_private.items);
-                try self.writeOrQueueRecordRest(flat_public.ext, rest.items, new_ext, .exact, pending);
+                try rest.appendSlice(self.allocator, add_to_private);
+                try rest.appendSlice(self.allocator, add_to_public);
+                try self.writeOrQueueRecordRest(flat_public.ext, rest.items, new_ext, row_width, pending);
             } else {
-                try self.writeOrQueueRecordRest(flat_public.ext, only_private.items, new_ext, .exact, pending);
-                try self.writeOrQueueRecordRest(flat_private.ext, only_public.items, new_ext, .exact, pending);
+                try self.writeOrQueueRecordRest(flat_public.ext, add_to_public, new_ext, row_width, pending);
+                try self.writeOrQueueRecordRest(flat_private.ext, add_to_private, new_ext, row_width, pending);
             }
         }
     }
@@ -2557,12 +2609,13 @@ pub const InstGraph = struct {
         self: *InstGraph,
         public_node: NodeId,
         private_node: NodeId,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         if (try self.containsGeneratedPrivate(private_node)) {
-            try pending.append(self.allocator, .{ .left = public_node, .right = private_node });
+            try pending.append(self.allocator, .{ .left = public_node, .right = private_node, .row_width = row_width });
         } else {
-            try self.unify(public_node, private_node);
+            try self.unifyAtRowWidth(public_node, private_node, row_width);
         }
     }
 
@@ -2570,6 +2623,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         public_content: InstNode,
         private_named: InstNamed,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         if (public_content != .named) Common.invariant("opaque public interface relation received a non-named public node");
@@ -2592,7 +2646,7 @@ pub const InstGraph = struct {
             if (public_named.args.len == 0 or private_named.args.len == 0) {
                 Common.invariant("iterator interface relation received no public item argument");
             }
-            try self.relateOpaqueChild(public_named.args[0], private_named.args[0], pending);
+            try self.relateOpaqueChild(public_named.args[0], private_named.args[0], row_width, pending);
             return;
         }
         if (public_named.kind != .@"opaque" or private_named.kind != .@"opaque" or
@@ -2611,7 +2665,7 @@ pub const InstGraph = struct {
             Common.invariant("opaque public interface relation received different type-argument arities");
         }
         for (public_named.args, private_named.args) |public_arg, private_arg| {
-            try self.relateOpaqueChild(public_arg, private_arg, pending);
+            try self.relateOpaqueChild(public_arg, private_arg, row_width, pending);
         }
     }
 
@@ -2619,6 +2673,7 @@ pub const InstGraph = struct {
         self: *InstGraph,
         public_named: InstNamed,
         private_named: InstNamed,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         if (public_named.kind != private_named.kind or
@@ -2628,7 +2683,7 @@ pub const InstGraph = struct {
             Common.invariant("opaque interface relation received different named types");
         }
         for (public_named.args, private_named.args) |public_arg, private_arg| {
-            try self.relateOpaqueChild(public_arg, private_arg, pending);
+            try self.relateOpaqueChild(public_arg, private_arg, row_width, pending);
         }
         if (public_named.backing) |public_backing| {
             const private_backing = private_named.backing orelse
@@ -2636,7 +2691,7 @@ pub const InstGraph = struct {
             if (public_backing.authority != private_backing.authority) {
                 Common.invariant("opaque interface relation received unmatched backing authority");
             }
-            try self.relateOpaqueChild(public_backing.node, private_backing.node, pending);
+            try self.relateOpaqueChild(public_backing.node, private_backing.node, row_width, pending);
         } else if (private_named.backing != null) {
             Common.invariant("opaque interface relation received different named backing presence");
         }
@@ -2752,6 +2807,7 @@ pub const InstGraph = struct {
         public_node: NodeId,
         public_var: InstVariable,
         private_content: InstNode,
+        row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!bool {
         switch (private_content) {
@@ -2765,12 +2821,12 @@ pub const InstGraph = struct {
             .list => |private_elem| {
                 const elem = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
                 try self.setContent(public_node, .{ .list = elem });
-                try self.relateOpaqueChild(elem, private_elem, pending);
+                try self.relateOpaqueChild(elem, private_elem, row_width, pending);
             },
             .box => |private_elem| {
                 const elem = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
                 try self.setContent(public_node, .{ .box = elem });
-                try self.relateOpaqueChild(elem, private_elem, pending);
+                try self.relateOpaqueChild(elem, private_elem, row_width, pending);
             },
             .tuple => |private_items| {
                 const items = try self.arena().alloc(NodeId, private_items.len);
@@ -2779,7 +2835,7 @@ pub const InstGraph = struct {
                 }
                 try self.setContent(public_node, .{ .tuple = items });
                 for (items, private_items) |item, private_item| {
-                    try self.relateOpaqueChild(item, private_item, pending);
+                    try self.relateOpaqueChild(item, private_item, row_width, pending);
                 }
             },
             .record => |private_row| {
@@ -2796,9 +2852,9 @@ pub const InstGraph = struct {
                 const ext = try self.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
                 try self.setContent(public_node, .{ .record = .{ .fields = fields, .ext = ext } });
                 for (fields, private_row.fields) |field, private_field| {
-                    try self.relateOpaqueChild(field.ty, private_field.ty, pending);
+                    try self.relateOpaqueChild(field.ty, private_field.ty, row_width, pending);
                 }
-                try self.relateOpaqueChild(ext, private_row.ext, pending);
+                try self.relateOpaqueChild(ext, private_row.ext, row_width, pending);
             },
             .tag_union => |private_row| {
                 const tags = try self.arena().alloc(InstTag, private_row.tags.len);
@@ -2817,10 +2873,10 @@ pub const InstGraph = struct {
                 try self.setContent(public_node, .{ .tag_union = .{ .tags = tags, .ext = ext } });
                 for (tags, private_row.tags) |tag, private_tag| {
                     for (tag.payloads, private_tag.payloads) |payload, private_payload| {
-                        try self.relateOpaqueChild(payload, private_payload, pending);
+                        try self.relateOpaqueChild(payload, private_payload, row_width, pending);
                     }
                 }
-                try self.relateOpaqueChild(ext, private_row.ext, pending);
+                try self.relateOpaqueChild(ext, private_row.ext, row_width, pending);
             },
             .redirect, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
         }
@@ -3373,6 +3429,18 @@ pub const InstGraph = struct {
     /// invariant violation.
     pub fn unifyConstruction(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
         try self.unifyRootsTransitively(a, b, false, .construction);
+    }
+
+    fn unifyAtRowWidth(
+        self: *InstGraph,
+        a: NodeId,
+        b: NodeId,
+        row_width: RowWidthRelation,
+    ) Allocator.Error!void {
+        switch (row_width) {
+            .exact => try self.unify(a, b),
+            .construction => try self.unifyConstruction(a, b),
+        }
     }
 
     /// Join two matching structural request containers after their components
@@ -7184,6 +7252,87 @@ test "opaque interface relation preserves distinct public and generated-private 
     const projected = try graph.recordNodes(structural_record);
     try std.testing.expectEqual(@as(usize, 1), projected.fields.len);
     try std.testing.expectEqual(field_name, projected.fields[0].name);
+}
+
+test "construction selection preserves private evidence while absorbing optional width" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xA7} ** 32));
+    const type_name = try name_store.internTypeName("PrivateEvidence");
+    const evidence_field = try name_store.internRecordFieldLabel("evidence");
+    const optional_field = try name_store.internRecordFieldLabel("optional");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(18) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const public_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const private_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const public_evidence = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = try graph.arena().dupe(NodeId, &.{public_arg}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+        },
+    } });
+    const private_evidence = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = try graph.arena().dupe(NodeId, &.{private_arg}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+    const optional_ty = try graph.newNode(.{ .primitive = .u64 });
+    const public_record = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{
+            .{
+                .name = evidence_field,
+                .ty = public_evidence,
+                .kind = .required,
+                .default = null,
+            },
+            .{
+                .name = optional_field,
+                .ty = optional_ty,
+                .value_ty = optional_ty,
+                .kind = .optional,
+                .default = null,
+            },
+        }),
+        .ext = try graph.newNode(.empty_record),
+    } });
+    const private_record = try graph.newNode(.{ .record = .{
+        .fields = try graph.arena().dupe(InstField, &.{.{
+            .name = evidence_field,
+            .ty = private_evidence,
+            .kind = .required,
+            .default = null,
+        }}),
+        .ext = try graph.newNode(.empty_record),
+    } });
+
+    try graph.selectGeneratedPrivateConstructionRepresentation(public_record, private_record);
+
+    try std.testing.expect(graph.sameClass(public_record, private_record));
+    try std.testing.expect(graph.sameClass(public_evidence, private_evidence));
+    try std.testing.expect(graph.sameClass(public_arg, private_arg));
+    try std.testing.expectEqual(@as(usize, 2), (try graph.flattenRecordRow(public_record)).fields.len);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(public_evidence).named.backing.?.authority);
 }
 
 test "named type relation to its own backing preserves the backing edge" {
