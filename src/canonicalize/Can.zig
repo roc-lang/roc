@@ -900,6 +900,27 @@ fn recordGlobalValueDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Err
     try self.scratch_global_value_defs.append(self.env.gpa, def_idx);
 }
 
+fn topLevelDefIsSelected(
+    self: *const Self,
+    selected_by_ident: *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx),
+    def_idx: CIR.Def.Idx,
+) bool {
+    const def = self.env.store.getDef(def_idx);
+    const pattern = self.env.store.getPattern(def.pattern);
+    if (pattern != .assign) return true;
+    return (selected_by_ident.get(pattern.assign.ident) orelse unreachable) == def_idx;
+}
+
+fn globalDefIntroducesValueBinding(
+    self: *const Self,
+    selected_by_ident: *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx),
+    def_idx: CIR.Def.Idx,
+) bool {
+    const def = self.env.store.getDef(def_idx);
+    return self.env.store.getExpr(def.expr) != .e_anno_only or
+        self.topLevelDefIsSelected(selected_by_ident, def_idx);
+}
+
 /// Register a method on its explicit owner declaration.
 fn registerAssociatedMethodIdent(
     self: *Self,
@@ -4542,31 +4563,39 @@ pub fn canonicalizeFile(
         }
     }
 
-    const value_binding_defs_start = self.env.store.scratchDefTop();
+    var value_binding_defs_match_global = true;
+    var top_level_value_defs_match_global = true;
     for (self.scratch_global_value_defs.items) |def_idx| {
-        const def = self.env.store.getDef(def_idx);
-        if (self.env.store.getExpr(def.expr) == .e_anno_only) {
-            const pattern = self.env.store.getPattern(def.pattern);
-            if (pattern == .assign) {
-                const selected = top_level_value_defs_by_ident.get(pattern.assign.ident) orelse unreachable;
-                if (selected != def_idx) continue;
+        const selected = self.topLevelDefIsSelected(&top_level_value_defs_by_ident, def_idx);
+        if (!selected) top_level_value_defs_match_global = false;
+        if (self.env.store.getExpr(self.env.store.getDef(def_idx).expr) == .e_anno_only and !selected) {
+            value_binding_defs_match_global = false;
+        }
+    }
+
+    if (value_binding_defs_match_global) {
+        self.env.value_binding_defs = self.env.global_value_defs;
+    } else {
+        const value_binding_defs_start = self.env.store.scratchDefTop();
+        for (self.scratch_global_value_defs.items) |def_idx| {
+            if (self.globalDefIntroducesValueBinding(&top_level_value_defs_by_ident, def_idx)) {
+                try self.env.store.addScratchDef(def_idx);
             }
         }
-        try self.env.store.addScratchDef(def_idx);
+        self.env.value_binding_defs = try self.env.store.defSpanFrom(value_binding_defs_start);
     }
-    self.env.value_binding_defs = try self.env.store.defSpanFrom(value_binding_defs_start);
 
-    const top_level_value_defs_start = self.env.store.scratchDefTop();
-    for (self.scratch_global_value_defs.items) |def_idx| {
-        const def = self.env.store.getDef(def_idx);
-        const pattern = self.env.store.getPattern(def.pattern);
-        if (pattern == .assign) {
-            const selected = top_level_value_defs_by_ident.get(pattern.assign.ident) orelse unreachable;
-            if (selected != def_idx) continue;
+    if (top_level_value_defs_match_global) {
+        self.env.top_level_value_defs = self.env.global_value_defs;
+    } else {
+        const top_level_value_defs_start = self.env.store.scratchDefTop();
+        for (self.scratch_global_value_defs.items) |def_idx| {
+            if (self.topLevelDefIsSelected(&top_level_value_defs_by_ident, def_idx)) {
+                try self.env.store.addScratchDef(def_idx);
+            }
         }
-        try self.env.store.addScratchDef(def_idx);
+        self.env.top_level_value_defs = try self.env.store.defSpanFrom(top_level_value_defs_start);
     }
-    self.env.top_level_value_defs = try self.env.store.defSpanFrom(top_level_value_defs_start);
 
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();

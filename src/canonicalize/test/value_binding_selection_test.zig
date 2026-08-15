@@ -1,3 +1,5 @@
+//! Tests canonicalization's ownership of top-level name and concrete value-binding selection.
+
 const std = @import("std");
 const parse = @import("parse");
 const CIR = @import("../CIR.zig");
@@ -61,4 +63,31 @@ test "canonicalization owns top-level name and value-binding selection" {
     try std.testing.expectEqual(@as(usize, 1), countDefs(&env, env.value_binding_defs, "a", .e_empty_record));
     try std.testing.expectEqual(@as(usize, 0), countDefs(&env, env.value_binding_defs, "a", .e_anno_only));
     try std.testing.expectEqual(@as(usize, 1), countDefs(&env, env.value_binding_defs, "orphan", .e_anno_only));
+}
+
+test "unfiltered value-definition spans reuse global definition storage" {
+    const source =
+        \\one = || {}
+        \\two = {}
+        \\three : {}
+    ;
+
+    const allocator = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer can.deinit();
+    try can.canonicalizeFile();
+
+    try std.testing.expectEqual(env.global_value_defs.span, env.top_level_value_defs.span);
+    try std.testing.expectEqual(env.global_value_defs.span, env.value_binding_defs.span);
 }
