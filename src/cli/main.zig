@@ -9084,12 +9084,16 @@ fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTarg
     return linker.DEFAULT_WASM_STACK_SIZE;
 }
 
-fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) usize {
+/// The configured initial wasm memory, or null when neither the CLI nor the
+/// platform's targets config specifies one. Null lets the linker size memory
+/// from the data segments plus the stack, which is always sufficient for
+/// those regions. The host must grow memory for its heap independently.
+fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?usize {
     if (args.wasm_memory) |bytes| return bytes;
     if (wasm) |config| {
         if (config.minimum_memory) |bytes| return bytes;
     }
-    return linker.DEFAULT_WASM_INITIAL_MEMORY;
+    return null;
 }
 
 /// Whether linked wasm output may assume linear memory starts zero-filled.

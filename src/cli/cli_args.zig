@@ -223,7 +223,7 @@ pub const BuildArgs = struct {
     watch: bool = false, // rebuild when source inputs change
     watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
-    wasm_memory: ?usize = null, // initial memory size for WASM targets (default: 64MB)
+    wasm_memory: ?usize = null, // initial memory size for WASM targets (default: sized from data segments plus the stack)
     wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
     require_executable_output: bool = false, // reject static/shared library targets
     require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
@@ -592,7 +592,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --no-cache                     Disable compilation caching
             \\      --watch                        Rebuild when source inputs change
             \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
-            \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: 67108864 = 64MB)
+            \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)
             \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
             \\      -h, --help                     Print help
             \\
