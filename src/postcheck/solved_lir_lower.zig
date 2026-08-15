@@ -8950,25 +8950,20 @@ const Lowerer = struct {
                         return layout.localGraphInput(node);
                     }
 
-                    // A nominal or opaque record lays out its fields in declared
-                    // order. The declared-order channel carries that order (the
-                    // backing row stays lexicographic for name resolution); build
-                    // the struct node from it and mark it nominal so the shared
-                    // commit keeps declared order, repaired only for padding.
+                    // An unnamed field explicitly opts a nominal or opaque record
+                    // into declared-order layout. Without that marker the named
+                    // type reuses its structural backing layout directly.
                     // Reserve the node first (mapping both the named type and its
                     // backing) so a recursive backing field resolves to it.
                     if (named.kind != .alias and named.declared_order.len != 0 and
-                        self.lowerer.types.get(backing.ty) == .record)
+                        self.lowerer.types.get(backing.ty) == .record and
+                        self.declaredOrderHasPadding(named.declared_order))
                     {
                         const node = try self.graph.reserveNode(self.lowerer.allocator);
                         self.local_nodes[index] = node;
                         self.local_nodes[@intFromEnum(backing.ty)] = node;
-                        if (try self.declaredOrderStructFields(named.declared_order, backing.ty)) |field_span| {
-                            self.graph.setNode(node, .{ .struct_ = field_span });
-                            try self.graph.markNominalStruct(self.lowerer.allocator, node);
-                        } else {
-                            self.graph.setNode(node, try self.nodeForType(backing.ty));
-                        }
+                        const field_span = try self.declaredOrderStructFields(named.declared_order, backing.ty);
+                        self.graph.setNode(node, .{ .struct_ = self.graph.declaredOrder(field_span) });
                         return layout.localGraphInput(node);
                     }
 
@@ -9049,20 +9044,27 @@ const Lowerer = struct {
             return try self.graph.appendFields(self.lowerer.allocator, fields);
         }
 
-        /// Builds graph fields for a nominal record in declared order from its
-        /// declared-order channel. Each named entry maps to the matching backing
-        /// field, keeping `.index` = the field's lexicographic position so
-        /// name-resolution (which indexes the lexicographic backing row) and the
-        /// layout offset map stay consistent. Returns null when the backing is
-        /// not a record or the declared order does not cover the backing fields,
-        /// so the caller falls back to the structural path.
+        fn declaredOrderHasPadding(self: *LayoutGraphBuilder, declared_order: Type.Span) bool {
+            const entries = self.lowerer.types.declaredFieldSpan(declared_order);
+            for (0..entries.len) |i| {
+                if (GuardedList.at(entries, i) == .padding) return true;
+            }
+            return false;
+        }
+
+        /// Builds graph fields for an opted-in nominal record in declared order
+        /// from its explicit declared-order channel. Each named entry maps to the
+        /// matching backing field, keeping `.index` = the field's lexicographic
+        /// position so name-resolution (which indexes the lexicographic backing
+        /// row) and the layout offset map stay consistent. Inconsistent checked
+        /// metadata is a compiler invariant failure.
         fn declaredOrderStructFields(
             self: *LayoutGraphBuilder,
             declared_order: Type.Span,
             backing_ty: Type.TypeId,
-        ) Common.LowerError!?layout.GraphFieldSpan {
+        ) Common.LowerError!layout.GraphFieldSpan {
             const backing_content = self.lowerer.types.get(backing_ty);
-            if (backing_content != .record) return null;
+            if (backing_content != .record) return Common.invariant("declared-order nominal layout had a non-record backing");
             const backing_fields = self.lowerer.types.fieldSpan(backing_content.record);
             const entries = self.lowerer.types.declaredFieldSpan(declared_order);
 
@@ -9071,7 +9073,9 @@ const Lowerer = struct {
                 const entry = GuardedList.at(entries, entry_index);
                 if (entry == .named) named_count += 1;
             }
-            if (named_count != backing_fields.len) return null;
+            if (named_count != backing_fields.len) {
+                return Common.invariant("declared-order nominal layout did not cover its backing fields");
+            }
 
             const fields = try self.lowerer.allocator.alloc(layout.GraphField, entries.len);
             defer self.lowerer.allocator.free(fields);
@@ -9093,7 +9097,8 @@ const Lowerer = struct {
                                 break;
                             }
                         }
-                        const idx = lexicographic_index orelse return null;
+                        const idx = lexicographic_index orelse
+                            return Common.invariant("declared-order nominal field was absent from its backing record");
                         fields[i] = .{ .index = idx, .child = try self.inputForType(field_ty) };
                     },
                     .padding => |ty| {
@@ -9953,6 +9958,106 @@ test "layout lowering accepts tag payload alias backed by primitive" {
     const tag_union_info = lowerer.result.layouts.getTagUnionInfo(repro_layout);
     try std.testing.expectEqual(@as(usize, 1), tag_union_info.variants.len);
     try std.testing.expectEqual(layout.Idx.u32, tag_union_info.variants.get(0).payload_layout);
+}
+
+test "layout lowering sorts a padding-free nominal record structurally" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0x5A} ** 32));
+    const state_name = try solved.lifted.names.internTypeName("State");
+    const first_name = try solved.lifted.names.internRecordFieldLabel("first");
+    const second_name = try solved.lifted.names.internRecordFieldLabel("second");
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    const f32_ty = try lowerer.types.add(.{ .primitive = .f32 });
+    // The backing row is lexicographic, as every stage stores it: `first` is
+    // original field index 0 and `second` is original field index 1.
+    const backing_fields = try lowerer.types.addFields(&.{
+        .{ .name = first_name, .ty = f32_ty, .default = null },
+        .{ .name = second_name, .ty = f32_ty, .default = null },
+    });
+    const backing_ty = try lowerer.types.add(.{ .record = backing_fields });
+    // `State := { second : F32, first : F32 }`: declared in reverse
+    // alphabetical order, with no unnamed `_` field.
+    const declared_order = try lowerer.types.addDeclaredFields(&.{
+        .{ .named = second_name },
+        .{ .named = first_name },
+    });
+    const state_ty = try lowerer.types.add(.{
+        .named = .{
+            // Layout lowering does not read checked type ids for this synthetic type.
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = state_name },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = backing_ty, .use = .inspectable },
+            .declared_order = declared_order,
+        },
+    });
+
+    // Repro for https://github.com/roc-lang/roc/issues/10649: a nominal record
+    // only opts into declared-order layout by including an unnamed `_` field.
+    // Without one it lays out exactly like its structural backing row (sort key
+    // descending, then field name ascending), which is also the order `roc glue`
+    // reports to platform authors. Both fields are F32, so the sort keys tie and
+    // the name order decides: `first` takes offset 0 and `second` offset 4.
+    const state_layout_idx = try lowerer.layoutOfType(state_ty);
+    const state_layout = lowerer.result.layouts.getLayout(state_layout_idx);
+    try std.testing.expectEqual(layout.LayoutTag.struct_, state_layout.tag);
+
+    const struct_idx = state_layout.getStruct().idx;
+    try std.testing.expectEqual(@as(u32, 8), lowerer.result.layouts.getStructSize(struct_idx));
+    try std.testing.expectEqual(@as(u32, 0), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 4), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+}
+
+test "layout lowering keeps opted-in nominal record declaration order" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0x5B} ** 32));
+    const state_name = try solved.lifted.names.internTypeName("State");
+    const first_name = try solved.lifted.names.internRecordFieldLabel("first");
+    const second_name = try solved.lifted.names.internRecordFieldLabel("second");
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    const f32_ty = try lowerer.types.add(.{ .primitive = .f32 });
+    const padding_ty = try lowerer.types.add(.zst);
+    const backing_fields = try lowerer.types.addFields(&.{
+        .{ .name = first_name, .ty = f32_ty, .default = null },
+        .{ .name = second_name, .ty = f32_ty, .default = null },
+    });
+    const backing_ty = try lowerer.types.add(.{ .record = backing_fields });
+    const declared_order = try lowerer.types.addDeclaredFields(&.{
+        .{ .named = second_name },
+        .{ .padding = padding_ty },
+        .{ .named = first_name },
+    });
+    const state_ty = try lowerer.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = state_name },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = backing_ty, .use = .inspectable },
+            .declared_order = declared_order,
+        },
+    });
+
+    const state_layout_idx = try lowerer.layoutOfType(state_ty);
+    const struct_idx = lowerer.result.layouts.getLayout(state_layout_idx).getStruct().idx;
+    try std.testing.expectEqual(@as(u32, 4), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try std.testing.expectEqual(@as(u32, 0), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    try std.testing.expectEqual(@as(u32, 8), lowerer.result.layouts.getStructSize(struct_idx));
 }
 
 test "direct LIR lower declarations are referenced" {

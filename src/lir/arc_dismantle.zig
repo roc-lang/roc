@@ -35,6 +35,124 @@ pub const Error = std.mem.Allocator.Error;
 
 const no_index: u32 = std.math.maxInt(u32);
 
+/// Compact description of an aggregate projection whose result may carry a
+/// stored ownership unit out of its source. The high two bits identify the
+/// projection form; the remaining bits hold the semantic field or tag indices.
+pub const no_projection: u64 = std.math.maxInt(u64);
+const projection_kind_shift = 62;
+const projection_data_mask = (@as(u64, 1) << projection_kind_shift) - 1;
+const ProjectionKind = enum(u2) {
+    field,
+    tag_payload,
+    tag_payload_struct,
+    reserved,
+};
+
+/// Encodes the ownership-relevant shape of a reference projection, or null
+/// when the operation does not select aggregate storage.
+pub fn encodeProjection(op: LIR.RefOp) ?u64 {
+    return switch (op) {
+        .field => |field| @as(u64, field.field_idx),
+        .tag_payload => |payload| (@as(u64, @intFromEnum(ProjectionKind.tag_payload)) << projection_kind_shift) |
+            (@as(u64, payload.variant_index) << 16) |
+            @as(u64, payload.payload_idx),
+        .tag_payload_struct => |payload| (@as(u64, @intFromEnum(ProjectionKind.tag_payload_struct)) << projection_kind_shift) |
+            @as(u64, payload.variant_index),
+        .local, .discriminant, .list_reinterpret, .nominal => null,
+    };
+}
+
+fn projectionKind(projection: u64) ProjectionKind {
+    return @enumFromInt(@as(u2, @intCast(projection >> projection_kind_shift)));
+}
+
+fn projectionField(projection: u64) u16 {
+    return @intCast(projection & projection_data_mask);
+}
+
+fn projectionVariant(projection: u64) u16 {
+    return switch (projectionKind(projection)) {
+        .tag_payload => @intCast((projection >> 16) & 0xffff),
+        .tag_payload_struct => @intCast(projection & 0xffff),
+        .field, .reserved => 0,
+    };
+}
+
+fn projectionPayload(projection: u64) u16 {
+    return @intCast(projection & 0xffff);
+}
+
+fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) ?layout_mod.StructField {
+    const info = layouts.getStructInfo(struct_layout);
+    for (0..info.fields.len) |index| {
+        const field = info.fields.get(@intCast(index));
+        if (field.index == field_idx) return field;
+    }
+    return null;
+}
+
+fn structHasOneRcField(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) bool {
+    const info = layouts.getStructInfo(struct_layout);
+    var only_field: ?u16 = null;
+    for (0..info.fields.len) |index| {
+        const field = info.fields.get(@intCast(index));
+        if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
+        if (only_field != null) return false;
+        only_field = field.index;
+    }
+    return only_field != null and only_field.? == field_idx;
+}
+
+/// Whether this projection covers every refcounted byte owned by the source's
+/// active aggregate shape. Moving such a projection transfers the source's
+/// one ownership unit without a retain or a residual release. For a tag union,
+/// the payload read itself proves which variant is active on that path; other
+/// variants remain ordinary whole releases on their own paths.
+pub fn projectionOwnsAllRc(
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    source: LIR.LocalId,
+    target: LIR.LocalId,
+    projection: u64,
+) bool {
+    if (projection == no_projection) return false;
+    const source_layout_idx = store.getLocal(source).layout_idx;
+    const target_layout_idx = store.getLocal(target).layout_idx;
+    const source_layout = layouts.getLayout(source_layout_idx);
+    switch (projectionKind(projection)) {
+        .field => {
+            if (source_layout.tag != .struct_) return false;
+            const field_idx = projectionField(projection);
+            const field = structFieldBySemanticIndex(layouts, source_layout, field_idx) orelse return false;
+            return field.layout == target_layout_idx and
+                layouts.layoutContainsRefcounted(layouts.getLayout(field.layout)) and
+                structHasOneRcField(layouts, source_layout, field_idx);
+        },
+        .tag_payload, .tag_payload_struct => {
+            if (source_layout.tag != .tag_union) return false;
+            const info = layouts.getTagUnionInfo(source_layout);
+            const variant_index = projectionVariant(projection);
+            if (variant_index >= info.variants.len) return false;
+            const payload_layout_idx = info.variants.get(variant_index).payload_layout;
+            const payload_layout = layouts.getLayout(payload_layout_idx);
+            if (projectionKind(projection) == .tag_payload_struct) {
+                return payload_layout_idx == target_layout_idx and
+                    layouts.layoutContainsRefcounted(payload_layout);
+            }
+            const payload_idx = projectionPayload(projection);
+            if (payload_layout.tag == .struct_) {
+                const field = structFieldBySemanticIndex(layouts, payload_layout, payload_idx) orelse return false;
+                return field.layout == target_layout_idx and
+                    layouts.layoutContainsRefcounted(layouts.getLayout(field.layout)) and
+                    structHasOneRcField(layouts, payload_layout, payload_idx);
+            }
+            return payload_idx == 0 and payload_layout_idx == target_layout_idx and
+                layouts.layoutContainsRefcounted(payload_layout);
+        },
+        .reserved => return false,
+    }
+}
+
 /// One refcounted field a dismantled container still owns at its death
 /// point: emission reads it into a temporary and releases the temporary.
 pub const ResidualField = struct {
@@ -67,6 +185,15 @@ pub const Dismantles = struct {
     /// Parameter positions whose owned variant activates an exact field take,
     /// indexed directly by source procedure id.
     owned_only_param_benefits: []arc_sig.ParamMask,
+    /// Borrowed projection locals that denote the complete refcounted payload
+    /// of another local. Moving one of these locals moves the root's unit
+    /// directly when that unit is present; otherwise the ordinary retain is
+    /// preserved.
+    projection_units: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId),
+    /// Complete projection reads whose owned target can receive the root's
+    /// unit directly. The solve-time transfer still checks path liveness and
+    /// keeps the ordinary retain when the root must survive.
+    complete_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, LIR.LocalId),
 
     pub fn deinit(self: *Dismantles) void {
         const gpa = self.arena.child_allocator;
@@ -74,6 +201,8 @@ pub const Dismantles = struct {
         self.containers.deinit(gpa);
         self.owned_only_takes.deinit(gpa);
         self.owned_only_containers.deinit(gpa);
+        self.projection_units.deinit(gpa);
+        self.complete_takes.deinit(gpa);
         self.arena.deinit();
     }
 
@@ -99,6 +228,14 @@ pub const Dismantles = struct {
             dismantleInvariant("ARC owned-only benefit lookup exceeded the analyzed source-procedure table");
         }
         return self.owned_only_param_benefits[index];
+    }
+
+    pub fn projectionUnitOf(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
+        return self.projection_units.get(local);
+    }
+
+    pub fn completeTakeRoot(self: *const Dismantles, stmt: LIR.CFStmtId) ?LIR.LocalId {
+        return self.complete_takes.get(stmt);
     }
 };
 
@@ -666,6 +803,8 @@ pub fn compute(
         .owned_only_takes = .empty,
         .owned_only_containers = .empty,
         .owned_only_param_benefits = &.{},
+        .projection_units = .empty,
+        .complete_takes = .empty,
     };
     errdefer result.deinit();
     result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
@@ -965,6 +1104,237 @@ pub fn compute(
             if (result.owned_only_containers.contains(param)) {
                 result.owned_only_param_benefits[proc_index] |= bit;
             }
+        }
+    }
+
+    // A complete aggregate projection denotes the same ownership place as its
+    // root: it can transfer that root's unit without manufacturing a second
+    // one. Discover those places to a fixpoint over complete projections and
+    // transparent aliases. The graph is sparse, so its memory is proportional
+    // to relevant reads rather than the total local count.
+    const ambiguous_index = no_index - 1;
+    const ParamInfo = struct { proc: u32, position: u16 };
+    var param_info = std.AutoHashMapUnmanaged(u32, ParamInfo).empty;
+    defer param_info.deinit(gpa);
+
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const params = store.getLocalSpan(store.getProcSpec(proc_id).args);
+        for (0..GuardedList.borrowLen(params)) |position| {
+            const param = GuardedList.at(params, position);
+            const param_index = @intFromEnum(param);
+            if (position >= arc_sig.tracked_param_count) continue;
+            const param_slot = try param_info.getOrPut(gpa, param_index);
+            if (param_slot.found_existing) {
+                param_slot.value_ptr.* = .{ .proc = ambiguous_index, .position = 0 };
+                continue;
+            }
+            param_slot.value_ptr.* = .{ .proc = @intCast(proc_index), .position = @intCast(position) };
+        }
+    }
+
+    const PlaceOrigin = struct {
+        root: u32,
+        projected: bool,
+    };
+    const PlaceEdgeKind = union(enum) {
+        alias,
+        projection: u32,
+    };
+    const PlaceEdge = struct {
+        source: u32,
+        target: u32,
+        kind: PlaceEdgeKind,
+        next: u32,
+    };
+    var place_edges = std.ArrayList(PlaceEdge).empty;
+    defer place_edges.deinit(gpa);
+    var place_heads = std.AutoHashMapUnmanaged(u32, u32).empty;
+    defer place_heads.deinit(gpa);
+    for (0..store.cfStmtCount()) |stmt_index| {
+        if (!visited.isSet(stmt_index)) continue;
+        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt != .assign_ref) continue;
+        const assign = stmt.assign_ref;
+        const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op) {
+            .local => |local| blk: {
+                if (!solution.isBorrowed(assign.target)) continue;
+                if (solution.unitLocalOf(assign.target) != solution.unitLocalOf(local)) continue;
+                break :blk .{ local, .alias };
+            },
+            .field, .tag_payload, .tag_payload_struct => blk: {
+                const projection = encodeProjection(assign.op).?;
+                const projection_source = switch (assign.op) {
+                    .field => |op| op.source,
+                    .tag_payload => |op| op.source,
+                    .tag_payload_struct => |op| op.source,
+                    .local,
+                    .discriminant,
+                    .list_reinterpret,
+                    .nominal,
+                    => unreachable,
+                };
+                if (!projectionOwnsAllRc(store, layouts, projection_source, assign.target, projection)) continue;
+                break :blk .{ projection_source, .{ .projection = @intCast(stmt_index) } };
+            },
+            .discriminant, .list_reinterpret, .nominal => continue,
+        };
+        const source_index = @intFromEnum(source);
+        const previous_head = place_heads.get(source_index) orelse no_index;
+        try place_edges.append(gpa, .{
+            .source = source_index,
+            .target = @intFromEnum(assign.target),
+            .kind = kind,
+            .next = previous_head,
+        });
+        try place_heads.put(gpa, source_index, @intCast(place_edges.items.len - 1));
+    }
+
+    var places = std.AutoHashMapUnmanaged(u32, PlaceOrigin).empty;
+    defer places.deinit(gpa);
+    var place_work = std.ArrayList(u32).empty;
+    defer place_work.deinit(gpa);
+
+    // Seed only locals that can actually carry a unit: owned bindings, proc
+    // or join parameters (which can be owned in an emission), and borrowed
+    // pure aliases whose `unitLocalOf` resolves to one of those roots. A
+    // borrowed payload local is therefore reached only through its explicit
+    // complete-projection edge.
+    var source_it = place_heads.keyIterator();
+    while (source_it.next()) |source_ptr| {
+        const source: LIR.LocalId = @enumFromInt(source_ptr.*);
+        const root = solution.unitLocalOf(source);
+        const root_index = @intFromEnum(root);
+        const root_can_own = !solution.isBorrowed(root) or
+            is_param[root_index] or
+            solution.isJoinParam(root);
+        if (!root_can_own) continue;
+        try places.put(gpa, source_ptr.*, .{ .root = root_index, .projected = false });
+        try place_work.append(gpa, source_ptr.*);
+    }
+
+    while (place_work.pop()) |source_index| {
+        const source_origin = places.get(source_index) orelse continue;
+        if (source_origin.root == ambiguous_index) continue;
+        var edge_index = place_heads.get(source_index) orelse no_index;
+        while (edge_index != no_index) {
+            const edge = place_edges.items[edge_index];
+            const projected = source_origin.projected or edge.kind == .projection;
+            const target: LIR.LocalId = @enumFromInt(edge.target);
+            // A join parameter is a cell with one definition per incoming
+            // edge, not an SSA value. Its edge-specific transfer is handled
+            // by join solving; one global place origin would incorrectly
+            // apply one edge's source to every arrival.
+            if (solution.isJoinParam(target)) {
+                edge_index = edge.next;
+                continue;
+            }
+            if (edge.kind == .projection and !solution.isBorrowed(target)) {
+                edge_index = edge.next;
+                continue;
+            }
+            const slot = try places.getOrPut(gpa, edge.target);
+            if (!slot.found_existing) {
+                slot.value_ptr.* = .{ .root = source_origin.root, .projected = projected };
+                try place_work.append(gpa, edge.target);
+            } else if (slot.value_ptr.root != ambiguous_index and slot.value_ptr.root != source_origin.root) {
+                slot.value_ptr.* = .{ .root = ambiguous_index, .projected = false };
+                try place_work.append(gpa, edge.target);
+            } else if (slot.value_ptr.root == source_origin.root and projected and !slot.value_ptr.projected) {
+                slot.value_ptr.projected = true;
+                try place_work.append(gpa, edge.target);
+            }
+            edge_index = edge.next;
+        }
+    }
+
+    // Borrowed complete projections keep the root as their unit key. Owned
+    // projection targets instead receive a solve-time move opportunity at the
+    // read itself; if liveness says the root survives, ARC retains exactly as
+    // before and the target owns the retained unit independently.
+    var places_it = places.iterator();
+    while (places_it.next()) |entry| {
+        const origin = entry.value_ptr.*;
+        if (origin.root == ambiguous_index or !origin.projected) continue;
+        const local: LIR.LocalId = @enumFromInt(entry.key_ptr.*);
+        if (!solution.isBorrowed(local) or solution.isJoinParam(local)) continue;
+        try result.projection_units.put(gpa, local, @enumFromInt(origin.root));
+    }
+    for (place_edges.items) |edge| {
+        if (edge.kind != .projection) continue;
+        const target: LIR.LocalId = @enumFromInt(edge.target);
+        // Unlike a borrowed place origin, this move is attached to one exact
+        // incoming read. An owned join cell can therefore receive the unit on
+        // this edge without conflating its other definitions.
+        if (solution.isBorrowed(target)) continue;
+        const origin = places.get(edge.source) orelse continue;
+        if (origin.root == ambiguous_index) continue;
+        try result.complete_takes.put(gpa, @enumFromInt(edge.kind.projection), @enumFromInt(origin.root));
+    }
+
+    // A leaf procedure's ordinary field dismantle makes its parameter
+    // beneficial. Direct calls propagate that benefit through complete places
+    // and plain forwarding to a fixpoint, admitting owned parameter variants
+    // all the way up a derived-encoder wrapper chain.
+    const BenefitEdge = struct {
+        source_key: u32,
+        next: u32,
+    };
+    var benefit_edges = std.ArrayList(BenefitEdge).empty;
+    defer benefit_edges.deinit(gpa);
+    var benefit_heads = std.AutoHashMapUnmanaged(u32, u32).empty;
+    defer benefit_heads.deinit(gpa);
+    for (0..store.cfStmtCount()) |stmt_index| {
+        if (!visited.isSet(stmt_index)) continue;
+        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        if (stmt != .assign_call) continue;
+        const call = stmt.assign_call;
+        const args = store.getLocalSpan(call.args);
+        for (0..GuardedList.borrowLen(args)) |position| {
+            if (position >= arc_sig.tracked_param_count) continue;
+            const arg = GuardedList.at(args, position);
+            const arg_index = @intFromEnum(arg);
+            const place_origin = places.get(arg_index);
+            const root_index: u32 = if (place_origin) |origin| origin.root else @intFromEnum(solution.unitLocalOf(arg));
+            if (root_index == no_index or root_index == ambiguous_index) continue;
+            const source_info = param_info.get(root_index) orelse continue;
+            if (source_info.proc == ambiguous_index) continue;
+            const source_proc: LIR.LirProcSpecId = @enumFromInt(source_info.proc);
+            if (solution.isPinnedProc(source_proc)) continue;
+            const target_key: u32 = @intCast(@intFromEnum(call.proc) * arc_sig.tracked_param_count + position);
+            const previous_head = benefit_heads.get(target_key) orelse no_index;
+            try benefit_edges.append(gpa, .{
+                .source_key = @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position),
+                .next = previous_head,
+            });
+            try benefit_heads.put(gpa, target_key, @intCast(benefit_edges.items.len - 1));
+        }
+    }
+
+    // Propagate each newly beneficial parameter exactly once. A wrapper chain
+    // is therefore linear in its calls rather than one full call-site scan per
+    // wrapper depth.
+    var benefit_work = std.ArrayList(u32).empty;
+    defer benefit_work.deinit(gpa);
+    for (result.owned_only_param_benefits, 0..) |mask, proc_index| {
+        for (0..arc_sig.tracked_param_count) |position| {
+            const bit = arc_sig.paramBit(position).?;
+            if ((mask & bit) == 0) continue;
+            try benefit_work.append(gpa, @intCast(proc_index * arc_sig.tracked_param_count + position));
+        }
+    }
+    while (benefit_work.pop()) |target_key| {
+        var edge_index = benefit_heads.get(target_key) orelse no_index;
+        while (edge_index != no_index) {
+            const edge = benefit_edges.items[edge_index];
+            const source_proc_index = edge.source_key / arc_sig.tracked_param_count;
+            const source_position = edge.source_key % arc_sig.tracked_param_count;
+            const source_bit = arc_sig.paramBit(source_position).?;
+            if ((result.owned_only_param_benefits[source_proc_index] & source_bit) == 0) {
+                result.owned_only_param_benefits[source_proc_index] |= source_bit;
+                try benefit_work.append(gpa, edge.source_key);
+            }
+            edge_index = edge.next;
         }
     }
 

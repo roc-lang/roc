@@ -141,7 +141,7 @@ main = stringify(Name.Name("hi"))
 					(ty-lookup (name "Stringable") (local))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 300)
+		(e-call (constraint-fn-var 301)
 			(e-lookup-local
 				(p-assign (ident "stringify")))
 			(e-nominal (nominal "Name")

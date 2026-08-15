@@ -22,6 +22,7 @@ const ContractEnv = struct {
     allocator_error_count: usize = 0,
     failure_count: usize = 0,
     log_count: usize = 0,
+    checksum_count: usize = 0,
     report: [1024]u8 = [_]u8{0} ** 1024,
     report_len: usize = 0,
 
@@ -77,14 +78,25 @@ const ContractEnv = struct {
     }
 
     fn bumpAlloc(self: *ContractEnv, total: usize, alignment: usize) ?[*]u8 {
-        if (self.heap_cursor == 0) self.heap_cursor = @wasmMemorySize(0) * wasm_page_size;
-        const raw = alignForward(self.heap_cursor, alignment);
-        const end = raw + total;
-        if (end < raw) {
+        if (self.heap_cursor == 0) {
+            const heap_start = @mulWithOverflow(@wasmMemorySize(0), wasm_page_size);
+            if (heap_start[1] != 0) {
+                self.allocatorFail("wasm memory exhausted");
+                return null;
+            }
+            self.heap_cursor = heap_start[0];
+        }
+        const raw = alignForward(self.heap_cursor, alignment) orelse {
+            self.allocatorFail("bump alignment overflow");
+            return null;
+        };
+        const end_result = @addWithOverflow(raw, total);
+        if (end_result[1] != 0) {
             self.allocatorFail("bump allocation overflow");
             return null;
         }
-        const required_pages = (end + wasm_page_size - 1) / wasm_page_size;
+        const end = end_result[0];
+        const required_pages = wasmPagesForBytes(end);
         const current_pages = @wasmMemorySize(0);
         if (required_pages > current_pages and @wasmMemoryGrow(0, required_pages - current_pages) == -1) {
             self.allocatorFail("wasm memory grow failed");
@@ -106,7 +118,15 @@ const ContractEnv = struct {
 
         const total = canary_size + alignment - 1 + length + canary_size;
         const raw = self.bumpAlloc(@max(total, 1), alignment) orelse return null;
-        const user_addr = alignForward(@intFromPtr(raw) + canary_size, alignment);
+        const user_start = @addWithOverflow(@intFromPtr(raw), canary_size);
+        if (user_start[1] != 0) {
+            self.allocatorFail("user pointer overflow");
+            return null;
+        }
+        const user_addr = alignForward(user_start[0], alignment) orelse {
+            self.allocatorFail("user pointer alignment overflow");
+            return null;
+        };
         const user: [*]u8 = @ptrFromInt(user_addr);
         if (user_addr % alignment != 0) {
             self.allocatorFail("returned pointer is not aligned");
@@ -181,8 +201,21 @@ const ContractEnv = struct {
     }
 };
 
-fn alignForward(value: usize, alignment: usize) usize {
-    return (value + alignment - 1) & ~(alignment - 1);
+fn alignForward(value: usize, alignment: usize) ?usize {
+    const sum = @addWithOverflow(value, alignment - 1);
+    if (sum[1] != 0) return null;
+    return sum[0] & ~(alignment - 1);
+}
+
+fn wasmPagesForBytes(byte_count: usize) usize {
+    return byte_count / wasm_page_size + @intFromBool(byte_count % wasm_page_size != 0);
+}
+
+comptime {
+    const max_usize = ~@as(usize, 0);
+    if (wasmPagesForBytes(max_usize) != max_usize / wasm_page_size + 1) {
+        @compileError("wasm page rounding must handle the usize limit");
+    }
 }
 
 fn bytesEqual(a: []const u8, b: []const u8) bool {
@@ -281,6 +314,22 @@ export fn roc_cli_log(arg0: abi.RocStr) callconv(.c) void {
     owned.decref(&roc_host);
 }
 
+// The argument is an owned container whose elements are refcounted, so its
+// release is the generated `decrefListOfStr` helper rather than the list's own
+// shallow `decref`: the elements have to be dropped when this reference is the
+// last one, and left alone when Roc still holds the list.
+export fn roc_cli_checksum(arg0: abi.RocList(abi.RocStr)) callconv(.c) u64 {
+    var sum: u64 = 0;
+    for (arg0.items()) |item| {
+        for (item.asSlice()) |byte| {
+            sum += byte;
+        }
+    }
+    contract_env.checksum_count += 1;
+    abi.decrefListOfStr(arg0, &roc_host);
+    return sum;
+}
+
 export fn roc_cli_many(
     arg0: u8,
     arg1: u16,
@@ -348,6 +397,9 @@ fn runContract() void {
 
     if (contract_env.log_count != 1) {
         contract_env.fail("expected one log call");
+    }
+    if (contract_env.checksum_count != 3) {
+        contract_env.fail("expected three checksum calls");
     }
     if (contract_env.allocator_error_count != 0) {
         contract_env.fail("allocator recorded errors");
