@@ -8163,13 +8163,9 @@ fn compileGlueRuntimeRustWasmHost(
     host_path: []const u8,
     host_wasm_path: []const u8,
 ) ?TestResult {
-    const host_object_path = std.fmt.allocPrint(allocator, "{s}.o", .{host_wasm_path}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime Rust wasm object path: {}", .{err});
-    const host_staticlib_path = std.fmt.allocPrint(allocator, "{s}.a", .{host_wasm_path}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime Rust wasm staticlib path: {}", .{err});
-    const emit_arg = std.fmt.allocPrint(allocator, "obj={s},link={s}", .{ host_object_path, host_staticlib_path }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate glue runtime Rust wasm emit argument: {}", .{err});
-
+    // Have rustc resolve core and compiler_builtins, but keep the result
+    // relocatable for Roc's surgical linker. link-dead-code disables the
+    // gc-sections flag that wasm-ld rejects when combined with -r.
     if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
         "rustc",
         "--edition=2021",
@@ -8185,23 +8181,17 @@ fn compileGlueRuntimeRustWasmHost(
         "opt-level=s",
         "-C",
         "target-feature=+simd128",
+        "-C",
+        "link-dead-code=yes",
+        "-C",
+        "link-arg=-r",
+        "-C",
+        "link-arg=--allow-undefined",
+        "-C",
+        "link-arg=--strip-debug",
         "--crate-type",
-        "staticlib",
-        "--emit",
-        emit_arg,
+        "cdylib",
         host_path,
-    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
-
-    // Root the host's own object explicitly, then let wasm-ld extract only the
-    // Rust runtime members that object actually references. A whole-archive
-    // link makes Roc's surgical linker process hundreds of unused members.
-    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
-        "zig",
-        "wasm-ld",
-        "-r",
-        "--strip-debug",
-        host_object_path,
-        host_staticlib_path,
         "-o",
         host_wasm_path,
     }, project_root_path, .{ .args = &.{} })) |failure| return failure;
