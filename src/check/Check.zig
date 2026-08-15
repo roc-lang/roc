@@ -95,7 +95,7 @@ const ExpectEffectSlot = struct {
     effectful: bool = false,
 };
 
-const ExpectEffectDependency = struct {
+const ExpectDispatchWatcher = struct {
     slot: ExpectEffectSlotId,
     fn_var: Var,
 };
@@ -315,12 +315,11 @@ int_unbound_vars: std.AutoHashMap(Var, void),
 /// constraint failing in multiple passes (or reachable through several aliased
 /// type variables) is reported once.
 reported_constraint_errors: std.AutoHashMap(ReportedConstraintError, void),
-/// Sparse effect slots for actual expect bodies. Function dependencies and
-/// static-dispatch watchers name these slots; constraint copying and unification
-/// therefore cannot manufacture or lose an expect context.
+/// Sparse effect slots for actual expect bodies. Static-dispatch watchers name
+/// these slots; constraint copying and unification therefore cannot manufacture
+/// or lose an expect context.
 expect_effect_slots: std.ArrayListUnmanaged(ExpectEffectSlot),
-expect_function_effect_dependencies: std.ArrayListUnmanaged(ExpectEffectDependency),
-expect_dispatch_effect_watchers: std.ArrayListUnmanaged(ExpectEffectDependency),
+expect_dispatch_effect_watchers: std.ArrayListUnmanaged(ExpectDispatchWatcher),
 successful_dispatch_fn_vars: std.ArrayListUnmanaged(Var),
 current_expect_effect_slot: ?ExpectEffectSlotId,
 /// Dense table of top-level patterns, and whether their defs have been processed.
@@ -2276,7 +2275,6 @@ fn initAssumePrepared(
         .int_unbound_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .expect_effect_slots = .empty,
-        .expect_function_effect_dependencies = .empty,
         .expect_dispatch_effect_watchers = .empty,
         .successful_dispatch_fn_vars = .empty,
         .current_expect_effect_slot = null,
@@ -2457,7 +2455,6 @@ pub fn deinit(self: *Self) void {
     self.int_unbound_vars.deinit();
     self.reported_constraint_errors.deinit();
     self.expect_effect_slots.deinit(self.gpa);
-    self.expect_function_effect_dependencies.deinit(self.gpa);
     self.expect_dispatch_effect_watchers.deinit(self.gpa);
     self.successful_dispatch_fn_vars.deinit(self.gpa);
     self.top_level_ptrns.deinit(self.gpa);
@@ -9459,17 +9456,9 @@ fn checkExpectBody(
     return does_fx;
 }
 
-fn recordCurrentExpectEffectDependency(
-    self: *Self,
-    dependencies: *std.ArrayListUnmanaged(ExpectEffectDependency),
-    fn_var: Var,
-) Allocator.Error!void {
-    const slot = self.current_expect_effect_slot orelse return;
-    try dependencies.append(self.gpa, .{ .slot = slot, .fn_var = fn_var });
-}
-
 fn recordCurrentExpectDispatchWatcher(self: *Self, fn_var: Var) Allocator.Error!void {
-    return self.recordCurrentExpectEffectDependency(&self.expect_dispatch_effect_watchers, fn_var);
+    const slot = self.current_expect_effect_slot orelse return;
+    try self.expect_dispatch_effect_watchers.append(self.gpa, .{ .slot = slot, .fn_var = fn_var });
 }
 
 /// Record a committed successful dispatch edge. Expect watchers are resolved
@@ -9486,29 +9475,25 @@ fn finalizeExpectEffectSlots(self: *Self) Allocator.Error!void {
     std.debug.assert(self.current_expect_effect_slot == null);
     if (self.expect_effect_slots.items.len == 0) return;
 
-    var successful_roots: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer successful_roots.deinit(self.gpa);
-    try successful_roots.ensureTotalCapacity(self.gpa, @intCast(self.successful_dispatch_fn_vars.items.len));
-    for (self.successful_dispatch_fn_vars.items) |fn_var| {
-        successful_roots.putAssumeCapacity(self.types.resolveVar(fn_var).var_, {});
-    }
-
-    // Finalization runs after the last type mutation, so one memo serves every
-    // slot dependency. Ordinary effect queries clear this cache because roots
-    // may change between calls; no such invalidation is possible here.
-    self.function_effect_resolution.clearRetainingCapacity();
-
-    for (self.expect_dispatch_effect_watchers.items) |watcher| {
-        const fn_root = self.types.resolveVar(watcher.fn_var).var_;
-        if (!successful_roots.contains(fn_root)) continue;
-        if (try self.functionEffectStateHelp(fn_root) == .effectful) {
-            self.expect_effect_slots.items[@intFromEnum(watcher.slot)].effectful = true;
+    if (self.expect_dispatch_effect_watchers.items.len > 0) {
+        var successful_roots: std.AutoHashMapUnmanaged(Var, void) = .empty;
+        defer successful_roots.deinit(self.gpa);
+        try successful_roots.ensureTotalCapacity(self.gpa, @intCast(self.successful_dispatch_fn_vars.items.len));
+        for (self.successful_dispatch_fn_vars.items) |fn_var| {
+            successful_roots.putAssumeCapacity(self.types.resolveVar(fn_var).var_, {});
         }
-    }
 
-    for (self.expect_function_effect_dependencies.items) |dependency| {
-        if (try self.functionEffectStateHelp(dependency.fn_var) == .effectful) {
-            self.expect_effect_slots.items[@intFromEnum(dependency.slot)].effectful = true;
+        // Finalization runs after the last type mutation, so one memo serves
+        // every watcher. Ordinary effect queries clear this cache because roots
+        // may change between calls; no such invalidation is possible here.
+        self.function_effect_resolution.clearRetainingCapacity();
+
+        for (self.expect_dispatch_effect_watchers.items) |watcher| {
+            const fn_root = self.types.resolveVar(watcher.fn_var).var_;
+            if (!successful_roots.contains(fn_root)) continue;
+            if (try self.functionEffectStateHelp(fn_root) == .effectful) {
+                self.expect_effect_slots.items[@intFromEnum(watcher.slot)].effectful = true;
+            }
         }
     }
 
@@ -9616,7 +9601,6 @@ fn functionEffectStateHelp(self: *Self, var_: Var) Allocator.Error!FunctionEffec
 }
 
 fn recordCurrentFunctionEffectDependency(self: *Self, function_var: Var) Allocator.Error!void {
-    try self.recordCurrentExpectEffectDependency(&self.expect_function_effect_dependencies, function_var);
     if (self.function_effect_dependency_frame_starts.items.len == 0) return;
     const root = self.types.resolveVar(function_var).var_;
     const start = self.function_effect_dependency_frame_starts.items[self.function_effect_dependency_frame_starts.items.len - 1];
@@ -16310,15 +16294,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             defer {
                 if (body_is_delayed_dependency) self.delayed_dependency_depth -= 1;
             }
-
-            // Creating a function value does not evaluate its body. A delayed
-            // lambda therefore owns its body's effects rather than contributing
-            // them directly to an enclosing expect. An immediately invoked
-            // lambda keeps the active slot because its body is part of the
-            // expect condition's evaluation.
-            const saved_expect_effect_slot = self.current_expect_effect_slot;
-            if (body_is_delayed_dependency) self.current_expect_effect_slot = null;
-            defer self.current_expect_effect_slot = saved_expect_effect_slot;
 
             const lambda_body_expected = Expected.none().withHoistPosition(nested_expected.hoist_position);
             try self.pushReturnConstraintFrame(expr_idx);
