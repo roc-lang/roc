@@ -2091,11 +2091,11 @@ A non-exhaustive destructure in an unguarded runtime position is itself a strict
 compile-time demand when its right-hand side is top-level-equivalent. This demand
 does not depend on whether the pattern contains a binder or whether any binder is
 later referenced. The checker selects a unit-valued pattern-validation root that
-evaluates the right-hand side and matches the complete source pattern. It also
-selects the first binder extraction, when one exists, without waiting for that
-binder to become live. After solving, a concrete extraction subsumes the matching
-validation root so the right-hand side is evaluated only once; if the extraction
-cannot be stored as a concrete constant, the unit-valued validation root remains.
+evaluates the right-hand side and matches the complete source pattern. Binder
+extractions remain liveness-driven. After solving, a selected concrete extraction
+subsumes the matching validation root so a live binder does not make the
+right-hand side evaluate twice; with no selected concrete extraction, the
+unit-valued validation root remains and no dead binder value is archived.
 The pending exhaustiveness site is explicitly classified for empirical
 compile-time validation only after this root selection succeeds. No validation
 root is selected inside an ordinary top-level constant, because that enclosing

@@ -3059,70 +3059,6 @@ fn recordHoistPatternExtractionProvenanceHelp(
     }
 }
 
-/// Select the first binder in source order as the compile-time owner for a
-/// refutable destructure. The checker has already recorded explicit
-/// extraction provenance for every binder before calling this helper.
-fn selectFirstHoistedPatternExtractionRoot(
-    self: *Self,
-    pattern: CIR.Pattern.Idx,
-) Allocator.Error!bool {
-    switch (self.cir.store.getPattern(pattern)) {
-        .assign => return self.ensureHoistedBindingRoot(pattern),
-        .as => |as_pattern| {
-            if (try self.ensureHoistedBindingRoot(pattern)) return true;
-            return self.selectFirstHoistedPatternExtractionRoot(as_pattern.pattern);
-        },
-        .tuple => |tuple| {
-            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
-                if (try self.selectFirstHoistedPatternExtractionRoot(elem_pattern)) return true;
-            }
-        },
-        .record_destructure => |destructure| {
-            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
-                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
-                if (try self.selectFirstHoistedPatternExtractionRoot(destruct.kind.toPatternIdx())) return true;
-            }
-        },
-        .applied_tag => |tag| {
-            for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
-                if (try self.selectFirstHoistedPatternExtractionRoot(arg_pattern)) return true;
-            }
-        },
-        .nominal => |nominal| return self.selectFirstHoistedPatternExtractionRoot(nominal.backing_pattern),
-        .nominal_external => |nominal| return self.selectFirstHoistedPatternExtractionRoot(nominal.backing_pattern),
-        .list => |list| {
-            for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
-                if (try self.selectFirstHoistedPatternExtractionRoot(elem_pattern)) return true;
-            }
-            if (list.rest_info) |rest_info| {
-                if (rest_info.pattern) |rest_pattern| {
-                    if (try self.selectFirstHoistedPatternExtractionRoot(rest_pattern)) return true;
-                }
-            }
-        },
-        .str_interpolation => |str| {
-            var step_offset: u32 = 0;
-            while (step_offset < str.steps.span.len) : (step_offset += 1) {
-                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
-                if (step.capture) |capture| {
-                    if (try self.selectFirstHoistedPatternExtractionRoot(capture)) return true;
-                }
-            }
-        },
-        .underscore,
-        .runtime_error,
-        .num_literal,
-        .num_from_numeral_literal,
-        .small_dec_literal,
-        .dec_literal,
-        .frac_f32_literal,
-        .frac_f64_literal,
-        .str_literal,
-        => {},
-    }
-    return false;
-}
-
 fn recordHoistPatternExtractionProvenance(
     self: *Self,
     pattern: CIR.Pattern.Idx,
@@ -18824,9 +18760,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                         try self.selectPendingDestructureValidationRoot(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
                     }
                     try self.recordHoistPatternProvenance(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
-                    if (needs_comptime_validation) {
-                        _ = try self.selectFirstHoistedPatternExtractionRoot(decl_stmt.pattern);
-                    }
                 }
                 try self.bindTypeSchemeVar(decl_expr_var, decl_pattern_var);
                 if (self.predeclared_local_scheme_vars.get(decl_stmt.pattern)) |predeclared_scheme_var| {
