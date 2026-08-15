@@ -75,6 +75,7 @@ struct ContractEnv {
     allocator_error_count: usize,
     failure_count: usize,
     log_count: usize,
+    checksum_count: usize,
     report: [u8; 1024],
     report_len: usize,
 }
@@ -89,6 +90,7 @@ impl ContractEnv {
             allocator_error_count: 0,
             failure_count: 0,
             log_count: 0,
+            checksum_count: 0,
             report: [0; 1024],
             report_len: 0,
         }
@@ -381,6 +383,25 @@ pub extern "C" fn roc_cli_log(arg0: abi::RocStr) {
 }
 
 #[no_mangle]
+/// The argument is an owned container whose elements are refcounted, so its
+/// release is the generated `decref_list_of_str` helper rather than the list's
+/// own shallow `decref`: the elements have to be dropped when this reference is
+/// the last one, and left alone when Roc still holds the list.
+pub extern "C" fn roc_cli_checksum(arg0: abi::RocList<abi::RocStr>) -> u64 {
+    let mut sum: u64 = 0;
+    for item in arg0.as_slice() {
+        for byte in item.as_slice() {
+            sum += *byte as u64;
+        }
+    }
+    env_mut().checksum_count += 1;
+    unsafe {
+        abi::decref_list_of_str(arg0, current_host());
+    }
+    sum
+}
+
+#[no_mangle]
 pub extern "C" fn roc_cli_many(
     arg0: u8,
     arg1: u16,
@@ -465,6 +486,10 @@ pub extern "C" fn main(_argc: i32, _argv: *const *const u8) -> i32 {
     if env_mut().log_count != 1 {
         let count = env_mut().log_count;
         env_mut().fail(format_args!("expected one log call, saw {count}"));
+    }
+    if env_mut().checksum_count != 3 {
+        let count = env_mut().checksum_count;
+        env_mut().fail(format_args!("expected three checksum calls, saw {count}"));
     }
     if env_mut().allocator_error_count != 0 {
         let count = env_mut().allocator_error_count;
