@@ -46,7 +46,7 @@ test {
     // to call occurrences, not copied type constraints. The optional derived-map
     // payload selection adds its tag, payload index, and optional discriminant
     // without affecting type identity.
-    try std.testing.expectEqual(96, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(88, @sizeOf(StaticDispatchConstraint));
     // Directed effect dependencies must survive type generalization,
     // instantiation, and cross-module copying, so they live with the function
     // payload rather than in checker-only side state.
