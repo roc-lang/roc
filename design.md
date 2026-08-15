@@ -1706,6 +1706,36 @@ reference to an imported scheme copy; the def itself still checks with its
 annotation generated in its body's frame, sharing vars with the scheme the
 checked module outputs, which checked dispatch-evidence resolution relies on.
 
+Roc generalization is exclusively rank-1. Quantification belongs to a value
+binding; an arbitrary expression does not acquire a scheme, and the result of
+calling a polymorphic function is a monotype even when that result contains a
+function. In particular, `mk : {} -> (a -> a)` permits separate calls to `mk`
+to choose separate `a`s, but one stored result of `mk({})` cannot subsequently
+be called at two different types. Roc has no rank-2 or rank-n interpretation
+under which that returned function could itself retain `forall a`.
+
+The checker records scheme-ness as explicit binding metadata at each
+generalization boundary. After rank adjustment, it walks the binding's type
+interface once and classifies the binding as a scheme exactly when a reachable
+variable was promoted to generalized rank. This producer-side classification
+is necessary because generalization is per variable: a partially generalized
+scheme can have a monomorphic structural root and quantified descendants. Root
+rank is therefore not a valid proxy for whether a binding is a scheme.
+
+Every source alias for the binding (expression, pattern, definition, or closure
+wrapper) receives the same classification explicitly. Checked module output
+stores the classified source nodes in a sorted table, and imported binding
+copies carry that recorded classification into the importing checker. A
+same-module value lookup, stored-value construction edge, or immediate-callee
+edge instantiates exactly when its source binding is classified as a scheme.
+Scheme instantiation force-copies the structural root so the rank-aware copy
+can reach and freshen quantified descendants while sharing escaped monomorphic
+variables. Same-module monotype lookups share their existing graph and allocate
+nothing. Imported checked types remain generalized cache templates and receive
+an independent copy per use as before; the recorded source classification is
+preserved on that copy. No consumer scans solved types or source syntax to
+rediscover this decision.
+
 The recursion rule is the ML binding-group rule. A recursive group gets one
 shared rank frame: members' patterns are ranked in it first, an in-group
 reference to an unannotated member unifies monomorphically with the member's
@@ -4242,10 +4272,12 @@ of the same raw edge reuses its recorded target; type traversal and digest
 construction occur only when selecting a target for a new derived edge, and
 an edge selected with no parent records no digest at all.
 
-Only roots actually promoted to generalized rank can instantiate a side-table
-scheme. A mixed recursive group can provisionally capture requirements for a
-value-restricted member before generalization; the checker removes that entry
-as soon as the generalizer leaves the root non-generalized. A requirement is
+Only bindings explicitly classified as schemes can instantiate a side-table
+scheme; the root itself need not have generalized rank when quantified
+descendants make the binding a partial scheme. A mixed recursive group can
+provisionally capture requirements for a value-restricted member before
+generalization; the checker removes that entry as soon as the generalization
+boundary does not classify the binding as a scheme. A requirement is
 retired only after static-dispatch checking actually consumes or rejects its
 exact callable relation; a concrete, aliased, rigid, generalized, or erroneous
 receiver is not evidence of discharge. A creation relation whose generalized
@@ -10625,6 +10657,14 @@ solving, adapted for Roc's checked module boundary and existing LIR.
 - Lambda Mono removes function types by turning finite function values into
   ordinary generated tag unions and erased function values into packed erased
   callables.
+
+Cor's LSS checker represents quantification explicitly on binding schemes:
+lookup instantiates a scheme, while a monotype is reused, and a call always
+produces a fresh monomorphic result. Roc's checked type store retains rank-based
+quantified variables for its richer solver, but its explicit binding-scheme
+classification preserves that same rank-1 behavior. In both designs the decision
+to instantiate comes from the binding, never from treating a function nested
+inside an arbitrary expression result as polymorphic.
 
 Roc adds language and implementation data that Cor's experiment does not need:
 

@@ -127,7 +127,7 @@ expect f(["a"]) == "x"
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 298)
+				(e-call (constraint-fn-var 300)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-list
