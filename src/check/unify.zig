@@ -30,7 +30,7 @@
 //!
 //! ```zig
 //! const result = unify(&types_store, &scratch, a_var, b_var);
-//! if (result == .ok) {
+//! if (result == .unified) {
 //!     for (scratch.fresh_vars.items) |v| {
 //!         // handle fresh type variable `v`
 //!     }
@@ -106,13 +106,20 @@ const NominalDirection = enum {
     b_is_nominal,
 };
 
-/// The result of unification
+/// The result of unification.
+///
+/// `unified` is evidence that the requested relation was established.
+/// `suppressed_by_error` only says that an existing `.err` made another
+/// diagnostic unnecessary; it is not evidence that the queried classes were
+/// merged or otherwise related.
 pub const Result = union(enum) {
     const Self = @This();
 
-    /// The relation was accepted. Encountering an existing `.err` can return
-    /// this without merging the queried classes.
-    ok,
+    /// The requested relation was established.
+    unified,
+    /// An existing `.err` stopped unification before the requested relation
+    /// was established. This is accepted for diagnostic recovery only.
+    suppressed_by_error,
     /// A mismatch recorded as a diagnostic.
     problem: Problem.Idx,
     /// A mismatch detected under `write_no_report`: nothing recorded and the
@@ -120,13 +127,22 @@ pub const Result = union(enum) {
     /// completed before the mismatch remain committed.
     mismatch,
 
-    pub fn isOk(self: Self) bool {
-        return self == .ok;
+    /// Whether this result requires no additional type-mismatch diagnostic.
+    pub fn isAccepted(self: Self) bool {
+        return switch (self) {
+            .unified, .suppressed_by_error => true,
+            .problem, .mismatch => false,
+        };
+    }
+
+    /// Whether this result proves that the requested relation was established.
+    pub fn isEstablished(self: Self) bool {
+        return self == .unified;
     }
 
     pub fn isProblem(self: Self) bool {
         switch (self) {
-            .ok => return false,
+            .unified, .suppressed_by_error => return false,
             .problem, .mismatch => return true,
         }
     }
@@ -290,7 +306,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     unifier.runWorkLoop() catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.ErroneousType => return .ok,
+            error.ErroneousType => return .suppressed_by_error,
             error.TypeMismatch => {},
         }
 
@@ -313,7 +329,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         return Result{ .problem = problem_idx };
     };
 
-    return .ok;
+    return .unified;
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.

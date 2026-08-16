@@ -7,7 +7,7 @@ const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
 
 /// Version tag for the checked-stage hoisted-root selection algorithm.
-pub const selection_algorithm_version: u64 = 3;
+pub const selection_algorithm_version: u64 = 4;
 
 /// Collection of hoisted roots selected for a checked module.
 pub const SelectedHoistedRootSet = struct {
@@ -25,6 +25,8 @@ pub const PatternExtraction = struct {
 pub const PatternValidation = struct {
     base_expr: CIR.Expr.Idx,
     scrutinee_pattern: CIR.Pattern.Idx,
+    /// Whether successful finalization makes the source declaration dead at runtime.
+    erase_runtime: bool,
 };
 
 /// Shape of the body used to evaluate a selected hoisted root.
@@ -42,6 +44,8 @@ pub const Body = union(enum) {
 pub const ValueKind = enum(u8) {
     data_constant,
     callable_binding,
+    /// Validation succeeds or reports a diagnostic; it archives no runtime value.
+    discarded,
 };
 
 /// A root selected during checking for compile-time evaluation.
@@ -62,8 +66,13 @@ pub const SelectedHoistedRoot = struct {
     /// The root body shape. Pattern extraction and validation roots are sparse
     /// selected-root metadata; no per-expression hoistability summary is stored.
     body: Body = .expr,
-    /// Whether finalization archives a data constant or an exact callable.
+    /// Whether finalization archives data, archives an exact callable, or
+    /// discards a validation-only result.
     value_kind: ValueKind = .data_constant,
+    /// Prospective expression root that subsumes this validation when that
+    /// expression survives post-solve pruning. Checker-only ownership metadata;
+    /// checked artifact publication does not persist it.
+    validation_owner_expr: ?CIR.Expr.Idx = null,
 };
 
 /// Clones a hoisted-root body into the caller's allocator when needed.
@@ -91,6 +100,7 @@ pub fn cloneSelectedRoot(allocator: Allocator, root: SelectedHoistedRoot) Alloca
         .pattern = root.pattern,
         .body = try cloneBody(allocator, root.body),
         .value_kind = root.value_kind,
+        .validation_owner_expr = root.validation_owner_expr,
     };
 }
 

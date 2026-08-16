@@ -1092,7 +1092,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .field_default => .compile_time_constant,
+                    .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .field_default => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                 },
@@ -1101,7 +1101,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .compile_time,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -1994,7 +1994,7 @@ fn compileTimeRootKindMatchesRequest(
     request_kind: RootRequestKind,
 ) bool {
     return switch (root_kind) {
-        .constant, .hoisted_constant => request_kind == .compile_time_constant,
+        .constant, .hoisted_constant, .hoisted_validation => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .numeral_conversion, .quote_conversion, .field_default => request_kind == .compile_time_constant,
@@ -2064,6 +2064,7 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
     return switch (root.kind) {
         .constant,
         .hoisted_constant,
+        .hoisted_validation,
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
@@ -18272,6 +18273,7 @@ fn sealConstEvalTemplatesForRoots(
                 };
                 break :blk hoisted.const_ref;
             },
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .numeral_conversion,
@@ -19390,7 +19392,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .comptime_only,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .comptime_only,
                 },
             });
         }
@@ -23495,6 +23497,9 @@ pub const CompileTimeRootKind = enum {
     constant,
     /// A selected top-level-equivalent expression inside a runtime body.
     hoisted_constant,
+    /// A compile-time-known refutable destructure whose successful unit result
+    /// has no runtime value to archive.
+    hoisted_validation,
     callable_binding,
     expect,
     /// A `from_numeral` conversion of a numeric literal whose target is a
@@ -23526,6 +23531,7 @@ pub const CompileTimeRootPayload = union(enum) {
     pending,
     const_node: ConstNodeId,
     fn_value: ConstFnId,
+    discarded,
     expect,
 };
 
@@ -23556,7 +23562,7 @@ pub const CompileTimeRoot = struct {
             .numeral_conversion => .numeral,
             .quote_conversion => .quote,
             .field_default => self.literal_conversion,
-            .constant, .hoisted_constant, .callable_binding, .expect => null,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => null,
         };
     }
 };
@@ -23670,6 +23676,7 @@ pub const CompileTimeRootTable = struct {
                     checkedArtifactInvariant("non-function selected root was classified as a callable binding", .{})
                 else
                     .callable_binding,
+                .discarded => .hoisted_validation,
             };
             const checked_root = try checkedBodyForSelectedHoistedRoot(
                 allocator,
@@ -23792,9 +23799,21 @@ pub const CompileTimeRootTable = struct {
 
     pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CheckedPatternId) ?ComptimeRootId {
         for (self.roots) |entry| {
+            if (entry.kind == .hoisted_validation) continue;
             if (entry.pattern != null and entry.pattern.? == pattern) return entry.id;
         }
         return null;
+    }
+
+    pub fn validationResolvedByPattern(self: *const CompileTimeRootTable, pattern: CheckedPatternId) bool {
+        for (self.roots) |entry| {
+            if (entry.kind != .hoisted_validation or entry.pattern != pattern) continue;
+            const body = entry.hoisted_body orelse checkedArtifactInvariant("hoisted validation root had no selected body", .{});
+            if (body != .pattern_validation) checkedArtifactInvariant("hoisted validation root had a non-validation body", .{});
+            if (!body.pattern_validation.erase_runtime) return false;
+            return entry.payload == .discarded;
+        }
+        return false;
     }
 
     /// Look up the field-default root (design.md "Defaulted Fields") whose
@@ -23959,7 +23978,11 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
     const matches = switch (kind) {
         .constant, .hoisted_constant => switch (payload) {
             .const_node => true,
-            .pending, .fn_value, .expect => false,
+            .pending, .fn_value, .discarded, .expect => false,
+        },
+        .hoisted_validation => switch (payload) {
+            .discarded => true,
+            .pending, .const_node, .fn_value, .expect => false,
         },
         .callable_binding => switch (payload) {
             // A callable initializer that reaches an explicit checked error is
@@ -23967,15 +23990,15 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
             // node at the callable's expected type, so execution crashes at
             // the exact invalid binding while independent roots remain usable.
             .fn_value, .const_node => true,
-            .pending, .expect => false,
+            .pending, .discarded, .expect => false,
         },
         .expect => switch (payload) {
             .expect => true,
-            .pending, .const_node, .fn_value => false,
+            .pending, .const_node, .fn_value, .discarded => false,
         },
         .numeral_conversion, .quote_conversion, .field_default => switch (payload) {
             .const_node => true,
-            .pending, .fn_value, .expect => false,
+            .pending, .fn_value, .discarded, .expect => false,
         },
     };
     if (matches) return;
@@ -23987,6 +24010,7 @@ fn verifyCompileTimeRootLiteralConversion(root: CompileTimeRoot) void {
         .field_default => {},
         .constant,
         .hoisted_constant,
+        .hoisted_validation,
         .callable_binding,
         .expect,
         .numeral_conversion,
@@ -24000,7 +24024,7 @@ fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
         .constant, .hoisted_constant => true,
         // A field default's constant is restored by expression lookup at
         // construction sites, never exported as a named data constant.
-        .callable_binding, .expect, .numeral_conversion, .quote_conversion, .field_default => false,
+        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .field_default => false,
     };
 }
 
@@ -24405,16 +24429,35 @@ fn exhaustivenessReplacingRootForSource(
 ) ?CompileTimeRoot {
     for (compile_time_roots.roots) |root| {
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
-        switch (source) {
-            .destructure_pattern => |source_pattern| {
-                if (root.hoisted_body) |body| switch (body) {
-                    .pattern_extraction => |extraction| if (extraction.scrutinee_pattern == source_pattern) return root,
-                    .pattern_validation => |validation| if (validation.scrutinee_pattern == source_pattern) return root,
-                    .expr => {},
+        if (root.hoisted_body) |body| switch (body) {
+            .pattern_extraction, .pattern_validation => {
+                const base_expr, const exact_pattern = switch (body) {
+                    .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
+                    .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
+                    .expr => unreachable,
                 };
+                if (source == .destructure_pattern and source.destructure_pattern == exact_pattern) return root;
+
+                // Pattern roots evaluate both their synthetic outer match and
+                // the original right-hand side. The exact-pattern check above
+                // owns the former; sites contained by the base expression
+                // belong to the latter.
+                const checked_base_expr = checkedExprIdForSource(checked_bodies, base_expr);
+                const base_contains = switch (source) {
+                    .match_expr => |source_expr| blk: {
+                        const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
+                        break :blk checkedExprContainsExpr(checked_bodies, checked_base_expr, checked_expr);
+                    },
+                    .destructure_pattern => |source_pattern| blk: {
+                        const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
+                        break :blk checkedExprContainsPattern(checked_bodies, checked_base_expr, checked_pattern);
+                    },
+                };
+                if (base_contains) return root;
+                continue;
             },
-            .match_expr => {},
-        }
+            .expr => {},
+        };
         const contains = switch (source) {
             .match_expr => |source_expr| blk: {
                 const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
@@ -24434,6 +24477,7 @@ fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
     return switch (kind) {
         .constant,
         .hoisted_constant,
+        .hoisted_validation,
         .numeral_conversion,
         .quote_conversion,
         // A default expression never occurs in a runtime body: any
@@ -24923,7 +24967,7 @@ fn appendCheckedPatternValidationRootBody(
     } }, checked_type, pattern_region, data);
     return .{
         .expr = wrapper,
-        .pattern = null,
+        .pattern = checked_source_pattern,
         .checked_type = checked_type,
     };
 }
@@ -28996,7 +29040,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 64 publishes iterator producer identities for `List.iter_rev`,
     // the numeric `to`/`until` ranges, and the F32/F64 range helpers.
     // Version 65 publishes unit-valued destructure-validation hoisted roots.
-    const serialized_layout_version: u32 = 65;
+    // Version 66 gives validation-only roots a discarded payload state so no
+    // unit constant is archived for them.
+    const serialized_layout_version: u32 = 66;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29196,10 +29242,11 @@ pub const CheckedModuleArtifact = struct {
             verifyCompileTimeRootLiteralConversion(root);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             switch (root.kind) {
-                .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => switch (root.payload) {
+                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => switch (root.payload) {
                     .pending => {},
                     .const_node,
                     .fn_value,
+                    .discarded,
                     .expect,
                     => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
@@ -29208,6 +29255,7 @@ pub const CheckedModuleArtifact = struct {
                     .pending,
                     .const_node,
                     .fn_value,
+                    .discarded,
                     => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
                 },
             }
@@ -29948,7 +29996,7 @@ pub const CheckedModuleArtifact = struct {
             if (root.kind == .expect) {
                 switch (root.payload) {
                     .expect => {},
-                    .pending, .const_node, .fn_value => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
+                    .pending, .const_node, .fn_value, .discarded => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
                 }
                 continue;
             }
@@ -29959,7 +30007,7 @@ pub const CheckedModuleArtifact = struct {
                         std.debug.panic("checked artifact invariant violated: requested compile-time root has pending payload", .{});
                     }
                 },
-                .const_node, .fn_value, .expect => {
+                .const_node, .fn_value, .discarded, .expect => {
                     if (!has_request) {
                         std.debug.panic("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
                     }
@@ -33469,6 +33517,7 @@ test "compile-time finalization route is explicit and non-optional" {
 
 test "compile-time roots and top-level values store final checked output only" {
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "constant") != null);
+    try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "hoisted_validation") != null);
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "callable_binding") != null);
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "expect") != null);
     try std.testing.expect(@hasField(CompileTimeRoot, "request_eligibility"));
@@ -33479,6 +33528,7 @@ test "compile-time roots and top-level values store final checked output only" {
     try std.testing.expect(@hasField(CompileTimeRootPayload, "pending"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "const_node"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "fn_value"));
+    try std.testing.expect(@hasField(CompileTimeRootPayload, "discarded"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "expect"));
 
     try std.testing.expectEqual(@as(usize, 2), unionFieldCount(TopLevelValueKind));
@@ -35187,8 +35237,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x68, 0x55, 0x02, 0x0B, 0xD2, 0x47, 0xFB, 0xE8, 0x03, 0xFD, 0x4C, 0xF1, 0x1B, 0x47, 0x45, 0x4F,
-        0x97, 0xAC, 0xA0, 0x4A, 0x0F, 0xB9, 0x9B, 0xE6, 0x07, 0x6D, 0x1A, 0xDE, 0x04, 0xDE, 0x6B, 0xD5,
+        0xBE, 0x6F, 0x9A, 0x56, 0x97, 0xCA, 0x76, 0x6D, 0x68, 0x4E, 0x18, 0x86, 0x53, 0xE3, 0x35, 0xF4,
+        0xC6, 0x51, 0x53, 0xFA, 0xB7, 0x44, 0xCB, 0xFB, 0x41, 0xDF, 0xA3, 0x74, 0x64, 0x46, 0xB0, 0x1C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

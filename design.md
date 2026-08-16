@@ -1243,6 +1243,21 @@ selected-name list; checked value, procedure, and compile-time-root construction
 use the value-binding list. Neither repeats name deduplication or chooses a
 definition based on its expression shape.
 
+An annotation-only declaration that no implementation supersedes names no value
+at all, whatever its annotation says, and `e_anno_only` is the body-free state
+that records this. Two rewrites give such an annotation a body, and only these
+two: a platform package's hosted rewrite, which produces `e_hosted_lambda`
+during canonicalization, and Builtin.roc's compiler-owned intrinsic annotations,
+whose bodies post-check lowering emits at each checked call site. Every other
+`e_anno_only` declaration keeps its declared type, so surrounding code still
+checks, but reading it is an error: checking reports the missing value at the
+reference and marks that expression erroneous, exactly as it already does for
+the sibling body-free state `e_derived_method`. This holds for a plain lookup,
+an imported lookup, a qualified associated read, and a method dispatch alike, so
+no reference to a valueless declaration survives checking. Post-check stages
+therefore never see one, and their rule that a procedure use carries a
+function-shaped request node needs no exception for it.
+
 The `Scope.type_bindings` table has one ordinary mutation API for type names.
 It accepts the full scope slice, the target scope index, the introduced name,
 and the incoming binding:
@@ -1402,13 +1417,17 @@ calling ordinary union or writing a raw redirect.
 
 An already-erroneous operand cannot overwrite a solved type or a flex carrying
 constraints. Encountering `.err` against either terminates the current
-unification successfully for diagnostic recovery, before any enclosing
-structure is merged. An unconstrained flex placeholder may adopt `.err`; this
-is how an erroneous expression explicitly fills its owning binding or
-annotation slot without contaminating an independently constrained producer.
-Checker sites that own a reported error use `markErroneous` to poison the owning
-solved class directly. No successful ordinary unification propagates an
-existing `.err` into a type that already carries information.
+unification with `suppressed_by_error` for diagnostic recovery, before any
+enclosing structure is merged. This outcome means no additional mismatch
+diagnostic is needed; it does not prove that the requested relation was
+established. `unified` is the only outcome that provides that proof. An
+unconstrained flex placeholder may adopt `.err`; this is a real merge and
+therefore returns `unified`. This is how an erroneous expression explicitly
+fills its owning binding or annotation slot without contaminating an
+independently constrained producer. Checker sites that own a reported error use
+`markErroneous` to poison the owning solved class directly. No successful
+ordinary unification propagates an existing `.err` into a type that already
+carries information.
 
 A relation an expression merely consults is not a relation it may destroy. A
 call checks its callee and its arguments, and a field access checks the record
@@ -1421,17 +1440,23 @@ cascades into unrelated uses of that producer nor leaves an `.err` on a binding
 whose value post-check lowering must still instantiate.
 
 Because `.err` no longer merges, it also no longer relates the operands unified
-against it. A checker site that relies on one variable to carry a relation
-between several others has to supply that relation itself once the carrier is
-erroneous. `match` is the one such site: every branch pattern describes the same
-scrutinee value, and that mutual consistency normally travels through the
-scrutinee's variable. When the scrutinee is already erroneous, the patterns
-unify against a shared fresh variable instead, so a disagreement between two
-patterns is still reported at the pattern that disagrees rather than surfacing
-later as an unexplained branch-body mismatch. The scrutinee's own error is not
-re-reported, the patterns are never related back to it, and the first
-disagreement poisons the shared variable so later patterns short-circuit exactly
-as they do when the scrutinee carries the relation.
+against it. A checker site that only needs diagnostic recovery may accept both
+`unified` and `suppressed_by_error`. A site that uses the relation as evidence
+for a speculative commit, a shared representative, dispatch success, or another
+checked output whose validity depends on the whole requested relation must
+require `unified`; `suppressed_by_error` cannot authorize that action. Evidence
+for a child relation that completed before suppression remains independently
+valid. A site that relies on one variable to carry a relation between several
+others has to supply that relation itself once the carrier is erroneous.
+`match` is one such site: every branch pattern describes the same scrutinee
+value, and that mutual consistency normally travels through the scrutinee's
+variable. When the scrutinee is already erroneous, the patterns unify against a
+shared fresh variable instead, so a disagreement between two patterns is still
+reported at the pattern that disagrees rather than surfacing later as an
+unexplained branch-body mismatch. The scrutinee's own error is not re-reported,
+the patterns are never related back to it, and the first disagreement poisons
+the shared variable so later patterns short-circuit exactly as they do when the
+scrutinee carries the relation.
 
 ## Type Alias Invariant
 
@@ -2136,16 +2161,39 @@ never as runtime-local pattern references.
 A non-exhaustive destructure in an unguarded runtime position is itself a strict
 compile-time demand when its right-hand side is top-level-equivalent. This demand
 does not depend on whether the pattern contains a binder or whether any binder is
-later referenced. The checker selects a unit-valued pattern-validation root that
-evaluates the right-hand side and matches the complete source pattern. Binder
-extractions remain liveness-driven. After solving, a selected concrete extraction
-subsumes the matching validation root so a live binder does not make the
-right-hand side evaluate twice; with no selected concrete extraction, the
-unit-valued validation root remains and no dead binder value is archived.
-The pending exhaustiveness site is explicitly classified for empirical
-compile-time validation only after this root selection succeeds. No validation
-root is selected inside an ordinary top-level constant, because that enclosing
-root already evaluates and owns the destructure site.
+later referenced. The checker records the complete checked source pattern and
+right-hand side as a deferred validation candidate, together with the prospective
+maximal expression root that can own its evaluation. The candidate retains a
+dedicated validation root until post-solve pruning proves that the expression
+owner or a concrete live-binder extraction was actually kept. This prevents a
+non-concrete or otherwise rejected prospective owner from losing the validation,
+while a kept owner prevents the right-hand side from evaluating twice.
+
+A surviving validation-only root evaluates the right-hand side and matches the
+complete source pattern, but its successful result is discarded rather than
+archived as a unit constant. A binder-free source declaration may then be erased
+from runtime lowering. The pending exhaustiveness site is explicitly classified
+for empirical compile-time validation when the eligible candidate is recorded.
+No candidate is recorded inside an ordinary top-level constant, because that
+enclosing root already evaluates and owns the destructure site. Validation uses
+the checked pattern compiler and compile-time evaluator; it never reinterprets
+source patterns separately.
+
+Local binding dependencies likewise remain candidates until their enclosing
+expression is either selected or rejected. A selected maximal parent owns the
+computation and its transient binders, including callable-typed binders that
+never enter static storage. Only when no eligible parent can own the use does the
+dependency become its own data or callable extraction root. Consequently
+selection does not duplicate a closed computation merely because a nested value
+is named, and the representation requirements of the root result never constrain
+transient local or match-branch binders.
+
+A callable extraction root is admitted only when the extracted value is itself
+a function and its complete checked signature is concrete. The checker records
+it as one exact callable root, never as ConstStore data. Data roots use a separate
+concreteness purpose that rejects a function anywhere in their stored type, so a
+value containing a callable remains one ordinary runtime allocation rather than
+being copied into independently restored callables.
 
 Hoisted-root selection is positional as well as dependency-based. Selection may
 fire only in structurally unguarded positions of runtime bodies, and the checker

@@ -148,9 +148,10 @@ pub const Constants = struct {
     /// 61: Static dispatch constraints no longer serialize checker-local expect regions.
     /// 62: For-loop dispatch plans retain explicit iterator and step type variables.
     /// 63: ModuleEnv retains canonicalization-selected top-level and value-binding definitions.
-    /// 64: A platform module's own annotation-only declarations stay
+    /// 64: Compile-time root selection rejects values containing callables.
+    /// 65: A platform module's own annotation-only declarations stay
     ///     annotation-only instead of becoming hosted declarations.
-    pub const CACHE_VERSION = 64;
+    pub const CACHE_VERSION = 65;
 };
 
 /// Configuration for the Roc cache system.
