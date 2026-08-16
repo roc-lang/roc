@@ -543,10 +543,9 @@ hoist_expr_candidates: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// cross-module method binding. One entry serves those repeats, and it also
 /// keeps the decisions about a single expression consistent with each other.
 hoist_iterator_source_memo: ?struct { expr: CIR.Expr.Idx, preserves: bool } = null,
-/// Compile-time-known local dependencies encountered while checking a local
-/// binding RHS. They are selected only if that RHS cannot itself be hoisted, or
-/// later when a selected parent root recursively selects dependencies.
-hoist_deferred_binding_dependencies: std.ArrayListUnmanaged(CIR.Pattern.Idx),
+/// Compile-time-known local dependencies and strict destructure validations
+/// waiting for the maximal enclosing root that can own their evaluation.
+hoist_deferred_roots: std.ArrayListUnmanaged(HoistDeferredRoot),
 /// Immutable local binding RHS expressions that were proven hoistable when the
 /// binding was checked. A candidate becomes a selected root only when a later
 /// lookup actually references the binding.
@@ -1576,6 +1575,16 @@ const CompletedHoistResult = struct {
 const HoistPatternExtraction = hoist_roots.PatternExtraction;
 const HoistPatternValidation = hoist_roots.PatternValidation;
 
+const HoistDeferredPatternValidation = struct {
+    validation: HoistPatternValidation,
+    owner_expr: ?CIR.Expr.Idx = null,
+};
+
+const HoistDeferredRoot = union(enum) {
+    binding: CIR.Pattern.Idx,
+    pattern_validation: HoistDeferredPatternValidation,
+};
+
 const HoistKnownValue = union(enum) {
     binding_rhs: CIR.Expr.Idx,
     pattern_extraction: HoistPatternExtraction,
@@ -1736,6 +1745,7 @@ const HoistSelectionTransaction = struct {
     fn stagePatternValidationRoot(
         self: *HoistSelectionTransaction,
         validation: HoistPatternValidation,
+        owner_expr: ?CIR.Expr.Idx,
     ) Allocator.Error!u32 {
         if (self.checker.hoist_selected_pattern_validations.get(validation.scrutinee_pattern)) |root_index| return root_index;
         if (self.staged_pattern_validations.get(validation.scrutinee_pattern)) |root_index| return root_index;
@@ -1746,6 +1756,8 @@ const HoistSelectionTransaction = struct {
         try self.staged_roots.append(self.checker.gpa, .{
             .expr = validation.base_expr,
             .body = .{ .pattern_validation = validation },
+            .value_kind = .discarded,
+            .validation_owner_expr = owner_expr,
         });
         try self.staged_pattern_validations.put(self.checker.gpa, validation.scrutinee_pattern, root_index);
         return root_index;
@@ -2380,7 +2392,7 @@ fn initAssumePrepared(
         .accepted_nominal_constructor_backings = .empty,
         .hoist_frames = .empty,
         .hoist_expr_candidates = .empty,
-        .hoist_deferred_binding_dependencies = .empty,
+        .hoist_deferred_roots = .empty,
         .hoist_binding_candidates = .{},
         .hoist_binding_scope_patterns = .empty,
         .hoist_known_values = .{},
@@ -2490,7 +2502,7 @@ pub fn deinit(self: *Self) void {
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
     self.hoist_expr_candidates.deinit(self.gpa);
-    self.hoist_deferred_binding_dependencies.deinit(self.gpa);
+    self.hoist_deferred_roots.deinit(self.gpa);
     self.hoist_binding_candidates.deinit(self.gpa);
     self.hoist_binding_scope_patterns.deinit(self.gpa);
     var known_value_iter = self.hoist_known_values.iterator();
@@ -2643,7 +2655,7 @@ fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool, hoist_pos
         .binding_rhs = binding_rhs,
         .binding_pattern = if (binding_rhs) self.checking_binding_rhs_pattern else null,
         .candidate_start = self.hoist_expr_candidates.items.len,
-        .deferred_dependency_start = self.hoist_deferred_binding_dependencies.items.len,
+        .deferred_dependency_start = self.hoist_deferred_roots.items.len,
     });
     self.last_hoist_result = null;
     return .{
@@ -2662,9 +2674,7 @@ fn abortHoistFrame(self: *Self, expr: CIR.Expr.Idx) void {
     }
     _ = self.hoist_frames.pop();
     self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
-    if (frame.binding_rhs) {
-        self.hoist_deferred_binding_dependencies.shrinkRetainingCapacity(frame.deferred_dependency_start);
-    }
+    self.hoist_deferred_roots.shrinkRetainingCapacity(frame.deferred_dependency_start);
     self.last_hoist_result = null;
 }
 
@@ -2689,6 +2699,13 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         !isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr)) and
         !self.varIsFunctionType(ModuleEnv.varFrom(expr));
     const current_covers_children = (can_cover_children and !frame.binding_rhs) or binding_rhs_can_cover_children;
+    // Any eligible binding RHS suppresses smaller expression candidates, but
+    // only a pattern that can publish that RHS as a binding root may become a
+    // prospective owner for its deferred validation. Other patterns must
+    // bubble validation to an enclosing root or retain a dedicated validation root.
+    const current_covers_deferred_roots = current_covers_children and
+        (!frame.binding_rhs or
+            (frame.binding_pattern != null and self.patternCanOwnHoistedBindingRoot(frame.binding_pattern.?)));
     const has_child_candidates = self.hoist_expr_candidates.items.len > frame.candidate_start;
     const action: HoistSelectionAction = if (!selection_allowed)
         .suppress_children
@@ -2705,11 +2722,10 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         try self.hoist_expr_candidates.ensureUnusedCapacity(self.gpa, 1);
     }
 
-    const should_flush_deferred_binding_dependencies = frame.binding_rhs and
-        !binding_rhs_can_cover_children and
-        selection_allowed and
-        self.hoist_deferred_binding_dependencies.items.len > frame.deferred_dependency_start;
-    if (should_flush_child_candidates or should_flush_deferred_binding_dependencies) {
+    const has_deferred_roots = self.hoist_deferred_roots.items.len > frame.deferred_dependency_start;
+    const should_flush_deferred_roots = selection_allowed and has_deferred_roots and
+        (frame_index == 0 or !semantically_eligible);
+    if (should_flush_child_candidates or should_flush_deferred_roots) {
         var transaction = HoistSelectionTransaction.init(self);
         defer transaction.deinit();
 
@@ -2719,9 +2735,20 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
                 _ = try transaction.stageExprRoot(candidate, null);
             }
         }
-        if (should_flush_deferred_binding_dependencies) {
-            for (self.hoist_deferred_binding_dependencies.items[frame.deferred_dependency_start..]) |dependency| {
-                _ = try transaction.stageBindingRoot(dependency);
+        if (should_flush_deferred_roots) {
+            // Binding roots go first so post-solve pruning can let a kept live
+            // extraction subsume the dedicated validation root.
+            for (self.hoist_deferred_roots.items[frame.deferred_dependency_start..]) |deferred| {
+                switch (deferred) {
+                    .binding => |pattern| _ = try transaction.stageBindingRoot(pattern),
+                    .pattern_validation => {},
+                }
+            }
+            for (self.hoist_deferred_roots.items[frame.deferred_dependency_start..]) |deferred| {
+                switch (deferred) {
+                    .binding => {},
+                    .pattern_validation => |pending| _ = try transaction.stagePatternValidationRoot(pending.validation, pending.owner_expr),
+                }
             }
         }
         try transaction.commit();
@@ -2738,8 +2765,26 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     }
     self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
 
-    if (frame.binding_rhs) {
-        self.hoist_deferred_binding_dependencies.shrinkRetainingCapacity(frame.deferred_dependency_start);
+    if (!selection_allowed or should_flush_deferred_roots) {
+        self.hoist_deferred_roots.shrinkRetainingCapacity(frame.deferred_dependency_start);
+    } else if (current_covers_deferred_roots) {
+        // The current expression may become the maximal selected owner. Keep a
+        // distinct validation root until post-solve pruning proves that it did,
+        // but consume binding dependencies that the expression evaluates locally.
+        var retained = frame.deferred_dependency_start;
+        for (self.hoist_deferred_roots.items[frame.deferred_dependency_start..]) |deferred| {
+            switch (deferred) {
+                .binding => {},
+                .pattern_validation => |pending| {
+                    self.hoist_deferred_roots.items[retained] = .{ .pattern_validation = .{
+                        .validation = pending.validation,
+                        .owner_expr = expr,
+                    } };
+                    retained += 1;
+                },
+            }
+        }
+        self.hoist_deferred_roots.shrinkRetainingCapacity(retained);
     }
 
     const completed = CompletedHoistResult{
@@ -2878,9 +2923,10 @@ fn recordHoistPatternProvenance(
 
 /// A pending destructure diagnostic is a strict compile-time demand on the
 /// complete scrutinee, independent of whether any binder is later referenced.
-/// Select one validation root from the same producer-proven eligibility facts
-/// used for ordinary local binding hoists.
-fn selectPendingDestructureValidationRoot(
+/// Keep the demand pending until the maximal eligible enclosing expression is
+/// known; only then can selection decide whether that expression owns the
+/// validation or a dedicated validation root is necessary.
+fn recordHoistPatternValidationCandidate(
     self: *Self,
     pattern: CIR.Pattern.Idx,
     expr: CIR.Expr.Idx,
@@ -2890,15 +2936,69 @@ fn selectPendingDestructureValidationRoot(
     if (completed.expr != expr) return;
     if (builtin.mode == .Debug) std.debug.assert(completed.hoist_position == hoist_position);
     if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
-    if (!self.exprCanBeHoistedBindingRoot(expr)) return;
-    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
-    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
 
-    _ = try self.ensureHoistedPatternValidationRoot(.{
-        .base_expr = expr,
-        .scrutinee_pattern = pattern,
-    });
+    try self.hoist_deferred_roots.append(self.gpa, .{ .pattern_validation = .{
+        .validation = .{
+            .base_expr = expr,
+            .scrutinee_pattern = pattern,
+            .erase_runtime = !self.patternIntroducesValueBinding(pattern),
+        },
+    } });
     self.problems.markPendingStaticExhaustivenessEmpirical(.{ .destructure_pattern = pattern });
+}
+
+fn patternIntroducesValueBinding(self: *const Self, pattern: CIR.Pattern.Idx) bool {
+    return switch (self.cir.store.getPattern(pattern)) {
+        .assign, .as => true,
+        .tuple => |tuple| blk: {
+            for (self.cir.store.slicePatterns(tuple.patterns)) |child| {
+                if (self.patternIntroducesValueBinding(child)) break :blk true;
+            }
+            break :blk false;
+        },
+        .record_destructure => |destructure| blk: {
+            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                if (self.patternIntroducesValueBinding(destruct.kind.toPatternIdx())) break :blk true;
+            }
+            break :blk false;
+        },
+        .applied_tag => |tag| blk: {
+            for (self.cir.store.slicePatterns(tag.args)) |child| {
+                if (self.patternIntroducesValueBinding(child)) break :blk true;
+            }
+            break :blk false;
+        },
+        .nominal => |nominal| self.patternIntroducesValueBinding(nominal.backing_pattern),
+        .nominal_external => |nominal| self.patternIntroducesValueBinding(nominal.backing_pattern),
+        .list => |list| blk: {
+            for (self.cir.store.slicePatterns(list.patterns)) |child| {
+                if (self.patternIntroducesValueBinding(child)) break :blk true;
+            }
+            if (list.rest_info) |rest| {
+                if (rest.pattern) |child| break :blk self.patternIntroducesValueBinding(child);
+            }
+            break :blk false;
+        },
+        .str_interpolation => |str| blk: {
+            var offset: u32 = 0;
+            while (offset < str.steps.span.len) : (offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, offset);
+                if (step.capture != null) break :blk true;
+            }
+            break :blk false;
+        },
+        .underscore,
+        .runtime_error,
+        .num_literal,
+        .num_from_numeral_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        => false,
+    };
 }
 
 fn patternCanOwnHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) bool {
@@ -3302,12 +3402,8 @@ fn hoistKnownBindingAvailable(self: *Self, pattern: CIR.Pattern.Idx) bool {
 }
 
 fn shouldDeferHoistedBindingSelection(self: *const Self) bool {
-    for (self.hoist_frames.items) |frame| {
-        if (!frame.binding_rhs) continue;
-        if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(frame.expr))) continue;
-        return true;
-    }
-    return false;
+    if (self.hoist_frames.items.len == 0) return false;
+    return self.hoist_frames.items[self.hoist_frames.items.len - 1].hoist_position.allowsSelection();
 }
 
 fn ensureHoistedPatternExtractionRoot(
@@ -3319,18 +3415,6 @@ fn ensureHoistedPatternExtractionRoot(
     var transaction = HoistSelectionTransaction.init(self);
     defer transaction.deinit();
     const root_index = try transaction.stagePatternExtractionRoot(pattern, extraction);
-    try transaction.commit();
-    return root_index;
-}
-
-fn ensureHoistedPatternValidationRoot(
-    self: *Self,
-    validation: HoistPatternValidation,
-) Allocator.Error!u32 {
-    if (self.hoist_selected_pattern_validations.get(validation.scrutinee_pattern)) |root_index| return root_index;
-    var transaction = HoistSelectionTransaction.init(self);
-    defer transaction.deinit();
-    const root_index = try transaction.stagePatternValidationRoot(validation);
     try transaction.commit();
     return root_index;
 }
@@ -3646,7 +3730,7 @@ const HoistSelectionTestState = struct {
         checker.gpa = allocator;
         checker.hoist_frames = .empty;
         checker.hoist_expr_candidates = .empty;
-        checker.hoist_deferred_binding_dependencies = .empty;
+        checker.hoist_deferred_roots = .empty;
         checker.hoist_binding_candidates = .{};
         checker.hoist_binding_scope_patterns = .empty;
         checker.hoist_known_values = .{};
@@ -3668,7 +3752,7 @@ const HoistSelectionTestState = struct {
     fn deinit(self: *HoistSelectionTestState) void {
         self.checker.hoist_frames.deinit(self.allocator);
         self.checker.hoist_expr_candidates.deinit(self.allocator);
-        self.checker.hoist_deferred_binding_dependencies.deinit(self.allocator);
+        self.checker.hoist_deferred_roots.deinit(self.allocator);
         self.checker.hoist_binding_candidates.deinit(self.allocator);
         self.checker.hoist_binding_scope_patterns.deinit(self.allocator);
         var known_value_iter = self.checker.hoist_known_values.iterator();
@@ -3850,7 +3934,7 @@ test "hoist frame finish is atomic when child flush precedes deferred dependency
         var guard = try state.checker.beginHoistFrame(parent_expr, true, .eligible);
         defer guard.deinit();
         try state.checker.hoist_expr_candidates.append(std.testing.allocator, child_expr);
-        try state.checker.hoist_deferred_binding_dependencies.append(std.testing.allocator, dependency_pattern);
+        try state.checker.hoist_deferred_roots.append(std.testing.allocator, .{ .binding = dependency_pattern });
         try state.checker.recordHoistKnownValue(dependency_pattern, .{ .binding_rhs = child_expr });
         state.checker.markCurrentHoistRuntimeDependency();
 
@@ -3865,8 +3949,11 @@ test "hoist frame finish is atomic when child flush precedes deferred dependency
                 try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_frames.items.len);
                 try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_expr_candidates.items.len);
                 try std.testing.expectEqual(child_expr, state.checker.hoist_expr_candidates.items[0]);
-                try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_deferred_binding_dependencies.items.len);
-                try std.testing.expectEqual(dependency_pattern, state.checker.hoist_deferred_binding_dependencies.items[0]);
+                try std.testing.expectEqual(@as(usize, 1), state.checker.hoist_deferred_roots.items.len);
+                switch (state.checker.hoist_deferred_roots.items[0]) {
+                    .binding => |pattern| try std.testing.expectEqual(dependency_pattern, pattern),
+                    .pattern_validation => return error.ExpectedDeferredBindingRoot,
+                }
                 try std.testing.expectEqual(@as(usize, 0), state.checker.selected_hoisted_roots.items.len);
                 try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_selected_exprs.count());
                 try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_selected_bindings.count());
@@ -3884,7 +3971,7 @@ test "hoist frame finish is atomic when child flush precedes deferred dependency
 
         try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_frames.items.len);
         try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_expr_candidates.items.len);
-        try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_deferred_binding_dependencies.items.len);
+        try std.testing.expectEqual(@as(usize, 0), state.checker.hoist_deferred_roots.items.len);
         try std.testing.expectEqual(@as(usize, 1), state.checker.selected_hoisted_roots.items.len);
         try std.testing.expectEqual(child_expr, state.checker.selected_hoisted_roots.items[0].expr);
         try std.testing.expectEqual(dependency_pattern, state.checker.selected_hoisted_roots.items[0].pattern.?);
@@ -7516,6 +7603,20 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         if (root.pattern != null) kept_pattern_count += 1;
     }
 
+    // A validation keeps its dedicated root until solving has proved that the
+    // prospective maximal expression root is itself publishable. Only a kept
+    // owner may subsume the validation.
+    for (self.selected_hoisted_roots.items, 0..) |root, validation_index| {
+        if (!keep_roots[validation_index]) continue;
+        if (root.body != .pattern_validation) continue;
+        const owner_expr = root.validation_owner_expr orelse continue;
+        const owner_index = self.hoist_selected_exprs.get(owner_expr) orelse continue;
+        if (!keep_roots[owner_index]) continue;
+        keep_roots[validation_index] = false;
+        kept_count -= 1;
+        kept_validation_count -= 1;
+    }
+
     // A kept extraction evaluates the same scrutinee and complete source
     // pattern as its validation root. Let it own that exhaustiveness site so
     // the right-hand side is not evaluated twice. If the extraction's result
@@ -7576,7 +7677,7 @@ fn hoistedRootIsIntrinsicallyKept(
     root: *hoist_roots.SelectedHoistedRoot,
 ) Allocator.Error!bool {
     if (root.body == .pattern_validation) {
-        root.value_kind = .data_constant;
+        root.value_kind = .discarded;
         return true;
     }
 
@@ -7585,9 +7686,15 @@ fn hoistedRootIsIntrinsicallyKept(
     else
         ModuleEnv.varFrom(root.expr);
 
-    if (root.body == .pattern_extraction and self.selectedHoistedRootIsTopLevel(root.*)) {
-        root.value_kind = if (self.varIsFunctionType(type_var)) .callable_binding else .data_constant;
-        return true;
+    if (root.body == .pattern_extraction) {
+        const is_function = self.varIsFunctionType(type_var);
+        if (is_function or self.selectedHoistedRootIsTopLevel(root.*)) {
+            root.value_kind = if (is_function) .callable_binding else .data_constant;
+            return if (self.selectedHoistedRootIsTopLevel(root.*))
+                true
+            else
+                try self.varIsConcreteCallableRootType(type_var);
+        }
     }
 
     if (self.varIsFunctionType(type_var)) {
@@ -7621,7 +7728,13 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
 
 fn varIsConcreteHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    return try self.varIsConcreteHoistedConstTypeInternal(.value_graph, var_, &self.var_set);
+    return try self.varIsConcreteHoistedConstTypeInternal(.value_graph, .data_constant, var_, &self.var_set);
+}
+
+fn varIsConcreteCallableRootType(self: *Self, var_: Var) Allocator.Error!bool {
+    if (builtin.mode == .Debug) std.debug.assert(self.varIsFunctionType(var_));
+    self.var_set.clearRetainingCapacity();
+    return try self.varIsConcreteHoistedConstTypeInternal(.value_graph, .callable_binding, var_, &self.var_set);
 }
 
 /// Resolve a nominal application's declaration backing TEMPLATE for read-only
@@ -7655,6 +7768,12 @@ fn nominalDeclBackingTemplate(self: *const Self, nominal: types_mod.NominalType)
 /// checked, so they count as concrete).
 const HoistedConstWalk = enum { value_graph, decl_template };
 
+/// The representation whose complete checked type this walk is proving.
+/// Data archived in ConstStore must not contain a callable. A callable binding
+/// instead has an exact callable payload, so its signature may itself contain
+/// function types in argument and result positions.
+const HoistedRootTypePurpose = enum { data_constant, callable_binding };
+
 /// Copy a record's field value-type variables onto `scratch_record_field_vars`
 /// and return the start mark of the pushed batch. The batch is
 /// `[mark, scratch_record_field_vars.top())`; the caller reads it *by index* and
@@ -7681,6 +7800,7 @@ fn dupeRecordFieldTypeVars(self: *Self, presences: []const types_mod.RecordField
 fn varIsConcreteHoistedConstTypeInternal(
     self: *Self,
     comptime walk: HoistedConstWalk,
+    comptime purpose: HoistedRootTypePurpose,
     var_: Var,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
@@ -7694,20 +7814,21 @@ fn varIsConcreteHoistedConstTypeInternal(
         .field_presence,
         => false,
         .rigid => walk == .decl_template,
-        .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceAliasArgs(alias), visited)) and
-            try self.varIsConcreteHoistedConstTypeInternal(walk, self.types.getAliasBackingVar(alias), visited),
-        .structure => |flat| try self.flatTypeIsConcreteHoistedConst(walk, flat, visited),
+        .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceAliasArgs(alias), visited)) and
+            try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, self.types.getAliasBackingVar(alias), visited),
+        .structure => |flat| try self.flatTypeIsConcreteHoistedConst(walk, purpose, flat, visited),
     };
 }
 
 fn varsAreConcreteHoistedConstTypes(
     self: *Self,
     comptime walk: HoistedConstWalk,
+    comptime purpose: HoistedRootTypePurpose,
     vars: []const Var,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     for (vars) |var_| {
-        if (!try self.varIsConcreteHoistedConstTypeInternal(walk, var_, visited)) return false;
+        if (!try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, var_, visited)) return false;
     }
     return true;
 }
@@ -7715,6 +7836,7 @@ fn varsAreConcreteHoistedConstTypes(
 fn flatTypeIsConcreteHoistedConst(
     self: *Self,
     comptime walk: HoistedConstWalk,
+    comptime purpose: HoistedRootTypePurpose,
     flat: FlatType,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
@@ -7722,38 +7844,35 @@ fn flatTypeIsConcreteHoistedConst(
         .empty_record,
         .empty_tag_union,
         => true,
-        // Archiving a value copies it: the ConstStore holds no allocation
-        // identity, so a callable reached from an archived value is rebuilt
-        // per restore and a source value that reaches two roots becomes two
-        // runtime callables. Platforms read a boxed callable's pointer as the
-        // value's identity, so a value containing one is never archived.
-        .fn_pure, .fn_effectful, .fn_unbound => false,
+        .fn_pure, .fn_effectful, .fn_unbound => |func| purpose == .callable_binding and
+            (try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceVars(func.args), visited)) and
+            try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, func.ret, visited),
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
             for (fields.items(.presence)) |presence| {
                 const field_var = presence.typeVar();
-                if (!try self.varIsConcreteHoistedConstTypeInternal(walk, field_var, visited)) break :blk false;
+                if (!try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, field_var, visited)) break :blk false;
             }
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, record.ext, visited);
+            break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, record.ext, visited);
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.presence)) |presence| {
                 const field_var = presence.typeVar();
-                if (!try self.varIsConcreteHoistedConstTypeInternal(walk, field_var, visited)) break :blk false;
+                if (!try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, field_var, visited)) break :blk false;
             }
             break :blk true;
         },
-        .tuple => |tuple| try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceVars(tuple.elems), visited),
+        .tuple => |tuple| try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceVars(tuple.elems), visited),
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |tag_args| {
-                if (!try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceVars(tag_args), visited)) break :blk false;
+                if (!try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceVars(tag_args), visited)) break :blk false;
             }
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, tag_union.ext, visited);
+            break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, tag_union.ext, visited);
         },
         .nominal_type => |nominal| blk: {
-            if (!try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceNominalArgs(nominal), visited)) break :blk false;
+            if (!try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceNominalArgs(nominal), visited)) break :blk false;
             if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| {
                 switch (builtin_decl) {
                     .list,
@@ -7774,7 +7893,7 @@ fn flatTypeIsConcreteHoistedConst(
             // template walk admits rigids. Opacity hides the backing from
             // source, not from archiving, which copies it.
             const template = self.nominalDeclBackingTemplate(nominal) orelse break :blk false;
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(.decl_template, template, visited);
+            break :blk try self.varIsConcreteHoistedConstTypeInternal(.decl_template, purpose, template, visited);
         },
     };
 }
@@ -8450,8 +8569,9 @@ fn hoistedRootStatementDependenciesAreKept(
     return switch (self.cir.store.getStatement(statement)) {
         .s_decl => |decl| blk: {
             if (!try self.hoistedRootDependenciesAreKeptInternal(decl.expr, context, keep_oracle)) break :blk false;
-            if (!try self.hoistedRootPatternSelectedDependenciesAreKept(decl.pattern, keep_oracle)) break :blk false;
-            if (!try self.hoistedRootPatternBindersAreConcrete(decl.pattern)) break :blk false;
+            // Binders introduced and consumed inside this root are transient
+            // evaluation state. They need neither separate selected roots nor
+            // representation-stable static types.
             try self.appendHoistedDependencyPatternBinders(decl.pattern, context, .internal);
             break :blk true;
         },
@@ -8493,7 +8613,8 @@ fn hoistedRootMatchDependenciesAreKept(
         defer context.pop(mark);
         for (self.cir.store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
             const branch_pattern = self.cir.store.getMatchBranchPattern(branch_pattern_idx);
-            if (!try self.hoistedRootPatternBindersAreConcrete(branch_pattern.pattern)) return false;
+            // Branch binders are likewise local to the root evaluation; only
+            // the selected root's result must have a storable concrete type.
             try self.appendHoistedDependencyPatternBinders(branch_pattern.pattern, context, .contextual);
         }
         if (branch.guard) |guard| {
@@ -16556,7 +16677,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     }
                 }
                 if (self.shouldDeferHoistedBindingSelection() and self.hoistKnownBindingAvailable(lookup.pattern_idx)) {
-                    try self.hoist_deferred_binding_dependencies.append(self.gpa, lookup.pattern_idx);
+                    try self.hoist_deferred_roots.append(self.gpa, .{ .binding = lookup.pattern_idx });
                     break :known true;
                 }
                 if (try self.ensureHoistedBindingRoot(lookup.pattern_idx)) break :known true;
@@ -18939,7 +19060,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 if (decl_pattern_result.isEstablished()) {
                     const needs_comptime_validation = try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
                     if (needs_comptime_validation) {
-                        try self.selectPendingDestructureValidationRoot(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
+                        try self.recordHoistPatternValidationCandidate(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
                     }
                     try self.recordHoistPatternProvenance(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
                 }

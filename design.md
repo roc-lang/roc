@@ -2161,16 +2161,39 @@ never as runtime-local pattern references.
 A non-exhaustive destructure in an unguarded runtime position is itself a strict
 compile-time demand when its right-hand side is top-level-equivalent. This demand
 does not depend on whether the pattern contains a binder or whether any binder is
-later referenced. The checker selects a unit-valued pattern-validation root that
-evaluates the right-hand side and matches the complete source pattern. Binder
-extractions remain liveness-driven. After solving, a selected concrete extraction
-subsumes the matching validation root so a live binder does not make the
-right-hand side evaluate twice; with no selected concrete extraction, the
-unit-valued validation root remains and no dead binder value is archived.
-The pending exhaustiveness site is explicitly classified for empirical
-compile-time validation only after this root selection succeeds. No validation
-root is selected inside an ordinary top-level constant, because that enclosing
-root already evaluates and owns the destructure site.
+later referenced. The checker records the complete checked source pattern and
+right-hand side as a deferred validation candidate, together with the prospective
+maximal expression root that can own its evaluation. The candidate retains a
+dedicated validation root until post-solve pruning proves that the expression
+owner or a concrete live-binder extraction was actually kept. This prevents a
+non-concrete or otherwise rejected prospective owner from losing the validation,
+while a kept owner prevents the right-hand side from evaluating twice.
+
+A surviving validation-only root evaluates the right-hand side and matches the
+complete source pattern, but its successful result is discarded rather than
+archived as a unit constant. A binder-free source declaration may then be erased
+from runtime lowering. The pending exhaustiveness site is explicitly classified
+for empirical compile-time validation when the eligible candidate is recorded.
+No candidate is recorded inside an ordinary top-level constant, because that
+enclosing root already evaluates and owns the destructure site. Validation uses
+the checked pattern compiler and compile-time evaluator; it never reinterprets
+source patterns separately.
+
+Local binding dependencies likewise remain candidates until their enclosing
+expression is either selected or rejected. A selected maximal parent owns the
+computation and its transient binders, including callable-typed binders that
+never enter static storage. Only when no eligible parent can own the use does the
+dependency become its own data or callable extraction root. Consequently
+selection does not duplicate a closed computation merely because a nested value
+is named, and the representation requirements of the root result never constrain
+transient local or match-branch binders.
+
+A callable extraction root is admitted only when the extracted value is itself
+a function and its complete checked signature is concrete. The checker records
+it as one exact callable root, never as ConstStore data. Data roots use a separate
+concreteness purpose that rejects a function anywhere in their stored type, so a
+value containing a callable remains one ordinary runtime allocation rather than
+being copied into independently restored callables.
 
 Hoisted-root selection is positional as well as dependency-based. Selection may
 fire only in structurally unguarded positions of runtime bodies, and the checker

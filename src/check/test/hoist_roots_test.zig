@@ -894,6 +894,7 @@ test "hoist roots publish top-level destructure binders used by executable roots
         switch (root.value_kind) {
             .data_constant => data_constant_count += 1,
             .callable_binding => callable_binding_count += 1,
+            .discarded => return error.TestUnexpectedResult,
         }
     }
     try std.testing.expectEqual(@as(usize, 3), data_constant_count);
@@ -1264,7 +1265,7 @@ test "hoist roots with non-concrete compile-time types are pruned" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist arbitrary block roots with non-concrete internal locals are pruned" {
+test "hoist block roots admit non-concrete transient internal locals" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1280,10 +1281,10 @@ test "hoist arbitrary block roots with non-concrete internal locals are pruned" 
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist nested block roots with non-concrete destructured internal binders are pruned" {
+test "hoist block roots admit non-concrete transient destructure binders" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1299,10 +1300,10 @@ test "hoist nested block roots with non-concrete destructured internal binders a
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist match roots with non-concrete contextual binders are pruned" {
+test "hoist match roots admit non-concrete transient contextual binders" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1317,10 +1318,10 @@ test "hoist match roots with non-concrete contextual binders are pruned" {
     defer test_env.deinit();
 
     try expectOnlyComptimeConditionWarnings(&test_env, 1);
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots depending on pruned non-concrete roots are pruned" {
+test "hoist roots admit non-concrete transient dependencies" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
         \\    x = []
@@ -1331,7 +1332,7 @@ test "hoist roots depending on pruned non-concrete roots are pruned" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
 }
 
 test "hoist roots depending on pruned custom literal roots are pruned" {
