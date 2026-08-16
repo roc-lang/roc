@@ -40,7 +40,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v20: statements carry virtual inline-scope ids and the image stores the
 ///      corresponding source-procedure/call-site graph.
 /// v21: erased calls and procedures carry explicit packed-argument plans.
-pub const FORMAT_VERSION: u32 = 22;
+/// v22: combines the independent v20 and v21 image changes.
+/// v23: Boxy type descriptors identify field-presence slots explicitly.
+pub const FORMAT_VERSION: u32 = 23;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -1161,6 +1163,7 @@ test "LIR image views empty and populated boxy tables" {
         .nested_descs = .{ .start = 0, .len = 1 },
         .tag_variants = .{ .start = 0, .len = 1 },
         .copy_plan = .{ .start = 0, .len = 1 },
+        .presence_slot_present_discriminant = 1,
         .inspect_method = @enumFromInt(fixtureTableIndex(0)),
     });
     try lowered.boxy_dicts.append(allocator, .{
@@ -1220,6 +1223,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_hidden_desc_sources.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_erased_arg_layouts.len);
     try std.testing.expect(populated_view.boxy_type_descs[0].contains_refcounted);
+    try std.testing.expectEqual(@as(?u16, 1), populated_view.boxy_type_descs[0].presence_slot_present_discriminant);
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(populated_view.boxy_type_descs[0].inspect_method.?));
     try std.testing.expectEqual(@as(u16, 0), populated_view.boxy_tag_variants[0].discriminant);
     try std.testing.expectEqualStrings("Ok", populated_view.store.getString(populated_view.boxy_tag_variants[0].name));

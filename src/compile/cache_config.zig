@@ -146,8 +146,9 @@ pub const Constants = struct {
     ///     numeric range hooks explicitly delegate to that representation.
     /// 60: Checked modules retain explicit rank-1 binding-scheme identities.
     /// 61: Static dispatch constraints no longer serialize checker-local expect regions.
-    /// 62: ModuleEnv retains canonicalization-selected top-level and value-binding definitions.
-    pub const CACHE_VERSION = 62;
+    /// 62: For-loop dispatch plans retain explicit iterator and step type variables.
+    /// 63: ModuleEnv retains canonicalization-selected top-level and value-binding definitions.
+    pub const CACHE_VERSION = 63;
 };
 
 /// Configuration for the Roc cache system.

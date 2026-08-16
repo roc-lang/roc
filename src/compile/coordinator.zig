@@ -6346,6 +6346,7 @@ fn hashPatternExtractionRegionsForView(
         const extraction = switch (body) {
             .expr => continue,
             .pattern_extraction => |payload| payload,
+            .pattern_validation => continue,
         };
         count.* += 1;
 
