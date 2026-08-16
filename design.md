@@ -1416,8 +1416,8 @@ whose value post-check lowering must still instantiate.
 Because `.err` no longer merges, it also no longer relates the operands unified
 against it. A checker site that only needs diagnostic recovery may accept both
 `unified` and `suppressed_by_error`. A site that uses the relation as evidence
-for a speculative commit, a shared representative, dispatch success, or other
-published metadata whose validity depends on the whole requested relation must
+for a speculative commit, a shared representative, dispatch success, or another
+checked output whose validity depends on the whole requested relation must
 require `unified`; `suppressed_by_error` cannot authorize that action. Evidence
 for a child relation that completed before suppression remains independently
 valid. A site that relies on one variable to carry a relation between several
