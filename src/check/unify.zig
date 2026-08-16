@@ -174,6 +174,54 @@ pub const RootRelation = enum {
     nominal_constructor_backing,
 };
 
+/// Whether a `nominal_constructor_backing` pair would use ordinary
+/// structural-to-nominal lifting in the inverse direction: an anonymous
+/// expected backing accepting an already-nominal actual operand.
+pub fn constructorBackingInverseLifts(types_store: *types_mod.Store, expected: Var, actual: Var) bool {
+    return constructorBackingIsAnonymous(types_store, expected) and
+        constructorBackingActualIsNominal(types_store, actual);
+}
+
+/// Whether the expected side of a constructor-backing pair is the anonymous
+/// structure an already-nominal actual must not lift back through.
+///
+/// A successful relation merges the two operands into one class, so this side's
+/// verdict is only meaningful before the relation runs. The declaration fixes
+/// the shape, so the pre-relation answer stays the right one afterwards.
+pub fn constructorBackingIsAnonymous(types_store: *types_mod.Store, expected: Var) bool {
+    const expected_content = contentThroughAliasesOrNull(types_store, expected) orelse return false;
+    return std.meta.activeTag(expected_content) == .structure and
+        std.meta.activeTag(expected_content.structure) != .nominal_type;
+}
+
+/// Whether the actual side of a constructor-backing pair has already lifted to
+/// a nominal.
+///
+/// This is decided from the operand's solved shape, and unification can widen
+/// that shape after the relation runs, so the checker re-decides this side
+/// against the settled graph (see design.md, "Settled-State Re-Decision").
+pub fn constructorBackingActualIsNominal(types_store: *types_mod.Store, actual: Var) bool {
+    const actual_content = contentThroughAliasesOrNull(types_store, actual) orelse return false;
+    if (std.meta.activeTag(actual_content) != .structure) return false;
+    const actual_flat = actual_content.structure;
+    if (std.meta.activeTag(actual_flat) != .nominal_type) return false;
+    return !types_store.nominalDeclIsInvalid(actual_flat.nominal_type);
+}
+
+/// Only a cyclic alias declaration can walk further than the store holds, and
+/// declaration validity rejects those before any value is checked, so the
+/// exhausted walk reports no shape and both callers above decide `false`.
+fn contentThroughAliasesOrNull(types_store: *types_mod.Store, start: Var) ?Content {
+    var current = start;
+    var remaining = types_store.len();
+    while (remaining > 0) : (remaining -= 1) {
+        const content = types_store.resolveVar(current).desc.content;
+        if (std.meta.activeTag(content) != .alias) return content;
+        current = types_store.getAliasBackingVar(content.alias);
+    }
+    return null;
+}
+
 /// Whether a unification relation may add optional/defaulted fields while
 /// checking a fresh record construction. Committed values and external
 /// boundaries use `exact` so their fixed layouts cannot widen.
@@ -569,37 +617,12 @@ const Unifier = struct {
     }
 
     fn processRootPair(self: *Self, a_var: Var, b_var: Var, relation: RootRelation) Error!void {
-        if (relation == .nominal_constructor_backing and try self.constructorBackingWouldInverseLift(a_var, b_var)) {
+        if (relation == .nominal_constructor_backing and
+            constructorBackingInverseLifts(self.types_store, a_var, b_var))
+        {
             return error.TypeMismatch;
         }
         try self.processGuardedPair(a_var, b_var);
-    }
-
-    fn contentThroughAliases(self: *Self, start: Var) Error!Content {
-        var current = start;
-        var remaining = self.types_store.len();
-        while (remaining > 0) : (remaining -= 1) {
-            const content = self.types_store.resolveVar(current).desc.content;
-            if (std.meta.activeTag(content) != .alias) return content;
-            current = self.types_store.getAliasBackingVar(content.alias);
-        }
-        return error.TypeMismatch;
-    }
-
-    /// Whether the root constructor-backing pair would use ordinary
-    /// structural-to-nominal lifting in the inverse direction: an anonymous
-    /// expected backing accepting an already-nominal actual operand.
-    fn constructorBackingWouldInverseLift(self: *Self, expected: Var, actual: Var) Error!bool {
-        const actual_content = try self.contentThroughAliases(actual);
-        if (std.meta.activeTag(actual_content) != .structure) return false;
-        const actual_flat = actual_content.structure;
-        if (std.meta.activeTag(actual_flat) != .nominal_type) return false;
-        const actual_nominal = actual_flat.nominal_type;
-        if (self.types_store.nominalDeclIsInvalid(actual_nominal)) return false;
-
-        const expected_content = try self.contentThroughAliases(expected);
-        return std.meta.activeTag(expected_content) == .structure and
-            std.meta.activeTag(expected_content.structure) != .nominal_type;
     }
 
     fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {

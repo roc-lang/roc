@@ -1489,6 +1489,37 @@ type mismatch diagnostic. The rejected side is pinned by
 nested-nominal and implicit-record-update controls are pinned in
 `src/check/test/type_checking_integration.zig`.
 
+The rejection is owned by the constructor expression alone. The operand's solved
+class belongs to an ordinary value that keeps flowing—in the rewrap case
+`..receiver` has already lifted the update to the nominal, so the operand's class
+*is* the receiver's—and poisoning a class other expressions still read leaves
+erroneous types on nodes Monotype must instantiate. So the relation reports its
+own diagnostic instead of poisoning either operand, and only the constructor's
+own var becomes erroneous.
+
+### Settled-State Re-Decision
+
+Whether the operand has already lifted to a nominal is decided from its solved
+shape, and unification can widen that shape after the relation runs: an operand
+that is still an open row when the constructor is checked—an inline lambda
+parameter, say—lifts to the nominal once a later call pins it. The rule is
+therefore decided twice, and the second verdict is the binding one: every
+accepted relation whose expected backing was anonymous is re-decided against the
+settled graph, and one that now inverse-lifts is rejected there. This is what
+makes the verdict independent of where the constructor happens to be written, so
+the same program is accepted or rejected whether its lambda is written inline or
+extracted to an annotated top-level function.
+
+A relation accepted at check time has already handed the constructor's result
+type to every consumer, so the settled-state rejection reports the same
+nominal-constructor mismatch and replaces the constructor with a runtime error
+without poisoning any var. The rejected side is pinned by
+`test/snapshots/issue/issue_10788_nominal_record_update_rewrap_deferred.md` and
+by the CLI specs on `test/cli/issue_10788_nominal_record_update_rewrap/`; the
+accepted control—the same constructor built from a fresh record literal in the
+same inline-lambda position—is pinned by
+`test/snapshots/issue/issue_10788_nominal_record_construction_in_lambda.md`.
+
 ## Module Completion Boundary
 
 The compile coordinator records phase progress separately from user diagnostics.

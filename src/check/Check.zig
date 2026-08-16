@@ -527,6 +527,9 @@ erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Every accepted explicit nominal constructor backing relation, for the
+/// settled-state re-decision in `recheckNominalConstructorBackings`.
+accepted_nominal_constructor_backings: std.ArrayListUnmanaged(AcceptedNominalConstructorBacking),
 /// Stack of expressions currently being checked for top-level-equivalent
 /// compile-time hoisting. This is temporary checker state only.
 hoist_frames: std.ArrayListUnmanaged(HoistFrame),
@@ -2053,6 +2056,21 @@ const ValueLookupEntry = struct {
     pattern_idx: CIR.Pattern.Idx,
 };
 
+/// One accepted explicit nominal constructor backing relation, kept so the
+/// settled state can re-decide the rule the relation applied.
+///
+/// A successful relation merges its two operands, so the expected side is no
+/// longer readable from the merged class; the nominal application it came from
+/// is what gets recorded, and the settled state re-opens that application's
+/// backing to describe the rejection.
+const AcceptedNominalConstructorBacking = struct {
+    expr_idx: CIR.Expr.Idx,
+    nominal_type: types_mod.NominalType,
+    actual_backing: Var,
+    region: Region,
+    context: problem.Context.NominalConstructorContext,
+};
+
 /// A struct scratch info about a static dispatch constraint
 const ScratchStaticDispatchConstraint = struct {
     where_clause: CIR.WhereClause.Idx,
@@ -2359,6 +2377,7 @@ fn initAssumePrepared(
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
         .erroneous_value_patterns = .empty,
+        .accepted_nominal_constructor_backings = .empty,
         .hoist_frames = .empty,
         .hoist_expr_candidates = .empty,
         .hoist_deferred_binding_dependencies = .empty,
@@ -2468,6 +2487,7 @@ pub fn deinit(self: *Self) void {
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
+    self.accepted_nominal_constructor_backings.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
     self.hoist_expr_candidates.deinit(self.gpa);
     self.hoist_deferred_binding_dependencies.deinit(self.gpa);
@@ -4617,9 +4637,24 @@ fn unifyOwnedRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary);
+}
+
+/// `unifyOwnedRelation` for a relation whose initial pair carries a root
+/// relation beyond ordinary unification.
+fn unifyOwnedRootRelation(
+    self: *Self,
+    expected: Var,
+    actual: Var,
+    env: *Env,
+    ctx: problem.Context,
+    row_width_relation: unifier.RowWidthRelation,
+    root_relation: unifier.RootRelation,
+) std.mem.Allocator.Error!unifier.Result {
     const result = try self.runUnify(expected, actual, env, .{
         .context = ctx,
         .on_mismatch = .write_no_report,
+        .root_relation = root_relation,
         .row_width_relation = row_width_relation,
         .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
         .record_construction_var = if (row_width_relation == .construction) actual else null,
@@ -4640,6 +4675,12 @@ fn unifyOwnedRelation(
     return .{ .problem = problem_idx };
 }
 
+/// The constructor's operand is an ordinary value expression whose solved class
+/// is shared with everything else that value flows through—in the very case
+/// this relation exists to reject, `..receiver` has already lifted the update to
+/// the nominal, so the operand's class *is* the receiver's. Rejecting the
+/// constructor therefore owns the diagnostic and poisons only the constructor
+/// node; the receiver keeps the type it legitimately has.
 fn unifyNominalConstructorBacking(
     self: *Self,
     expected_backing: Var,
@@ -4648,12 +4689,14 @@ fn unifyNominalConstructorBacking(
     ctx: problem.Context.NominalConstructorContext,
     row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
-    return self.runUnify(expected_backing, actual_backing, env, .{
-        .context = .{ .nominal_constructor = ctx },
-        .root_relation = .nominal_constructor_backing,
-        .row_width_relation = row_width_relation,
-        .field_presence_relation = if (row_width_relation == .exact) .committed_value else .ordinary,
-    });
+    return self.unifyOwnedRootRelation(
+        expected_backing,
+        actual_backing,
+        env,
+        .{ .nominal_constructor = ctx },
+        row_width_relation,
+        .nominal_constructor_backing,
+    );
 }
 
 /// Check if a variable contains an infinite type after solving a binding.
@@ -4726,6 +4769,57 @@ fn checkBindingRootsForInfiniteTypes(self: *Self) std.mem.Allocator.Error!void {
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
+    }
+}
+
+/// The settled-state re-decision of every accepted explicit nominal constructor
+/// backing relation.
+///
+/// The relation rejects lifting an already-nominal operand back through an
+/// anonymous expected backing. That is decided from the operand's solved shape,
+/// and unification can widen the shape after the relation runs: an operand that
+/// was still an open row when the constructor was checked lifts to the nominal
+/// once a later call pins it, which is exactly the shape the rule exists to
+/// reject. Re-deciding here is what makes the rule's verdict independent of
+/// where the constructor happens to be written.
+///
+/// A constructor rejected here has already handed its result type to every
+/// consumer, so poisoning the target var would corrupt the annotation classes it
+/// merged into. Only the constructor expression becomes a runtime error.
+fn recheckNominalConstructorBackings(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    for (self.accepted_nominal_constructor_backings.items) |accepted| {
+        if (!unifier.constructorBackingActualIsNominal(self.types, accepted.actual_backing)) continue;
+        if (self.cir.store.getExpr(accepted.expr_idx) == .e_runtime_error) continue;
+
+        // Re-open the declaration the relation compared against, so the report
+        // names the same expected backing a relation-time rejection does. A
+        // declaration that no longer opens is invalid and already reported at
+        // the declaration, so this use stays silent exactly as it does there.
+        const expected_backing = (try self.openNominalBackingForApp(
+            accepted.nominal_type,
+            env,
+            accepted.region,
+        )) orelse continue;
+
+        const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_backing);
+        const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, accepted.actual_backing);
+        _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+            .types = .{
+                .expected_var = expected_backing,
+                .expected_snapshot = expected_snapshot,
+                .actual_var = accepted.actual_backing,
+                .actual_snapshot = actual_snapshot,
+            },
+            .context = .{ .nominal_constructor = accepted.context },
+        } });
+
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(accepted.expr_idx),
+        } });
+        try self.replaceExprWithRuntimeError(accepted.expr_idx, diagnostic_idx);
     }
 }
 
@@ -7168,6 +7262,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // After solving all deferred constraints, check every binding root
     // (top-level defs and local bindings) for infinite types
     try self.checkBindingRootsForInfiniteTypes();
+    try self.recheckNominalConstructorBackings(&env);
 
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
@@ -11131,6 +11226,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // root the expression contains
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
     try self.checkBindingRootsForInfiniteTypes();
+    try self.recheckNominalConstructorBackings(&env);
     try self.finalizeExpectEffectSlots();
 
     try self.finalizeBindingSchemeNodes();
@@ -11232,6 +11328,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // reasons documented there.
     try self.defaultLiteralFieldKinds(&env);
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
+    try self.recheckNominalConstructorBackings(&env);
 
     try self.reportPolymorphicConstrainedExpr(expr_idx);
     try self.poisonErroneousValueUses();
@@ -14945,6 +15042,7 @@ fn checkPatternHelp(
                 pattern_region,
                 env,
                 .exact,
+                null,
             );
         },
         .nominal_external => |nominal| {
@@ -14962,6 +15060,7 @@ fn checkPatternHelp(
                     pattern_region,
                     env,
                     .exact,
+                    null,
                 );
             } else {
                 try self.markErroneous(pattern_var);
@@ -16195,6 +16294,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 expr_region,
                 env,
                 if (self.exprIsFreshRecordConstruction(nominal.backing_expr)) .construction else .exact,
+                expr_idx,
             );
         },
         .e_nominal_external => |nominal| {
@@ -16214,6 +16314,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_region,
                     env,
                     if (self.exprIsFreshRecordConstruction(nominal.backing_expr)) .construction else .exact,
+                    expr_idx,
                 );
             } else {
                 try self.markErroneous(expr_var);
@@ -21545,6 +21646,9 @@ fn openNominalBackingForApp(
 /// - backing_type: The kind of backing type (tag, record, tuple, value)
 /// - region: The source region for instantiation
 /// - env: The type checking environment
+/// - owner_expr: the constructor expression, for the expression forms. A
+///   nominal pattern's backing is a sub-pattern of the same pattern rather than
+///   a value that keeps flowing, so the pattern forms pass null.
 fn checkNominalTypeUsage(
     self: *Self,
     target_var: Var,
@@ -21554,6 +21658,7 @@ fn checkNominalTypeUsage(
     region: Region,
     env: *Env,
     row_width_relation: unifier.RowWidthRelation,
+    owner_expr: ?CIR.Expr.Idx,
 ) std.mem.Allocator.Error!NominalCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -21595,11 +21700,18 @@ fn checkNominalTypeUsage(
         //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
         // Convert CIR.Expr.NominalBackingType to Context.NominalConstructorContext.BackingType
         const context_backing_type: problem.Context.NominalConstructorContext.BackingType = @enumFromInt(@intFromEnum(backing_type));
+        const constructor_context: problem.Context.NominalConstructorContext = .{ .backing_type = context_backing_type };
+        // Only an anonymous expected backing can be inverse-lifted through, and
+        // an accepted relation merges that side away, so the settled state can
+        // no longer read it: take the verdict here, while it still means
+        // something, and record the relation only when the rule can apply.
+        const recheck_at_settled_state = owner_expr != null and
+            unifier.constructorBackingIsAnonymous(self.types, nominal_backing_var);
         const result = try self.unifyNominalConstructorBacking(
             nominal_backing_var,
             actual_backing_var,
             env,
-            .{ .backing_type = context_backing_type },
+            constructor_context,
             row_width_relation,
         );
 
@@ -21609,17 +21721,25 @@ fn checkNominalTypeUsage(
                 // If unification succeeded, this is a valid instance of the nominal type
                 // So we set the target's type to be the nominal type
                 _ = try self.unify(target_var, nominal_var, env);
+                if (recheck_at_settled_state) {
+                    try self.accepted_nominal_constructor_backings.append(self.gpa, .{
+                        .expr_idx = owner_expr.?,
+                        .nominal_type = nominal_type,
+                        .actual_backing = actual_backing_var,
+                        .region = region,
+                        .context = constructor_context,
+                    });
+                }
                 return .ok;
             },
-            // `.mismatch` cannot occur here (this path never passes
-            // `write_no_report`), but a reported problem and an unreported
-            // mismatch both mean the constructor is incompatible.
+            // `.mismatch` cannot occur here: `unifyNominalConstructorBacking`
+            // owns the diagnostic and always reports, so it only ever returns
+            // `.ok`/`.problem`. Both non-ok results mean the constructor is
+            // incompatible with the nominal type, so they share an arm.
             .problem, .mismatch => {
-                // Unification failed - the constructor is incompatible with the nominal type
-                // Context is already set by unifyInContext
-                // (`.mismatch` is unreachable here—this call uses the poison_to_err
-                // wrapper, which only returns `.ok`/`.problem`—grouped for exhaustiveness.)
-                // Mark the entire expression as having a type error
+                // Only the constructor node becomes erroneous. Its operand keeps
+                // the type it legitimately has, so every other expression that
+                // shares that solved class stays lowerable.
                 try self.markErroneous(target_var);
                 return .err;
             },
