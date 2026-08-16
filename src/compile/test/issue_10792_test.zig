@@ -2,7 +2,7 @@
 //!
 //! A hosted procedure exists only where the platform header's `hosted` section
 //! binds it to a linker symbol. An annotation-only declaration the section
-//! cannot name — one in the platform's own root module — is a declaration
+//! cannot name—one in the platform's own root module—is a declaration
 //! without a value, and one the section simply omits is an invalid hosted
 //! section. Both are reported to the author, and neither aborts the compiler
 //! when the platform also carries a compile-time root.
@@ -109,8 +109,8 @@ test "issue 10792: a hosted declaration the platform header omits reports an inv
             .name = "Host.roc",
             .source =
             \\Host := [].{
-            \\    double! : I64 => I64,
-            \\    triple! : I64 => I64,
+            \\    double! : I64 => I64
+            \\    triple! : I64 => I64
             \\}
             \\
             ,

@@ -11984,7 +11984,16 @@ fn lowerCheckedSourceToLir(
     target_usize: base.target.TargetUsize,
     proc_debug_names: bool,
     timing: ?*lir.CheckedPipeline.Timing,
-) Allocator.Error!lir.CheckedPipeline.LoweredProgram {
+) (Allocator.Error || error{CompilationFailed})!lir.CheckedPipeline.LoweredProgram {
+    // A hosted declaration the platform's `hosted` section never bound has no
+    // linker symbol and no dispatch slot, so there is nothing to emit for it and
+    // nothing for a host to link against. Checking reports that as an invalid
+    // hosted section, which every caller renders before lowering; stop here
+    // rather than lowering a host boundary that cannot link.
+    if (check.CheckedArtifact.hasUnboundHostedDeclarations(root_artifact, imported_artifacts, relation_artifacts)) {
+        return error.CompilationFailed;
+    }
+
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
         .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -12757,7 +12766,7 @@ fn lowerPlannedTestModule(
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
     timing: ?*lir.CheckedPipeline.Timing,
-) Allocator.Error!CliLoweredTestModule {
+) (Allocator.Error || error{CompilationFailed})!CliLoweredTestModule {
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, planned.artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, planned.artifact);
@@ -12821,7 +12830,7 @@ fn runCheckedArtifactTests(
     module_results: *std.ArrayList(CliModuleTestResult),
     timing: ?*lir.CheckedPipeline.Timing,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
-) (Allocator.Error || error{NoHomeDirectory})!CliTestRunSummary {
+) (Allocator.Error || error{ CompilationFailed, NoHomeDirectory })!CliTestRunSummary {
     const module = planned.module;
     const artifact = planned.artifact;
     var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt, specialization_strategy, timing);
@@ -13120,7 +13129,7 @@ fn runOptimizedTestPlan(
     total: *CliTestRunSummary,
     live_output: ?*CliOptimizedLiveTestOutput,
     timing: ?*lir.CheckedPipeline.Timing,
-) (ReportRenderError || error{NoHomeDirectory})!void {
+) (ReportRenderError || error{ CompilationFailed, NoHomeDirectory })!void {
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .llvm_size, .llvm_speed => {},

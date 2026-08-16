@@ -4296,7 +4296,10 @@ const ProcedureBuilder = struct {
                 return switch (std.mem.order(u8, a.order, b.order)) {
                     .lt => true,
                     .gt => false,
-                    .eq => a.def_idx < b.def_idx,
+                    .eq => if (a.def_idx != b.def_idx)
+                        a.def_idx < b.def_idx
+                    else
+                        std.mem.order(u8, &a.module_key.bytes, &b.module_key.bytes) == .lt,
                 };
             }
         };

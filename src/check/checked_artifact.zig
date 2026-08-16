@@ -30481,6 +30481,61 @@ pub const ImportedModuleView = struct {
     const_store: *const ConstStore,
 };
 
+/// Whether some module in scope declares a hosted procedure that the platform's
+/// `hosted` section never bound.
+///
+/// Such a declaration has no linker symbol and no dispatch slot, so a runtime
+/// lowering that reaches it has nothing to emit. Checking already reports the
+/// omission as an invalid hosted section; a driver consumes this to stop after
+/// rendering that diagnostic rather than lowering a host boundary that cannot
+/// link. A program checking accepted never trips it, because every declaration
+/// the section omits is an error there.
+pub fn hasUnboundHostedDeclarations(
+    root: *const CheckedModuleArtifact,
+    imports: []const ImportedModuleView,
+    relations: []const ImportedModuleView,
+) bool {
+    const bindings = hostedBindingsInScope(root, imports, relations) orelse return false;
+    if (viewDeclaresUnboundHostedProc(importedView(root), bindings)) return true;
+    for (imports) |view| {
+        if (viewDeclaresUnboundHostedProc(view, bindings)) return true;
+    }
+    for (relations) |view| {
+        if (viewDeclaresUnboundHostedProc(view, bindings)) return true;
+    }
+    return false;
+}
+
+/// The platform's hosted binding table, if a platform module is in scope.
+fn hostedBindingsInScope(
+    root: *const CheckedModuleArtifact,
+    imports: []const ImportedModuleView,
+    relations: []const ImportedModuleView,
+) ?*const HostedBindingTable {
+    if (root.module_identity.kind == .platform) return &root.hosted_bindings;
+    for (imports) |view| {
+        if (view.module_identity.kind == .platform) return view.hosted_bindings;
+    }
+    for (relations) |view| {
+        if (view.module_identity.kind == .platform) return view.hosted_bindings;
+    }
+    return null;
+}
+
+fn viewDeclaresUnboundHostedProc(view: ImportedModuleView, bindings: *const HostedBindingTable) bool {
+    for (view.hosted_procs.procs) |proc| {
+        var bound = false;
+        for (bindings.bindings) |binding| {
+            if (!std.mem.eql(u8, &binding.target_checked_module.bytes, &view.key.bytes)) continue;
+            if (binding.target_def != proc.def_idx) continue;
+            bound = true;
+            break;
+        }
+        if (!bound) return true;
+    }
+    return false;
+}
+
 /// Public `LoweringModuleView` declaration.
 pub const LoweringModuleView = struct {
     module: *const CheckedModuleArtifact,

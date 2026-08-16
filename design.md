@@ -10472,10 +10472,9 @@ section is also the complete set: post-check lowering builds its hosted
 catalog from the checked hosted binding table checking outputs for that
 section, so a hosted declaration the section omits has no symbol and no slot.
 Checking reports that omission as an invalid hosted section rather than
-lowering discovering it. Two
-byte-identical modules whose effectful declarations are wired to different
-symbols stay distinct because the platform header that assigns those symbols
-is the data that separates them. `provides` follows the same rule: the
+lowering discovering it. Two byte-identical modules whose effectful
+declarations are wired to different symbols stay distinct because the platform
+header that assigns those symbols is the data that separates them. `provides` follows the same rule: the
 exported symbol set is part of the platform relation, and two exports remain
 two exports even when they name the same Roc function.
 
