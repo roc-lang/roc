@@ -1243,6 +1243,21 @@ selected-name list; checked value, procedure, and compile-time-root construction
 use the value-binding list. Neither repeats name deduplication or chooses a
 definition based on its expression shape.
 
+An annotation-only declaration that no implementation supersedes names no value
+at all, whatever its annotation says, and `e_anno_only` is the body-free state
+that records this. Two rewrites give such an annotation a body, and only these
+two: a platform package's hosted rewrite, which produces `e_hosted_lambda`
+during canonicalization, and Builtin.roc's compiler-owned intrinsic annotations,
+whose bodies post-check lowering emits at each checked call site. Every other
+`e_anno_only` declaration keeps its declared type, so surrounding code still
+checks, but reading it is an error: checking reports the missing value at the
+reference and marks that expression erroneous, exactly as it already does for
+the sibling body-free state `e_derived_method`. This holds for a plain lookup,
+an imported lookup, a qualified associated read, and a method dispatch alike, so
+no reference to a valueless declaration survives checking. Post-check stages
+therefore never see one, and their rule that a procedure use carries a
+function-shaped request node needs no exception for it.
+
 The `Scope.type_bindings` table has one ordinary mutation API for type names.
 It accepts the full scope slice, the target scope index, the introduced name,
 and the incoming binding:

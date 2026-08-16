@@ -81,6 +81,7 @@ const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
+const AnnotationOnlyValueUse = problem_mod.AnnotationOnlyValueUse;
 const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
@@ -994,6 +995,9 @@ pub const ReportBuilder = struct {
             },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
+            },
+            .annotation_only_value_use => |data| {
+                return self.buildAnnotationOnlyValueUseReport(data);
             },
             .unsupported_generated_method => |data| {
                 return self.buildUnsupportedGeneratedMethodReport(data);
@@ -4291,6 +4295,20 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildAnnotationOnlyValueUseReport(self: *Self, data: AnnotationOnlyValueUse) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Reference Has No Value", "This refers to a declaration that has a type annotation but no implementation, so there is no value here to use.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Give that declaration a value body, or stop referring to it here."),
         }, self, &report);
         return report;
     }
