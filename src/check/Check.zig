@@ -88,6 +88,18 @@ const FunctionEffectResolution = enum {
     }
 };
 
+const ExpectEffectSlotId = enum(u32) { _ };
+
+const ExpectEffectSlot = struct {
+    region: Region,
+    effectful: bool = false,
+};
+
+const ExpectDispatchWatcher = struct {
+    slot: ExpectEffectSlotId,
+    fn_var: Var,
+};
+
 /// How a type variable occurrence will be represented in the checked type
 /// artifact consumed by later compiler stages.
 const InspectTypePosition = enum(u2) {
@@ -303,12 +315,13 @@ int_unbound_vars: std.AutoHashMap(Var, void),
 /// constraint failing in multiple passes (or reachable through several aliased
 /// type variables) is reported once.
 reported_constraint_errors: std.AutoHashMap(ReportedConstraintError, void),
-/// Constraint fn vars already reported as effectful dispatches in an expect
-/// body, so a constraint revisited across passes is reported once (replaces the
-/// old expect_region side table's fetchRemove dedup).
-reported_effectful_expect: std.AutoHashMap(Var, void),
-/// Region of the expect body currently being checked, if any.
-current_expect_region: ?Region,
+/// Sparse effect slots for actual expect bodies. Static-dispatch watchers name
+/// these slots; constraint copying and unification therefore cannot manufacture
+/// or lose an expect context.
+expect_effect_slots: std.ArrayListUnmanaged(ExpectEffectSlot),
+expect_dispatch_effect_watchers: std.ArrayListUnmanaged(ExpectDispatchWatcher),
+successful_dispatch_fn_vars: std.ArrayListUnmanaged(Var),
+current_expect_effect_slot: ?ExpectEffectSlotId,
 /// Dense table of top-level patterns, and whether their defs have been processed.
 top_level_ptrns: std.ArrayListUnmanaged(?DefProcessed),
 /// Read-only platform requirement surface used only when checking an app root.
@@ -527,9 +540,8 @@ hoist_expr_candidates: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// cross-module method binding. One entry serves those repeats, and it also
 /// keeps the decisions about a single expression consistent with each other.
 hoist_iterator_source_memo: ?struct { expr: CIR.Expr.Idx, preserves: bool } = null,
-/// Compile-time-known local dependencies encountered while checking a local
-/// binding RHS. They are selected only if that RHS cannot itself be hoisted, or
-/// later when a selected parent root recursively selects dependencies.
+/// Compile-time-known local dependencies and strict destructure validations
+/// waiting for the maximal enclosing root that can own their evaluation.
 hoist_deferred_roots: std.ArrayListUnmanaged(HoistDeferredRoot),
 /// Immutable local binding RHS expressions that were proven hoistable when the
 /// binding was checked. A candidate becomes a selected root only when a later
@@ -557,6 +569,9 @@ hoist_selected_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32),
 /// expression selection and local binding selection from duplicating the same
 /// root.
 hoist_selected_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32),
+/// Unit-valued roots that validate one refutable destructure, keyed by the
+/// source destructure pattern.
+hoist_selected_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32),
 /// Expressions whose original subtrees were replaced with explicit runtime
 /// errors after hoist selection had already seen them. Selected roots and
 /// dependencies inside these subtrees must be pruned before publication.
@@ -1557,9 +1572,14 @@ const CompletedHoistResult = struct {
 const HoistPatternExtraction = hoist_roots.PatternExtraction;
 const HoistPatternValidation = hoist_roots.PatternValidation;
 
+const HoistDeferredPatternValidation = struct {
+    validation: HoistPatternValidation,
+    owner_expr: ?CIR.Expr.Idx = null,
+};
+
 const HoistDeferredRoot = union(enum) {
     binding: CIR.Pattern.Idx,
-    pattern_validation: HoistPatternValidation,
+    pattern_validation: HoistDeferredPatternValidation,
 };
 
 const HoistKnownValue = union(enum) {
@@ -1586,6 +1606,7 @@ const HoistSelectionTransaction = struct {
     staged_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot) = .empty,
     staged_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
     staged_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
+    staged_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
     known_updates: std.ArrayListUnmanaged(HoistKnownUpdate) = .empty,
     committed: bool = false,
 
@@ -1602,6 +1623,7 @@ const HoistSelectionTransaction = struct {
         self.staged_roots.deinit(self.checker.gpa);
         self.staged_exprs.deinit(self.checker.gpa);
         self.staged_bindings.deinit(self.checker.gpa);
+        self.staged_pattern_validations.deinit(self.checker.gpa);
         self.known_updates.deinit(self.checker.gpa);
     }
 
@@ -1642,7 +1664,7 @@ const HoistSelectionTransaction = struct {
                     std.debug.assert(root.pattern != null);
                     std.debug.assert(root.pattern.? == pattern);
                 },
-                .pattern_validation => hoistSelectionInvariant("pattern validation root acquired a binding association"),
+                .pattern_validation => unreachable,
             }
         } else {
             const root = &self.checker.selected_hoisted_roots.items[root_index];
@@ -1720,21 +1742,10 @@ const HoistSelectionTransaction = struct {
     fn stagePatternValidationRoot(
         self: *HoistSelectionTransaction,
         validation: HoistPatternValidation,
+        owner_expr: ?CIR.Expr.Idx,
     ) Allocator.Error!u32 {
-        for (self.checker.selected_hoisted_roots.items, 0..) |root, root_index| {
-            switch (root.body) {
-                .pattern_extraction => |extraction| if (extraction.scrutinee_pattern == validation.scrutinee_pattern) return @intCast(root_index),
-                .pattern_validation => |existing| if (existing.scrutinee_pattern == validation.scrutinee_pattern) return @intCast(root_index),
-                .expr => {},
-            }
-        }
-        for (self.staged_roots.items, 0..) |root, staged_index| {
-            switch (root.body) {
-                .pattern_extraction => |extraction| if (extraction.scrutinee_pattern == validation.scrutinee_pattern) return @intCast(self.selectedRootCount() + staged_index),
-                .pattern_validation => |existing| if (existing.scrutinee_pattern == validation.scrutinee_pattern) return @intCast(self.selectedRootCount() + staged_index),
-                .expr => {},
-            }
-        }
+        if (self.checker.hoist_selected_pattern_validations.get(validation.scrutinee_pattern)) |root_index| return root_index;
+        if (self.staged_pattern_validations.get(validation.scrutinee_pattern)) |root_index| return root_index;
 
         try self.stageExprDependencies(validation.base_expr);
 
@@ -1743,7 +1754,9 @@ const HoistSelectionTransaction = struct {
             .expr = validation.base_expr,
             .body = .{ .pattern_validation = validation },
             .value_kind = .discarded,
+            .validation_owner_expr = owner_expr,
         });
+        try self.staged_pattern_validations.put(self.checker.gpa, validation.scrutinee_pattern, root_index);
         return root_index;
     }
 
@@ -1984,6 +1997,7 @@ const HoistSelectionTransaction = struct {
         try self.checker.selected_hoisted_roots.ensureUnusedCapacity(self.checker.gpa, self.staged_roots.items.len);
         try self.checker.hoist_selected_exprs.ensureUnusedCapacity(self.checker.gpa, self.staged_exprs.count());
         try self.checker.hoist_selected_bindings.ensureUnusedCapacity(self.checker.gpa, self.staged_bindings.count());
+        try self.checker.hoist_selected_pattern_validations.ensureUnusedCapacity(self.checker.gpa, self.staged_pattern_validations.count());
 
         const selected_start = self.checker.selected_hoisted_roots.items.len;
         for (self.staged_roots.items, 0..) |root, offset| {
@@ -1991,10 +2005,14 @@ const HoistSelectionTransaction = struct {
             self.checker.selected_hoisted_roots.appendAssumeCapacity(root);
             switch (root.body) {
                 .expr => self.checker.hoist_selected_exprs.putAssumeCapacityNoClobber(root.expr, root_index),
-                .pattern_extraction,
-                .pattern_validation,
-                => {},
+                .pattern_extraction => {},
+                .pattern_validation => {},
             }
+        }
+
+        var validation_iter = self.staged_pattern_validations.iterator();
+        while (validation_iter.next()) |entry| {
+            self.checker.hoist_selected_pattern_validations.putAssumeCapacityNoClobber(entry.key_ptr.*, entry.value_ptr.*);
         }
 
         var binding_iter = self.staged_bindings.iterator();
@@ -2056,14 +2074,31 @@ const ScratchStaticDispatchConstraint = struct {
 };
 
 const ReturnConstraint = struct {
-    expected: Var,
     actual_expr: CIR.Expr.Idx,
-    ctx: problem.Context,
+    kind: ReturnConstraintKind,
+};
+
+const ReturnConstraintKind = enum(u8) {
+    return_expr,
+    try_suffix,
+
+    fn problemContext(self: ReturnConstraintKind) problem.Context {
+        return switch (self) {
+            .return_expr => .early_return,
+            .try_suffix => .try_operator,
+        };
+    }
 };
 
 const ReturnConstraintFrame = struct {
+    /// The canonical owner of every return in this frame.
     lambda: CIR.Expr.Idx,
+    /// Start of this lambda's deferred constraints in the shared scratch list.
     start: usize,
+    /// The inferred body result that unannotated returns constrain after body checking.
+    body_result: Var,
+    /// The result supplied by an annotation or another explicit function expectation.
+    expected_result: ?Var,
 };
 
 /// A constraint generated during type checking, to be checked at the end
@@ -2319,8 +2354,10 @@ fn initAssumePrepared(
         .scratch_generated_codec_calls = .empty,
         .int_unbound_vars = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
-        .reported_effectful_expect = std.AutoHashMap(Var, void).init(gpa),
-        .current_expect_region = null,
+        .expect_effect_slots = .empty,
+        .expect_dispatch_effect_watchers = .empty,
+        .successful_dispatch_fn_vars = .empty,
+        .current_expect_effect_slot = null,
         .top_level_ptrns = try initNodeSlots(?DefProcessed, gpa, node_count, null),
         .platform_requirements = null,
         .platform_required_defs = .{},
@@ -2345,6 +2382,7 @@ fn initAssumePrepared(
         .hoist_contextual_binding_scope_patterns = .empty,
         .hoist_selected_bindings = .{},
         .hoist_selected_exprs = .{},
+        .hoist_selected_pattern_validations = .{},
         .hoist_invalidated_exprs = .{},
         .selected_hoisted_roots = .empty,
         .executable_root_defs = .empty,
@@ -2457,6 +2495,7 @@ pub fn deinit(self: *Self) void {
     self.hoist_contextual_binding_scope_patterns.deinit(self.gpa);
     self.hoist_selected_bindings.deinit(self.gpa);
     self.hoist_selected_exprs.deinit(self.gpa);
+    self.hoist_selected_pattern_validations.deinit(self.gpa);
     self.hoist_invalidated_exprs.deinit(self.gpa);
     for (self.selected_hoisted_roots.items) |*root| {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
@@ -2502,7 +2541,9 @@ pub fn deinit(self: *Self) void {
     self.checked_interpolation_part_constraints.deinit();
     self.int_unbound_vars.deinit();
     self.reported_constraint_errors.deinit();
-    self.reported_effectful_expect.deinit();
+    self.expect_effect_slots.deinit(self.gpa);
+    self.expect_dispatch_effect_watchers.deinit(self.gpa);
+    self.successful_dispatch_fn_vars.deinit(self.gpa);
     self.top_level_ptrns.deinit(self.gpa);
     self.platform_required_defs.deinit(self.gpa);
     for (self.platform_requirement_solutions.items) |solution| {
@@ -2639,9 +2680,9 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         !self.varIsFunctionType(ModuleEnv.varFrom(expr));
     const current_covers_children = (can_cover_children and !frame.binding_rhs) or binding_rhs_can_cover_children;
     // Any eligible binding RHS suppresses smaller expression candidates, but
-    // only a pattern that can publish that RHS as a binding root consumes its
-    // deferred validation. Other patterns must bubble validation to an
-    // enclosing root or a dedicated validation root.
+    // only a pattern that can publish that RHS as a binding root may become a
+    // prospective owner for its deferred validation. Other patterns must
+    // bubble validation to an enclosing root or a dedicated fallback root.
     const current_covers_deferred_roots = current_covers_children and
         (!frame.binding_rhs or
             (frame.binding_pattern != null and self.patternCanOwnHoistedBindingRoot(frame.binding_pattern.?)));
@@ -2675,6 +2716,8 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
             }
         }
         if (should_flush_deferred_roots) {
+            // Binding roots go first so post-solve pruning can prefer a kept
+            // live extraction over the dedicated validation fallback.
             for (self.hoist_deferred_roots.items[frame.deferred_dependency_start..]) |deferred| {
                 switch (deferred) {
                     .binding => |pattern| _ = try transaction.stageBindingRoot(pattern),
@@ -2684,7 +2727,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
             for (self.hoist_deferred_roots.items[frame.deferred_dependency_start..]) |deferred| {
                 switch (deferred) {
                     .binding => {},
-                    .pattern_validation => |validation| _ = try transaction.stagePatternValidationRoot(validation),
+                    .pattern_validation => |pending| _ = try transaction.stagePatternValidationRoot(pending.validation, pending.owner_expr),
                 }
             }
         }
@@ -2702,8 +2745,26 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     }
     self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
 
-    if (!selection_allowed or current_covers_deferred_roots or should_flush_deferred_roots) {
+    if (!selection_allowed or should_flush_deferred_roots) {
         self.hoist_deferred_roots.shrinkRetainingCapacity(frame.deferred_dependency_start);
+    } else if (current_covers_deferred_roots) {
+        // The current expression may become the maximal selected owner. Keep a
+        // validation fallback until post-solve pruning proves that it did, but
+        // consume binding dependencies that the expression evaluates locally.
+        var retained = frame.deferred_dependency_start;
+        for (self.hoist_deferred_roots.items[frame.deferred_dependency_start..]) |deferred| {
+            switch (deferred) {
+                .binding => {},
+                .pattern_validation => |pending| {
+                    self.hoist_deferred_roots.items[retained] = .{ .pattern_validation = .{
+                        .validation = pending.validation,
+                        .owner_expr = expr,
+                    } };
+                    retained += 1;
+                },
+            }
+        }
+        self.hoist_deferred_roots.shrinkRetainingCapacity(retained);
     }
 
     const completed = CompletedHoistResult{
@@ -2840,6 +2901,11 @@ fn recordHoistPatternProvenance(
     }
 }
 
+/// A pending destructure diagnostic is a strict compile-time demand on the
+/// complete scrutinee, independent of whether any binder is later referenced.
+/// Keep the demand pending until the maximal eligible enclosing expression is
+/// known; only then can selection decide whether that expression owns the
+/// validation or a dedicated validation root is necessary.
 fn recordHoistPatternValidationCandidate(
     self: *Self,
     pattern: CIR.Pattern.Idx,
@@ -2852,10 +2918,13 @@ fn recordHoistPatternValidationCandidate(
     if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
 
     try self.hoist_deferred_roots.append(self.gpa, .{ .pattern_validation = .{
-        .base_expr = expr,
-        .scrutinee_pattern = pattern,
-        .erase_runtime = !self.patternIntroducesValueBinding(pattern),
+        .validation = .{
+            .base_expr = expr,
+            .scrutinee_pattern = pattern,
+            .erase_runtime = !self.patternIntroducesValueBinding(pattern),
+        },
     } });
+    self.problems.markPendingStaticExhaustivenessEmpirical(.{ .destructure_pattern = pattern });
 }
 
 fn patternIntroducesValueBinding(self: *const Self, pattern: CIR.Pattern.Idx) bool {
@@ -3601,13 +3670,24 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
         std.debug.assert(selected.pattern.? == entry.key_ptr.*);
     }
 
+    var validation_iter = self.hoist_selected_pattern_validations.iterator();
+    while (validation_iter.next()) |entry| {
+        const root_index = entry.value_ptr.*;
+        std.debug.assert(root_index < self.selected_hoisted_roots.items.len);
+        const selected = self.selected_hoisted_roots.items[root_index];
+        const validation = switch (selected.body) {
+            .pattern_validation => |value| value,
+            .expr, .pattern_extraction => unreachable,
+        };
+        std.debug.assert(validation.scrutinee_pattern == entry.key_ptr.*);
+    }
+
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
         const root_index: u32 = @intCast(i);
         switch (root.body) {
             .expr => std.debug.assert(self.hoist_selected_exprs.get(root.expr) == root_index),
-            .pattern_extraction,
-            .pattern_validation,
-            => {},
+            .pattern_extraction => {},
+            .pattern_validation => |validation| std.debug.assert(self.hoist_selected_pattern_validations.get(validation.scrutinee_pattern) == root_index),
         }
         if (root.pattern) |pattern| {
             std.debug.assert(self.hoist_selected_bindings.get(pattern) == root_index);
@@ -3639,6 +3719,7 @@ const HoistSelectionTestState = struct {
         checker.hoist_contextual_binding_scope_patterns = .empty;
         checker.hoist_selected_bindings = .{};
         checker.hoist_selected_exprs = .{};
+        checker.hoist_selected_pattern_validations = .{};
         checker.hoist_invalidated_exprs = .{};
         checker.selected_hoisted_roots = .empty;
         checker.last_hoist_result = null;
@@ -3664,6 +3745,7 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_contextual_binding_scope_patterns.deinit(self.allocator);
         self.checker.hoist_selected_bindings.deinit(self.allocator);
         self.checker.hoist_selected_exprs.deinit(self.allocator);
+        self.checker.hoist_selected_pattern_validations.deinit(self.allocator);
         self.checker.hoist_invalidated_exprs.deinit(self.allocator);
         for (self.checker.selected_hoisted_roots.items) |*root| {
             hoist_roots.deinitSelectedRoot(self.allocator, root);
@@ -6405,6 +6487,7 @@ fn mkFlexWithFromNumeralConstraint(
         .fn_var = fn_var,
         .origin = .{ .from_literal = .{ .numeral = num_literal_info } },
     };
+    if (source_node != null) try self.recordCurrentExpectDispatchWatcher(fn_var);
 
     // Store it in the types store
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
@@ -6488,6 +6571,7 @@ fn mkFlexWithFromQuoteConstraint(
         .fn_var = fn_var,
         .origin = .{ .from_literal = .quote },
     };
+    if (source_node != null) try self.recordCurrentExpectDispatchWatcher(fn_var);
 
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
@@ -7132,12 +7216,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         switch (stmt) {
             .s_expect => |expr_stmt| {
                 // Check the body expression
-                const expect_does_fx = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
-                if (expect_does_fx) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                        .region = stmt_region,
-                    } });
-                }
+                _ = try self.checkExpectBody(expr_stmt.body, &env, Expected.none(), stmt_region);
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 // Unify with Bool (expects must be bool expressions)
@@ -7205,6 +7284,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.finalizeLiteralDispatchResolutions();
     try self.finalizeTopLevelDemandDependencies(&env);
+    try self.finalizeExpectEffectSlots();
 
     try self.finalizeBindingSchemeNodes();
 
@@ -7353,6 +7433,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var kept_count: usize = 0;
     var kept_expr_count: u32 = 0;
     var kept_pattern_count: u32 = 0;
+    var kept_validation_count: u32 = 0;
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
         const intrinsic = !self.hoistExprInvalidated(root.expr) and try self.hoistedRootIsIntrinsicallyKept(root);
@@ -7364,17 +7445,51 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         kept_count += 1;
         switch (root.body) {
             .expr => kept_expr_count += 1,
-            .pattern_extraction,
-            .pattern_validation,
-            => {},
+            .pattern_extraction => {},
+            .pattern_validation => kept_validation_count += 1,
         }
         if (root.pattern != null) kept_pattern_count += 1;
     }
+
+    // A validation keeps its dedicated fallback until solving has proved that
+    // the prospective maximal expression root is itself publishable. Only a
+    // kept owner may subsume the validation.
+    for (self.selected_hoisted_roots.items, 0..) |root, validation_index| {
+        if (!keep_roots[validation_index]) continue;
+        if (root.body != .pattern_validation) continue;
+        const owner_expr = root.validation_owner_expr orelse continue;
+        const owner_index = self.hoist_selected_exprs.get(owner_expr) orelse continue;
+        if (!keep_roots[owner_index]) continue;
+        keep_roots[validation_index] = false;
+        kept_count -= 1;
+        kept_validation_count -= 1;
+    }
+
+    // A kept extraction evaluates the same scrutinee and complete source
+    // pattern as its validation root. Let it own that exhaustiveness site so
+    // the right-hand side is not evaluated twice. If the extraction's result
+    // type is not concrete, pruning leaves the unit-valued validation root in
+    // place instead.
+    for (self.selected_hoisted_roots.items, 0..) |root, i| {
+        if (!keep_roots[i]) continue;
+        const extraction = switch (root.body) {
+            .pattern_extraction => |extraction| extraction,
+            .expr, .pattern_validation => continue,
+        };
+        const validation_index = self.hoist_selected_pattern_validations.get(extraction.scrutinee_pattern) orelse continue;
+        if (!keep_roots[validation_index]) continue;
+        keep_roots[validation_index] = false;
+        kept_count -= 1;
+        kept_validation_count -= 1;
+    }
+
     try self.hoist_selected_exprs.ensureTotalCapacity(self.gpa, kept_expr_count);
     try self.hoist_selected_bindings.ensureTotalCapacity(self.gpa, kept_pattern_count);
+    try self.hoist_selected_pattern_validations.ensureTotalCapacity(self.gpa, kept_validation_count);
 
     self.hoist_selected_exprs.clearRetainingCapacity();
     self.hoist_selected_bindings.clearRetainingCapacity();
+    self.hoist_selected_pattern_validations.clearRetainingCapacity();
 
     var kept: usize = 0;
     for (self.selected_hoisted_roots.items, keep_roots, 0..) |*root, keep, i| {
@@ -7390,9 +7505,8 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         const root_index: u32 = @intCast(kept);
         switch (self.selected_hoisted_roots.items[kept].body) {
             .expr => self.hoist_selected_exprs.putAssumeCapacityNoClobber(self.selected_hoisted_roots.items[kept].expr, root_index),
-            .pattern_extraction,
-            .pattern_validation,
-            => {},
+            .pattern_extraction => {},
+            .pattern_validation => |validation| self.hoist_selected_pattern_validations.putAssumeCapacityNoClobber(validation.scrutinee_pattern, root_index),
         }
         if (self.selected_hoisted_roots.items[kept].pattern) |pattern| {
             self.hoist_selected_bindings.putAssumeCapacityNoClobber(pattern, root_index);
@@ -7410,27 +7524,25 @@ fn hoistedRootIsIntrinsicallyKept(
     self: *Self,
     root: *hoist_roots.SelectedHoistedRoot,
 ) Allocator.Error!bool {
+    if (root.body == .pattern_validation) {
+        root.value_kind = .discarded;
+        return true;
+    }
+
     const type_var = if (root.pattern) |pattern|
         ModuleEnv.varFrom(pattern)
     else
         ModuleEnv.varFrom(root.expr);
 
-    switch (root.body) {
-        .pattern_validation => {
-            root.value_kind = .discarded;
-            return true;
-        },
-        .pattern_extraction => {
-            const is_function = self.varIsFunctionType(type_var);
-            if (is_function or self.selectedHoistedRootIsTopLevel(root.*)) {
-                root.value_kind = if (is_function) .callable_binding else .data_constant;
-                return if (self.selectedHoistedRootIsTopLevel(root.*))
-                    true
-                else
-                    try self.varIsConcreteSelectedRootType(type_var);
-            }
-        },
-        .expr => {},
+    if (root.body == .pattern_extraction) {
+        const is_function = self.varIsFunctionType(type_var);
+        if (is_function or self.selectedHoistedRootIsTopLevel(root.*)) {
+            root.value_kind = if (is_function) .callable_binding else .data_constant;
+            return if (self.selectedHoistedRootIsTopLevel(root.*))
+                true
+            else
+                try self.varIsConcreteSelectedRootType(type_var);
+        }
     }
 
     if (self.varIsFunctionType(type_var)) {
@@ -7721,9 +7833,8 @@ const HoistedRootKeepOracle = struct {
                     if (entry.found_existing) hoistSelectionInvariant("duplicate selected hoisted expression root");
                     entry.value_ptr.* = root_index;
                 },
-                .pattern_extraction,
-                .pattern_validation,
-                => {},
+                .pattern_extraction => {},
+                .pattern_validation => {},
             }
             if (root.pattern) |pattern| {
                 const entry = oracle.pattern_roots.getOrPutAssumeCapacity(pattern);
@@ -8358,6 +8469,136 @@ fn hoistedRootMatchDependenciesAreKept(
         if (!try self.hoistedRootDependenciesAreKeptInternal(branch.value, context, keep_oracle)) return false;
     }
     return true;
+}
+
+fn hoistedRootPatternSelectedDependenciesAreKept(
+    self: *Self,
+    pattern: CIR.Pattern.Idx,
+    keep_oracle: *const HoistedRootKeepOracle,
+) Allocator.Error!bool {
+    if (keep_oracle.selectedPatternIsKept(pattern)) |kept| {
+        if (!kept) return false;
+    }
+
+    return switch (self.cir.store.getPattern(pattern)) {
+        .assign,
+        .underscore,
+        .runtime_error,
+        .num_literal,
+        .num_from_numeral_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        => true,
+        .as => |as_pattern| try self.hoistedRootPatternSelectedDependenciesAreKept(as_pattern.pattern, keep_oracle),
+        .tuple => |tuple| blk: {
+            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
+                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(elem_pattern, keep_oracle)) break :blk false;
+            }
+            break :blk true;
+        },
+        .record_destructure => |destructure| blk: {
+            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(destruct.kind.toPatternIdx(), keep_oracle)) break :blk false;
+            }
+            break :blk true;
+        },
+        .applied_tag => |tag| blk: {
+            for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
+                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(arg_pattern, keep_oracle)) break :blk false;
+            }
+            break :blk true;
+        },
+        .nominal => |nominal| try self.hoistedRootPatternSelectedDependenciesAreKept(nominal.backing_pattern, keep_oracle),
+        .nominal_external => |nominal| try self.hoistedRootPatternSelectedDependenciesAreKept(nominal.backing_pattern, keep_oracle),
+        .list => |list| blk: {
+            for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
+                if (!try self.hoistedRootPatternSelectedDependenciesAreKept(elem_pattern, keep_oracle)) break :blk false;
+            }
+            if (list.rest_info) |rest_info| {
+                if (rest_info.pattern) |rest_pattern| {
+                    if (!try self.hoistedRootPatternSelectedDependenciesAreKept(rest_pattern, keep_oracle)) break :blk false;
+                }
+            }
+            break :blk true;
+        },
+        .str_interpolation => |str| blk: {
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
+                if (step.capture) |capture| {
+                    if (!try self.hoistedRootPatternSelectedDependenciesAreKept(capture, keep_oracle)) break :blk false;
+                }
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn hoistedRootPatternBindersAreConcrete(
+    self: *Self,
+    pattern: CIR.Pattern.Idx,
+) Allocator.Error!bool {
+    return switch (self.cir.store.getPattern(pattern)) {
+        .assign => try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern)),
+        .as => |as_pattern| (try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(pattern))) and
+            try self.hoistedRootPatternBindersAreConcrete(as_pattern.pattern),
+        .tuple => |tuple| blk: {
+            for (self.cir.store.slicePatterns(tuple.patterns)) |elem_pattern| {
+                if (!try self.hoistedRootPatternBindersAreConcrete(elem_pattern)) break :blk false;
+            }
+            break :blk true;
+        },
+        .record_destructure => |destructure| blk: {
+            for (self.cir.store.sliceRecordDestructs(destructure.destructs)) |destruct_idx| {
+                const destruct = self.cir.store.getRecordDestruct(destruct_idx);
+                if (!try self.hoistedRootPatternBindersAreConcrete(destruct.kind.toPatternIdx())) break :blk false;
+            }
+            break :blk true;
+        },
+        .applied_tag => |tag| blk: {
+            for (self.cir.store.slicePatterns(tag.args)) |arg_pattern| {
+                if (!try self.hoistedRootPatternBindersAreConcrete(arg_pattern)) break :blk false;
+            }
+            break :blk true;
+        },
+        .nominal => |nominal| try self.hoistedRootPatternBindersAreConcrete(nominal.backing_pattern),
+        .nominal_external => |nominal| try self.hoistedRootPatternBindersAreConcrete(nominal.backing_pattern),
+        .list => |list| blk: {
+            for (self.cir.store.slicePatterns(list.patterns)) |elem_pattern| {
+                if (!try self.hoistedRootPatternBindersAreConcrete(elem_pattern)) break :blk false;
+            }
+            if (list.rest_info) |rest_info| {
+                if (rest_info.pattern) |rest_pattern| {
+                    if (!try self.hoistedRootPatternBindersAreConcrete(rest_pattern)) break :blk false;
+                }
+            }
+            break :blk true;
+        },
+        .str_interpolation => |str| blk: {
+            var step_offset: u32 = 0;
+            while (step_offset < str.steps.span.len) : (step_offset += 1) {
+                const step = self.cir.store.getStrPatternStep(str.steps, step_offset);
+                if (step.capture) |capture| {
+                    if (!try self.hoistedRootPatternBindersAreConcrete(capture)) break :blk false;
+                }
+            }
+            break :blk true;
+        },
+        .underscore,
+        .runtime_error,
+        .num_literal,
+        .num_from_numeral_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        => true,
+    };
 }
 
 fn appendHoistedDependencyPatternBinders(
@@ -9667,11 +9908,65 @@ fn checkExpectBody(
     expected: Expected,
     expect_region: Region,
 ) std.mem.Allocator.Error!bool {
-    const saved_expect_region = self.current_expect_region;
-    self.current_expect_region = expect_region;
-    defer self.current_expect_region = saved_expect_region;
+    const slot: ExpectEffectSlotId = @enumFromInt(self.expect_effect_slots.items.len);
+    try self.expect_effect_slots.append(self.gpa, .{ .region = expect_region });
 
-    return try self.checkExpr(body, env, expected.suppressComptimeConditionWarnings().suppressHoistSelection());
+    const saved_expect_slot = self.current_expect_effect_slot;
+    self.current_expect_effect_slot = slot;
+    defer self.current_expect_effect_slot = saved_expect_slot;
+
+    const does_fx = try self.checkExpr(body, env, expected.suppressComptimeConditionWarnings().suppressHoistSelection());
+    self.expect_effect_slots.items[@intFromEnum(slot)].effectful = does_fx;
+    return does_fx;
+}
+
+fn recordCurrentExpectDispatchWatcher(self: *Self, fn_var: Var) Allocator.Error!void {
+    const slot = self.current_expect_effect_slot orelse return;
+    try self.expect_dispatch_effect_watchers.append(self.gpa, .{ .slot = slot, .fn_var = fn_var });
+}
+
+/// Record a committed successful dispatch edge. Expect watchers are resolved
+/// once at the checked boundary, after all roots have settled; storing the raw
+/// var preserves the exact edge while finalization normalizes roots in one
+/// linear pass. Probes never publish success—the committed relation is revisited
+/// by the ordinary dispatch pass.
+fn recordSuccessfulStaticDispatch(self: *Self, constraint: StaticDispatchConstraint) Allocator.Error!void {
+    if (self.probe_depth != 0 or self.expect_dispatch_effect_watchers.items.len == 0) return;
+    try self.successful_dispatch_fn_vars.append(self.gpa, constraint.fn_var);
+}
+
+fn finalizeExpectEffectSlots(self: *Self) Allocator.Error!void {
+    std.debug.assert(self.current_expect_effect_slot == null);
+    if (self.expect_effect_slots.items.len == 0) return;
+
+    if (self.expect_dispatch_effect_watchers.items.len > 0) {
+        var successful_roots: std.AutoHashMapUnmanaged(Var, void) = .empty;
+        defer successful_roots.deinit(self.gpa);
+        try successful_roots.ensureTotalCapacity(self.gpa, @intCast(self.successful_dispatch_fn_vars.items.len));
+        for (self.successful_dispatch_fn_vars.items) |fn_var| {
+            successful_roots.putAssumeCapacity(self.types.resolveVar(fn_var).var_, {});
+        }
+
+        // Finalization runs after the last type mutation, so one memo serves
+        // every watcher. Ordinary effect queries clear this cache because roots
+        // may change between calls; no such invalidation is possible here.
+        self.function_effect_resolution.clearRetainingCapacity();
+
+        for (self.expect_dispatch_effect_watchers.items) |watcher| {
+            const fn_root = self.types.resolveVar(watcher.fn_var).var_;
+            if (!successful_roots.contains(fn_root)) continue;
+            if (try self.functionEffectStateHelp(fn_root) == .effectful) {
+                self.expect_effect_slots.items[@intFromEnum(watcher.slot)].effectful = true;
+            }
+        }
+    }
+
+    for (self.expect_effect_slots.items) |slot| {
+        if (!slot.effectful) continue;
+        _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
+            .region = slot.region,
+        } });
+    }
 }
 
 fn varIsFunctionType(self: *Self, var_: Var) bool {
@@ -10945,6 +11240,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // root the expression contains
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
     try self.checkBindingRootsForInfiniteTypes();
+    try self.finalizeExpectEffectSlots();
 
     try self.finalizeBindingSchemeNodes();
 
@@ -11048,6 +11344,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     try self.reportPolymorphicConstrainedExpr(expr_idx);
     try self.poisonErroneousValueUses();
+    try self.finalizeExpectEffectSlots();
 
     try self.finalizeBindingSchemeNodes();
 
@@ -13192,9 +13489,6 @@ fn instantiateWhereAliasConstraint(
         .fn_name = constraint.fn_name,
         .fn_var = try self.instantiateVarWithSubs(constraint.fn_var, subs, env, .{ .explicit = region }),
         .origin = .{ .where_clause = .{} },
-        // The reference is what the user wrote, so an unmet constraint points
-        // at the where alias rather than at its declaration.
-        .provenance = .{ .expect_region = StaticDispatchConstraint.Provenance.OptRegion.some(region) },
     };
 }
 
@@ -14384,11 +14678,12 @@ fn setBuiltinTypeContent(
 
 // types //
 
+/// Expression-local expectations. Lambda return targets live in
+/// `ReturnConstraintFrame` so a nested expression annotation cannot replace them.
 const Expected = struct {
     annotation: ?CIR.Annotation.Idx = null,
     expected_type: ?ExpectedType = null,
     branch_result: ?Var = null,
-    return_result: ?Var = null,
     comptime_condition_warnings: enum { emit, suppress } = .emit,
     hoist_position: HoistPosition = .suppressed,
 
@@ -14410,7 +14705,6 @@ const Expected = struct {
             .annotation = annotation_idx,
             .expected_type = self.expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
@@ -14421,7 +14715,6 @@ const Expected = struct {
             .annotation = self.annotation,
             .expected_type = expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
@@ -14432,7 +14725,6 @@ const Expected = struct {
             .annotation = null,
             .expected_type = expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
@@ -14443,7 +14735,6 @@ const Expected = struct {
             .annotation = self.annotation,
             .expected_type = self.expected_type,
             .branch_result = branch_result,
-            .return_result = self.return_result orelse branch_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
@@ -14454,7 +14745,6 @@ const Expected = struct {
             .annotation = self.annotation,
             .expected_type = self.expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = hoist_position,
         };
@@ -14469,7 +14759,6 @@ const Expected = struct {
             .annotation = self.annotation,
             .expected_type = self.expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = .suppress,
             .hoist_position = .comptime_root,
         };
@@ -14478,7 +14767,6 @@ const Expected = struct {
     fn forBranchBody(self: Expected) Expected {
         return .{
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = .suppressed,
         };
@@ -14486,17 +14774,14 @@ const Expected = struct {
 
     fn forStatement(self: Expected) Expected {
         return .{
-            .return_result = self.return_result,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
     }
 
-    fn forReturnValue(self: Expected) Expected {
-        const expected_return = self.returnResult();
+    fn forReturnValue(self: Expected, expected_return: ?Var) Expected {
         return .{
             .branch_result = expected_return,
-            .return_result = expected_return,
             .comptime_condition_warnings = self.comptime_condition_warnings,
             .hoist_position = self.hoist_position,
         };
@@ -14507,7 +14792,6 @@ const Expected = struct {
             .annotation = self.annotation,
             .expected_type = self.expected_type,
             .branch_result = self.branch_result,
-            .return_result = self.return_result,
             .comptime_condition_warnings = .suppress,
             .hoist_position = self.hoist_position,
         };
@@ -14515,13 +14799,6 @@ const Expected = struct {
 
     fn emitsComptimeConditionWarnings(self: Expected) bool {
         return self.comptime_condition_warnings == .emit;
-    }
-
-    fn returnResult(self: Expected) ?Var {
-        if (self.return_result) |return_result| {
-            return return_result;
-        }
-        return self.branch_result;
     }
 };
 
@@ -16481,7 +16758,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
 
             const lambda_body_expected = Expected.none().withHoistPosition(nested_expected.hoist_position);
-            try self.pushReturnConstraintFrame(expr_idx);
+            const expected_result = if (mb_anno_func) |expected_func| expected_func.ret else null;
+            try self.pushReturnConstraintFrame(expr_idx, body_var, expected_result);
             var return_constraints_processed = false;
             defer if (!return_constraints_processed) self.discardReturnConstraintFrame(expr_idx);
 
@@ -17306,11 +17584,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_expect => |expect| {
             self.markCurrentHoistObservableEffect();
             const expect_does_fx = try self.checkExpectBody(expect.body, env, child_expected, expr_region);
-            if (expect_does_fx) {
-                _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                    .region = expr_region,
-                } });
-            }
             does_fx = expect_does_fx or does_fx;
             const body_var = ModuleEnv.varFrom(expect.body);
 
@@ -17373,21 +17646,20 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_return => |ret| {
             self.markCurrentHoistObservableEffect();
-            const return_expected = nested_expected.forReturnValue();
+            const expected_return = self.expectedReturnResultFor(ret.lambda);
+            const return_expected = nested_expected.forReturnValue(expected_return);
             does_fx = try self.checkExpr(ret.expr, env, return_expected) or does_fx;
-            const return_ctx: problem.Context = switch (ret.context) {
-                .return_expr => .early_return,
-                .try_suffix => .try_operator,
+            const return_kind: ReturnConstraintKind = switch (ret.context) {
+                .return_expr => .return_expr,
+                .try_suffix => .try_suffix,
             };
 
-            if (return_expected.returnResult()) |expected_return| {
-                try self.checkReturnRelation(expected_return, ret.expr, return_ctx, env);
+            if (expected_return) |annotated_return| {
+                try self.checkReturnRelation(annotated_return, ret.expr, return_kind.problemContext(), env);
             } else {
                 // Validate the lambda body type against the return value after the
                 // body is fully checked, but before the lambda generalizes.
-                const lambda_expr = self.cir.store.getExpr(ret.lambda);
-                std.debug.assert(lambda_expr == .e_lambda);
-                try self.appendReturnConstraint(ret.lambda, ModuleEnv.varFrom(lambda_expr.e_lambda.body), ret.expr, return_ctx);
+                try self.appendReturnConstraint(ret.lambda, ret.expr, return_kind);
             }
 
             // Note that we DO NOT unify the return type with the expr here.
@@ -18415,7 +18687,6 @@ fn checkPatternExhaustiveness(
         } });
         return true;
     }
-
     return false;
 }
 
@@ -18593,8 +18864,8 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.unify(decl_pattern_var, decl_expr_var, env);
 
                 if (decl_pattern_result.isOk()) {
-                    const needs_static_validation = try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
-                    if (needs_static_validation) {
+                    const needs_comptime_validation = try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
+                    if (needs_comptime_validation) {
                         try self.recordHoistPatternValidationCandidate(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
                     }
                     try self.recordHoistPatternProvenance(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
@@ -18677,10 +18948,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 _ = try self.unify(stmt_var, var_expr, env);
 
                 if (var_pattern_result.isOk()) {
-                    const needs_static_validation = try self.checkDestructureExhaustiveness(var_stmt.pattern_idx, var_stmt.expr, var_expr, env, stmt_region);
-                    if (needs_static_validation) {
-                        try self.recordHoistPatternValidationCandidate(var_stmt.pattern_idx, var_stmt.expr, expectation.hoist_position);
-                    }
+                    _ = try self.checkDestructureExhaustiveness(var_stmt.pattern_idx, var_stmt.expr, var_expr, env, stmt_region);
                 }
 
                 // `var` statements are binding roots too (they never
@@ -18744,10 +19012,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 _ = try self.unify(stmt_var, reassign_expr_var, env);
 
                 if (reassign_pattern_result.isOk()) {
-                    const needs_static_validation = try self.checkDestructureExhaustiveness(reassign.pattern_idx, reassign.expr, reassign_expr_var, env, stmt_region);
-                    if (needs_static_validation) {
-                        try self.recordHoistPatternValidationCandidate(reassign.pattern_idx, reassign.expr, statement_expected.hoist_position);
-                    }
+                    _ = try self.checkDestructureExhaustiveness(reassign.pattern_idx, reassign.expr, reassign_expr_var, env, stmt_region);
                 }
             },
             .s_for => |for_stmt| {
@@ -18851,11 +19116,6 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 self.markCurrentHoistObservableEffect();
                 statement_blocks_later_hoists = true;
                 const expect_does_fx = try self.checkExpectBody(expr_stmt.body, env, statement_expected, stmt_region);
-                if (expect_does_fx) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-                        .region = stmt_region,
-                    } });
-                }
                 does_fx = expect_does_fx or does_fx;
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
@@ -18873,17 +19133,16 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 self.markCurrentHoistObservableEffect();
                 statement_blocks_later_hoists = true;
                 // Type check the return expression
-                const return_expected = expected.forReturnValue();
+                const expected_return = self.expectedReturnResultFor(ret.lambda);
+                const return_expected = expected.forReturnValue(expected_return);
                 does_fx = try self.checkExpr(ret.expr, env, return_expected) or does_fx;
 
-                if (return_expected.returnResult()) |expected_return| {
-                    try self.checkReturnRelation(expected_return, ret.expr, .early_return, env);
+                if (expected_return) |annotated_return| {
+                    try self.checkReturnRelation(annotated_return, ret.expr, .early_return, env);
                 } else {
                     // Validate the lambda body type against the return value after the
                     // body is fully checked, but before the lambda generalizes.
-                    const lambda_expr = self.cir.store.getExpr(ret.lambda);
-                    std.debug.assert(lambda_expr == .e_lambda);
-                    try self.appendReturnConstraint(ret.lambda, ModuleEnv.varFrom(lambda_expr.e_lambda.body), ret.expr, .early_return);
+                    try self.appendReturnConstraint(ret.lambda, ret.expr, .return_expr);
                 }
 
                 // A return statement's type should be a flex var so it can unify with any type.
@@ -19478,7 +19737,7 @@ fn checkMatchExpr(
         if (!try_result.isOk()) {
             has_invalid_try = true;
             had_type_error = true;
-        } else if (expected.returnResult()) |expected_return| {
+        } else if (self.currentExpectedReturnResult()) |expected_return| {
             if (self.tryConditionIsDirectHostedCall(match.cond)) {
                 try self.widenTryConditionForExpectedReturn(cond_var, expected_return, env, expr_region);
             }
@@ -20401,6 +20660,7 @@ fn mkBinopConstraint(
         .origin = .{ .desugared_binop = .{ .negated = negated } },
         .provenance = constraintProvenance(binop_expr_idx),
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     if (binop_expr_idx) |expr_idx| {
         try self.publishBinopDispatchExpr(expr_idx, method_name, region, constraint_fn_var);
@@ -20497,6 +20757,7 @@ fn mkUnaryOp(
         .origin = .desugared_unaryop,
         .provenance = constraintProvenance(unary_expr_idx),
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
     if (unary_expr_idx) |expr_idx| {
         try self.publishUnaryDispatchExpr(expr_idx, method_name, region, constraint_fn_var);
@@ -20587,6 +20848,8 @@ fn checkIteratorForLoop(
         loop_node,
         ModuleEnv.nodeIdxFrom(pattern),
         ModuleEnv.nodeIdxFrom(iterable),
+        iterator_var,
+        step_var,
         iter_fn_var,
         next_fn_var,
         step.topology,
@@ -20628,18 +20891,6 @@ fn constraintProvenance(intro_expr: ?CIR.Expr.Idx) StaticDispatchConstraint.Prov
         else
             .none,
     };
-}
-
-/// Like `constraintProvenance`, but also captures the current expect-body region.
-/// Only method-dispatch constraints carry it—the region feeds the
-/// "effectful dispatch in expect" diagnostic, matching what the old
-/// expect_region side table recorded (never for binop/unary origins).
-fn methodDispatchProvenance(self: *const Self, intro_expr: ?CIR.Expr.Idx) StaticDispatchConstraint.Provenance {
-    var provenance = constraintProvenance(intro_expr);
-    if (self.current_expect_region) |r| {
-        provenance.expect_region = StaticDispatchConstraint.Provenance.OptRegion.some(r);
-    }
-    return provenance;
 }
 
 fn mkSyntheticReceiverDispatchConstraint(
@@ -20689,8 +20940,9 @@ fn mkReceiverDispatchConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = .method_call,
-        .provenance = self.methodDispatchProvenance(method_expr_idx),
+        .provenance = constraintProvenance(method_expr_idx),
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(
@@ -20725,8 +20977,9 @@ fn mkTypeMethodCallConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = .method_call,
-        .provenance = self.methodDispatchProvenance(method_expr_idx),
+        .provenance = constraintProvenance(method_expr_idx),
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(
@@ -20766,7 +21019,7 @@ fn mkInterpolationMetadata(
     }
 
     return .{
-        .expr_region = StaticDispatchConstraint.Provenance.OptRegion.some(
+        .expr_region = StaticDispatchConstraint.OptRegion.some(
             self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx)),
         ),
         .item_var = item_var,
@@ -20795,9 +21048,10 @@ fn mkInterpolationConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = .{ .from_literal = .interpolation },
-        .provenance = self.methodDispatchProvenance(expr_idx),
+        .provenance = constraintProvenance(expr_idx),
         .interpolation = try self.mkInterpolationMetadata(expr_idx, item_var),
     };
+    try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
     const constrained_var = try self.freshFromContent(
@@ -24608,11 +24862,30 @@ fn isDecNominal(self: *Self, var_: Var) bool {
     return nominal.ident.ident_idx.eql(self.cir.idents.dec_type);
 }
 
-fn pushReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+fn pushReturnConstraintFrame(
+    self: *Self,
+    lambda_idx: CIR.Expr.Idx,
+    body_result: Var,
+    expected_result: ?Var,
+) std.mem.Allocator.Error!void {
     try self.return_constraint_frames.append(self.gpa, .{
         .lambda = lambda_idx,
         .start = self.return_constraints.items.len,
+        .body_result = body_result,
+        .expected_result = expected_result,
     });
+}
+
+fn currentExpectedReturnResult(self: *const Self) ?Var {
+    if (self.return_constraint_frames.items.len == 0) return null;
+    return self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1].expected_result;
+}
+
+fn expectedReturnResultFor(self: *const Self, lambda_idx: CIR.Expr.Idx) ?Var {
+    std.debug.assert(self.return_constraint_frames.items.len > 0);
+    const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
+    std.debug.assert(frame.lambda == lambda_idx);
+    return frame.expected_result;
 }
 
 fn discardReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) void {
@@ -24627,46 +24900,15 @@ fn discardReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) void {
 fn appendReturnConstraint(
     self: *Self,
     lambda_idx: CIR.Expr.Idx,
-    expected: Var,
     actual_expr: CIR.Expr.Idx,
-    ctx: problem.Context,
+    kind: ReturnConstraintKind,
 ) std.mem.Allocator.Error!void {
-    switch (ctx) {
-        .early_return, .try_operator => {},
-        .none,
-        .fn_call_arity,
-        .fn_call_arg,
-        .if_condition,
-        .if_branch,
-        .match_pattern,
-        .match_alt_binder,
-        .match_branch,
-        .list_entry,
-        .interpolation_part,
-        .type_annotation,
-        .record_destructure,
-        .binop_lhs,
-        .binop_rhs,
-        .record_access,
-        .record_update,
-        .try_operator_expr,
-        .statement_value,
-        .nominal_constructor,
-        .fn_args_bound_var,
-        .platform_requirement,
-        .method_type,
-        .expect,
-        .recursive_def,
-        => unreachable,
-    }
-
     std.debug.assert(self.return_constraint_frames.items.len > 0);
     const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
     std.debug.assert(frame.lambda == lambda_idx);
     try self.return_constraints.append(self.gpa, .{
-        .expected = expected,
         .actual_expr = actual_expr,
-        .ctx = ctx,
+        .kind = kind,
     });
 }
 
@@ -24693,39 +24935,12 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx) st
     std.debug.assert(frame.lambda == lambda_idx);
 
     for (self.return_constraints.items[frame.start..]) |constraint| {
-        switch (constraint.ctx) {
-            .early_return => {
-                try self.checkReturnRelation(constraint.expected, constraint.actual_expr, .early_return, env);
-            },
-            .try_operator => {
-                try self.checkReturnRelation(constraint.expected, constraint.actual_expr, .try_operator, env);
-            },
-            .none,
-            .fn_call_arity,
-            .fn_call_arg,
-            .if_condition,
-            .if_branch,
-            .match_pattern,
-            .match_alt_binder,
-            .match_branch,
-            .list_entry,
-            .interpolation_part,
-            .type_annotation,
-            .record_destructure,
-            .binop_lhs,
-            .binop_rhs,
-            .record_access,
-            .record_update,
-            .try_operator_expr,
-            .statement_value,
-            .nominal_constructor,
-            .fn_args_bound_var,
-            .platform_requirement,
-            .method_type,
-            .expect,
-            .recursive_def,
-            => unreachable,
-        }
+        try self.checkReturnRelation(
+            frame.body_result,
+            constraint.actual_expr,
+            constraint.kind.problemContext(),
+            env,
+        );
     }
 
     self.return_constraints.shrinkRetainingCapacity(frame.start);
@@ -25914,7 +26129,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                             try self.markStaticDispatchRejected(constraint);
                         } else {
-                            try self.reportEffectfulDispatchInExpect(constraint);
+                            try self.recordSuccessfulStaticDispatch(constraint);
 
                             // The body provably forces this where-clause method: a
                             // body dispatch matched it and unified successfully. Mark
@@ -26331,7 +26546,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
                     } else {
-                        try self.reportEffectfulDispatchInExpect(constraint);
+                        try self.recordSuccessfulStaticDispatch(constraint);
                     }
                 }
                 break :dispatch_resolution;
@@ -26648,7 +26863,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
                     } else {
-                        try self.reportEffectfulDispatchInExpect(constraint);
+                        try self.recordSuccessfulStaticDispatch(constraint);
                     }
                 }
                 break :dispatch_resolution;
@@ -26892,20 +27107,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
     {
         self.retireResolvedTypeSchemeRequirements();
     }
-}
-
-fn reportEffectfulDispatchInExpect(
-    self: *Self,
-    constraint: StaticDispatchConstraint,
-) std.mem.Allocator.Error!void {
-    if (!try self.varIsEffectfulFunction(constraint.fn_var)) return;
-    const expect_region = constraint.provenance.expect_region.get() orelse return;
-    // Report each constraint once even though constraint checking revisits it
-    // across passes—the dedup set replaces the old side table's fetchRemove.
-    if ((try self.reported_effectful_expect.getOrPut(constraint.fn_var)).found_existing) return;
-    _ = try self.problems.appendProblem(self.gpa, .{ .effectful_expect = .{
-        .region = expect_region,
-    } });
 }
 
 fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_var: Var, region: Region) Allocator.Error!void {
@@ -29776,7 +29977,7 @@ fn satisfyDerivedMapConstraint(
     if ((try self.unify(expected_var, constraint.fn_var, env)).isProblem()) return false;
 
     self.recordDerivedMapPlan(constraint.fn_var, analysis.plan);
-    try self.reportEffectfulDispatchInExpect(constraint);
+    try self.recordSuccessfulStaticDispatch(constraint);
     return true;
 }
 

@@ -7661,6 +7661,8 @@ fn appendStaticDispatchTypeRoots(
 
     for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
         if (!source_nodes.hasRawLoop(plan.node_idx)) continue;
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.iterator_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.iter_fn_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.next_fn_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_topology.one_payload_var));
@@ -15366,25 +15368,14 @@ fn appendSyntheticLocalLookupRefs(
                 });
                 by_checked_expr[raw_expr] = id;
             },
-            .pattern_extraction_wrapper => {
+            .pattern_validation_result => {},
+            .pattern_extraction_wrapper, .pattern_validation_wrapper => {
                 const raw_expr = @intFromEnum(origin_record.expr);
                 if (raw_expr >= checked_bodies.exprCount()) {
                     checkedArtifactInvariant("synthetic wrapper origin referenced an expression out of range", .{});
                 }
                 if (checkedExprDataCategory(std.meta.activeTag(checked_bodies.expr(origin_record.expr).data)) != .match_expr) {
                     checkedArtifactInvariant("synthetic wrapper origin pointed at a non-match expression", .{});
-                }
-            },
-            .pattern_validation_result => {
-                const expr = checked_bodies.expr(origin_record.expr);
-                if (expr.data != .empty_record) {
-                    checkedArtifactInvariant("synthetic pattern-validation result was not unit", .{});
-                }
-            },
-            .pattern_validation_wrapper => {
-                const expr = checked_bodies.expr(origin_record.expr);
-                if (checkedExprDataCategory(std.meta.activeTag(expr.data)) != .match_expr) {
-                    checkedArtifactInvariant("synthetic pattern-validation wrapper was not a match expression", .{});
                 }
             },
         }
@@ -17244,29 +17235,16 @@ const EvidencePass = struct {
             chain,
             commit_unpinned,
         )) orelse return;
-        // The iterator type is the `iter` callable's return: dispatch `next`
-        // on it.
-        const next_dispatcher = self.iteratorNextDispatcherVar(src.iter_fn_var);
-        plan.next.resolution = if (next_dispatcher) |dispatcher_var|
-            (try self.resolveObligation(
-                dispatcher_var,
-                plan.next.dispatcher_ty,
-                plan.next.method,
-                null,
-                src.next_fn_var,
-                chain,
-                commit_unpinned,
-            )) orelse return
-        else
-            // A non-function `iter` callable only occurs on checked errors.
-            .checked_error;
+        plan.next.resolution = (try self.resolveObligation(
+            src.next_dispatcher_var,
+            plan.next.dispatcher_ty,
+            plan.next.method,
+            null,
+            src.next_fn_var,
+            chain,
+            commit_unpinned,
+        )) orelse return;
         self.iterator_plan_resolved[raw] = true;
-    }
-
-    fn iteratorNextDispatcherVar(self: *EvidencePass, iter_fn_var: Var) ?Var {
-        const resolved = self.types.resolveVar(iter_fn_var);
-        const func = resolved.desc.content.unwrapFunc() orelse return null;
-        return func.ret;
     }
 
     /// Resolve one dispatch obligation: `method` dispatched on
@@ -23516,8 +23494,8 @@ pub const CompileTimeRootKind = enum {
     constant,
     /// A selected top-level-equivalent expression inside a runtime body.
     hoisted_constant,
-    /// A selected compile-time-known refutable destructure whose successful
-    /// result has no runtime value to archive.
+    /// A compile-time-known refutable destructure whose successful unit result
+    /// has no runtime value to archive.
     hoisted_validation,
     callable_binding,
     expect,
@@ -23721,17 +23699,14 @@ pub const CompileTimeRootTable = struct {
                     .callable_binding,
                 .discarded => .hoisted_validation,
             };
-            const checked_type = switch (selected.value_kind) {
-                .data_constant, .callable_binding => try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
-                .discarded => try checked_types.store.ensureEmptyRecordRoot(allocator, names),
-            };
-            const checked_expr = try checkedExprIdForSelectedHoistedRoot(
+            const checked_root = try checkedBodyForSelectedHoistedRoot(
                 allocator,
                 module,
+                names,
+                checked_types,
                 checked_body_builder,
                 @intCast(selected_index),
                 selected,
-                checked_type,
             );
             const hoisted_body = try hoist_roots.cloneBody(allocator, selected.body);
             try appendCompileTimeRoot(&roots, allocator, .{
@@ -23743,12 +23718,9 @@ pub const CompileTimeRootTable = struct {
                 } },
                 .source_pattern = selected.pattern,
                 .hoisted_body = hoisted_body,
-                .pattern = switch (selected.body) {
-                    .pattern_validation => |validation| checkedPatternIdForSource(checked_bodies, validation.scrutinee_pattern),
-                    .expr, .pattern_extraction => if (selected.pattern) |pattern| checkedPatternIdForSource(checked_bodies, pattern) else null,
-                },
-                .expr = checked_expr,
-                .checked_type = checked_type,
+                .pattern = checked_root.pattern,
+                .expr = checked_root.expr,
+                .checked_type = checked_root.checked_type,
                 .payload = .pending,
             });
         }
@@ -23858,7 +23830,8 @@ pub const CompileTimeRootTable = struct {
         for (self.roots) |entry| {
             if (entry.kind != .hoisted_validation or entry.pattern != pattern) continue;
             const body = entry.hoisted_body orelse checkedArtifactInvariant("hoisted validation root had no selected body", .{});
-            if (body != .pattern_validation or !body.pattern_validation.erase_runtime) return false;
+            if (body != .pattern_validation) checkedArtifactInvariant("hoisted validation root had a non-validation body", .{});
+            if (!body.pattern_validation.erase_runtime) return false;
             return entry.payload == .discarded;
         }
         return false;
@@ -24476,38 +24449,36 @@ fn exhaustivenessReplacingRootForSource(
     source: problem.Store.ExhaustivenessSiteSource,
 ) ?CompileTimeRoot {
     for (compile_time_roots.roots) |root| {
-        if (root.hoisted_body) |body| {
-            switch (body) {
-                .pattern_extraction, .pattern_validation => {
-                    const base_expr, const exact_pattern = switch (body) {
-                        .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
-                        .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
-                        .expr => unreachable,
-                    };
-                    if (source == .destructure_pattern and source.destructure_pattern == exact_pattern) return root;
-
-                    // Pattern roots evaluate both their synthetic outer match and the
-                    // original right-hand side. The exact-pattern check above owns the
-                    // former; sites contained by the base expression belong to the
-                    // latter even when the extracted value is callable.
-                    const checked_base_expr = checkedExprIdForSource(checked_bodies, base_expr);
-                    const base_contains = switch (source) {
-                        .match_expr => |source_expr| blk: {
-                            const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
-                            break :blk checkedExprContainsExpr(checked_bodies, checked_base_expr, checked_expr);
-                        },
-                        .destructure_pattern => |source_pattern| blk: {
-                            const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
-                            break :blk checkedExprContainsPattern(checked_bodies, checked_base_expr, checked_pattern);
-                        },
-                    };
-                    if (base_contains) return root;
-                    continue;
-                },
-                .expr => {},
-            }
-        }
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
+        if (root.hoisted_body) |body| switch (body) {
+            .pattern_extraction, .pattern_validation => {
+                const base_expr, const exact_pattern = switch (body) {
+                    .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
+                    .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
+                    .expr => unreachable,
+                };
+                if (source == .destructure_pattern and source.destructure_pattern == exact_pattern) return root;
+
+                // Pattern roots evaluate both their synthetic outer match and
+                // the original right-hand side. The exact-pattern check above
+                // owns the former; sites contained by the base expression
+                // belong to the latter.
+                const checked_base_expr = checkedExprIdForSource(checked_bodies, base_expr);
+                const base_contains = switch (source) {
+                    .match_expr => |source_expr| blk: {
+                        const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
+                        break :blk checkedExprContainsExpr(checked_bodies, checked_base_expr, checked_expr);
+                    },
+                    .destructure_pattern => |source_pattern| blk: {
+                        const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
+                        break :blk checkedExprContainsPattern(checked_bodies, checked_base_expr, checked_pattern);
+                    },
+                };
+                if (base_contains) return root;
+                continue;
+            },
+            .expr => {},
+        };
         const contains = switch (source) {
             .match_expr => |source_expr| blk: {
                 const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
@@ -24917,33 +24888,108 @@ fn checkedExprIdForSource(checked_bodies: *const CheckedBodyStore, expr: CIR.Exp
     };
 }
 
-fn checkedExprIdForSelectedHoistedRoot(
+const SelectedHoistedCheckedBody = struct {
+    expr: CheckedExprId,
+    pattern: ?CheckedPatternId,
+    checked_type: CheckedTypeId,
+};
+
+fn checkedBodyForSelectedHoistedRoot(
     allocator: Allocator,
     module: TypedCIR.Module,
+    names: *const canonical.CanonicalNameStore,
+    checked_types: *CheckedTypePublication,
     checked_body_builder: *CheckedBodyStoreBuilder,
     selected_index: u32,
     selected: hoist_roots.SelectedHoistedRoot,
-    checked_type: CheckedTypeId,
-) Allocator.Error!CheckedExprId {
+) Allocator.Error!SelectedHoistedCheckedBody {
     const checked_bodies = checked_body_builder.storePtr();
     return switch (selected.body) {
-        .expr => checkedExprIdForSource(checked_bodies, selected.expr),
-        .pattern_extraction => |extraction| try appendCheckedPatternExtractionRootExpr(
+        .expr => .{
+            .expr = checkedExprIdForSource(checked_bodies, selected.expr),
+            .pattern = if (selected.pattern) |pattern| checkedPatternIdForSource(checked_bodies, pattern) else null,
+            .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, if (selected.pattern) |pattern| ModuleEnv.varFrom(pattern) else module.exprType(selected.expr)),
+        },
+        .pattern_extraction => |extraction| blk: {
+            const checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(extraction.result_pattern));
+            break :blk .{
+                .expr = try appendCheckedPatternExtractionRootExpr(
+                    allocator,
+                    module,
+                    checked_body_builder,
+                    selected_index,
+                    extraction,
+                    checked_type,
+                ),
+                .pattern = checkedPatternIdForSource(checked_bodies, extraction.result_pattern),
+                .checked_type = checked_type,
+            };
+        },
+        .pattern_validation => |validation| try appendCheckedPatternValidationRootBody(
             allocator,
             module,
-            checked_body_builder,
-            selected_index,
-            extraction,
-            checked_type,
-        ),
-        .pattern_validation => |validation| try appendCheckedPatternValidationRootExpr(
-            allocator,
-            module,
+            try checked_types.store.ensureEmptyRecordRoot(allocator, names),
             checked_body_builder,
             selected_index,
             validation,
-            checked_type,
         ),
+    };
+}
+
+fn appendCheckedPatternValidationRootBody(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_type: CheckedTypeId,
+    checked_body_builder: *CheckedBodyStoreBuilder,
+    selected_index: u32,
+    validation: hoist_roots.PatternValidation,
+) Allocator.Error!SelectedHoistedCheckedBody {
+    const checked_bodies = checked_body_builder.storePtr();
+    const scrutinee = checkedExprIdForSource(checked_bodies, validation.base_expr);
+    const checked_source_pattern = checkedPatternIdForSource(checked_bodies, validation.scrutinee_pattern);
+    const pattern_region = module.regionAt(ModuleEnv.nodeIdxFrom(validation.scrutinee_pattern));
+    const result = try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_validation_result = .{
+        .selected_root_index = selected_index,
+    } }, checked_type, pattern_region, .empty_record);
+
+    try checked_bodies.match_branch_pattern_pool.ensureUnusedCapacity(allocator, 1);
+    const pattern_start: u32 = @intCast(checked_bodies.match_branch_pattern_pool.items.len);
+    checked_bodies.match_branch_pattern_pool.appendAssumeCapacity(.{
+        .pattern = checked_source_pattern,
+        .degenerate = false,
+        .bn_start = 0,
+        .bn_len = 0,
+    });
+    errdefer _ = checked_bodies.match_branch_pattern_pool.pop();
+
+    const branches = try allocator.alloc(CheckedMatchBranch, 1);
+    var branches_owned = true;
+    errdefer if (branches_owned) allocator.free(branches);
+    branches[0] = .{
+        .pt_start = pattern_start,
+        .pt_len = 1,
+        .value = result,
+        .guard = null,
+    };
+
+    var data: CheckedExprData = .{ .match_ = .{
+        .cond = scrutinee,
+        .branches = branches,
+        .is_try_suffix = false,
+        .skip_exhaustiveness = false,
+        .comptime_site_kind = .destructure,
+    } };
+    branches_owned = false;
+    defer deinitCheckedExprData(allocator, &data);
+
+    const wrapper = try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_validation_wrapper = .{
+        .selected_root_index = selected_index,
+        .scrutinee_pattern = checked_source_pattern,
+    } }, checked_type, pattern_region, data);
+    return .{
+        .expr = wrapper,
+        .pattern = checked_source_pattern,
+        .checked_type = checked_type,
     };
 }
 
@@ -25003,68 +25049,6 @@ fn appendCheckedPatternExtractionRootExpr(
         .selected_root_index = selected_index,
         .scrutinee_pattern = checked_scrutinee_pattern,
     } }, checked_type, match_region, data);
-}
-
-fn appendCheckedPatternValidationRootExpr(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    checked_body_builder: *CheckedBodyStoreBuilder,
-    selected_index: u32,
-    validation: hoist_roots.PatternValidation,
-    checked_type: CheckedTypeId,
-) Allocator.Error!CheckedExprId {
-    const checked_bodies = checked_body_builder.storePtr();
-    const scrutinee = checkedExprIdForSource(checked_bodies, validation.base_expr);
-    const checked_scrutinee_pattern = checkedPatternIdForSource(checked_bodies, validation.scrutinee_pattern);
-    const match_region = module.regionAt(ModuleEnv.nodeIdxFrom(validation.scrutinee_pattern));
-    const result = try checked_body_builder.appendSyntheticExpr(
-        allocator,
-        .{ .pattern_validation_result = .{ .selected_root_index = selected_index } },
-        checked_type,
-        match_region,
-        .empty_record,
-    );
-
-    try checked_bodies.match_branch_pattern_pool.ensureUnusedCapacity(allocator, 1);
-    const pattern_start: u32 = @intCast(checked_bodies.match_branch_pattern_pool.items.len);
-    checked_bodies.match_branch_pattern_pool.appendAssumeCapacity(.{
-        .pattern = checked_scrutinee_pattern,
-        .degenerate = false,
-        .bn_start = 0,
-        .bn_len = 0,
-    });
-    errdefer _ = checked_bodies.match_branch_pattern_pool.pop();
-
-    const branches = try allocator.alloc(CheckedMatchBranch, 1);
-    var branches_owned = true;
-    errdefer if (branches_owned) allocator.free(branches);
-    branches[0] = .{
-        .pt_start = pattern_start,
-        .pt_len = 1,
-        .value = result,
-        .guard = null,
-    };
-
-    var data: CheckedExprData = .{ .match_ = .{
-        .cond = scrutinee,
-        .branches = branches,
-        .is_try_suffix = false,
-        .skip_exhaustiveness = false,
-        .comptime_site_kind = .destructure,
-    } };
-    branches_owned = false;
-    defer deinitCheckedExprData(allocator, &data);
-
-    return try checked_body_builder.appendSyntheticExpr(
-        allocator,
-        .{ .pattern_validation_wrapper = .{
-            .selected_root_index = selected_index,
-            .scrutinee_pattern = checked_scrutinee_pattern,
-        } },
-        checked_type,
-        match_region,
-        data,
-    );
 }
 
 fn checkedPatternIdForSource(checked_bodies: *const CheckedBodyStore, pattern: CIR.Pattern.Idx) CheckedPatternId {
@@ -25361,6 +25345,7 @@ pub const HoistedConstTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         artifact_key: CheckedModuleArtifactKey,
+        checked_types: *CheckedTypeStore,
         roots: *const CompileTimeRootTable,
         const_templates: *ConstTemplateTable,
     ) Allocator.Error!HoistedConstTable {
@@ -25391,7 +25376,15 @@ pub const HoistedConstTable = struct {
                 ModuleEnv.varFrom(pattern)
             else
                 ModuleEnv.varFrom(source_expr);
-            const source_scheme = try canonical_type_keys.schemeFromVar(
+            const source_scheme = if (root.hoisted_body) |body| switch (body) {
+                .pattern_validation => try checked_types.ensureSchemeForRoot(allocator, root.checked_type),
+                .expr, .pattern_extraction => try canonical_type_keys.schemeFromVar(
+                    allocator,
+                    module.typeStoreConst(),
+                    module.moduleEnvConst(),
+                    source_var,
+                ),
+            } else try canonical_type_keys.schemeFromVar(
                 allocator,
                 module.typeStoreConst(),
                 module.moduleEnvConst(),
@@ -28619,6 +28612,9 @@ pub const DispatchEvidenceFailure = struct {
         dispatch_expr_plan_out_of_bounds,
         iterator_for_missing_plan,
         iterator_for_plan_out_of_bounds,
+        iterator_plan_structural_resolution,
+        iterator_plan_callable_type_out_of_bounds,
+        iterator_plan_callable_not_function,
         plan_unfinalized_direct,
         plan_evidence_node_out_of_bounds,
         evidence_node_nested_refs_out_of_bounds,
@@ -29071,9 +29067,10 @@ pub const CheckedModuleArtifact = struct {
     // of publishing a second root for the same checked expression.
     // Version 64 publishes iterator producer identities for `List.iter_rev`,
     // the numeric `to`/`until` ranges, and the F32/F64 range helpers.
-    // Version 65 publishes compile-time-only pattern-validation roots and
-    // their discarded payload state.
-    const serialized_layout_version: u32 = 65;
+    // Version 65 publishes unit-valued destructure-validation hoisted roots.
+    // Version 66 gives validation-only roots a discarded payload state so no
+    // unit constant is archived for them.
+    const serialized_layout_version: u32 = 66;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29590,7 +29587,29 @@ pub const CheckedModuleArtifact = struct {
                             .method = call.method,
                         };
                     },
-                    .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+                    .structural => return .{
+                        .kind = .iterator_plan_structural_resolution,
+                        .index = @intCast(i),
+                        .method = call.method,
+                    },
+                    .checked_error, .@"unreachable" => continue,
+                    .evidence_dependent => {},
+                }
+
+                if (@intFromEnum(call.callable_ty) >= self.checked_types.payloads.items.len) {
+                    return .{
+                        .kind = .iterator_plan_callable_type_out_of_bounds,
+                        .index = @intCast(i),
+                        .method = call.method,
+                    };
+                }
+                const callable = self.checked_types.payload(call.callable_ty);
+                if (callable != .function) {
+                    return .{
+                        .kind = .iterator_plan_callable_not_function,
+                        .index = @intCast(i),
+                        .method = call.method,
+                    };
                 }
             }
         }
@@ -32591,6 +32610,7 @@ pub fn publishFromTypedModule(
         allocator,
         module,
         artifact_key,
+        checked_types,
         &compile_time_roots,
         &const_templates,
     );
@@ -33306,6 +33326,7 @@ fn expectProvidedExportKind(
         allocator,
         module,
         artifact_key,
+        checked_types,
         &compile_time_roots,
         &const_templates,
     );
@@ -33469,6 +33490,7 @@ test "compile-time finalization route is explicit and non-optional" {
 
 test "compile-time roots and top-level values store final checked output only" {
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "constant") != null);
+    try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "hoisted_validation") != null);
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "callable_binding") != null);
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "expect") != null);
     try std.testing.expect(@hasField(CompileTimeRoot, "request_eligibility"));
@@ -33479,6 +33501,7 @@ test "compile-time roots and top-level values store final checked output only" {
     try std.testing.expect(@hasField(CompileTimeRootPayload, "pending"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "const_node"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "fn_value"));
+    try std.testing.expect(@hasField(CompileTimeRootPayload, "discarded"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "expect"));
 
     try std.testing.expectEqual(@as(usize, 2), unionFieldCount(TopLevelValueKind));
@@ -35187,8 +35210,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x57, 0xE1, 0x5B, 0x72, 0x58, 0xA6, 0x50, 0x15, 0x32, 0xF0, 0x4B, 0x8F, 0xC6, 0xA9, 0x59, 0xC0,
-        0xF2, 0xBA, 0x5A, 0x68, 0x2F, 0x31, 0x01, 0x3B, 0xA6, 0x4D, 0x09, 0x31, 0x90, 0x9D, 0x8A, 0xFC,
+        0xBE, 0x6F, 0x9A, 0x56, 0x97, 0xCA, 0x76, 0x6D, 0x68, 0x4E, 0x18, 0x86, 0x53, 0xE3, 0x35, 0xF4,
+        0xC6, 0x51, 0x53, 0xFA, 0xB7, 0x44, 0xCB, 0xFB, 0x41, 0xDF, 0xA3, 0x74, 0x64, 0x46, 0xB0, 0x1C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

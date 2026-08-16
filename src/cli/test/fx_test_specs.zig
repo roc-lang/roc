@@ -418,7 +418,7 @@ pub const io_spec_tests = [_]TestSpec{
     .{
         .roc_file = "test/fx/dbg_corrupts_recursive_tag_union.roc",
         .io_spec = "1>Child is Text: hello",
-        .expected_build_stderr_contains = &.{"`DBG` IN OPTIMIZED BUILD"},
+        .expected_build_stderr_contains = &.{"`dbg` in optimized build"},
         .description = "Regression test: dbg on recursive tag union preserves variant discriminant (issue #8804)",
     },
     .{

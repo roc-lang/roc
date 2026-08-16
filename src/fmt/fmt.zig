@@ -1778,11 +1778,12 @@ const Formatter = struct {
             },
             .tuple => |t| {
                 const items = fmt.ast.store.exprSlice(t.items);
-                if (items.len == 1) {
+                const layout = fmt.ast.store.getCollectionLayout(ei);
+                if (items.len == 1 and layout == .compact) {
                     const group_multiline = fmt.regionHasInteriorComment(t.region) or fmt.groupedExprWillBeMultiline(items[0]);
                     _ = try fmt.formatParenthesizedExpr(t.region, items[0], group_multiline);
                 } else {
-                    try fmt.formatCollection(region, fmt.ast.store.getCollectionLayout(ei), .round, AST.Expr.Idx, items, Formatter.formatExpr);
+                    try fmt.formatCollection(region, layout, .round, AST.Expr.Idx, items, Formatter.formatExpr);
                 }
             },
             .tuple_access => |ta| {
@@ -5255,6 +5256,10 @@ test "trailing commas explicitly control collection layout" {
             .expected = "x = [\n\t1,\n\t2,\n]\n",
         },
         .{
+            .input = "x = (1,)",
+            .expected = "x = (\n\t1,\n)\n",
+        },
+        .{
             .input = "x = f(\n  1,\n  2\n)",
             .expected = "x = f(1, 2)\n",
         },
@@ -5289,6 +5294,12 @@ test "trailing commas explicitly control collection layout" {
         defer std.testing.allocator.free(result);
         try std.testing.expectEqualStrings(case.expected, result);
     }
+}
+
+test "issue 10672: parenthesized single-element tuple formatting is idempotent" {
+    // Repro for https://github.com/roc-lang/roc/issues/10672
+    const result = try moduleFmtsStable(std.testing.allocator, "a=((0,))", false);
+    defer std.testing.allocator.free(result);
 }
 
 test "issue 9939: named open tag union type variable is preserved" {
