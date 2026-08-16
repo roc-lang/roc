@@ -527,6 +527,9 @@ erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Every accepted explicit nominal constructor backing relation, for the
+/// settled-state re-decision in `recheckNominalConstructorBackings`.
+accepted_nominal_constructor_backings: std.ArrayListUnmanaged(AcceptedNominalConstructorBacking),
 /// Stack of expressions currently being checked for top-level-equivalent
 /// compile-time hoisting. This is temporary checker state only.
 hoist_frames: std.ArrayListUnmanaged(HoistFrame),
@@ -2053,6 +2056,21 @@ const ValueLookupEntry = struct {
     pattern_idx: CIR.Pattern.Idx,
 };
 
+/// One accepted explicit nominal constructor backing relation, kept so the
+/// settled state can re-decide the rule the relation applied.
+///
+/// A successful relation merges its two operands, so the expected side is no
+/// longer readable from the merged class. Its content is copied out beforehand
+/// instead: rebuilding one var from that content is what lets a settled-state
+/// report name the same expected backing a relation-time report does, without
+/// re-entering instantiation after generalization.
+const AcceptedNominalConstructorBacking = struct {
+    expr_idx: CIR.Expr.Idx,
+    expected_backing_content: types_mod.Content,
+    actual_backing: Var,
+    context: problem.Context.NominalConstructorContext,
+};
+
 /// A struct scratch info about a static dispatch constraint
 const ScratchStaticDispatchConstraint = struct {
     where_clause: CIR.WhereClause.Idx,
@@ -2359,6 +2377,7 @@ fn initAssumePrepared(
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
         .erroneous_value_patterns = .empty,
+        .accepted_nominal_constructor_backings = .empty,
         .hoist_frames = .empty,
         .hoist_expr_candidates = .empty,
         .hoist_deferred_binding_dependencies = .empty,
@@ -2468,6 +2487,7 @@ pub fn deinit(self: *Self) void {
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
+    self.accepted_nominal_constructor_backings.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
     self.hoist_expr_candidates.deinit(self.gpa);
     self.hoist_deferred_binding_dependencies.deinit(self.gpa);
@@ -4617,18 +4637,44 @@ fn unifyOwnedRelation(
     ctx: problem.Context,
     row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyOwnedRootRelation(expected, actual, env, ctx, row_width_relation, .ordinary);
+}
+
+/// `unifyOwnedRelation` for a relation whose initial pair carries a root
+/// relation beyond ordinary unification.
+fn unifyOwnedRootRelation(
+    self: *Self,
+    expected: Var,
+    actual: Var,
+    env: *Env,
+    ctx: problem.Context,
+    row_width_relation: unifier.RowWidthRelation,
+    root_relation: unifier.RootRelation,
+) std.mem.Allocator.Error!unifier.Result {
     const result = try self.runUnify(expected, actual, env, .{
         .context = ctx,
         .on_mismatch = .write_no_report,
+        .root_relation = root_relation,
         .row_width_relation = row_width_relation,
         .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
         .record_construction_var = if (row_width_relation == .construction) actual else null,
     });
     if (result.isOk()) return .ok;
+    return .{ .problem = try self.appendTypeMismatch(expected, actual, ctx) };
+}
 
+/// Record a type mismatch between two vars under a context. Every caller that
+/// owns its own rejection reports through here, so a rejection re-decided at
+/// the settled state renders exactly like the relation-time one.
+fn appendTypeMismatch(
+    self: *Self,
+    expected: Var,
+    actual: Var,
+    ctx: problem.Context,
+) std.mem.Allocator.Error!problem.Problem.Idx {
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected);
     const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual);
-    const problem_idx = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+    return self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
         .types = .{
             .expected_var = expected,
             .expected_snapshot = expected_snapshot,
@@ -4637,9 +4683,14 @@ fn unifyOwnedRelation(
         },
         .context = ctx,
     } });
-    return .{ .problem = problem_idx };
 }
 
+/// The constructor's operand is an ordinary value expression whose solved class
+/// is shared with everything else that value flows through—in the very case
+/// this relation exists to reject, `..receiver` has already lifted the update to
+/// the nominal, so the operand's class *is* the receiver's. Rejecting the
+/// constructor therefore owns the diagnostic and poisons only the constructor
+/// node; the receiver keeps the type it legitimately has.
 fn unifyNominalConstructorBacking(
     self: *Self,
     expected_backing: Var,
@@ -4648,12 +4699,14 @@ fn unifyNominalConstructorBacking(
     ctx: problem.Context.NominalConstructorContext,
     row_width_relation: unifier.RowWidthRelation,
 ) std.mem.Allocator.Error!unifier.Result {
-    return self.runUnify(expected_backing, actual_backing, env, .{
-        .context = .{ .nominal_constructor = ctx },
-        .root_relation = .nominal_constructor_backing,
-        .row_width_relation = row_width_relation,
-        .field_presence_relation = if (row_width_relation == .exact) .committed_value else .ordinary,
-    });
+    return self.unifyOwnedRootRelation(
+        expected_backing,
+        actual_backing,
+        env,
+        .{ .nominal_constructor = ctx },
+        row_width_relation,
+        .nominal_constructor_backing,
+    );
 }
 
 /// Check if a variable contains an infinite type after solving a binding.
@@ -4727,6 +4780,104 @@ fn checkBindingRootsForInfiniteTypes(self: *Self) std.mem.Allocator.Error!void {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
         try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
+}
+
+/// The settled-state re-decision of every accepted explicit nominal constructor
+/// backing relation.
+///
+/// The relation rejects lifting an already-nominal operand back through an
+/// anonymous expected backing. That is decided from the operand's solved shape,
+/// and unification can widen the shape after the relation runs: an operand that
+/// was still an open row when the constructor was checked lifts to the nominal
+/// once a later call pins it, which is exactly the shape the rule exists to
+/// reject. Re-deciding here is what makes the rule's verdict independent of
+/// where the constructor happens to be written.
+///
+/// A constructor rejected here has already handed its result type to every
+/// consumer, so poisoning the target var would corrupt the annotation classes it
+/// merged into. Only the constructor expression becomes a runtime error.
+fn recheckNominalConstructorBackings(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var rejected: std.ArrayListUnmanaged(u32) = .empty;
+    defer rejected.deinit(self.gpa);
+
+    // Indexed rather than over a captured slice: nothing here appends to the
+    // list today, and a captured slice would be the thing that breaks first if
+    // that ever changed.
+    var index: usize = 0;
+    while (index < self.accepted_nominal_constructor_backings.items.len) : (index += 1) {
+        const accepted = self.accepted_nominal_constructor_backings.items[index];
+        const lifted = unifier.constructorBackingActualIsNominal(self.types, accepted.actual_backing) orelse continue;
+        if (!lifted) continue;
+        if (self.cir.store.getExpr(accepted.expr_idx) == .e_runtime_error) continue;
+        try rejected.append(self.gpa, @intCast(index));
+    }
+    if (rejected.items.len == 0) return;
+
+    // Source order, widest first where two rejections start together: this is
+    // the order the reports come out in, and it puts an enclosing rejection
+    // ahead of the ones its own replacement is about to discard.
+    const RejectionOrder = struct {
+        check: *const Self,
+        fn lessThan(check: *const Self, a: u32, b: u32) bool {
+            const region_a = check.rejectedNominalConstructorRegion(a);
+            const region_b = check.rejectedNominalConstructorRegion(b);
+            if (region_a.start.offset != region_b.start.offset) {
+                return region_a.start.offset < region_b.start.offset;
+            }
+            if (region_a.end.offset != region_b.end.offset) {
+                return region_a.end.offset > region_b.end.offset;
+            }
+            return a < b;
+        }
+    };
+    std.mem.sort(u32, rejected.items, @as(*const Self, self), RejectionOrder.lessThan);
+
+    var reported_regions: std.ArrayListUnmanaged(Region) = .empty;
+    defer reported_regions.deinit(self.gpa);
+
+    for (rejected.items) |entry_index| {
+        const accepted = self.accepted_nominal_constructor_backings.items[entry_index];
+        const region = self.rejectedNominalConstructorRegion(entry_index);
+        if (self.expressionErrorAlreadyEncloses(region, reported_regions.items)) continue;
+
+        // One var rebuilt from the declared backing's own content. It describes
+        // the expected side the merged class can no longer show, and minting it
+        // touches nothing the solved graph already holds.
+        const expected_backing = try self.freshFromContent(accepted.expected_backing_content, env, region);
+        _ = try self.appendTypeMismatch(
+            expected_backing,
+            accepted.actual_backing,
+            .{ .nominal_constructor = accepted.context },
+        );
+
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{ .region = region } });
+        try self.replaceExprWithRuntimeError(accepted.expr_idx, diagnostic_idx);
+        try reported_regions.append(self.gpa, region);
+    }
+}
+
+fn rejectedNominalConstructorRegion(self: *const Self, entry_index: u32) Region {
+    return self.cir.store.getExprRegion(self.accepted_nominal_constructor_backings.items[entry_index].expr_idx);
+}
+
+/// Whether an expression already destined to become a runtime error encloses
+/// this region. The enclosing error replaces the whole subtree, so a second
+/// report would describe source the checked module no longer contains—which is
+/// exactly what a relation-time rejection avoids by poisoning its own node and
+/// letting the enclosing relations read `.err`.
+fn expressionErrorAlreadyEncloses(self: *const Self, region: Region, reported: []const Region) bool {
+    for (reported) |outer| {
+        if (outer.start.offset <= region.start.offset and region.end.offset <= outer.end.offset) return true;
+    }
+    var queued = self.erroneous_value_exprs.keyIterator();
+    while (queued.next()) |expr_idx| {
+        const outer = self.cir.store.getExprRegion(expr_idx.*);
+        if (outer.start.offset <= region.start.offset and region.end.offset <= outer.end.offset) return true;
+    }
+    return false;
 }
 
 /// The display name for a binding root being occurs-checked, when it has one.
@@ -7168,6 +7319,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // After solving all deferred constraints, check every binding root
     // (top-level defs and local bindings) for infinite types
     try self.checkBindingRootsForInfiniteTypes();
+    try self.recheckNominalConstructorBackings(&env);
 
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
@@ -11131,6 +11283,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // root the expression contains
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
     try self.checkBindingRootsForInfiniteTypes();
+    try self.recheckNominalConstructorBackings(&env);
     try self.finalizeExpectEffectSlots();
 
     try self.finalizeBindingSchemeNodes();
@@ -11232,6 +11385,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // reasons documented there.
     try self.defaultLiteralFieldKinds(&env);
     try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
+    try self.recheckNominalConstructorBackings(&env);
 
     try self.reportPolymorphicConstrainedExpr(expr_idx);
     try self.poisonErroneousValueUses();
@@ -14945,6 +15099,7 @@ fn checkPatternHelp(
                 pattern_region,
                 env,
                 .exact,
+                null,
             );
         },
         .nominal_external => |nominal| {
@@ -14962,6 +15117,7 @@ fn checkPatternHelp(
                     pattern_region,
                     env,
                     .exact,
+                    null,
                 );
             } else {
                 try self.markErroneous(pattern_var);
@@ -16195,6 +16351,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 expr_region,
                 env,
                 if (self.exprIsFreshRecordConstruction(nominal.backing_expr)) .construction else .exact,
+                expr_idx,
             );
         },
         .e_nominal_external => |nominal| {
@@ -16214,6 +16371,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     expr_region,
                     env,
                     if (self.exprIsFreshRecordConstruction(nominal.backing_expr)) .construction else .exact,
+                    expr_idx,
                 );
             } else {
                 try self.markErroneous(expr_var);
@@ -21545,6 +21703,12 @@ fn openNominalBackingForApp(
 /// - backing_type: The kind of backing type (tag, record, tuple, value)
 /// - region: The source region for instantiation
 /// - env: The type checking environment
+/// - owner_expr: the constructor expression, for the expression forms. A
+///   nominal pattern's backing is a sub-pattern of the same pattern, and a
+///   pattern has no node a rejection could replace with a runtime error, so the
+///   pattern forms pass null and are decided once, at relation time. Their
+///   operand is pinned by the scrutinee the pattern is checked against, so the
+///   widening the settled-state re-decision exists to catch cannot reach them.
 fn checkNominalTypeUsage(
     self: *Self,
     target_var: Var,
@@ -21554,6 +21718,7 @@ fn checkNominalTypeUsage(
     region: Region,
     env: *Env,
     row_width_relation: unifier.RowWidthRelation,
+    owner_expr: ?CIR.Expr.Idx,
 ) std.mem.Allocator.Error!NominalCheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -21595,11 +21760,23 @@ fn checkNominalTypeUsage(
         //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
         // Convert CIR.Expr.NominalBackingType to Context.NominalConstructorContext.BackingType
         const context_backing_type: problem.Context.NominalConstructorContext.BackingType = @enumFromInt(@intFromEnum(backing_type));
+        const constructor_context: problem.Context.NominalConstructorContext = .{ .backing_type = context_backing_type };
+        // Only an anonymous expected backing can be inverse-lifted through, and
+        // an accepted relation merges that side away, so the settled state can
+        // no longer read it: take both the verdict and the shape it describes
+        // here, while they still mean something.
+        const recheck_at_settled_state: ?struct { expr: CIR.Expr.Idx, expected: types_mod.Content } = blk: {
+            const owner = owner_expr orelse break :blk null;
+            const is_anonymous = unifier.constructorBackingIsAnonymous(self.types, nominal_backing_var) orelse
+                break :blk null;
+            if (!is_anonymous) break :blk null;
+            break :blk .{ .expr = owner, .expected = self.types.resolveVar(nominal_backing_var).desc.content };
+        };
         const result = try self.unifyNominalConstructorBacking(
             nominal_backing_var,
             actual_backing_var,
             env,
-            .{ .backing_type = context_backing_type },
+            constructor_context,
             row_width_relation,
         );
 
@@ -21609,17 +21786,24 @@ fn checkNominalTypeUsage(
                 // If unification succeeded, this is a valid instance of the nominal type
                 // So we set the target's type to be the nominal type
                 _ = try self.unify(target_var, nominal_var, env);
+                if (recheck_at_settled_state) |recheck| {
+                    try self.accepted_nominal_constructor_backings.append(self.gpa, .{
+                        .expr_idx = recheck.expr,
+                        .expected_backing_content = recheck.expected,
+                        .actual_backing = actual_backing_var,
+                        .context = constructor_context,
+                    });
+                }
                 return .ok;
             },
-            // `.mismatch` cannot occur here (this path never passes
-            // `write_no_report`), but a reported problem and an unreported
-            // mismatch both mean the constructor is incompatible.
+            // `.mismatch` cannot occur here: `unifyNominalConstructorBacking`
+            // owns the diagnostic and always reports, so it only ever returns
+            // `.ok`/`.problem`. Both non-ok results mean the constructor is
+            // incompatible with the nominal type, so they share an arm.
             .problem, .mismatch => {
-                // Unification failed - the constructor is incompatible with the nominal type
-                // Context is already set by unifyInContext
-                // (`.mismatch` is unreachable here—this call uses the poison_to_err
-                // wrapper, which only returns `.ok`/`.problem`—grouped for exhaustiveness.)
-                // Mark the entire expression as having a type error
+                // Only the constructor node becomes erroneous. Its operand keeps
+                // the type it legitimately has, so every other expression that
+                // shares that solved class stays lowerable.
                 try self.markErroneous(target_var);
                 return .err;
             },
@@ -21776,6 +21960,7 @@ const Probe = struct {
     generated_codec_calls_len: usize,
     rejected_static_dispatches_len: usize,
     record_omitted_defaults_len: usize,
+    accepted_nominal_constructor_backings_len: usize,
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
     imported_method_schemes_len: usize,
@@ -21819,6 +22004,9 @@ const Probe = struct {
         // on descriptors the savepoint rollback above already restored.
         self.check.cir.rejected_static_dispatches.items.shrinkRetainingCapacity(self.rejected_static_dispatches_len);
         self.check.cir.record_omitted_defaults.items.shrinkRetainingCapacity(self.record_omitted_defaults_len);
+        // Constructor relations recorded during the probe name the operand var
+        // and the backing content the savepoint rollback just discarded.
+        self.check.accepted_nominal_constructor_backings.shrinkRetainingCapacity(self.accepted_nominal_constructor_backings_len);
         while (self.check.dispatch_target_instantiations.items.len > self.dispatch_target_instantiations_len) {
             const removed = self.check.dispatch_target_instantiations.pop().?;
             const did_remove = self.check.dispatch_target_instantiation_by_fn_var.remove(removed.constraint_fn_var);
@@ -21864,6 +22052,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const generated_codec_calls_len = self.cir.generated_codec_calls.items.items.len;
     const rejected_static_dispatches_len = self.cir.rejected_static_dispatches.items.items.len;
     const record_omitted_defaults_len = self.cir.record_omitted_defaults.items.items.len;
+    const accepted_nominal_constructor_backings_len = self.accepted_nominal_constructor_backings.items.len;
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     const dispatch_derivations_len = self.dispatch_derivations.items.len;
     const imported_method_schemes_len = self.imported_method_schemes.items.len;
@@ -21892,6 +22081,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .generated_codec_calls_len = generated_codec_calls_len,
         .rejected_static_dispatches_len = rejected_static_dispatches_len,
         .record_omitted_defaults_len = record_omitted_defaults_len,
+        .accepted_nominal_constructor_backings_len = accepted_nominal_constructor_backings_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
         .imported_method_schemes_len = imported_method_schemes_len,

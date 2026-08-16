@@ -1481,13 +1481,48 @@ may likewise resolve to a nominal type; that is substitution of the declaration
 parameter, not an inverse lift through a concrete structural backing.
 
 This rule is implemented inside pure unification as explicit caller-supplied
-relation data. The checker must not probe a solved operand and then mutate or
-poison the graph separately, and Monotype must not repair an invalid checked
-constructor. A rejected root relation produces the existing nominal-constructor
-type mismatch diagnostic. The rejected side is pinned by
-`test/snapshots/issue/issue_10195_nominal_record_update_rewrapped.md`; accepted
-nested-nominal and implicit-record-update controls are pinned in
-`src/check/test/type_checking_integration.zig`.
+relation data. Deciding it never mutates or poisons the solved graph outside
+that unification—the one probe that re-reads a solved operand, the settled-state
+re-decision below, writes no descriptor and no redirect—and Monotype must not
+repair an invalid checked constructor. A rejected root relation produces the
+existing nominal-constructor type mismatch diagnostic. The rejected side is
+pinned by
+`test/snapshots/issue/issue_10195_nominal_record_update_rewrapped.md` in
+expression position and by
+`test/snapshots/issue/issue_10788_nominal_pattern_backing_mismatch.md` in
+pattern position; accepted nested-nominal and implicit-record-update controls
+are pinned in `src/check/test/type_checking_integration.zig`.
+
+The rejection is owned by the constructor expression alone. The operand's solved
+class belongs to an ordinary value that keeps flowing—in the rewrap case
+`..receiver` has already lifted the update to the nominal, so the operand's class
+*is* the receiver's—and poisoning a class other expressions still read leaves
+erroneous types on nodes Monotype must instantiate. So the relation reports its
+own diagnostic instead of poisoning either operand, and only the constructor's
+own var becomes erroneous.
+
+### Settled-State Re-Decision
+
+Whether the operand has already lifted to a nominal is decided from its solved
+shape, and unification can widen that shape after the relation runs: an operand
+that is still an open row when the constructor is checked—an inline lambda
+parameter, say—lifts to the nominal once a later call pins it. The rule is
+therefore decided twice, and the second verdict is the binding one: every
+accepted relation whose expected backing was anonymous is re-decided against the
+settled graph, and one that now inverse-lifts is rejected there. This is what
+makes the verdict independent of where the constructor happens to be written, so
+the same program is accepted or rejected whether its lambda is written inline or
+extracted to an annotated top-level function.
+
+A relation accepted at check time has already handed the constructor's result
+type to every consumer, so the settled-state rejection reports the same
+nominal-constructor mismatch and replaces the constructor with a runtime error
+without poisoning any var. The rejected side is pinned by
+`test/snapshots/issue/issue_10788_nominal_record_update_rewrap_deferred.md` and
+by the CLI specs on `test/cli/issue_10788_nominal_record_update_rewrap/`; the
+accepted control—the same constructor built from a fresh record literal in the
+same inline-lambda position—is pinned by
+`test/snapshots/issue/issue_10788_nominal_record_construction_in_lambda.md`.
 
 ## Module Completion Boundary
 
@@ -5098,8 +5133,24 @@ stamped plan—is documented and enforced at the restamp sites
 (`rewriteEqBinopAsMethodEq`, `rewriteDerivedIsEqMethodCallAsStructuralEq`,
 `rewriteDerivedMethodCallAsStructuralHash`). Plan stamping at creation
 (`replaceExprWithDispatchCall` and friends at plan-creation sites) is the
-plan's first stamp, not a restamp; `replaceExprWithRuntimeError` is diagnostic
-recovery.
+plan's first stamp, not a restamp; `replaceExprWithRuntimeError` retires the
+plans in the subtree it replaces, which is diagnostic recovery at every call
+site except `recheckNominalConstructorBackings`, where it is the rejection
+mechanism of a declared rule (see below).
+
+- `recheckNominalConstructorBackings`—policy: Nominal Constructor Backing
+  Relation, "Settled-State Re-Decision" (above). This is the one probe of
+  solved types whose verdict rejects a program: it re-reads the constructor
+  operand's settled shape and, when the operand has lifted to a nominal since
+  the relation ran, reports the relation's own mismatch and replaces the
+  constructor with a runtime error. It writes no descriptor and no redirect—
+  the solved graph the verdict was read from is left exactly as it stands, so
+  every type that consumed the constructor's result stays intact—and the CIR
+  mutation is confined to the rejected constructor and the plans in its own
+  subtree. Both sides are pinned:
+  `test/snapshots/issue/issue_10788_nominal_record_update_rewrap_deferred.md`
+  rejects, `test/snapshots/issue/issue_10788_nominal_record_construction_in_lambda.md`
+  accepts the same constructor shape in the same position.
 
 Read-only acceptance probes (no mutation; their rules live in doc comments
 at their definitions): `staticDispatchConstraintAcceptsCandidate` states the
