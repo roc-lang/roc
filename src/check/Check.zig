@@ -17999,8 +17999,8 @@ fn retireCallLikeExprWithErroneousOperands(
 }
 
 fn retireCallLikeExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
+    try self.markErroneous(expr_var);
     if (!self.erroneous_value_exprs.contains(expr_idx)) {
-        try self.markErroneous(expr_var);
         try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
     }
     self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = true;
