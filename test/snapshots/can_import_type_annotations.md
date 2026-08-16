@@ -209,6 +209,25 @@ advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input
 
 Is it misspelled, or is there an import missing?
 
+── ✗ type mismatch ──────────────────────── can_import_type_annotations.md:15:21
+
+The first branch of this match does not match the previous branch .
+
+Ok(data) => Ok(Http.success(data))
+            ^^^^^^^^^^^^^^^^^^^^^^
+
+The first branch is:
+
+    [Ok(Error), ..]
+
+But the previous branch results in:
+
+    Try(Error, Error)
+
+All branches in a match must have compatible types.
+Note: You can wrap branches values in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
+
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwAs,UpperIdent,KwExposing,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
