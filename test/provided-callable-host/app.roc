@@ -2,6 +2,7 @@ app [
     make_boxed_callable,
     drop_boxed_callable,
     make_aliased_boxed_callables,
+    make_shared_boxed_callables,
     drop_aliased_boxed_callables,
 ] { pf: platform "./platform/main.roc" }
 
@@ -32,6 +33,14 @@ make_aliased_boxed_callables = || {
 
     Box.box({ first: boxed, second: boxed })
 }
+
+# The same requirement for a top-level binding, which every reference reads
+# rather than rebuilding.
+shared_probe : Box(U64 -> U64)
+shared_probe = identity_probe()
+
+make_shared_boxed_callables : () -> Box(AliasedCallables)
+make_shared_boxed_callables = || Box.box({ first: shared_probe, second: shared_probe })
 
 drop_aliased_boxed_callables : Box(AliasedCallables) -> {}
 drop_aliased_boxed_callables = |_callables| {}

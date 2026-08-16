@@ -5268,7 +5268,12 @@ const Builder = struct {
 
         const stable = switch (view.const_store.get(node)) {
             .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
-            .fn_value => false,
+            // Static data emits an erased callable as one allocation naming
+            // its procedure through a relocation, so a capture-free function
+            // value is fully decided by the ConstStore. A capture record is
+            // not: its slots carry their own evidence, which this walk has no
+            // ConstStore node to answer for.
+            .fn_value => |fn_id| view.const_store.getFn(fn_id).captures.len == 0,
             .zst,
             .scalar,
             .str,
@@ -19761,6 +19766,17 @@ const BodyContext = struct {
         return null;
     }
 
+    /// Whether a constant restored here can only name what it builds.
+    ///
+    /// A node reached while an enclosing ConstStore node is still being built
+    /// restores to a read of that node's binding local, and static data is
+    /// emitted by a standalone initializer procedure with no such local in
+    /// scope. A node's own binding is not in this stack by the time its
+    /// candidate is decided, so only genuinely enclosing ones are counted.
+    fn constRestorationIsClosed(self: *BodyContext) bool {
+        return self.draft.active_const_node_bindings.items.len == 0;
+    }
+
     fn constNodeRepresentationsEql(
         self: *BodyContext,
         left: ActiveConstNodeRepresentation,
@@ -29116,7 +29132,8 @@ const BodyContext = struct {
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
-        if (self.builder.static_data_literals and
+        if (self.constRestorationIsClosed() and
+            self.builder.static_data_literals and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
@@ -29158,15 +29175,25 @@ const BodyContext = struct {
             request_node,
             const_locator,
         );
-        if (self.builder.static_data_literals and
+        if (self.constRestorationIsClosed() and
+            self.builder.static_data_literals and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
+            // A resolved request already names a committed type, so sealing it
+            // here lets this use share one static allocation with every other
+            // use of the same constant. An unresolved request keeps its graph
+            // cell and its own allocation, which stays correct because the
+            // static data it names is a copy of the same bytes.
+            const request_cell = if (try self.graph.typeIsResolved(request_node))
+                DraftTypeCell.fromSealed(try self.resolvedTypeViewForNode(request_node))
+            else
+                DraftTypeCell.fromGraphNode(request_node);
             const id = try self.builder.staticDataValue(
                 const_locator,
                 node,
                 checked_type,
-                DraftTypeCell.fromGraphNode(request_node),
+                request_cell,
             );
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_node), .{ .static_data_candidate = .{
                 .static_data = id,

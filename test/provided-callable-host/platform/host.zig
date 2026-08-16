@@ -39,6 +39,7 @@ const HostEnv = struct {
 extern fn roc_make_boxed_callable(offset: u64) callconv(.c) ?[*]u8;
 extern fn roc_drop_boxed_callable(callable: ?[*]u8) callconv(.c) void;
 extern fn roc_make_aliased_boxed_callables() callconv(.c) ?[*]u8;
+extern fn roc_make_shared_boxed_callables() callconv(.c) ?[*]u8;
 extern fn roc_drop_aliased_boxed_callables(callables: ?[*]u8) callconv(.c) void;
 
 /// Host view of the app's `{ first : Box(U64 -> U64), second : Box(U64 -> U64) }`.
@@ -119,23 +120,30 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
     // One boxed callable held by two record fields is one heap allocation, so
     // both fields must reach the host as the same erased-callable pointer.
-    const aliased_ptr = roc_make_aliased_boxed_callables() orelse {
-        std.debug.print("provided aliased callable maker returned null\n", .{});
-        return 1;
-    };
-    if (host_env.alloc_count == 0) {
-        std.debug.print("provided aliased callable maker did not allocate\n", .{});
-        return 1;
-    }
-    const aliased: *const AliasedCallables = @ptrCast(@alignCast(aliased_ptr));
-    const first = aliased.first;
-    const second = aliased.second;
-    roc_drop_aliased_boxed_callables(aliased_ptr);
-
     var failed = false;
-    if (first != second) {
-        std.debug.print("provided aliased callables arrived as {?*} and {?*}\n", .{ first, second });
-        failed = true;
+    const makers = [_]struct { name: []const u8, make: *const fn () callconv(.c) ?[*]u8 }{
+        .{ .name = "aliased", .make = &roc_make_aliased_boxed_callables },
+        .{ .name = "shared", .make = &roc_make_shared_boxed_callables },
+    };
+    for (makers) |maker| {
+        const before_allocs = host_env.alloc_count;
+        const aliased_ptr = maker.make() orelse {
+            std.debug.print("provided {s} callable maker returned null\n", .{maker.name});
+            return 1;
+        };
+        if (host_env.alloc_count == before_allocs) {
+            std.debug.print("provided {s} callable maker did not allocate\n", .{maker.name});
+            return 1;
+        }
+        const aliased: *const AliasedCallables = @ptrCast(@alignCast(aliased_ptr));
+        const first = aliased.first;
+        const second = aliased.second;
+        roc_drop_aliased_boxed_callables(aliased_ptr);
+
+        if (first != second) {
+            std.debug.print("provided {s} callables arrived as {?*} and {?*}\n", .{ maker.name, first, second });
+            failed = true;
+        }
     }
     if (host_env.dealloc_count != host_env.alloc_count) {
         std.debug.print("provided aliased callable drop released {d} of {d} allocations\n", .{
