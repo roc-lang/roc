@@ -1487,9 +1487,11 @@ re-decision below, writes no descriptor and no redirect—and Monotype must not
 repair an invalid checked constructor. A rejected root relation produces the
 existing nominal-constructor type mismatch diagnostic. The rejected side is
 pinned by
-`test/snapshots/issue/issue_10195_nominal_record_update_rewrapped.md`; accepted
-nested-nominal and implicit-record-update controls are pinned in
-`src/check/test/type_checking_integration.zig`.
+`test/snapshots/issue/issue_10195_nominal_record_update_rewrapped.md` in
+expression position and by
+`test/snapshots/issue/issue_10788_nominal_pattern_backing_mismatch.md` in
+pattern position; accepted nested-nominal and implicit-record-update controls
+are pinned in `src/check/test/type_checking_integration.zig`.
 
 The rejection is owned by the constructor expression alone. The operand's solved
 class belongs to an ordinary value that keeps flowing—in the rewrap case

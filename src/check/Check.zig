@@ -21704,8 +21704,11 @@ fn openNominalBackingForApp(
 /// - region: The source region for instantiation
 /// - env: The type checking environment
 /// - owner_expr: the constructor expression, for the expression forms. A
-///   nominal pattern's backing is a sub-pattern of the same pattern rather than
-///   a value that keeps flowing, so the pattern forms pass null.
+///   nominal pattern's backing is a sub-pattern of the same pattern, and a
+///   pattern has no node a rejection could replace with a runtime error, so the
+///   pattern forms pass null and are decided once, at relation time. Their
+///   operand is pinned by the scrutinee the pattern is checked against, so the
+///   widening the settled-state re-decision exists to catch cannot reach them.
 fn checkNominalTypeUsage(
     self: *Self,
     target_var: Var,
