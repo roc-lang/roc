@@ -23684,6 +23684,18 @@ const ProcBodyBuilder = struct {
         for_: anytype,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const plan_id = for_.plan orelse
+            boxyLowerInvariant("checked iterator for reached boxy lowering without an iterator dispatch plan");
+        const plan = self.iteratorForPlan(plan_id);
+        inline for (.{ plan.iter.resolution, plan.next.resolution }) |resolution| {
+            switch (resolution) {
+                .checked_error => return try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
+                .@"unreachable" => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
+                .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+                .direct_closed, .direct_parametric, .evidence_dependent => {},
+                .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
+            }
+        }
         if (!self.isZstLocal(target)) {
             boxyLowerInvariant("checked iterator for reached boxy lowering with non-Unit result layout");
         }
@@ -23696,9 +23708,6 @@ const ProcBodyBuilder = struct {
         try self.reserveMatchPatternBindings(for_.pattern);
         try self.reserveMatchPatternDescriptors(for_.pattern, &.{});
 
-        const plan_id = for_.plan orelse
-            boxyLowerInvariant("checked iterator for reached boxy lowering without an iterator dispatch plan");
-        const plan = self.iteratorForPlan(plan_id);
         const iter_call_plan = self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, .iter, self.worker_layout.worker);
         const next_call_plan = self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, .next, self.worker_layout.worker);
         const iterator_type = if (iter_call_plan) |call_plan|
