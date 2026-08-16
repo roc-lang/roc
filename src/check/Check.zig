@@ -2060,14 +2060,14 @@ const ValueLookupEntry = struct {
 /// settled state can re-decide the rule the relation applied.
 ///
 /// A successful relation merges its two operands, so the expected side is no
-/// longer readable from the merged class; the nominal application it came from
-/// is what gets recorded, and the settled state re-opens that application's
-/// backing to describe the rejection.
+/// longer readable from the merged class. Its content is copied out beforehand
+/// instead: rebuilding one var from that content is what lets a settled-state
+/// report name the same expected backing a relation-time report does, without
+/// re-entering instantiation after generalization.
 const AcceptedNominalConstructorBacking = struct {
     expr_idx: CIR.Expr.Idx,
-    nominal_type: types_mod.NominalType,
+    expected_backing_content: types_mod.Content,
     actual_backing: Var,
-    region: Region,
     context: problem.Context.NominalConstructorContext,
 };
 
@@ -4660,10 +4660,21 @@ fn unifyOwnedRootRelation(
         .record_construction_var = if (row_width_relation == .construction) actual else null,
     });
     if (result.isOk()) return .ok;
+    return .{ .problem = try self.appendTypeMismatch(expected, actual, ctx) };
+}
 
+/// Record a type mismatch between two vars under a context. Every caller that
+/// owns its own rejection reports through here, so a rejection re-decided at
+/// the settled state renders exactly like the relation-time one.
+fn appendTypeMismatch(
+    self: *Self,
+    expected: Var,
+    actual: Var,
+    ctx: problem.Context,
+) std.mem.Allocator.Error!problem.Problem.Idx {
     const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected);
     const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, actual);
-    const problem_idx = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
+    return self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
         .types = .{
             .expected_var = expected,
             .expected_snapshot = expected_snapshot,
@@ -4672,7 +4683,6 @@ fn unifyOwnedRootRelation(
         },
         .context = ctx,
     } });
-    return .{ .problem = problem_idx };
 }
 
 /// The constructor's operand is an ordinary value expression whose solved class
@@ -4790,41 +4800,84 @@ fn recheckNominalConstructorBackings(self: *Self, env: *Env) std.mem.Allocator.E
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Indexed rather than over a captured slice: re-opening a declaration below
-    // mints vars, and a list this loop reads must not be held across that.
+    var rejected: std.ArrayListUnmanaged(u32) = .empty;
+    defer rejected.deinit(self.gpa);
+
+    // Indexed rather than over a captured slice: nothing here appends to the
+    // list today, and a captured slice would be the thing that breaks first if
+    // that ever changed.
     var index: usize = 0;
     while (index < self.accepted_nominal_constructor_backings.items.len) : (index += 1) {
         const accepted = self.accepted_nominal_constructor_backings.items[index];
-        if (!unifier.constructorBackingActualIsNominal(self.types, accepted.actual_backing)) continue;
+        const lifted = unifier.constructorBackingActualIsNominal(self.types, accepted.actual_backing) orelse continue;
+        if (!lifted) continue;
         if (self.cir.store.getExpr(accepted.expr_idx) == .e_runtime_error) continue;
-
-        // Re-open the declaration the relation compared against, so the report
-        // names the same expected backing a relation-time rejection does. A
-        // declaration that no longer opens is invalid and already reported at
-        // the declaration, so this use stays silent exactly as it does there.
-        const expected_backing = (try self.openNominalBackingForApp(
-            accepted.nominal_type,
-            env,
-            accepted.region,
-        )) orelse continue;
-
-        const expected_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expected_backing);
-        const actual_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, accepted.actual_backing);
-        _ = try self.problems.appendProblem(self.gpa, .{ .type_mismatch = .{
-            .types = .{
-                .expected_var = expected_backing,
-                .expected_snapshot = expected_snapshot,
-                .actual_var = accepted.actual_backing,
-                .actual_snapshot = actual_snapshot,
-            },
-            .context = .{ .nominal_constructor = accepted.context },
-        } });
-
-        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-            .region = self.cir.store.getExprRegion(accepted.expr_idx),
-        } });
-        try self.replaceExprWithRuntimeError(accepted.expr_idx, diagnostic_idx);
+        try rejected.append(self.gpa, @intCast(index));
     }
+    if (rejected.items.len == 0) return;
+
+    // Source order, widest first where two rejections start together: this is
+    // the order the reports come out in, and it puts an enclosing rejection
+    // ahead of the ones its own replacement is about to discard.
+    const RejectionOrder = struct {
+        check: *const Self,
+        fn lessThan(check: *const Self, a: u32, b: u32) bool {
+            const region_a = check.rejectedNominalConstructorRegion(a);
+            const region_b = check.rejectedNominalConstructorRegion(b);
+            if (region_a.start.offset != region_b.start.offset) {
+                return region_a.start.offset < region_b.start.offset;
+            }
+            if (region_a.end.offset != region_b.end.offset) {
+                return region_a.end.offset > region_b.end.offset;
+            }
+            return a < b;
+        }
+    };
+    std.mem.sort(u32, rejected.items, @as(*const Self, self), RejectionOrder.lessThan);
+
+    var reported_regions: std.ArrayListUnmanaged(Region) = .empty;
+    defer reported_regions.deinit(self.gpa);
+
+    for (rejected.items) |entry_index| {
+        const accepted = self.accepted_nominal_constructor_backings.items[entry_index];
+        const region = self.rejectedNominalConstructorRegion(entry_index);
+        if (self.expressionErrorAlreadyEncloses(region, reported_regions.items)) continue;
+
+        // One var rebuilt from the declared backing's own content. It describes
+        // the expected side the merged class can no longer show, and minting it
+        // touches nothing the solved graph already holds.
+        const expected_backing = try self.freshFromContent(accepted.expected_backing_content, env, region);
+        _ = try self.appendTypeMismatch(
+            expected_backing,
+            accepted.actual_backing,
+            .{ .nominal_constructor = accepted.context },
+        );
+
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{ .region = region } });
+        try self.replaceExprWithRuntimeError(accepted.expr_idx, diagnostic_idx);
+        try reported_regions.append(self.gpa, region);
+    }
+}
+
+fn rejectedNominalConstructorRegion(self: *const Self, entry_index: u32) Region {
+    return self.cir.store.getExprRegion(self.accepted_nominal_constructor_backings.items[entry_index].expr_idx);
+}
+
+/// Whether an expression already destined to become a runtime error encloses
+/// this region. The enclosing error replaces the whole subtree, so a second
+/// report would describe source the checked module no longer contains—which is
+/// exactly what a relation-time rejection avoids by poisoning its own node and
+/// letting the enclosing relations read `.err`.
+fn expressionErrorAlreadyEncloses(self: *const Self, region: Region, reported: []const Region) bool {
+    for (reported) |outer| {
+        if (outer.start.offset <= region.start.offset and region.end.offset <= outer.end.offset) return true;
+    }
+    var queued = self.erroneous_value_exprs.keyIterator();
+    while (queued.next()) |expr_idx| {
+        const outer = self.cir.store.getExprRegion(expr_idx.*);
+        if (outer.start.offset <= region.start.offset and region.end.offset <= outer.end.offset) return true;
+    }
+    return false;
 }
 
 /// The display name for a binding root being occurs-checked, when it has one.
@@ -21707,10 +21760,15 @@ fn checkNominalTypeUsage(
         const constructor_context: problem.Context.NominalConstructorContext = .{ .backing_type = context_backing_type };
         // Only an anonymous expected backing can be inverse-lifted through, and
         // an accepted relation merges that side away, so the settled state can
-        // no longer read it: take the verdict here, while it still means
-        // something, and record the relation only when the rule can apply.
-        const recheck_at_settled_state = owner_expr != null and
-            unifier.constructorBackingIsAnonymous(self.types, nominal_backing_var);
+        // no longer read it: take both the verdict and the shape it describes
+        // here, while they still mean something.
+        const recheck_at_settled_state: ?struct { expr: CIR.Expr.Idx, expected: types_mod.Content } = blk: {
+            const owner = owner_expr orelse break :blk null;
+            const is_anonymous = unifier.constructorBackingIsAnonymous(self.types, nominal_backing_var) orelse
+                break :blk null;
+            if (!is_anonymous) break :blk null;
+            break :blk .{ .expr = owner, .expected = self.types.resolveVar(nominal_backing_var).desc.content };
+        };
         const result = try self.unifyNominalConstructorBacking(
             nominal_backing_var,
             actual_backing_var,
@@ -21725,12 +21783,11 @@ fn checkNominalTypeUsage(
                 // If unification succeeded, this is a valid instance of the nominal type
                 // So we set the target's type to be the nominal type
                 _ = try self.unify(target_var, nominal_var, env);
-                if (recheck_at_settled_state) {
+                if (recheck_at_settled_state) |recheck| {
                     try self.accepted_nominal_constructor_backings.append(self.gpa, .{
-                        .expr_idx = owner_expr.?,
-                        .nominal_type = nominal_type,
+                        .expr_idx = recheck.expr,
+                        .expected_backing_content = recheck.expected,
                         .actual_backing = actual_backing_var,
-                        .region = region,
                         .context = constructor_context,
                     });
                 }
@@ -21900,6 +21957,7 @@ const Probe = struct {
     generated_codec_calls_len: usize,
     rejected_static_dispatches_len: usize,
     record_omitted_defaults_len: usize,
+    accepted_nominal_constructor_backings_len: usize,
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
     imported_method_schemes_len: usize,
@@ -21943,6 +22001,9 @@ const Probe = struct {
         // on descriptors the savepoint rollback above already restored.
         self.check.cir.rejected_static_dispatches.items.shrinkRetainingCapacity(self.rejected_static_dispatches_len);
         self.check.cir.record_omitted_defaults.items.shrinkRetainingCapacity(self.record_omitted_defaults_len);
+        // Constructor relations recorded during the probe name the operand var
+        // and the backing content the savepoint rollback just discarded.
+        self.check.accepted_nominal_constructor_backings.shrinkRetainingCapacity(self.accepted_nominal_constructor_backings_len);
         while (self.check.dispatch_target_instantiations.items.len > self.dispatch_target_instantiations_len) {
             const removed = self.check.dispatch_target_instantiations.pop().?;
             const did_remove = self.check.dispatch_target_instantiation_by_fn_var.remove(removed.constraint_fn_var);
@@ -21988,6 +22049,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const generated_codec_calls_len = self.cir.generated_codec_calls.items.items.len;
     const rejected_static_dispatches_len = self.cir.rejected_static_dispatches.items.items.len;
     const record_omitted_defaults_len = self.cir.record_omitted_defaults.items.items.len;
+    const accepted_nominal_constructor_backings_len = self.accepted_nominal_constructor_backings.items.len;
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     const dispatch_derivations_len = self.dispatch_derivations.items.len;
     const imported_method_schemes_len = self.imported_method_schemes.items.len;
@@ -22016,6 +22078,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .generated_codec_calls_len = generated_codec_calls_len,
         .rejected_static_dispatches_len = rejected_static_dispatches_len,
         .record_omitted_defaults_len = record_omitted_defaults_len,
+        .accepted_nominal_constructor_backings_len = accepted_nominal_constructor_backings_len,
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
         .imported_method_schemes_len = imported_method_schemes_len,

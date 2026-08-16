@@ -1481,10 +1481,12 @@ may likewise resolve to a nominal type; that is substitution of the declaration
 parameter, not an inverse lift through a concrete structural backing.
 
 This rule is implemented inside pure unification as explicit caller-supplied
-relation data. The checker must not probe a solved operand and then mutate or
-poison the graph separately, and Monotype must not repair an invalid checked
-constructor. A rejected root relation produces the existing nominal-constructor
-type mismatch diagnostic. The rejected side is pinned by
+relation data. Deciding it never mutates or poisons the solved graph outside
+that unification—the one probe that re-reads a solved operand, the settled-state
+re-decision below, writes no descriptor and no redirect—and Monotype must not
+repair an invalid checked constructor. A rejected root relation produces the
+existing nominal-constructor type mismatch diagnostic. The rejected side is
+pinned by
 `test/snapshots/issue/issue_10195_nominal_record_update_rewrapped.md`; accepted
 nested-nominal and implicit-record-update controls are pinned in
 `src/check/test/type_checking_integration.zig`.
@@ -5129,8 +5131,24 @@ stamped plan—is documented and enforced at the restamp sites
 (`rewriteEqBinopAsMethodEq`, `rewriteDerivedIsEqMethodCallAsStructuralEq`,
 `rewriteDerivedMethodCallAsStructuralHash`). Plan stamping at creation
 (`replaceExprWithDispatchCall` and friends at plan-creation sites) is the
-plan's first stamp, not a restamp; `replaceExprWithRuntimeError` is diagnostic
-recovery.
+plan's first stamp, not a restamp; `replaceExprWithRuntimeError` retires the
+plans in the subtree it replaces, which is diagnostic recovery at every call
+site except `recheckNominalConstructorBackings`, where it is the rejection
+mechanism of a declared rule (see below).
+
+- `recheckNominalConstructorBackings`—policy: Nominal Constructor Backing
+  Relation, "Settled-State Re-Decision" (above). This is the one probe of
+  solved types whose verdict rejects a program: it re-reads the constructor
+  operand's settled shape and, when the operand has lifted to a nominal since
+  the relation ran, reports the relation's own mismatch and replaces the
+  constructor with a runtime error. It writes no descriptor and no redirect—
+  the solved graph the verdict was read from is left exactly as it stands, so
+  every type that consumed the constructor's result stays intact—and the CIR
+  mutation is confined to the rejected constructor and the plans in its own
+  subtree. Both sides are pinned:
+  `test/snapshots/issue/issue_10788_nominal_record_update_rewrap_deferred.md`
+  rejects, `test/snapshots/issue/issue_10788_nominal_record_construction_in_lambda.md`
+  accepts the same constructor shape in the same position.
 
 Read-only acceptance probes (no mutation; their rules live in doc comments
 at their definitions): `staticDispatchConstraintAcceptsCandidate` states the

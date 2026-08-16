@@ -174,44 +174,35 @@ pub const RootRelation = enum {
     nominal_constructor_backing,
 };
 
-/// Whether a `nominal_constructor_backing` pair would use ordinary
-/// structural-to-nominal lifting in the inverse direction: an anonymous
-/// expected backing accepting an already-nominal actual operand.
-pub fn constructorBackingInverseLifts(types_store: *types_mod.Store, expected: Var, actual: Var) bool {
-    return constructorBackingIsAnonymous(types_store, expected) and
-        constructorBackingActualIsNominal(types_store, actual);
-}
-
 /// Whether the expected side of a constructor-backing pair is the anonymous
-/// structure an already-nominal actual must not lift back through.
+/// structure an already-nominal actual must not lift back through. `null` when
+/// the alias walk found no shape to decide from.
 ///
 /// A successful relation merges the two operands into one class, so this side's
 /// verdict is only meaningful before the relation runs. The declaration fixes
 /// the shape, so the pre-relation answer stays the right one afterwards.
-pub fn constructorBackingIsAnonymous(types_store: *types_mod.Store, expected: Var) bool {
-    const expected_content = contentThroughAliasesOrNull(types_store, expected) orelse return false;
+pub fn constructorBackingIsAnonymous(types_store: *const types_mod.Store, expected: Var) ?bool {
+    const expected_content = contentThroughAliasesOrNull(types_store, expected) orelse return null;
     return std.meta.activeTag(expected_content) == .structure and
-        std.meta.activeTag(expected_content.structure) != .nominal_type;
+        expected_content.unwrapNominalType() == null;
 }
 
 /// Whether the actual side of a constructor-backing pair has already lifted to
-/// a nominal.
+/// a nominal. `null` when the alias walk found no shape to decide from.
 ///
 /// This is decided from the operand's solved shape, and unification can widen
 /// that shape after the relation runs, so the checker re-decides this side
 /// against the settled graph (see design.md, "Settled-State Re-Decision").
-pub fn constructorBackingActualIsNominal(types_store: *types_mod.Store, actual: Var) bool {
-    const actual_content = contentThroughAliasesOrNull(types_store, actual) orelse return false;
-    if (std.meta.activeTag(actual_content) != .structure) return false;
-    const actual_flat = actual_content.structure;
-    if (std.meta.activeTag(actual_flat) != .nominal_type) return false;
-    return !types_store.nominalDeclIsInvalid(actual_flat.nominal_type);
+pub fn constructorBackingActualIsNominal(types_store: *const types_mod.Store, actual: Var) ?bool {
+    const actual_content = contentThroughAliasesOrNull(types_store, actual) orelse return null;
+    const nominal = actual_content.unwrapNominalType() orelse return false;
+    return !types_store.nominalDeclIsInvalid(nominal);
 }
 
-/// Only a cyclic alias declaration can walk further than the store holds, and
-/// declaration validity rejects those before any value is checked, so the
-/// exhausted walk reports no shape and both callers above decide `false`.
-fn contentThroughAliasesOrNull(types_store: *types_mod.Store, start: Var) ?Content {
+/// Walking further than the store holds means the alias chain is cyclic, which
+/// is a shape no decision can be read from; each caller states what it does
+/// with that.
+fn contentThroughAliasesOrNull(types_store: *const types_mod.Store, start: Var) ?Content {
     var current = start;
     var remaining = types_store.len();
     while (remaining > 0) : (remaining -= 1) {
@@ -617,12 +608,22 @@ const Unifier = struct {
     }
 
     fn processRootPair(self: *Self, a_var: Var, b_var: Var, relation: RootRelation) Error!void {
-        if (relation == .nominal_constructor_backing and
-            constructorBackingInverseLifts(self.types_store, a_var, b_var))
-        {
+        if (relation == .nominal_constructor_backing and try self.constructorBackingWouldInverseLift(a_var, b_var)) {
             return error.TypeMismatch;
         }
         try self.processGuardedPair(a_var, b_var);
+    }
+
+    /// The root constructor-backing rule, decided against the operands as they
+    /// stand now. A cyclic alias offers no shape to decide from, and a relation
+    /// this unifier cannot decide does not unify, so it mismatches. The actual
+    /// side goes first: it rules out the overwhelmingly common case without
+    /// walking the expected side at all.
+    fn constructorBackingWouldInverseLift(self: *Self, expected: Var, actual: Var) Error!bool {
+        const actual_is_nominal = constructorBackingActualIsNominal(self.types_store, actual) orelse
+            return error.TypeMismatch;
+        if (!actual_is_nominal) return false;
+        return constructorBackingIsAnonymous(self.types_store, expected) orelse error.TypeMismatch;
     }
 
     fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {
