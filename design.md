@@ -1232,6 +1232,17 @@ an auto-imported type, redeclares an existing type, or repeats the same external
 type must live in one place. Callers may choose which source operation they are
 performing, but they must not duplicate the type-binding collision matrix.
 
+Canonicalization also outputs two exact module-global value-definition lists.
+The selected-name list contains one definition for each source-visible value
+name, plus every global definition whose pattern has no single source name. The
+value-binding list contains every concrete shadowed definition by exact identity
+and excludes annotation-only declarations superseded by an implementation.
+Duplicate and superseded definitions remain in the complete definition list so
+checking can report and type-check them. Name-sensitive consumers use the
+selected-name list; checked value, procedure, and compile-time-root construction
+use the value-binding list. Neither repeats name deduplication or chooses a
+definition based on its expression shape.
+
 The `Scope.type_bindings` table has one ordinary mutation API for type names.
 It accepts the full scope slice, the target scope index, the introduced name,
 and the incoming binding:

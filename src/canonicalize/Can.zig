@@ -62,7 +62,6 @@ pub const BuiltinTypeContext = struct {
 pub const ModuleInitContext = struct {
     builtin_types: BuiltinTypeContext,
     imported_modules: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
-    explicit_root_names: []const []const u8 = &.{},
     /// Version string of the compiler that is running, used to check a
     /// header's `roc` version pin against it. Null skips that check.
     ///
@@ -71,13 +70,6 @@ pub const ModuleInitContext = struct {
     /// which canonicalize for inspection—the snapshot tool above all—
     /// produce output that does not change with whichever compiler built them.
     compiler_version: ?[]const u8 = null,
-};
-
-/// A definition requested by an explicit-roots caller.
-pub const ExplicitRootDef = struct {
-    name: []const u8,
-    ident: Ident.Idx,
-    def_idx: CIR.Def.Idx,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -278,9 +270,6 @@ exposed_type_texts: std.StringHashMapUnmanaged(Region) = .{},
 /// In the common case this stays empty—it is only populated by builtin canon paths that still
 /// want to pre-register hierarchical qualified item names for cross-module lookup.
 placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
-/// Definitions requested by the caller as explicit post-check roots.
-explicit_root_names: []const []const u8 = &.{},
-explicit_root_defs: std.ArrayListUnmanaged(ExplicitRootDef) = .empty,
 /// Version of the compiler that is running, or null to skip checking the
 /// header's `roc` version pin. See `ModuleInitContext.compiler_version`.
 compiler_version: ?[]const u8 = null,
@@ -619,7 +608,6 @@ pub fn deinit(
     self.exposed_ident_texts.deinit(gpa);
     self.exposed_type_texts.deinit(gpa);
     self.placeholder_idents.deinit(gpa);
-    self.explicit_root_defs.deinit(gpa);
     self.pending_provides_entries.deinit(gpa);
     self.method_registrations.deinit(gpa);
 
@@ -730,7 +718,6 @@ fn initInternal(
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
-        .explicit_root_names = if (maybe_context) |context| context.explicit_root_names else &.{},
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
         .alias_cycle_references = std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx){},
@@ -852,28 +839,16 @@ fn addAutoImportedNominalTagExpr(
     }, region);
 }
 
-/// Return a caller-requested root by the definition recorded at creation time.
+/// Return a caller-requested root from canonicalization's finalized
+/// source-visible definition selection.
 pub fn explicitRootDefByName(self: *const Self, name: []const u8) ?CIR.Def.Idx {
-    for (self.explicit_root_defs.items) |root| {
-        if (std.mem.eql(u8, root.name, name)) return root.def_idx;
+    for (self.env.store.sliceDefs(self.env.top_level_value_defs)) |def_idx| {
+        const def = self.env.store.getDef(def_idx);
+        const pattern = self.env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        if (std.mem.eql(u8, self.env.getIdent(pattern.assign.ident), name)) return def_idx;
     }
     return null;
-}
-
-fn recordExplicitRootDef(self: *Self, ident: Ident.Idx, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
-    if (self.explicit_root_names.len == 0) return;
-
-    const ident_text = self.env.getIdent(ident);
-    for (self.explicit_root_names) |root_name| {
-        if (!std.mem.eql(u8, ident_text, root_name)) continue;
-
-        try self.explicit_root_defs.append(self.env.gpa, .{
-            .name = root_name,
-            .ident = ident,
-            .def_idx = def_idx,
-        });
-        return;
-    }
 }
 
 fn markGloballyResolvablePattern(self: *Self, pattern_idx: Pattern.Idx) std.mem.Allocator.Error!void {
@@ -923,6 +898,27 @@ fn recordGlobalValueDef(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Err
     const def = self.env.store.getDef(def_idx);
     try self.markBoundPatternsGloballyResolvable(def.pattern);
     try self.scratch_global_value_defs.append(self.env.gpa, def_idx);
+}
+
+fn topLevelDefIsSelected(
+    self: *const Self,
+    selected_by_ident: *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx),
+    def_idx: CIR.Def.Idx,
+) bool {
+    const def = self.env.store.getDef(def_idx);
+    const pattern = self.env.store.getPattern(def.pattern);
+    if (pattern != .assign) return true;
+    return (selected_by_ident.get(pattern.assign.ident) orelse unreachable) == def_idx;
+}
+
+fn globalDefIntroducesValueBinding(
+    self: *const Self,
+    selected_by_ident: *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx),
+    def_idx: CIR.Def.Idx,
+) bool {
+    const def = self.env.store.getDef(def_idx);
+    return self.env.store.getExpr(def.expr) != .e_anno_only or
+        self.topLevelDefIsSelected(selected_by_ident, def_idx);
 }
 
 /// Register a method on its explicit owner declaration.
@@ -3719,6 +3715,43 @@ fn reportInvalidAssociatedStatement(
     });
 }
 
+/// Canonicalize an `expect` written directly inside an associated block.
+///
+/// A module-visible type's associated block is part of the module's top-level
+/// surface, so its expects join `all_statements` exactly like expects written at
+/// the top level of the file, which is what makes `roc test` run them. An
+/// associated block nested inside a function body belongs to that function's
+/// block instead, so its expects become statements of the enclosing block and
+/// run inline wherever the block runs.
+fn canonicalizeAssociatedExpect(
+    self: *Self,
+    expect_stmt: std.meta.fieldInfo(AST.Statement, .expect).type,
+    owner_is_module_visible: bool,
+    block_context: ?BlockStatementContext,
+) std.mem.Allocator.Error!void {
+    const region = self.parse_ir.tokenizedRegionToRegion(expect_stmt.region);
+
+    // Track that we're inside an expect so the ? operator fails the expect on
+    // Err instead of returning early.
+    const was_in_expect = self.in_expect;
+    self.in_expect = true;
+    defer self.in_expect = was_in_expect;
+
+    const body = try self.canonicalizeExprOrMalformed(expect_stmt.body);
+    const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
+        .body = body.idx,
+    } }, region);
+
+    if (owner_is_module_visible) {
+        try self.env.store.addScratchStatement(stmt_idx);
+    } else {
+        try self.addBlockStatement(
+            self.localAssociatedContext(block_context),
+            CanonicalizedStatement{ .idx = stmt_idx, .free_vars = body.free_vars },
+        );
+    }
+}
+
 fn canonicalizeAssociatedItems(
     self: *Self,
     state: *AssociatedItemsState,
@@ -4085,10 +4118,13 @@ fn canonicalizeAssociatedItems(
             .@"while" => |while_stmt| try self.reportInvalidAssociatedStatement("while", while_stmt.region),
             .@"return" => |return_stmt| try self.reportInvalidAssociatedStatement("return", return_stmt.region),
             .@"break" => |break_stmt| try self.reportInvalidAssociatedStatement("break", break_stmt.region),
-            .@"var", .expr, .expect, .file_import, .malformed => {
+            .expect => |expect_stmt| try self.canonicalizeAssociatedExpect(
+                expect_stmt,
+                owner_is_module_visible,
+                block_context,
+            ),
+            .@"var", .expr, .file_import, .malformed => {
                 // var, expr, file_import and malformed are already reported by the parser.
-                // expect is not reported by anything today; see #10730 for whether it should
-                // run inside an associated block or be rejected like the statements above.
             },
         }
     }
@@ -4545,6 +4581,62 @@ pub fn canonicalizeFile(
     }
     self.env.global_value_defs = try self.env.store.defSpanFrom(global_value_defs_start);
 
+    // Associated forward-reference adoption can rewrite a placeholder's ident
+    // while canonicalization is in progress. Select source-visible values only
+    // after those rewrites are complete, so the retained identifiers and
+    // definition identities are final.
+    var top_level_value_defs_by_ident = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Def.Idx){};
+    defer top_level_value_defs_by_ident.deinit(self.env.gpa);
+    for (self.scratch_global_value_defs.items) |def_idx| {
+        const def = self.env.store.getDef(def_idx);
+        const pattern = self.env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+
+        const selected = try top_level_value_defs_by_ident.getOrPut(self.env.gpa, pattern.assign.ident);
+        if (!selected.found_existing) {
+            selected.value_ptr.* = def_idx;
+        } else {
+            const prior = self.env.store.getDef(selected.value_ptr.*);
+            if (self.env.store.getExpr(prior.expr) == .e_anno_only and self.env.store.getExpr(def.expr) != .e_anno_only) {
+                selected.value_ptr.* = def_idx;
+            }
+        }
+    }
+
+    var value_binding_defs_match_global = true;
+    var top_level_value_defs_match_global = true;
+    for (self.scratch_global_value_defs.items) |def_idx| {
+        const selected = self.topLevelDefIsSelected(&top_level_value_defs_by_ident, def_idx);
+        if (!selected) top_level_value_defs_match_global = false;
+        if (self.env.store.getExpr(self.env.store.getDef(def_idx).expr) == .e_anno_only and !selected) {
+            value_binding_defs_match_global = false;
+        }
+    }
+
+    if (value_binding_defs_match_global) {
+        self.env.value_binding_defs = self.env.global_value_defs;
+    } else {
+        const value_binding_defs_start = self.env.store.scratchDefTop();
+        for (self.scratch_global_value_defs.items) |def_idx| {
+            if (self.globalDefIntroducesValueBinding(&top_level_value_defs_by_ident, def_idx)) {
+                try self.env.store.addScratchDef(def_idx);
+            }
+        }
+        self.env.value_binding_defs = try self.env.store.defSpanFrom(value_binding_defs_start);
+    }
+
+    if (top_level_value_defs_match_global) {
+        self.env.top_level_value_defs = self.env.global_value_defs;
+    } else {
+        const top_level_value_defs_start = self.env.store.scratchDefTop();
+        for (self.scratch_global_value_defs.items) |def_idx| {
+            if (self.topLevelDefIsSelected(&top_level_value_defs_by_ident, def_idx)) {
+                try self.env.store.addScratchDef(def_idx);
+            }
+        }
+        self.env.top_level_value_defs = try self.env.store.defSpanFrom(top_level_value_defs_start);
+    }
+
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
 
@@ -4974,7 +5066,6 @@ fn canonicalizeStmtDecl(
         // Top-level associated items (identifiers ending with '!') are automatically exposed
         const is_associated_item = ident_text.len > 0 and ident_text[ident_text.len - 1] == '!';
         const idx = try self.env.insertIdent(base.Ident.for_text(ident_text));
-        try self.recordExplicitRootDef(idx, def_idx);
 
         // If this identifier is exposed (or is an associated item), add it to exposed_items
         if (self.exposed_ident_texts.contains(ident_text) or is_associated_item) {
@@ -5842,8 +5933,7 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
     // Start a new scratch space for exports
     const scratch_exports_start = self.env.store.scratchDefTop();
 
-    // Use the already-created all_defs span
-    const defs_slice = self.env.store.sliceDefs(self.env.all_defs);
+    const defs_slice = self.env.store.sliceDefs(self.env.top_level_value_defs);
 
     // Check each definition to see if it corresponds to an exposed item.
     // We check exposed_idents which only contains items from the exposing clause,
@@ -5856,6 +5946,7 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
             // Check if this identifier was explicitly exposed in the module header
             if (self.exposed_idents.contains(pattern.assign.ident)) {
                 try self.env.store.addScratchDef(def_idx);
+                try self.env.setExposedValueNodeIndexById(pattern.assign.ident, @intFromEnum(def_idx));
             }
         }
     }

@@ -1656,7 +1656,6 @@ pub fn parseCheckModule(
             .builtin_indices = builtin_indices,
         },
         .imported_modules = if (available_imports.len == 0) null else &imported_modules,
-        .explicit_root_names = explicit_root_names,
     });
     errdefer czer.deinit();
 
