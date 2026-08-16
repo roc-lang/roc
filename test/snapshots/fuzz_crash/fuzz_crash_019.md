@@ -204,7 +204,6 @@ TYPE MISMATCH - fuzz_crash_019.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
 TYPE MISMATCH - fuzz_crash_019.md:93:22:93:24
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:116:1:116:13
-TYPE MISMATCH - fuzz_crash_019.md:119:2:119:10
 MISSING METHOD - fuzz_crash_019.md:105:55:105:66
 MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 # PROBLEMS
@@ -1008,20 +1007,6 @@ t : V((a,c))
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
 
-── ✗ type mismatch ───────────────────────────────────── fuzz_crash_019.md:119:2
-
-This expression produces a value, but it's not being used.
-
-foo == 1
-^^^^^^^^
-
-It has the type:
-
-    Bool
-
-Since this expression is used as a statement, it must evaluate to {}.
-If you don't need the value, you can ignore it with _ =.
-
 ── ✗ missing method ─────────────────────────────────── fuzz_crash_019.md:105:55
 
 This is trying to dispatch a method named od on an unresolved type variable,
@@ -1762,14 +1747,7 @@ expect {
 	(s-expect
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expect
-		(e-block
-			(s-expr
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(e-method-eq (negated "false")
-				(lhs
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(rhs
-					(e-runtime-error (tag "ident_not_in_scope")))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
