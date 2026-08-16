@@ -4790,7 +4790,11 @@ fn recheckNominalConstructorBackings(self: *Self, env: *Env) std.mem.Allocator.E
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    for (self.accepted_nominal_constructor_backings.items) |accepted| {
+    // Indexed rather than over a captured slice: re-opening a declaration below
+    // mints vars, and a list this loop reads must not be held across that.
+    var index: usize = 0;
+    while (index < self.accepted_nominal_constructor_backings.items.len) : (index += 1) {
+        const accepted = self.accepted_nominal_constructor_backings.items[index];
         if (!unifier.constructorBackingActualIsNominal(self.types, accepted.actual_backing)) continue;
         if (self.cir.store.getExpr(accepted.expr_idx) == .e_runtime_error) continue;
 
