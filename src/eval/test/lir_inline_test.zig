@@ -8549,3 +8549,62 @@ test "issue 10731 mapping over a List-recursive tag union lowers under wrapper i
         \\}
     , &.{ "Wrap(1)", "[Wrap(2)]" });
 }
+
+// Repro for https://github.com/roc-lang/roc/issues/10797: a generic
+// state-threading function whose returned closure builds a `List` with a
+// counted `for` loop, specialized at a call site that supplies a known
+// generator. Cloning that closure body must keep the `var $state` parameter
+// bound in the clone, so the specialized loop's initial values still name a
+// live binding.
+test "issue 10797 SpecConstr keeps the threaded var parameter bound in a specialized loop" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Generator(value) : U32 -> { value : value, state : U32 }
+        \\
+        \\list : Generator(a), U64 -> Generator(List(a))
+        \\list = |generator, length| {
+        \\    |var $state| {
+        \\        var $result = List.with_capacity(length)
+        \\
+        \\        for _ in 0..<length {
+        \\            { value: item, state: $state } = generator($state)
+        \\            $result = $result.append(item)
+        \\        }
+        \\
+        \\        { value: $result, state: $state }
+        \\    }
+        \\}
+        \\
+        \\step : Generator(U32)
+        \\step = |state| { value: state, state: state + 7 }
+        \\
+        \\main : U64
+        \\main = {
+        \\    { value: values, state: final } = list(step, 3)(1234)
+        \\    values.sum().to_u64() * 10000 + final.to_u64()
+        \\}
+    ;
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source);
+    defer lifted.deinit(allocator);
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    // 1234 + 1241 + 1248 = 3723, and the threaded state ends at 1255.
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(u64, 37231255), value.read(u64)),
+    }
+}

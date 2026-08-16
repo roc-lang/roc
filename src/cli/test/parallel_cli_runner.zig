@@ -1001,6 +1001,17 @@ const subcommand_cases = [_]CliCase{
     // Repro for https://github.com/roc-lang/roc/issues/10560: complete checked
     // interface relations must reach a generated iterator before Lambda Solved.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10560: generated iterator preserves nested named callable types", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_10560_generated_iterator_evidence.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" } } } } },
+    // Repro for https://github.com/roc-lang/roc/issues/10788: a nominal
+    // constructor that re-wraps an already-nominal record update is rejected by
+    // the backing relation, and that rejection must not travel into Monotype as
+    // an erroneous checked type. Unrelated test roots still run, so the
+    // independent `expect` has to pass either way.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10788: rejected nominal record update rewrap does not reach Monotype", .timeout_ms = 60_000, .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_10788_nominal_record_update_rewrap/Sh.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stderr, .text = "invalid nominal record" }}, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stdout, .text = "1 passed" }, .{ .stream = .stdout, .text = "All (1) tests passed" } } }}, .not_contains = &.{ .{ .stream = .stderr, .text = "erroneous checked type reached Monotype instantiation" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // Repro for https://github.com/roc-lang/roc/issues/10788: the same rewrap
+    // written as an inline lambda argument reaches the backing relation while
+    // the receiver is still a flex var, so the settled-state re-decision is
+    // what rejects it. Compiling has to reach that verdict and terminate.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10788: nominal record update rewrap under an inline lambda terminates", .timeout_ms = 60_000, .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_10788_nominal_record_update_rewrap/Sc.roc", .exit = .not_panic, .contains = &.{.{ .stream = .stderr, .text = "invalid nominal record" }}, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stdout, .text = "passed" }, .{ .stream = .stderr, .text = "passed" } } }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // Repro for https://github.com/roc-lang/roc/issues/10303: mutually
     // recursive function-containing values must finish Monotype lowering.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10303: mutually recursive function values check cleanly", .timeout_ms = 10_000, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10303_recursive_function_values.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }} } } },
