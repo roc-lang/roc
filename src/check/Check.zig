@@ -7769,10 +7769,10 @@ fn flatTypeIsConcreteHoistedConst(
                     => {},
                 }
             }
-            if (nominal.isOpaque()) break :blk true;
-            // Transparent non-builtin nominal: inspect the declaration's
-            // backing template. Formals in the template stand for the args
-            // checked above, so the template walk admits rigids.
+            // Non-builtin nominal: inspect the declaration's backing template.
+            // Formals in the template stand for the args checked above, so the
+            // template walk admits rigids. Opacity hides the backing from
+            // source, not from archiving, which copies it.
             const template = self.nominalDeclBackingTemplate(nominal) orelse break :blk false;
             break :blk try self.varIsConcreteHoistedConstTypeInternal(.decl_template, template, visited);
         },
