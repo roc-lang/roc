@@ -1304,6 +1304,14 @@ fn relateCheckedMonoRequestNodeAt(
         .named => |checked_named| switch (request_content) {
             .named => |request_named| {
                 if (sameNamedValueDefinition(checked_named, request_named)) {
+                    // A declaration's arguments are components of the value the
+                    // same way a record's fields are. Relating only the backing
+                    // reaches every argument the backing mentions, so this
+                    // relation exists for the phantom arguments: the ones the
+                    // backing never mentions.
+                    for (checked_named.args, request_named.args) |checked_arg, request_arg| {
+                        try relateCheckedMonoRequestNodeAt(graph, checked_arg, request_arg, row_width, seen);
+                    }
                     const checked_backing = checked_named.backing orelse {
                         try graph.unify(checked_root, request_root);
                         return;

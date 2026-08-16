@@ -52,6 +52,15 @@ Host :: {
     ## Return a host callable that consumes the fifth ABI argument when called.
     boxed_transition! : I64 => Box(UnitToBoxedUnitToI64)
 
+    ## Store any boxed Roc value in the host, which owns it until `take_seed!`
+    ## hands it back. The host never inspects it, so its type survives only in
+    ## Roc's type system, the way a platform's opaque host-owned values do.
+    store_seed! : Box(a) => {}
+
+    ## Return the boxed value `store_seed!` was given. The result type is the
+    ## only place `a` appears, so nothing at a call site constrains it.
+    take_seed! : () => Box(a)
+
     ## Store a boxed function in the host by incrementing its outer refcount.
     store_boxed! : Box(I64ToI64) => {}
 
