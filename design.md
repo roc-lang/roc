@@ -6782,6 +6782,22 @@ error fences the containing value, while `rejected_static_dispatches` records
 only failures of the dispatch check itself. `EvidencePass` never infers either
 case from the constraint callable or its return type.
 
+The dispatch *target*'s declaration is the third route to `checked_error`, and
+it fences the target the way the paragraph above fences the receiver. A method
+whose declaration canonicalization could not canonicalize, or whose body
+checking poisoned, carries `e_runtime_error` as its bound expression; its
+diagnostic is already reported and it has no runtime target. Such a declaration
+is still *declared*, so `MethodRegistry` records its `(MethodOwner,
+MethodNameId)` key with no target rather than omitting it, and
+`lookupCheckedMethodTarget` answers `rejected` instead of "no such method".
+Omitting the key would be indistinguishable from a method no view declares,
+which is a publication bug for an owned value dispatch. A registry key with no
+target is the only representation of this state: post-check stages consume
+`MethodTarget` as a lowerable target and must never receive one for a rejected
+declaration, so the distinction lives in the lookup result, not in
+`MethodTargetKind`. `EvidencePass` resolves a `rejected` lookup to
+`checked_error` and adds no second diagnostic at the dispatch site.
+
 `checked_error` and `unreachable` are rejected, non-returning
 dispatches. Monotype lowers both to an ordinary Roc runtime crash instead of a
 call, so neither can return a dispatch result value. For `checked_error`, this is
