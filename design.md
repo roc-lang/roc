@@ -2087,6 +2087,20 @@ right-hand side and complete scrutinee pattern. Those roots are emitted in
 dependency-first order and later lookups resolve through the selected binder,
 never as runtime-local pattern references.
 
+A non-exhaustive destructure in an unguarded runtime position is itself a strict
+compile-time demand when its right-hand side is top-level-equivalent. This demand
+does not depend on whether the pattern contains a binder or whether any binder is
+later referenced. The checker selects a unit-valued pattern-validation root that
+evaluates the right-hand side and matches the complete source pattern. Binder
+extractions remain liveness-driven. After solving, a selected concrete extraction
+subsumes the matching validation root so a live binder does not make the
+right-hand side evaluate twice; with no selected concrete extraction, the
+unit-valued validation root remains and no dead binder value is archived.
+The pending exhaustiveness site is explicitly classified for empirical
+compile-time validation only after this root selection succeeds. No validation
+root is selected inside an ordinary top-level constant, because that enclosing
+root already evaluates and owns the destructure site.
+
 Hoisted-root selection is positional as well as dependency-based. Selection may
 fire only in structurally unguarded positions of runtime bodies, and the checker
 must carry that position as explicit checking context while computing

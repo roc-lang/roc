@@ -1996,8 +1996,8 @@ pub const StaticDispatchPlanTable = struct {
             const item_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.patternType(pattern_idx));
             const iter_callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(for_plan.iter_fn_var));
             const next_callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(for_plan.next_fn_var));
-            const iterator_ty = checkedFunctionReturnTypeId(checked_types, iter_callable_ty);
-            const step_ty = checkedFunctionReturnTypeId(checked_types, next_callable_ty);
+            const iterator_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(for_plan.iterator_var));
+            const step_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(for_plan.step_var));
             const step_topology = IteratorStepTopology{
                 .done_tag = try names.internTagIdent(module.identStoreConst(), @bitCast(for_plan.step_topology.done_tag_ident)),
                 .one_tag = try names.internTagIdent(module.identStoreConst(), @bitCast(for_plan.step_topology.one_tag_ident)),
@@ -2042,6 +2042,7 @@ pub const StaticDispatchPlanTable = struct {
                 });
                 try iterator_plan_sources.append(allocator, .{
                     .iter_dispatcher_var = module.exprType(iterable_idx),
+                    .next_dispatcher_var = @enumFromInt(for_plan.iterator_var),
                     .iter_fn_var = @enumFromInt(for_plan.iter_fn_var),
                     .next_fn_var = @enumFromInt(for_plan.next_fn_var),
                 });
@@ -2184,6 +2185,7 @@ pub const PlanSource = struct {
 /// `iterator_for_plans`.
 pub const IteratorPlanSource = struct {
     iter_dispatcher_var: Var,
+    next_dispatcher_var: Var,
     iter_fn_var: Var,
     next_fn_var: Var,
 };
@@ -2534,27 +2536,6 @@ fn checkedTypeIdForVar(
         }
         unreachable;
     };
-}
-
-fn checkedFunctionReturnTypeId(
-    checked_types: anytype,
-    callable_ty: CheckedTypeId,
-) CheckedTypeId {
-    const raw = @intFromEnum(callable_ty);
-    if (raw >= checked_types.store.payloadCount()) {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch invariant violated: callable type root was outside the checked type store", .{});
-        }
-        unreachable;
-    }
-    const payload = checked_types.store.payload(callable_ty);
-    if (std.meta.activeTag(payload) != .function) {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch invariant violated: for-loop dispatch constraint was not a function", .{});
-        }
-        unreachable;
-    }
-    return payload.function.ret;
 }
 
 fn staticDispatchOperandsForSlice(

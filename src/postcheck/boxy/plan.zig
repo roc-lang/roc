@@ -10935,6 +10935,8 @@ const Builder = struct {
         }
         const plan = view.static_dispatch_plans.iterator_for_plans[raw];
 
+        if (iteratorPlanDoesNotExecute(plan)) return;
+
         _ = try self.analyzeType(view, plan.item_ty);
         _ = try self.analyzeType(view, plan.iterator_ty);
         _ = try self.analyzeType(view, plan.step_ty);
@@ -12199,6 +12201,18 @@ fn directDispatchTarget(
         .@"unreachable",
         => null,
     };
+}
+
+fn iteratorPlanDoesNotExecute(plan: static_dispatch.IteratorForPlan) bool {
+    inline for (.{ plan.iter.resolution, plan.next.resolution }) |resolution| {
+        switch (resolution) {
+            .checked_error, .@"unreachable" => return true,
+            .direct_pending => boxyPlanInvariant("unfinalized iterator call reached Boxy planning"),
+            .direct_closed, .direct_parametric, .evidence_dependent => {},
+            .structural => boxyPlanInvariant("structural iterator dispatch reached Boxy planning"),
+        }
+    }
+    return false;
 }
 
 fn descriptorReason(kind: RepresentationKind) ?DescriptorReason {

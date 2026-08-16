@@ -79,6 +79,7 @@ pub const LirInspectFn = *const fn (
 
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
+    specialization_strategy: base.SpecializationStrategy = .lss,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
     list_in_place_map: bool = false,
@@ -289,6 +290,7 @@ fn lowerAppPathToLir(
         },
         .{ .requests = lir_roots },
         .{
+            .specialization_strategy = opts.specialization_strategy,
             .target_usize = opts.target_usize,
             .inline_mode = opts.inline_mode,
             .list_in_place_map = opts.list_in_place_map,

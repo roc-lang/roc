@@ -153,6 +153,24 @@ pub const Store = struct {
         unreachable;
     }
 
+    /// Record that a checker-selected compile-time root will execute this site.
+    /// The pending diagnostic must therefore be decided empirically by that
+    /// root rather than flushed as an unconditionally runtime-reachable error.
+    pub fn markPendingStaticExhaustivenessEmpirical(
+        self: *Self,
+        source: ExhaustivenessSiteSource,
+    ) void {
+        for (self.pending_static_exhaustiveness.items) |*pending| {
+            if (!exhaustivenessSourcesEqual(pending.source, source)) continue;
+            pending.mode = .empirical;
+            return;
+        }
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
+        }
+        unreachable;
+    }
+
     pub fn resolvePendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
         var write: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {

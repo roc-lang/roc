@@ -61,6 +61,17 @@ plans. They must not reconstruct runtime layout or ownership behavior from
 display strings, semantic type names, source field order, or incidental data
 structure shape.
 
+For concrete Roc-owned values, Zig and Rust glue compose zero-runtime-storage
+release policies. `RocList(T).deinit` in Zig selects the compiler-generated
+policy for `T` at comptime. Rust provided functions whose results have complete
+release policies also get an `_owned` wrapper returning `RocOwned`; its
+zero-sized policy implements recursive `Drop` without adding a descriptor or
+context pointer to the value. List release atomically claims the final spine
+reference before reading elements, then releases the allocation's complete
+element range and finally frees the spine. Opaque payloads are not assigned a
+structural policy: recursive teardown across that boundary requires an explicit
+compiler-owned release root or descriptor rather than host-side guessing.
+
 ## Pointer-Width Contract
 
 The glue script input is targetless. It carries no concrete Roc build target,
@@ -181,7 +192,7 @@ language-specific.
 | --- | --- | --- |
 | Owned-vs-borrowed boundary confusion for hosted args, provided returns, and stored values | Explicit retain/release/move helpers and generated hosted-function comments/signatures that make ownership transfer visible | `glue runtime: cli-main` owns/decrefs `RocStr` hosted args and `roc_main` results; `glue runtime: app-model` owns/decrefs boxed models and rendered `View`; all CGlue/ZigGlue/RustGlue native+wasm32 cells. |
 | Recursive refcounting for nested records, tag payloads, lists, boxes, closures, and recursive types through `Box` | Data-driven recursive retain/release helpers emitted from compiler RC plans, not from type names | `glue runtime: type-catalog` exercises `Tree`, boxed payloads, recursive tags, and catalog unions; `glue runtime: layout-probe` exercises many boxed fields; `glue command generated Zig compiles with zig build-obj` checks emitted retain/release helpers. |
-| Lists with refcounted elements, including backing element-count headers | List helpers that know element width, alignment, and whether element teardown is required | `glue runtime: cli-main` constructs `List(Str)` args and validates the refcounted element-count header; `glue runtime: app-model` renders and decrefs `View.messages : List(Msg)`. |
+| Lists with refcounted elements, including backing element-count headers | List helpers that know element width, alignment, and whether element teardown is required | `glue runtime: cli-main` constructs `List(Str)` args and validates the refcounted element-count header; `glue runtime: app-model` renders and decrefs `View.messages : List(Msg)`; issue 10451's Zig/Rust glue cases compile recursive release for a directly returned `List(Str)`. |
 | Seamless slices for `Str` and `List` | Allocation-base recovery helpers that never free the visible slice pointer directly | `glue runtime: cli-main` uses generated Zig/Rust `RocStr.fromSlice` and `RocList.fromSlice` helpers and decrefs through allocation-base recovery; CGlue helper source is covered by `glue command generated C header compiles with zig cc` and `CGlue.roc expect tests pass`. |
 | Roc allocation headers, static refcount zero, and deallocation alignment | Allocator wrappers and assertions for header size, alignment, canaries, and static-data no-op release | `glue runtime: cli-main` and `glue runtime: app-model` use adversarial host allocators with alignment/live-allocation checks; `glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment` and the Rust equivalent cover boxed payload alignment/static-release helpers. |
 | `RocStr` small, big, static, and sliced representations | Safe byte/as-str views, constructors with UTF-8 policy, retain/release helpers, and no C-string assumptions | `glue runtime: cli-main` covers `roc_cli_read`, `roc_cli_log`, and app args; `glue runtime: type-catalog` covers provided/result strings in records and tag payloads; `glue runtime: app-model` covers `View.title`. |

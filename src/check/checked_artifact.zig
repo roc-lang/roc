@@ -4551,7 +4551,7 @@ pub const CheckedTypeStore = struct {
         names: *const canonical.CanonicalNameStore,
     ) Allocator.Error!CheckedTypeId {
         const key = try checkedTypePayloadKeyBuild(allocator, names, self, .empty_record);
-        if (self.rootForKey(key)) |existing| {
+        if (self.rootForKey(key.key)) |existing| {
             if (self.payload(existing) != .empty_record) try self.replaceTypeRootPayload(allocator, existing, .empty_record);
             return existing;
         }
@@ -7660,6 +7660,8 @@ fn appendStaticDispatchTypeRoots(
 
     for (module.moduleEnvConst().for_loop_dispatch_plans.items.items) |plan| {
         if (!source_nodes.hasRawLoop(plan.node_idx)) continue;
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.iterator_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.iter_fn_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.next_fn_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_topology.one_payload_var));
@@ -10405,6 +10407,13 @@ pub const SyntheticExprOrigin = union(enum) {
         result_pattern: CheckedPatternId,
     },
     pattern_extraction_wrapper: struct {
+        selected_root_index: u32,
+        scrutinee_pattern: CheckedPatternId,
+    },
+    pattern_validation_result: struct {
+        selected_root_index: u32,
+    },
+    pattern_validation_wrapper: struct {
         selected_root_index: u32,
         scrutinee_pattern: CheckedPatternId,
     },
@@ -15358,7 +15367,8 @@ fn appendSyntheticLocalLookupRefs(
                 });
                 by_checked_expr[raw_expr] = id;
             },
-            .pattern_extraction_wrapper => {
+            .pattern_validation_result => {},
+            .pattern_extraction_wrapper, .pattern_validation_wrapper => {
                 const raw_expr = @intFromEnum(origin_record.expr);
                 if (raw_expr >= checked_bodies.exprCount()) {
                     checkedArtifactInvariant("synthetic wrapper origin referenced an expression out of range", .{});
@@ -17224,29 +17234,16 @@ const EvidencePass = struct {
             chain,
             commit_unpinned,
         )) orelse return;
-        // The iterator type is the `iter` callable's return: dispatch `next`
-        // on it.
-        const next_dispatcher = self.iteratorNextDispatcherVar(src.iter_fn_var);
-        plan.next.resolution = if (next_dispatcher) |dispatcher_var|
-            (try self.resolveObligation(
-                dispatcher_var,
-                plan.next.dispatcher_ty,
-                plan.next.method,
-                null,
-                src.next_fn_var,
-                chain,
-                commit_unpinned,
-            )) orelse return
-        else
-            // A non-function `iter` callable only occurs on checked errors.
-            .checked_error;
+        plan.next.resolution = (try self.resolveObligation(
+            src.next_dispatcher_var,
+            plan.next.dispatcher_ty,
+            plan.next.method,
+            null,
+            src.next_fn_var,
+            chain,
+            commit_unpinned,
+        )) orelse return;
         self.iterator_plan_resolved[raw] = true;
-    }
-
-    fn iteratorNextDispatcherVar(self: *EvidencePass, iter_fn_var: Var) ?Var {
-        const resolved = self.types.resolveVar(iter_fn_var);
-        const func = resolved.desc.content.unwrapFunc() orelse return null;
-        return func.ret;
     }
 
     /// Resolve one dispatch obligation: `method` dispatched on
@@ -23601,7 +23598,7 @@ pub const CompileTimeRootTable = struct {
         names: *canonical.CanonicalNameStore,
         global_value_defs: []const CIR.Def.Idx,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
-        checked_types: *const CheckedTypePublication,
+        checked_types: *CheckedTypePublication,
         checked_body_builder: *CheckedBodyStoreBuilder,
         procedure_templates: *const CheckedProcedureTemplateTable,
     ) Allocator.Error!CompileTimeRootTable {
@@ -23695,9 +23692,10 @@ pub const CompileTimeRootTable = struct {
                 else
                     .callable_binding,
             };
-            const checked_expr = try checkedExprIdForSelectedHoistedRoot(
+            const checked_root = try checkedBodyForSelectedHoistedRoot(
                 allocator,
                 module,
+                names,
                 checked_types,
                 checked_body_builder,
                 @intCast(selected_index),
@@ -23713,9 +23711,9 @@ pub const CompileTimeRootTable = struct {
                 } },
                 .source_pattern = selected.pattern,
                 .hoisted_body = hoisted_body,
-                .pattern = if (selected.pattern) |pattern| checkedPatternIdForSource(checked_bodies, pattern) else null,
-                .expr = checked_expr,
-                .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, source_ty),
+                .pattern = checked_root.pattern,
+                .expr = checked_root.expr,
+                .checked_type = checked_root.checked_type,
                 .payload = .pending,
             });
         }
@@ -24428,6 +24426,16 @@ fn exhaustivenessReplacingRootForSource(
 ) ?CompileTimeRoot {
     for (compile_time_roots.roots) |root| {
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
+        switch (source) {
+            .destructure_pattern => |source_pattern| {
+                if (root.hoisted_body) |body| switch (body) {
+                    .pattern_extraction => |extraction| if (extraction.scrutinee_pattern == source_pattern) return root,
+                    .pattern_validation => |validation| if (validation.scrutinee_pattern == source_pattern) return root,
+                    .expr => {},
+                };
+            },
+            .match_expr => {},
+        }
         const contains = switch (source) {
             .match_expr => |source_expr| blk: {
                 const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
@@ -24821,6 +24829,7 @@ fn syntheticExprCapacityForHoistedRoots(selected_hoisted_roots: []const hoist_ro
         count += switch (root.body) {
             .expr => 0,
             .pattern_extraction => 2,
+            .pattern_validation => 2,
         };
     }
     return count;
@@ -24835,25 +24844,108 @@ fn checkedExprIdForSource(checked_bodies: *const CheckedBodyStore, expr: CIR.Exp
     };
 }
 
-fn checkedExprIdForSelectedHoistedRoot(
+const SelectedHoistedCheckedBody = struct {
+    expr: CheckedExprId,
+    pattern: ?CheckedPatternId,
+    checked_type: CheckedTypeId,
+};
+
+fn checkedBodyForSelectedHoistedRoot(
     allocator: Allocator,
     module: TypedCIR.Module,
-    checked_types: *const CheckedTypePublication,
+    names: *const canonical.CanonicalNameStore,
+    checked_types: *CheckedTypePublication,
     checked_body_builder: *CheckedBodyStoreBuilder,
     selected_index: u32,
     selected: hoist_roots.SelectedHoistedRoot,
-) Allocator.Error!CheckedExprId {
+) Allocator.Error!SelectedHoistedCheckedBody {
     const checked_bodies = checked_body_builder.storePtr();
     return switch (selected.body) {
-        .expr => checkedExprIdForSource(checked_bodies, selected.expr),
-        .pattern_extraction => |extraction| try appendCheckedPatternExtractionRootExpr(
+        .expr => .{
+            .expr = checkedExprIdForSource(checked_bodies, selected.expr),
+            .pattern = if (selected.pattern) |pattern| checkedPatternIdForSource(checked_bodies, pattern) else null,
+            .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, if (selected.pattern) |pattern| ModuleEnv.varFrom(pattern) else module.exprType(selected.expr)),
+        },
+        .pattern_extraction => |extraction| blk: {
+            const checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(extraction.result_pattern));
+            break :blk .{
+                .expr = try appendCheckedPatternExtractionRootExpr(
+                    allocator,
+                    module,
+                    checked_body_builder,
+                    selected_index,
+                    extraction,
+                    checked_type,
+                ),
+                .pattern = checkedPatternIdForSource(checked_bodies, extraction.result_pattern),
+                .checked_type = checked_type,
+            };
+        },
+        .pattern_validation => |validation| try appendCheckedPatternValidationRootBody(
             allocator,
             module,
+            try checked_types.store.ensureEmptyRecordRoot(allocator, names),
             checked_body_builder,
             selected_index,
-            extraction,
-            try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(extraction.result_pattern)),
+            validation,
         ),
+    };
+}
+
+fn appendCheckedPatternValidationRootBody(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_type: CheckedTypeId,
+    checked_body_builder: *CheckedBodyStoreBuilder,
+    selected_index: u32,
+    validation: hoist_roots.PatternValidation,
+) Allocator.Error!SelectedHoistedCheckedBody {
+    const checked_bodies = checked_body_builder.storePtr();
+    const scrutinee = checkedExprIdForSource(checked_bodies, validation.base_expr);
+    const checked_source_pattern = checkedPatternIdForSource(checked_bodies, validation.scrutinee_pattern);
+    const pattern_region = module.regionAt(ModuleEnv.nodeIdxFrom(validation.scrutinee_pattern));
+    const result = try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_validation_result = .{
+        .selected_root_index = selected_index,
+    } }, checked_type, pattern_region, .empty_record);
+
+    try checked_bodies.match_branch_pattern_pool.ensureUnusedCapacity(allocator, 1);
+    const pattern_start: u32 = @intCast(checked_bodies.match_branch_pattern_pool.items.len);
+    checked_bodies.match_branch_pattern_pool.appendAssumeCapacity(.{
+        .pattern = checked_source_pattern,
+        .degenerate = false,
+        .bn_start = 0,
+        .bn_len = 0,
+    });
+    errdefer _ = checked_bodies.match_branch_pattern_pool.pop();
+
+    const branches = try allocator.alloc(CheckedMatchBranch, 1);
+    var branches_owned = true;
+    errdefer if (branches_owned) allocator.free(branches);
+    branches[0] = .{
+        .pt_start = pattern_start,
+        .pt_len = 1,
+        .value = result,
+        .guard = null,
+    };
+
+    var data: CheckedExprData = .{ .match_ = .{
+        .cond = scrutinee,
+        .branches = branches,
+        .is_try_suffix = false,
+        .skip_exhaustiveness = false,
+        .comptime_site_kind = .destructure,
+    } };
+    branches_owned = false;
+    defer deinitCheckedExprData(allocator, &data);
+
+    const wrapper = try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_validation_wrapper = .{
+        .selected_root_index = selected_index,
+        .scrutinee_pattern = checked_source_pattern,
+    } }, checked_type, pattern_region, data);
+    return .{
+        .expr = wrapper,
+        .pattern = null,
+        .checked_type = checked_type,
     };
 }
 
@@ -25209,6 +25301,7 @@ pub const HoistedConstTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         artifact_key: CheckedModuleArtifactKey,
+        checked_types: *CheckedTypeStore,
         roots: *const CompileTimeRootTable,
         const_templates: *ConstTemplateTable,
     ) Allocator.Error!HoistedConstTable {
@@ -25239,7 +25332,15 @@ pub const HoistedConstTable = struct {
                 ModuleEnv.varFrom(pattern)
             else
                 ModuleEnv.varFrom(source_expr);
-            const source_scheme = try canonical_type_keys.schemeFromVar(
+            const source_scheme = if (root.hoisted_body) |body| switch (body) {
+                .pattern_validation => try checked_types.ensureSchemeForRoot(allocator, root.checked_type),
+                .expr, .pattern_extraction => try canonical_type_keys.schemeFromVar(
+                    allocator,
+                    module.typeStoreConst(),
+                    module.moduleEnvConst(),
+                    source_var,
+                ),
+            } else try canonical_type_keys.schemeFromVar(
                 allocator,
                 module.typeStoreConst(),
                 module.moduleEnvConst(),
@@ -28467,6 +28568,9 @@ pub const DispatchEvidenceFailure = struct {
         dispatch_expr_plan_out_of_bounds,
         iterator_for_missing_plan,
         iterator_for_plan_out_of_bounds,
+        iterator_plan_structural_resolution,
+        iterator_plan_callable_type_out_of_bounds,
+        iterator_plan_callable_not_function,
         plan_unfinalized_direct,
         plan_evidence_node_out_of_bounds,
         evidence_node_nested_refs_out_of_bounds,
@@ -28919,7 +29023,8 @@ pub const CheckedModuleArtifact = struct {
     // of publishing a second root for the same checked expression.
     // Version 64 publishes iterator producer identities for `List.iter_rev`,
     // the numeric `to`/`until` ranges, and the F32/F64 range helpers.
-    const serialized_layout_version: u32 = 64;
+    // Version 65 publishes unit-valued destructure-validation hoisted roots.
+    const serialized_layout_version: u32 = 65;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29434,7 +29539,29 @@ pub const CheckedModuleArtifact = struct {
                             .method = call.method,
                         };
                     },
-                    .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+                    .structural => return .{
+                        .kind = .iterator_plan_structural_resolution,
+                        .index = @intCast(i),
+                        .method = call.method,
+                    },
+                    .checked_error, .@"unreachable" => continue,
+                    .evidence_dependent => {},
+                }
+
+                if (@intFromEnum(call.callable_ty) >= self.checked_types.payloads.items.len) {
+                    return .{
+                        .kind = .iterator_plan_callable_type_out_of_bounds,
+                        .index = @intCast(i),
+                        .method = call.method,
+                    };
+                }
+                const callable = self.checked_types.payload(call.callable_ty);
+                if (callable != .function) {
+                    return .{
+                        .kind = .iterator_plan_callable_not_function,
+                        .index = @intCast(i),
+                        .method = call.method,
+                    };
                 }
             }
         }
@@ -32435,6 +32562,7 @@ pub fn publishFromTypedModule(
         allocator,
         module,
         artifact_key,
+        checked_types,
         &compile_time_roots,
         &const_templates,
     );
@@ -33150,6 +33278,7 @@ fn expectProvidedExportKind(
         allocator,
         module,
         artifact_key,
+        checked_types,
         &compile_time_roots,
         &const_templates,
     );
@@ -35031,8 +35160,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xEB, 0x44, 0x4E, 0x79, 0x79, 0x45, 0x88, 0xD2, 0x12, 0xDE, 0xFE, 0x4E, 0x3A, 0x65, 0x4D, 0xFD,
-        0x2D, 0x96, 0x1C, 0xDE, 0x40, 0x1C, 0x15, 0x9A, 0xCC, 0x90, 0xA1, 0x3C, 0x48, 0x6B, 0x1D, 0x66,
+        0x68, 0x55, 0x02, 0x0B, 0xD2, 0x47, 0xFB, 0xE8, 0x03, 0xFD, 0x4C, 0xF1, 0x1B, 0x47, 0x45, 0x4F,
+        0x97, 0xAC, 0xA0, 0x4A, 0x0F, 0xB9, 0x9B, 0xE6, 0x07, 0x6D, 0x1A, 0xDE, 0x04, 0xDE, 0x6B, 0xD5,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

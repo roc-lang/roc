@@ -8405,8 +8405,15 @@ const Lowerer = struct {
         if (@import("builtin").mode == .Debug) {
             const target_layout = self.result.store.getLocal(target).layout_idx;
             const source_layout = self.result.store.getLocal(source).layout_idx;
-            if (target_layout != source_layout) {
-                Common.invariant("local assignment layouts differed without an explicit boundary");
+            // Layout indices identify store entries, so distinct indices can
+            // still describe the same representation. Keep the common exact
+            // index check as cheap as before, inspect entries only for distinct
+            // indices, and only walk layouts for recursive equivalents.
+            if (target_layout != source_layout and
+                !self.layoutsShareRepresentation(target_layout, source_layout) and
+                !try self.layoutsEquivalent(target_layout, source_layout))
+            {
+                Common.invariant("local assignment representations differed without an explicit boundary");
             }
         }
         return try self.addAssignRef(target, .{ .local = source }, next);

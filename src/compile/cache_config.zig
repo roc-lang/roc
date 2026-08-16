@@ -145,7 +145,9 @@ pub const Constants = struct {
     ///     `_to` methods, and stored ranges mint iterator representations while
     ///     numeric range hooks explicitly delegate to that representation.
     /// 60: Checked modules retain explicit rank-1 binding-scheme identities.
-    pub const CACHE_VERSION = 60;
+    /// 61: Static dispatch constraints no longer serialize checker-local expect regions.
+    /// 62: For-loop dispatch plans retain explicit iterator and step type variables.
+    pub const CACHE_VERSION = 62;
 };
 
 /// Configuration for the Roc cache system.

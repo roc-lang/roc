@@ -139,6 +139,8 @@ test "hoisted local constants are finalized and restored during runtime lowering
         \\    (left, right) = pair
         \\    tuple_total = left + right
         \\    Ok(tag_value) = Ok(45.I64)
+        \\    Ok(_) = List.get([1.I64], 0)
+        \\    Ok(_items) = List.get([[]], 0)
         \\    match_tuple_total = match (50.I64, 8.I64) {
         \\        (match_left, match_right) => match_left + match_right + List.len(args).to_i64_wrap()
         \\    }
@@ -970,7 +972,7 @@ test "inlined hoisted constant crash reports hoisted source region" {
     try std.testing.expect(found);
 }
 
-test "hoisted pattern extraction failure reports original destructure region" {
+test "hoisted pattern extraction and validation failures report original destructure regions" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -987,6 +989,7 @@ test "hoisted pattern extraction failure reports original destructure region" {
         \\main! = |args| {
         \\    x : Try(I64, Str)
         \\    x = Err("bad")
+        \\    Ok(_) = x
         \\    Ok(foo) = x
         \\    _ = foo + List.len(args).to_i64_wrap()
         \\    Echo.line!("done")
@@ -1053,17 +1056,24 @@ test "hoisted pattern extraction failure reports original destructure region" {
     try coord.coordinatorLoop();
     try std.testing.expect(coord.hasUserErrors());
 
-    var found = false;
+    var found_validation = false;
+    var found_extraction = false;
+    var diagnostic_count: usize = 0;
     var report_iter = coord.iterReports();
     while (report_iter.next()) |entry| {
         if (!std.mem.eql(u8, entry.report.title, "Non Exhaustive Destructure")) continue;
-        found = true;
+        diagnostic_count += 1;
         const region = entry.report.getRegionInfo() orelse return error.NonExhaustiveDestructureReportHadNoRegion;
-        try std.testing.expectEqual(@as(u32, 8), region.start_line_idx);
-        try std.testing.expectEqual(@as(u32, 8), region.end_line_idx);
+        if (region.start_line_idx == 8 and region.end_line_idx == 8) {
+            found_validation = true;
+        } else if (region.start_line_idx == 9 and region.end_line_idx == 9) {
+            found_extraction = true;
+        }
         try std.testing.expectEqualStrings("main", entry.module_name);
     }
-    try std.testing.expect(found);
+    try std.testing.expectEqual(@as(usize, 2), diagnostic_count);
+    try std.testing.expect(found_validation);
+    try std.testing.expect(found_extraction);
 }
 
 test "hoisted pattern extraction base match failure reports match" {
@@ -1607,6 +1617,7 @@ fn expectPatternExtractionSyntheticRegions(
         const extraction = switch (body) {
             .expr => continue,
             .pattern_extraction => |payload| payload,
+            .pattern_validation => continue,
         };
         extraction_count += 1;
 
