@@ -1911,29 +1911,29 @@ fn findHostedBindingView(
     return null;
 }
 
+/// Replace the scanned hosted declarations with the platform's checked hosted
+/// bindings: one entry per binding, in binding order, carrying the binding's
+/// linker symbol and dispatch slot. A declaration no binding names has no host
+/// symbol and so has no entry; checking reports that omission as an invalid
+/// hosted section.
 fn applyHostedBindings(
     allocator: Allocator,
-    entries: []HostedCacheEntry,
+    entries: *std.ArrayList(HostedCacheEntry),
     binding_view: HostedBindingView,
 ) Allocator.Error!void {
-    const bindings = binding_view.table.bindings;
-    if (entries.len != bindings.len) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("default roc command invariant violated: hosted binding count {d} differs from checked hosted catalog size {d}", .{ bindings.len, entries.len });
-        }
-        unreachable;
-    }
-
     var entries_by_target = std.AutoHashMap(HostedTargetKey, usize).init(allocator);
     defer entries_by_target.deinit();
-    try entries_by_target.ensureTotalCapacity(@intCast(entries.len));
-    for (entries, 0..) |entry, index| {
+    try entries_by_target.ensureTotalCapacity(@intCast(entries.items.len));
+    for (entries.items, 0..) |entry, index| {
         entries_by_target.putAssumeCapacityNoClobber(.{
             .module_key = entry.module_key,
             .def_idx = entry.def_idx,
         }, index);
     }
 
+    const bindings = binding_view.table.bindings;
+    var bound = try std.ArrayList(HostedCacheEntry).initCapacity(allocator, bindings.len);
+    errdefer bound.deinit(allocator);
     for (bindings, 0..) |binding, dispatch_index| {
         const entry_index = entries_by_target.get(.{
             .module_key = binding.target_checked_module.bytes,
@@ -1944,16 +1944,14 @@ fn applyHostedBindings(
             }
             unreachable;
         };
-        entries[entry_index].dispatch_index = @intCast(dispatch_index);
-        entries[entry_index].external_symbol_name = binding_view.names.externalSymbolNameText(binding.external_symbol_name);
+        var entry = entries.items[entry_index];
+        entry.dispatch_index = @intCast(dispatch_index);
+        entry.external_symbol_name = binding_view.names.externalSymbolNameText(binding.external_symbol_name);
+        bound.appendAssumeCapacity(entry);
     }
 
-    const DispatchSort = struct {
-        pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {
-            return a.dispatch_index < b.dispatch_index;
-        }
-    };
-    std.mem.sort(HostedCacheEntry, entries, {}, DispatchSort.lessThan);
+    entries.deinit(allocator);
+    entries.* = bound;
 }
 
 fn checkedHostedTable(
@@ -1981,7 +1979,7 @@ fn checkedHostedTable(
     }
 
     if (findHostedBindingView(root_artifact, imported_artifacts, relation_artifacts)) |binding_view| {
-        try applyHostedBindings(allocator, hosted_entries.items, binding_view);
+        try applyHostedBindings(allocator, &hosted_entries, binding_view);
     } else {
         const SortContext = struct {
             pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {

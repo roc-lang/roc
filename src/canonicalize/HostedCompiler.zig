@@ -9,12 +9,30 @@ const base = @import("base");
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
 
+/// Whether a platform header's `hosted` section can name a declaration in a
+/// module of this kind.
+///
+/// A hosted entry resolves through an imported module environment and binds to
+/// a definition that import owns, so a package's own root module is never a
+/// hosted target. The platform module is the case that matters: its
+/// annotation-only declarations have no entry that could map them to a linker
+/// symbol, so they are declarations without a value rather than host
+/// procedures.
+fn kindDeclaresHostedFunctions(kind: ModuleEnv.ModuleKind) bool {
+    return switch (kind) {
+        .type_module, .module, .hosted => true,
+        .platform, .app, .default_app, .package, .malformed => false,
+    };
+}
+
 /// Replace ordinary e_anno_only expressions in a Type Module with e_hosted_lambda operations (in-place).
 /// Compiler-derived associated methods have their own CIR tag and are not host declarations.
 /// This transforms standalone annotations into hosted lambda operations that will be
 /// provided by the host application at runtime.
 /// Records the rewritten definitions as explicit output for later compiler stages.
 pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
+    if (!kindDeclaresHostedFunctions(env.module_kind)) return;
+
     const gpa = env.gpa;
     const hosted_defs_start = env.store.scratchDefTop();
 

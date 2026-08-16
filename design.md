@@ -2772,10 +2772,14 @@ the other.
 Canonicalization records each recognized associated underscore opt-in as an
 `e_derived_method` CIR expression carrying its exact derived-method kind. An
 ordinary annotation without a body remains `e_anno_only`; in a platform package,
-only that ordinary form may be rewritten into a hosted declaration. Checking and
-insertion into the checked method registry consume the explicit derived-method
-kind and must not recover compiler intent from identifier text or the annotation
-shape.
+only that ordinary form may be rewritten into a hosted declaration, and only in a
+module whose declarations a platform header's `hosted` section can name. A hosted
+entry resolves through an imported module environment, so a package's own root
+module is never a hosted target: the platform module's own annotation-only
+declarations stay `e_anno_only` and are reported as declarations without a value.
+Checking and insertion into the checked method registry consume the explicit
+derived-method kind and must not recover compiler intent from identifier text or
+the annotation shape.
 
 A derived parser or encoder is still finite, shape-specific generated code.
 Boxy planning records a generated-codec worker from the checked structural
@@ -10463,7 +10467,12 @@ hosted { "roc_stdout_line": Stdout.line!, "roc_stderr_line": Stderr.line! }
 The symbol string is the identity of an externally-bound function. A hosted
 call resolves to the entry at its declaration slot in the `hosted` section;
 resolution never matches hosted declarations by signature, by
-declaring-module content, or by any content-derived module identity. Two
+declaring-module content, or by any content-derived module identity. The
+section is also the complete set: post-check lowering builds its hosted
+catalog from the checked hosted binding table checking outputs for that
+section, so a hosted declaration the section omits has no symbol and no slot.
+Checking reports that omission as an invalid hosted section rather than
+lowering discovering it. Two
 byte-identical modules whose effectful declarations are wired to different
 symbols stay distinct because the platform header that assigns those symbols
 is the data that separates them. `provides` follows the same rule: the
