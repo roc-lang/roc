@@ -24477,30 +24477,35 @@ fn exhaustivenessReplacingRootForSource(
 ) ?CompileTimeRoot {
     for (compile_time_roots.roots) |root| {
         if (root.hoisted_body) |body| {
-            const base_expr, const exact_pattern = switch (body) {
-                .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
-                .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
-                .expr => continue,
-            };
-            if (source == .destructure_pattern and source.destructure_pattern == exact_pattern) return root;
+            switch (body) {
+                .pattern_extraction, .pattern_validation => {
+                    const base_expr, const exact_pattern = switch (body) {
+                        .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
+                        .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
+                        .expr => unreachable,
+                    };
+                    if (source == .destructure_pattern and source.destructure_pattern == exact_pattern) return root;
 
-            // Pattern roots evaluate both their synthetic outer match and the
-            // original right-hand side. The exact-pattern check above owns the
-            // former; sites contained by the base expression belong to the
-            // latter even when the extracted value is callable.
-            const checked_base_expr = checkedExprIdForSource(checked_bodies, base_expr);
-            const base_contains = switch (source) {
-                .match_expr => |source_expr| blk: {
-                    const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
-                    break :blk checkedExprContainsExpr(checked_bodies, checked_base_expr, checked_expr);
+                    // Pattern roots evaluate both their synthetic outer match and the
+                    // original right-hand side. The exact-pattern check above owns the
+                    // former; sites contained by the base expression belong to the
+                    // latter even when the extracted value is callable.
+                    const checked_base_expr = checkedExprIdForSource(checked_bodies, base_expr);
+                    const base_contains = switch (source) {
+                        .match_expr => |source_expr| blk: {
+                            const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
+                            break :blk checkedExprContainsExpr(checked_bodies, checked_base_expr, checked_expr);
+                        },
+                        .destructure_pattern => |source_pattern| blk: {
+                            const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
+                            break :blk checkedExprContainsPattern(checked_bodies, checked_base_expr, checked_pattern);
+                        },
+                    };
+                    if (base_contains) return root;
+                    continue;
                 },
-                .destructure_pattern => |source_pattern| blk: {
-                    const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
-                    break :blk checkedExprContainsPattern(checked_bodies, checked_base_expr, checked_pattern);
-                },
-            };
-            if (base_contains) return root;
-            continue;
+                .expr => {},
+            }
         }
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
         const contains = switch (source) {
@@ -35182,8 +35187,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xEB, 0x44, 0x4E, 0x79, 0x79, 0x45, 0x88, 0xD2, 0x12, 0xDE, 0xFE, 0x4E, 0x3A, 0x65, 0x4D, 0xFD,
-        0x2D, 0x96, 0x1C, 0xDE, 0x40, 0x1C, 0x15, 0x9A, 0xCC, 0x90, 0xA1, 0x3C, 0x48, 0x6B, 0x1D, 0x66,
+        0x57, 0xE1, 0x5B, 0x72, 0x58, 0xA6, 0x50, 0x15, 0x32, 0xF0, 0x4B, 0x8F, 0xC6, 0xA9, 0x59, 0xC0,
+        0xF2, 0xBA, 0x5A, 0x68, 0x2F, 0x31, 0x01, 0x3B, 0xA6, 0x4D, 0x09, 0x31, 0x90, 0x9D, 0x8A, 0xFC,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

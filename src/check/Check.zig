@@ -2638,6 +2638,13 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         !isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr)) and
         !self.varIsFunctionType(ModuleEnv.varFrom(expr));
     const current_covers_children = (can_cover_children and !frame.binding_rhs) or binding_rhs_can_cover_children;
+    // Any eligible binding RHS suppresses smaller expression candidates, but
+    // only a pattern that can publish that RHS as a binding root consumes its
+    // deferred validation. Other patterns must bubble validation to an
+    // enclosing root or a dedicated validation root.
+    const current_covers_deferred_roots = current_covers_children and
+        (!frame.binding_rhs or
+            (frame.binding_pattern != null and self.patternCanOwnHoistedBindingRoot(frame.binding_pattern.?)));
     const has_child_candidates = self.hoist_expr_candidates.items.len > frame.candidate_start;
     const action: HoistSelectionAction = if (!selection_allowed)
         .suppress_children
@@ -2695,7 +2702,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     }
     self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
 
-    if (!selection_allowed or current_covers_children or should_flush_deferred_roots) {
+    if (!selection_allowed or current_covers_deferred_roots or should_flush_deferred_roots) {
         self.hoist_deferred_roots.shrinkRetainingCapacity(frame.deferred_dependency_start);
     }
 
