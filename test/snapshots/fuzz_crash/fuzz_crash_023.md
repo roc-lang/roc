@@ -2102,11 +2102,7 @@ expect {
 			(ty-apply (name "Maybe") (local)
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(rhs
-				(e-num (value "1")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expect
 		(e-block
 			(s-let

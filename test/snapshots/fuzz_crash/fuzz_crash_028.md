@@ -262,7 +262,7 @@ MISSING METHOD - fuzz_crash_028.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
 TOO FEW ARGS - fuzz_crash_028.md:104:2:106:3
-TYPE MISMATCH - fuzz_crash_028.md:115:3:115:3
+REFERENCE HAS NO VALUE - fuzz_crash_028.md:115:3:115:10
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:12
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:141:1:141:7
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:144:1:144:13
@@ -1609,21 +1609,15 @@ The match_time function has the type:
 
 Are there any missing commas?
 
-── ✗ type mismatch ──────────────────────────────────── fuzz_crash_028.md:115:11
+── ✗ reference has no value ──────────────────────────── fuzz_crash_028.md:115:3
 
-The first argument being passed to this function has the wrong type.
+This refers to a declaration that has a type annotation but no implementation,
+so there is no value here to use.
 
-        add_one(dbg # Afist
-er, # afarg
-        ), 456, # ee
+add_one(dbg # Afist
+^^^^^^^
 
-This argument has the type:
-
-    {}
-
-But add_one needs the first argument to be:
-
-    U64
+Give that declaration a value body, or stop referring to it here.
 
 ── ✗ type mismatch ───────────────────────────────────── fuzz_crash_028.md:133:5
 
@@ -2547,21 +2541,9 @@ expect {
 			(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 			(ty-malformed)))
 	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(rhs
-				(e-num (value "1")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expect
-		(e-block
-			(s-let
-				(p-assign (ident "f"))
-				(e-num (value "1")))
-			(e-method-eq (negated "false")
-				(lhs
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(rhs
-					(e-runtime-error (tag "ident_not_in_scope")))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

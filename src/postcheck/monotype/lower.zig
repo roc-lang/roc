@@ -3128,7 +3128,7 @@ const Builder = struct {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -17112,6 +17112,7 @@ const BodyContext = struct {
         self.source_region_override = switch (root.kind) {
             .constant,
             .hoisted_constant,
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .numeral_conversion,
@@ -17128,6 +17129,7 @@ const BodyContext = struct {
             // comptime-root path.
             .constant,
             .hoisted_constant,
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .field_default,
@@ -19472,7 +19474,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFn(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -19541,7 +19543,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
             .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
             .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -32442,7 +32444,7 @@ const BodyContext = struct {
         if (declaring_view.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr)) |root| {
             switch (root.payload) {
                 .const_node => |node| return try self.restoreConstNodeAtType(declaring_view, declaring_view, node, field_ty),
-                .pending, .fn_value, .expect => {},
+                .pending, .fn_value, .discarded, .expect => {},
             }
         }
         if (!moduleViewIdentityMatches(self.view, origin_hash)) {
@@ -34621,7 +34623,7 @@ const BodyContext = struct {
         return switch (root.payload) {
             .const_node => |node| try self.restoreConstNodeAtType(self.view, self.view, node, ty),
             .pending => null,
-            .fn_value, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
+            .fn_value, .discarded, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
         };
     }
 
@@ -46175,7 +46177,8 @@ const BodyContext = struct {
                 // information but has no runtime value to bind.
                 .anno_only => false,
                 .pending => Common.invariant("pending checked declaration reached Monotype runtime statement filter"),
-                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => self.view.hoisted_constants.lookupByPattern(decl.pattern) == null,
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => self.view.hoisted_constants.lookupByPattern(decl.pattern) == null and
+                    !self.view.compile_time_roots.validationResolvedByPattern(decl.pattern),
             },
             .var_,
             .var_uninitialized,

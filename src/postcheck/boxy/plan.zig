@@ -9591,7 +9591,7 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .pending => .{ .module = view.key, .expr = root.expr },
-            .fn_value, .const_node, .expect => null,
+            .fn_value, .const_node, .discarded, .expect => null,
         };
     }
 
@@ -9682,6 +9682,7 @@ const Builder = struct {
             .fn_value => |fn_id| self.constFnValueBody(view, fn_id),
             .pending => boxyPlanInvariant("pending callable eval root reached runtime boxy body type planning before compile-time finalization"),
             .const_node,
+            .discarded,
             .expect,
             => boxyPlanInvariant("callable eval binding root did not output a callable value"),
         };
@@ -10191,6 +10192,7 @@ const Builder = struct {
             },
             .pending => try self.analyzeDispatchCallTarget(view, expr_id, maybe_plan),
             .fn_value,
+            .discarded,
             .expect,
             => boxyPlanInvariant("from_quote conversion root had a non-data payload"),
         }
@@ -10216,6 +10218,7 @@ const Builder = struct {
             },
             .pending => try self.analyzeDispatchCallTarget(view, expr_id, maybe_plan),
             .fn_value,
+            .discarded,
             .expect,
             => boxyPlanInvariant("from_numeral conversion root had a non-data payload"),
         }
@@ -11377,7 +11380,7 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| .{ .module = view.key, .fn_id = fn_id },
-            .pending, .const_node, .expect => null,
+            .pending, .const_node, .discarded, .expect => null,
         };
     }
 
@@ -11608,7 +11611,7 @@ const Builder = struct {
                 );
             },
             .pending => self.workerSourceForCallableRootExpr(view, root.expr),
-            .const_node, .expect => null,
+            .const_node, .discarded, .expect => null,
         };
     }
 

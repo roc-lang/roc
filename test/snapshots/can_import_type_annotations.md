@@ -62,6 +62,7 @@ MOD NOT FOUND - can_import_type_annotations.md:24:29:24:36
 MOD NOT FOUND - can_import_type_annotations.md:24:53:24:59
 MOD NOT FOUND - can_import_type_annotations.md:24:72:24:78
 NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
+TYPE MISMATCH - can_import_type_annotations.md:15:21:15:43
 # PROBLEMS
 ── ● duplicate definition ─────────────────── can_import_type_annotations.md:2:1
 
@@ -208,6 +209,25 @@ advancedParser = |parserConfig, input| Json.Parser.parseWith(parserConfig, input
                                        ^^^^^^^^^^^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
+
+── ✗ type mismatch ──────────────────────── can_import_type_annotations.md:15:21
+
+The first branch of this match does not match the previous branch .
+
+Ok(data) => Ok(Http.success(data))
+            ^^^^^^^^^^^^^^^^^^^^^^
+
+The first branch is:
+
+    [Ok(Error), ..]
+
+But the previous branch results in:
+
+    Try(Error, Error)
+
+All branches in a match must have compatible types.
+Note: You can wrap branches values in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig

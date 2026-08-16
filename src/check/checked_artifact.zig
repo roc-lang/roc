@@ -1092,7 +1092,7 @@ pub const RootRequestTable = struct {
             try appendRoot(&requests, allocator, .{
                 .module_idx = root.module_idx,
                 .kind = switch (root.kind) {
-                    .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .field_default => .compile_time_constant,
+                    .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .field_default => .compile_time_constant,
                     .callable_binding => .compile_time_callable,
                     .expect => .test_expect,
                 },
@@ -1101,7 +1101,7 @@ pub const RootRequestTable = struct {
                 .checked_type = entryWrapperForRoot(entry_wrappers, root.id).checked_fn_root,
                 .abi = switch (root.kind) {
                     .expect => .test_expect,
-                    .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .compile_time,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .compile_time,
                 },
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
@@ -1994,7 +1994,7 @@ fn compileTimeRootKindMatchesRequest(
     request_kind: RootRequestKind,
 ) bool {
     return switch (root_kind) {
-        .constant, .hoisted_constant => request_kind == .compile_time_constant,
+        .constant, .hoisted_constant, .hoisted_validation => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .numeral_conversion, .quote_conversion, .field_default => request_kind == .compile_time_constant,
@@ -2064,6 +2064,7 @@ fn compileTimeRootDependsOnUnboundPlatformRequirement(
     return switch (root.kind) {
         .constant,
         .hoisted_constant,
+        .hoisted_validation,
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
@@ -18270,8 +18271,11 @@ fn sealConstEvalTemplatesForRoots(
         if (!compileTimeRootHasConstBody(root.kind)) continue;
         const const_ref = switch (root.kind) {
             .constant => blk: {
-                const pattern = root.pattern orelse checkedArtifactInvariant("constant root has no top-level pattern", .{});
-                const top_level = top_level_values.lookupByPattern(pattern) orelse {
+                const def_idx = switch (root.source) {
+                    .def => |def| def,
+                    .expr, .statement, .required_binding, .hoisted => checkedArtifactInvariant("constant root source is not a top-level definition", .{}),
+                };
+                const top_level = top_level_values.lookupByDef(def_idx) orelse {
                     checkedArtifactInvariant("constant root has no top-level value entry", .{});
                 };
                 break :blk switch (top_level.value) {
@@ -18285,6 +18289,7 @@ fn sealConstEvalTemplatesForRoots(
                 };
                 break :blk hoisted.const_ref;
             },
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .numeral_conversion,
@@ -19215,7 +19220,7 @@ pub const CheckedProcedureTemplateTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
-        global_value_defs: []const CIR.Def.Idx,
+        value_binding_defs: []const CIR.Def.Idx,
         names: *canonical.CanonicalNameStore,
         owner_artifact: canonical.ArtifactRef,
         checked_type_publication: *CheckedTypePublication,
@@ -19230,7 +19235,7 @@ pub const CheckedProcedureTemplateTable = struct {
 
         const module_name = try names.internModuleIdent(module.identStoreConst(), module.qualifiedModuleIdent());
 
-        for (global_value_defs) |def_idx| {
+        for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
             if (!topLevelExprIsAlreadyProcedure(def.expr.data)) continue;
 
@@ -19403,7 +19408,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .nested_proc_sites = .{},
                 .target = switch (root.kind) {
                     .expect => .entry,
-                    .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .comptime_only,
+                    .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => .comptime_only,
                 },
             });
         }
@@ -23511,6 +23516,9 @@ pub const CompileTimeRootKind = enum {
     constant,
     /// A selected top-level-equivalent expression inside a runtime body.
     hoisted_constant,
+    /// A compile-time-known refutable destructure whose successful unit result
+    /// has no runtime value to archive.
+    hoisted_validation,
     callable_binding,
     expect,
     /// A `from_numeral` conversion of a numeric literal whose target is a
@@ -23542,6 +23550,7 @@ pub const CompileTimeRootPayload = union(enum) {
     pending,
     const_node: ConstNodeId,
     fn_value: ConstFnId,
+    discarded,
     expect,
 };
 
@@ -23572,25 +23581,10 @@ pub const CompileTimeRoot = struct {
             .numeral_conversion => .numeral,
             .quote_conversion => .quote,
             .field_default => self.literal_conversion,
-            .constant, .hoisted_constant, .callable_binding, .expect => null,
+            .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .expect => null,
         };
     }
 };
-
-fn topLevelDefHasValueImplementation(
-    module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
-    global_value_defs: []const CIR.Def.Idx,
-    source_name: canonical.ExportNameId,
-) Allocator.Error!bool {
-    for (global_value_defs) |other_def_idx| {
-        const other_def = module.def(other_def_idx);
-        if (other_def.expr.data == .e_anno_only) continue;
-        const other_name = (try topLevelDefSourceName(module, names, other_def)) orelse continue;
-        if (other_name == source_name) return true;
-    }
-    return false;
-}
 
 /// Public `CompileTimeRootTable` declaration.
 ///
@@ -23614,8 +23608,8 @@ pub const CompileTimeRootTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
-        names: *canonical.CanonicalNameStore,
-        global_value_defs: []const CIR.Def.Idx,
+        names: *const canonical.CanonicalNameStore,
+        value_binding_defs: []const CIR.Def.Idx,
         selected_hoisted_roots: []const hoist_roots.SelectedHoistedRoot,
         checked_types: *CheckedTypePublication,
         checked_body_builder: *CheckedBodyStoreBuilder,
@@ -23656,20 +23650,11 @@ pub const CompileTimeRootTable = struct {
             inserted.value_ptr.* = roots.items.len - 1;
         }
 
-        var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
-        defer seen_source_names.deinit(allocator);
-
         const module_env = module.moduleEnvConst();
-        for (global_value_defs) |def_idx| {
+        for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
             if (topLevelDefSourceIdent(def) == null) continue;
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
-
-            const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
-            if (def.expr.data == .e_anno_only and try topLevelDefHasValueImplementation(module, names, global_value_defs, source_name)) continue;
-            const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
-            if (seen_source_name.found_existing) continue;
-            seen_source_name.value_ptr.* = {};
 
             const source_ty = module.defType(def_idx);
             if (sourceTypeIsFunction(module, source_ty)) {
@@ -23710,6 +23695,7 @@ pub const CompileTimeRootTable = struct {
                     checkedArtifactInvariant("non-function selected root was classified as a callable binding", .{})
                 else
                     .callable_binding,
+                .discarded => .hoisted_validation,
             };
             const checked_root = try checkedBodyForSelectedHoistedRoot(
                 allocator,
@@ -23832,9 +23818,21 @@ pub const CompileTimeRootTable = struct {
 
     pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CheckedPatternId) ?ComptimeRootId {
         for (self.roots) |entry| {
+            if (entry.kind == .hoisted_validation) continue;
             if (entry.pattern != null and entry.pattern.? == pattern) return entry.id;
         }
         return null;
+    }
+
+    pub fn validationResolvedByPattern(self: *const CompileTimeRootTable, pattern: CheckedPatternId) bool {
+        for (self.roots) |entry| {
+            if (entry.kind != .hoisted_validation or entry.pattern != pattern) continue;
+            const body = entry.hoisted_body orelse checkedArtifactInvariant("hoisted validation root had no selected body", .{});
+            if (body != .pattern_validation) checkedArtifactInvariant("hoisted validation root had a non-validation body", .{});
+            if (!body.pattern_validation.erase_runtime) return false;
+            return entry.payload == .discarded;
+        }
+        return false;
     }
 
     /// Look up the field-default root (design.md "Defaulted Fields") whose
@@ -23999,7 +23997,11 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
     const matches = switch (kind) {
         .constant, .hoisted_constant => switch (payload) {
             .const_node => true,
-            .pending, .fn_value, .expect => false,
+            .pending, .fn_value, .discarded, .expect => false,
+        },
+        .hoisted_validation => switch (payload) {
+            .discarded => true,
+            .pending, .const_node, .fn_value, .expect => false,
         },
         .callable_binding => switch (payload) {
             // A callable initializer that reaches an explicit checked error is
@@ -24007,15 +24009,15 @@ fn verifyCompileTimeRootPayloadMatchesKind(kind: CompileTimeRootKind, payload: C
             // node at the callable's expected type, so execution crashes at
             // the exact invalid binding while independent roots remain usable.
             .fn_value, .const_node => true,
-            .pending, .expect => false,
+            .pending, .discarded, .expect => false,
         },
         .expect => switch (payload) {
             .expect => true,
-            .pending, .const_node, .fn_value => false,
+            .pending, .const_node, .fn_value, .discarded => false,
         },
         .numeral_conversion, .quote_conversion, .field_default => switch (payload) {
             .const_node => true,
-            .pending, .fn_value, .expect => false,
+            .pending, .fn_value, .discarded, .expect => false,
         },
     };
     if (matches) return;
@@ -24027,6 +24029,7 @@ fn verifyCompileTimeRootLiteralConversion(root: CompileTimeRoot) void {
         .field_default => {},
         .constant,
         .hoisted_constant,
+        .hoisted_validation,
         .callable_binding,
         .expect,
         .numeral_conversion,
@@ -24040,7 +24043,7 @@ fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
         .constant, .hoisted_constant => true,
         // A field default's constant is restored by expression lookup at
         // construction sites, never exported as a named data constant.
-        .callable_binding, .expect, .numeral_conversion, .quote_conversion, .field_default => false,
+        .hoisted_validation, .callable_binding, .expect, .numeral_conversion, .quote_conversion, .field_default => false,
     };
 }
 
@@ -24445,16 +24448,35 @@ fn exhaustivenessReplacingRootForSource(
 ) ?CompileTimeRoot {
     for (compile_time_roots.roots) |root| {
         if (!compileTimeRootReplacesSourceOccurrence(root.kind)) continue;
-        switch (source) {
-            .destructure_pattern => |source_pattern| {
-                if (root.hoisted_body) |body| switch (body) {
-                    .pattern_extraction => |extraction| if (extraction.scrutinee_pattern == source_pattern) return root,
-                    .pattern_validation => |validation| if (validation.scrutinee_pattern == source_pattern) return root,
-                    .expr => {},
+        if (root.hoisted_body) |body| switch (body) {
+            .pattern_extraction, .pattern_validation => {
+                const base_expr, const exact_pattern = switch (body) {
+                    .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
+                    .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
+                    .expr => unreachable,
                 };
+                if (source == .destructure_pattern and source.destructure_pattern == exact_pattern) return root;
+
+                // Pattern roots evaluate both their synthetic outer match and
+                // the original right-hand side. The exact-pattern check above
+                // owns the former; sites contained by the base expression
+                // belong to the latter.
+                const checked_base_expr = checkedExprIdForSource(checked_bodies, base_expr);
+                const base_contains = switch (source) {
+                    .match_expr => |source_expr| blk: {
+                        const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
+                        break :blk checkedExprContainsExpr(checked_bodies, checked_base_expr, checked_expr);
+                    },
+                    .destructure_pattern => |source_pattern| blk: {
+                        const checked_pattern = checked_bodies.patternIdForSource(source_pattern) orelse break :blk false;
+                        break :blk checkedExprContainsPattern(checked_bodies, checked_base_expr, checked_pattern);
+                    },
+                };
+                if (base_contains) return root;
+                continue;
             },
-            .match_expr => {},
-        }
+            .expr => {},
+        };
         const contains = switch (source) {
             .match_expr => |source_expr| blk: {
                 const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse break :blk false;
@@ -24474,6 +24496,7 @@ fn compileTimeRootReplacesSourceOccurrence(kind: CompileTimeRootKind) bool {
     return switch (kind) {
         .constant,
         .hoisted_constant,
+        .hoisted_validation,
         .numeral_conversion,
         .quote_conversion,
         // A default expression never occurs in a runtime body: any
@@ -24963,7 +24986,7 @@ fn appendCheckedPatternValidationRootBody(
     } }, checked_type, pattern_region, data);
     return .{
         .expr = wrapper,
-        .pattern = null,
+        .pattern = checked_source_pattern,
         .checked_type = checked_type,
     };
 }
@@ -25112,7 +25135,7 @@ pub const TopLevelValueTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
-        global_value_defs: []const CIR.Def.Idx,
+        value_binding_defs: []const CIR.Def.Idx,
         names: *canonical.CanonicalNameStore,
         checked_bodies: *const CheckedBodyStore,
         templates: *const CheckedProcedureTemplateTable,
@@ -25132,17 +25155,10 @@ pub const TopLevelValueTable = struct {
         var by_def = std.ArrayList(TopLevelValueByDefEntry).empty;
         errdefer by_def.deinit(allocator);
 
-        var seen_source_names = std.AutoHashMapUnmanaged(canonical.ExportNameId, void){};
-        defer seen_source_names.deinit(allocator);
-
-        for (global_value_defs) |def_idx| {
+        for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
             const checked_pattern = checkedPatternIdForSource(checked_bodies, def.pattern.idx);
             const source_name = try topLevelDefSourceName(module, names, def) orelse continue;
-            if (def.expr.data == .e_anno_only and try topLevelDefHasValueImplementation(module, names, global_value_defs, source_name)) continue;
-            const seen_source_name = try seen_source_names.getOrPut(allocator, source_name);
-            if (seen_source_name.found_existing) continue;
-            seen_source_name.value_ptr.* = {};
             const source_ty = module.defType(def_idx);
             const source_scheme = try canonical_type_keys.schemeFromVar(
                 allocator,
@@ -29043,7 +29059,11 @@ pub const CheckedModuleArtifact = struct {
     // Version 64 publishes iterator producer identities for `List.iter_rev`,
     // the numeric `to`/`until` ranges, and the F32/F64 range helpers.
     // Version 65 publishes unit-valued destructure-validation hoisted roots.
-    const serialized_layout_version: u32 = 66;
+    // Version 66 gives validation-only roots a discarded payload state so no
+    // unit constant is archived for them.
+    // Version 67 records a method whose declaration was rejected under its own
+    // registry key with no target.
+    const serialized_layout_version: u32 = 67;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29243,10 +29263,11 @@ pub const CheckedModuleArtifact = struct {
             verifyCompileTimeRootLiteralConversion(root);
             if (root.pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
             switch (root.kind) {
-                .constant, .hoisted_constant, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => switch (root.payload) {
+                .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .field_default => switch (root.payload) {
                     .pending => {},
                     .const_node,
                     .fn_value,
+                    .discarded,
                     .expect,
                     => verifyCompileTimeRootPayloadMatchesKind(root.kind, root.payload),
                 },
@@ -29255,6 +29276,7 @@ pub const CheckedModuleArtifact = struct {
                     .pending,
                     .const_node,
                     .fn_value,
+                    .discarded,
                     => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload before compile-time lowering", .{}),
                 },
             }
@@ -29996,7 +30018,7 @@ pub const CheckedModuleArtifact = struct {
             if (root.kind == .expect) {
                 switch (root.payload) {
                     .expect => {},
-                    .pending, .const_node, .fn_value => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
+                    .pending, .const_node, .fn_value, .discarded => std.debug.panic("checked artifact invariant violated: expect root has non-expect payload", .{}),
                 }
                 continue;
             }
@@ -30007,7 +30029,7 @@ pub const CheckedModuleArtifact = struct {
                         std.debug.panic("checked artifact invariant violated: requested compile-time root has pending payload", .{});
                     }
                 },
-                .const_node, .fn_value, .expect => {
+                .const_node, .fn_value, .discarded, .expect => {
                     if (!has_request) {
                         std.debug.panic("checked artifact invariant violated: non-requested compile-time root has concrete payload", .{});
                     }
@@ -32431,7 +32453,7 @@ pub fn publishFromTypedModule(
     try checked_body_builder.reserveSyntheticExprs(allocator, syntheticExprCapacityForHoistedRoots(inputs.hoisted_roots));
     const checked_bodies = checked_body_builder.storePtr();
 
-    const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
+    const value_binding_defs = module_env.store.sliceDefs(module_env.value_binding_defs);
 
     var relation_type_substitutions = try PlatformRelationTypeSubstitutions.fromRelation(
         allocator,
@@ -32463,7 +32485,7 @@ pub fn publishFromTypedModule(
     var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
         allocator,
         module,
-        global_value_defs,
+        value_binding_defs,
         &canonical_names,
         owner_artifact,
         &checked_type_publication,
@@ -32528,7 +32550,7 @@ pub fn publishFromTypedModule(
         allocator,
         module,
         &canonical_names,
-        global_value_defs,
+        value_binding_defs,
         inputs.hoisted_roots,
         &checked_type_publication,
         &checked_body_builder,
@@ -32566,7 +32588,7 @@ pub fn publishFromTypedModule(
     var top_level_values = try TopLevelValueTable.fromModule(
         allocator,
         module,
-        global_value_defs,
+        value_binding_defs,
         &canonical_names,
         checked_bodies,
         &checked_procedure_templates,
@@ -33069,7 +33091,7 @@ fn expectProvidedExportKind(
     var builtin_templates = try CheckedProcedureTemplateTable.fromModule(
         allocator,
         builtin_module,
-        builtin_env.store.sliceDefs(builtin_env.global_value_defs),
+        builtin_env.store.sliceDefs(builtin_env.value_binding_defs),
         &builtin_names,
         artifactRef(builtin_key),
         &builtin_checked_type_publication,
@@ -33165,7 +33187,7 @@ fn expectProvidedExportKind(
     defer checked_body_builder.deinit(allocator);
     const checked_bodies = checked_body_builder.storePtr();
 
-    const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
+    const value_binding_defs = module_env.store.sliceDefs(module_env.value_binding_defs);
 
     var relation_type_substitutions = PlatformRelationTypeSubstitutions{};
     defer relation_type_substitutions.deinit(allocator);
@@ -33176,7 +33198,7 @@ fn expectProvidedExportKind(
     var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(
         allocator,
         module,
-        global_value_defs,
+        value_binding_defs,
         &canonical_names,
         owner_artifact,
         &checked_type_publication,
@@ -33250,7 +33272,7 @@ fn expectProvidedExportKind(
         allocator,
         module,
         &canonical_names,
-        global_value_defs,
+        value_binding_defs,
         &.{},
         &checked_type_publication,
         &checked_body_builder,
@@ -33282,7 +33304,7 @@ fn expectProvidedExportKind(
     var top_level_values = try TopLevelValueTable.fromModule(
         allocator,
         module,
-        global_value_defs,
+        value_binding_defs,
         &canonical_names,
         checked_bodies,
         &checked_procedure_templates,
@@ -33462,6 +33484,7 @@ test "compile-time finalization route is explicit and non-optional" {
 
 test "compile-time roots and top-level values store final checked output only" {
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "constant") != null);
+    try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "hoisted_validation") != null);
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "callable_binding") != null);
     try std.testing.expect(std.meta.stringToEnum(CompileTimeRootKind, "expect") != null);
     try std.testing.expect(@hasField(CompileTimeRoot, "request_eligibility"));
@@ -33472,6 +33495,7 @@ test "compile-time roots and top-level values store final checked output only" {
     try std.testing.expect(@hasField(CompileTimeRootPayload, "pending"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "const_node"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "fn_value"));
+    try std.testing.expect(@hasField(CompileTimeRootPayload, "discarded"));
     try std.testing.expect(@hasField(CompileTimeRootPayload, "expect"));
 
     try std.testing.expectEqual(@as(usize, 2), unionFieldCount(TopLevelValueKind));
@@ -35180,8 +35204,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x84, 0x04, 0xF3, 0x91, 0x47, 0x0B, 0x12, 0xB1, 0x75, 0xC9, 0x5F, 0xF8, 0xF4, 0x62, 0x90, 0x47,
-        0xD7, 0x98, 0xC9, 0xF2, 0x60, 0x32, 0xE0, 0x8F, 0xDE, 0x52, 0xA4, 0x95, 0xB1, 0xDE, 0x8C, 0xA8,
+        0x93, 0x49, 0x87, 0xCE, 0xA2, 0x39, 0xBC, 0x97, 0x44, 0xB5, 0x16, 0x83, 0xD3, 0xE1, 0xDD, 0x19,
+        0x1F, 0x65, 0x6C, 0x8E, 0x35, 0xB8, 0xFC, 0x8A, 0xBF, 0x8D, 0xFE, 0xB4, 0xD0, 0xCB, 0xBC, 0xE3,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

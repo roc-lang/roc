@@ -126,6 +126,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/while_loop_test.zig"));
     std.testing.refAllDecls(@import("test/where_clause_ownership_test.zig"));
     std.testing.refAllDecls(@import("test/type_shadowing_test.zig"));
+    std.testing.refAllDecls(@import("test/value_binding_selection_test.zig"));
 
     // Backend tests (Roc emitter)
     std.testing.refAllDecls(@import("RocEmitter.zig"));
