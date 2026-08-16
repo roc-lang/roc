@@ -525,10 +525,8 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
-		(e-dispatch-call (method "negate") (constraint-fn-var 318)
-			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(args)))
+		(e-unary-minus
+			(e-runtime-error (tag "ident_not_in_scope"))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
