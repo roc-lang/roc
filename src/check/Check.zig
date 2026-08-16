@@ -10528,15 +10528,40 @@ fn varsHaveUnresolvedNonLiteralStaticDispatchConstraints(
 /// runtime symbols plus the internal roc__ namespace are reserved.
 ///
 /// Applications never pay for this: it only runs for platform modules.
+///
+/// One hosted function declaration, identified by the module and definition
+/// the hosted transform rewrote rather than by any name it goes under.
+const HostedTarget = struct {
+    module: *const ModuleEnv,
+    def: CIR.Def.Idx,
+};
+
+/// Record every hosted function `module` declares, keeping one display name per
+/// definition for the missing-entry diagnostic.
+fn collectDeclaredHostedFunctions(
+    self: *Self,
+    declared: *std.AutoHashMap(HostedTarget, []const u8),
+    module: *const ModuleEnv,
+) std.mem.Allocator.Error!void {
+    for (module.store.sliceDefs(module.hosted_defs)) |def_idx| {
+        const def = module.store.getDef(def_idx);
+        const expr = module.store.getExpr(def.expr);
+        std.debug.assert(expr == .e_hosted_lambda);
+
+        const name = try hostedDefinitionDisplayName(self.gpa, module, expr.e_hosted_lambda.symbol_name);
+        const gop = try declared.getOrPut(.{ .module = module, .def = def_idx });
+        if (gop.found_existing) {
+            self.gpa.free(name);
+        } else {
+            gop.value_ptr.* = name;
+        }
+    }
+}
+
 fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     if (self.cir.module_kind != .platform) return;
 
     const section = self.cir.hosted_entries.items.items;
-
-    const HostedTarget = struct {
-        module: *const ModuleEnv,
-        def: CIR.Def.Idx,
-    };
 
     // Exact definitions of every hosted function declared by imported modules.
     // Display names are retained only for missing-entry diagnostics.
@@ -10550,22 +10575,16 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     // dependencies), since hosted functions can live in modules the platform
     // root never imports directly. The hosted transform publishes the exact
     // rewritten defs, including associated items of nested type modules.
+    //
+    // The platform root is walked alongside them. A section entry names its
+    // target through an import, so an entry can never resolve to a definition
+    // in the root itself; a hosted declaration written there is therefore
+    // always missing from the section, and reporting it here is what tells the
+    // author so instead of leaving a declaration no linker symbol reaches.
     for (self.owner_modules) |imported_env| {
-        for (imported_env.store.sliceDefs(imported_env.hosted_defs)) |def_idx| {
-            const def = imported_env.store.getDef(def_idx);
-            const expr = imported_env.store.getExpr(def.expr);
-            std.debug.assert(expr == .e_hosted_lambda);
-
-            const target = HostedTarget{ .module = imported_env, .def = def_idx };
-            const name = try hostedDefinitionDisplayName(self.gpa, imported_env, expr.e_hosted_lambda.symbol_name);
-            const gop = try declared.getOrPut(target);
-            if (gop.found_existing) {
-                self.gpa.free(name);
-            } else {
-                gop.value_ptr.* = name;
-            }
-        }
+        try self.collectDeclaredHostedFunctions(&declared, imported_env);
     }
+    try self.collectDeclaredHostedFunctions(&declared, self.cir);
 
     // Walk the section's resolved targets, detect duplicate functions and
     // duplicate/reserved symbols (provides symbols share the namespace).

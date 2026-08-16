@@ -676,7 +676,7 @@ fn lowerEvalAndFinishRoots(
         );
     }
 
-    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+    var lowered = try lowerFinalizationModulesToLir(
         allocator,
         .{
             .root = checked.loweringViewWithRelations(module, relation_modules),
@@ -1177,7 +1177,7 @@ fn lowerDevEvalAndFinishRoots(
     coverage: *ComptimeCoverage,
     options: Options,
 ) FinalizeError!bool {
-    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+    var lowered = try lowerFinalizationModulesToLir(
         allocator,
         .{
             .root = checked.loweringViewWithRelations(module, relation_modules),
@@ -2232,6 +2232,26 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
 
 fn artifactMatches(a: anytype, b: checked.CheckedModuleArtifactKey) bool {
     return std.meta.eql(a.bytes, b.bytes);
+}
+
+/// Lower a module that is still being checked.
+///
+/// `lowerCheckedModulesToLir` binds hosted declarations against a platform
+/// header's hosted section only once the module holding that section finished
+/// checking, so the unbound-declaration rejection cannot reach compile-time
+/// finalization.
+fn lowerFinalizationModulesToLir(
+    allocator: Allocator,
+    modules: lir.CheckedPipeline.CheckedModuleSet,
+    roots: lir.CheckedPipeline.RootRequestSet,
+    target: lir.CheckedPipeline.TargetConfig,
+) Allocator.Error!lir.CheckedPipeline.LoweredProgram {
+    return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.HostedFunctionNotBound => finalizationInvariant(
+            "compile-time finalization lowering rejected a hosted declaration the platform header did not bind",
+        ),
+    };
 }
 
 fn finalizationInvariant(comptime message: []const u8) noreturn {
