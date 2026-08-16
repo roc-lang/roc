@@ -3564,6 +3564,10 @@ Builtin :: [].{
 		## This means the #U64 this function returns can always be safely converted to #I64 or #I32, depending on the target.
 		len : List(_item) -> U64
 
+		## Returns the number of items the list can hold without triggering a memory allocation.
+		## The capacity is always greater than or equal to the [List.len].
+		capacity : List(_item) -> U64
+
 		##  Check if the list is empty.
 		## ```roc
 		## [1, 2, 3].is_empty()

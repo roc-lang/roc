@@ -1668,6 +1668,17 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "0" },
     },
     .{
+        .name = "low_level - List.capacity reports reserved capacity",
+        .source =
+        \\{
+        \\x : List(U64)
+        \\x = List.with_capacity(10)
+        \\List.capacity(x) >= 10
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - List.append on non-empty list",
         .source =
         \\{
