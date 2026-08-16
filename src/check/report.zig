@@ -1027,7 +1027,7 @@ pub const ReportBuilder = struct {
             .unset_of_required_field => |data| return self.buildUnsetOfRequiredFieldReport(data),
             .unset_of_defaulted_field => |data| return self.buildUnsetOfDefaultedFieldReport(data),
             .effectful_default_value => |data| return self.buildEffectfulDefaultValueReport(data),
-            .default_literal_not_concrete => |data| return self.buildDefaultLiteralNotConcreteReport(data),
+            .default_constrains_type_parameter => |data| return self.buildDefaultConstrainsTypeParameterReport(data),
             .recursive_default_value => |data| return self.buildRecursiveDefaultValueReport(data),
             .circular_value_definition => |data| return self.buildCircularValueDefinitionReport(data),
             .literal_defaulted => |data| return self.buildLiteralDefaultedReport(data),
@@ -3154,17 +3154,21 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    fn buildDefaultLiteralNotConcreteReport(
+    fn buildDefaultConstrainsTypeParameterReport(
         self: *Self,
-        data: problem_mod.DefaultLiteralNotConcrete,
+        data: problem_mod.DefaultConstrainsTypeParameter,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Default Literal Needs A Concrete Type", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Default Constrains A Type Parameter", "", .runtime_error);
         errdefer report.deinit();
 
         try D.renderSliceInto(&.{
-            D.bytes("This literal in the default value for the"),
+            D.bytes("The default value for the"),
             D.ident(data.field_name).withAnnotation(.inline_code),
-            D.bytes("field does not have a concrete type."),
+            D.bytes("field requires the type parameter"),
+            D.ident(data.type_param).withAnnotation(.inline_code),
+            D.bytes("to have a"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("method."),
         }, self, &report, &report.headline);
 
         const region_info = self.module_env.calcRegionInfo(data.region);
@@ -3176,7 +3180,7 @@ pub const ReportBuilder = struct {
             self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
-        try report.document.addReflowingText("A default is materialized at every construction site that omits the field, at that site's own type—and a literal is converted through the type it lands in, so a literal whose type stays parametric could land in a type with no literal conversion at all. Give the literal a concrete type, or use an expression that does not need literal conversion.");
+        try report.document.addReflowingText("A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.");
 
         return report;
     }

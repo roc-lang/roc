@@ -43,7 +43,7 @@ cycle_val = Cycle.{}
 DEFAULT VALUE CYCLE - record_default_expressions.md:30:22:30:33
 INVALID NOMINAL RECORD - record_default_expressions.md:33:19:33:21
 EFFECTFUL DEFAULT VALUE - record_default_expressions.md:20:26:20:34
-DEFAULT LITERAL NEEDS A CONCRETE TYPE - record_default_expressions.md:25:33:25:34
+DEFAULT CONSTRAINS A TYPE PARAMETER - record_default_expressions.md:25:33:25:34
 # PROBLEMS
 ── ✗ default value cycle ─────────────────── record_default_expressions.md:30:22
 
@@ -86,19 +86,18 @@ A default is filled in by the compiler wherever construction omits the field,
 so running effects here would happen at unpredictable times. Compute the value
 with an effectful function first, then pass it explicitly.
 
-── ✗ default literal needs a concrete type ─ record_default_expressions.md:25:33
+── ✗ default constrains a type parameter ─── record_default_expressions.md:25:33
 
-This literal in the default value for the value field does not have a concrete
-type.
+The default value for the value field requires the type parameter t to have a
+from_numeral method.
 
 BadLiteral(t) := { value : t ?? 0 }
                                 ^
 
-A default is materialized at every construction site that omits the field, at
-that site's own type—and a literal is converted through the type it lands in,
-so a literal whose type stays parametric could land in a type with no literal
-conversion at all. Give the literal a concrete type, or use an expression that
-does not need literal conversion.
+A field default can never place a requirement on the type's parameters: type
+declarations do not carry where clauses, and the compiler never infers such
+requirements onto a type. Make the field's type concrete, or use a default
+value that demands nothing of the parameter.
 
 # TOKENS
 ~~~zig
