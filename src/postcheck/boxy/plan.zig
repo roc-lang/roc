@@ -169,7 +169,7 @@ pub const RepChild = struct {
     role: ChildRole,
     source_type: CheckedTypeIdentity,
     rep: TypeRepId,
-    record_field_kind: checked.CheckedFieldKind.Tag = .required,
+    record_field_kind: checked.CheckedFieldKind = .required,
 };
 
 /// One tag name and its planned payload representation span.
@@ -230,6 +230,11 @@ pub const TypeRepresentation = struct {
     dictionaries: Span = .{},
     descriptor: ?DescriptorRequirementId = null,
     contains_dynamic: bool = false,
+    /// This representation is the checker-defined `[#Missing, #Present(a)]`
+    /// storage convention used for an optional or still-parametric field kind.
+    /// The discriminant is explicit so later stages never infer the field's
+    /// presence kind from tag names or representation shape.
+    presence_slot_present_discriminant: ?u16 = null,
     /// The source nominal type declared itself opaque: inspect must not
     /// reveal the backing structure.
     inspect_opaque: bool = false,
@@ -4162,11 +4167,11 @@ const Builder = struct {
                 .source_type = self.plan.representations.items[@intFromEnum(rep)].source_type,
                 .rep = rep,
                 .record_field_kind = if (field.value_ty != null)
-                    .optional
+                    checked.CheckedFieldKind.optional
                 else if (field.default != null)
-                    .defaulted
+                    .{ .tag = .defaulted }
                 else
-                    .required,
+                    checked.CheckedFieldKind.required,
             });
         }
         sortRecordFieldChildrenByName(store_view, children.items);
@@ -4592,19 +4597,15 @@ const Builder = struct {
     ) Allocator.Error!void {
         const source_type = typeRef(view, field.ty);
         const rep = switch (field.kind.tag) {
-            .required, .defaulted, .undetermined => try self.analyzeType(view, field.ty),
-            .optional => try self.optionalSlotRepresentation(view, field.ty),
+            .required, .defaulted => try self.analyzeType(view, field.ty),
+            .optional, .undetermined => try self.optionalSlotRepresentation(view, field.ty),
             .err => boxyPlanInvariant("checked-error record field reached boxy representation planning"),
         };
         try children.append(self.allocator, .{
             .role = .{ .record_field = field.name },
             .source_type = source_type,
             .rep = rep,
-            .record_field_kind = switch (field.kind.tag) {
-                .undetermined => .required,
-                .required, .optional, .defaulted => |kind| kind,
-                .err => unreachable,
-            },
+            .record_field_kind = field.kind,
         });
     }
 
@@ -4652,6 +4653,7 @@ const Builder = struct {
             // Slot tags carry their payload descriptor through enclosing
             // records even when this particular payload is concrete.
             .contains_dynamic = true,
+            .presence_slot_present_discriminant = 1,
         };
         return rep_id;
     }
@@ -7028,7 +7030,10 @@ const Builder = struct {
                 maybe_evidence,
             );
             if (mapping.hidden_desc_index < evidence_only_start and
-                pending.items[mapping.hidden_desc_index].rep != source.rep)
+                !self.callDescriptorRepsAgreeAcrossPresenceSlot(
+                    pending.items[mapping.hidden_desc_index].rep,
+                    source.rep,
+                ))
             {
                 boxyPlanInvariant("literal evidence disagreed with the concrete signature descriptor substitution");
             }
@@ -7795,6 +7800,10 @@ const Builder = struct {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
             }
+            if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, aligned_call_rep_id, worker_child)) {
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
+                continue;
+            }
             if (try self.workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, aligned_call_rep_id, call_value_rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps, seen_descriptor_reps, substitutions, runtime_value_only);
                 continue;
@@ -8158,6 +8167,10 @@ const Builder = struct {
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, context);
                 continue;
             }
+            if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, call_rep_id, worker_child)) {
+                try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
+                continue;
+            }
             if (try self.workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_rep_id, context);
                 continue;
@@ -8245,6 +8258,10 @@ const Builder = struct {
             }
             if (try self.findMatchingDictionaryChildBySourceType(call_children, worker_child)) |call_child| {
                 try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_child.rep, substitutions, seen);
+                continue;
+            }
+            if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, call_rep_id, worker_child)) {
+                try self.collectCallDictionaryRepSubstitutions(worker_child.rep, call_rep_id, substitutions, seen);
                 continue;
             }
             if (try self.workerChildCanMatchUnwrappedCallRepForDictionaries(worker_rep_id, worker_child)) {
@@ -9310,6 +9327,58 @@ const Builder = struct {
     ) Allocator.Error!bool {
         const worker_backing = self.structuralWrapperBackingRep(worker_rep_id) orelse return false;
         return worker_child.rep == worker_backing and !try self.repSubtreeHasDescriptorInOtherChildren(worker_rep_id, worker_child);
+    }
+
+    fn workerPresenceSlotPayloadMatchesUnwrappedCallRep(
+        self: *const Builder,
+        worker_rep_id: TypeRepId,
+        call_rep_id: TypeRepId,
+        worker_child: RepChild,
+    ) bool {
+        const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
+        const present_discriminant = worker_rep.presence_slot_present_discriminant orelse return false;
+        const call_rep = self.plan.representations.items[@intFromEnum(call_rep_id)];
+        if (call_rep.presence_slot_present_discriminant != null) return false;
+
+        const variants = self.plan.tagVariantSlice(worker_rep.tag_variants);
+        const present_index: usize = present_discriminant;
+        if (present_index >= variants.len) {
+            boxyPlanInvariant("presence-slot Present discriminant exceeded its planned variants");
+        }
+        for (self.plan.childSlice(variants[present_index].payloads)) |payload| {
+            if (payload.rep == worker_child.rep and std.meta.eql(payload.role, worker_child.role)) return true;
+        }
+        return false;
+    }
+
+    fn callDescriptorRepsAgreeAcrossPresenceSlot(
+        self: *const Builder,
+        first: TypeRepId,
+        second: TypeRepId,
+    ) bool {
+        if (first == second) return true;
+        if (self.presenceSlotPayloadRep(first)) |payload| {
+            if (payload == second) return true;
+        }
+        if (self.presenceSlotPayloadRep(second)) |payload| {
+            if (payload == first) return true;
+        }
+        return false;
+    }
+
+    fn presenceSlotPayloadRep(self: *const Builder, rep_id: TypeRepId) ?TypeRepId {
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        const present_discriminant = rep.presence_slot_present_discriminant orelse return null;
+        const variants = self.plan.tagVariantSlice(rep.tag_variants);
+        const present_index: usize = present_discriminant;
+        if (present_index >= variants.len) {
+            boxyPlanInvariant("presence-slot Present discriminant exceeded its planned variants");
+        }
+        const payloads = self.plan.childSlice(variants[present_index].payloads);
+        if (payloads.len != 1) {
+            boxyPlanInvariant("presence-slot Present variant did not have exactly one planned payload");
+        }
+        return payloads[0].rep;
     }
 
     fn workerChildCanMatchUnwrappedCallRepForDictionaries(
@@ -13332,7 +13401,7 @@ test "boxy planner preserves optional record field representation and descriptor
     const record = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
     const record_children = plan.childSlice(record.children);
     try std.testing.expectEqual(@as(usize, 1), record_children.len);
-    try std.testing.expectEqual(checked.CheckedFieldKind.Tag.optional, record_children[0].record_field_kind);
+    try std.testing.expectEqual(checked.CheckedFieldKind.Tag.optional, record_children[0].record_field_kind.tag);
     try std.testing.expect(record.contains_dynamic);
     try std.testing.expect(record.descriptor != null);
 
@@ -13340,6 +13409,7 @@ test "boxy planner preserves optional record field representation and descriptor
     try std.testing.expectEqual(RepresentationKind.tag_union, slot.kind);
     try std.testing.expect(slot.contains_dynamic);
     try std.testing.expect(slot.descriptor != null);
+    try std.testing.expectEqual(@as(?u16, 1), slot.presence_slot_present_discriminant);
     const variants = plan.tagVariantSlice(slot.tag_variants);
     try std.testing.expectEqual(@as(usize, 2), variants.len);
     try std.testing.expectEqual(missing, variants[0].name);
@@ -13347,6 +13417,52 @@ test "boxy planner preserves optional record field representation and descriptor
     const present_payloads = plan.childSlice(variants[1].payloads);
     try std.testing.expectEqual(@as(usize, 1), present_payloads.len);
     try std.testing.expectEqual(record_children[0].source_type, present_payloads[0].source_type);
+}
+
+test "boxy planner preserves undetermined record field kind identity in a presence slot" {
+    const gpa = std.testing.allocator;
+
+    var canonical_names = checked_names.CanonicalNameStore.init(gpa);
+    defer canonical_names.deinit();
+    const field_name = try canonical_names.internRecordFieldLabel("value");
+    _ = try canonical_names.internTagLabel("#Missing");
+    _ = try canonical_names.internTagLabel("#Present");
+
+    const kind_var: checked.CheckedTypeId = @enumFromInt(fixtureTableIndex(1));
+    const fields = [_]checked.CheckedRecordField{.{
+        .name = field_name,
+        .ty = @enumFromInt(fixtureTableIndex(0)),
+        .kind = .undetermined(kind_var),
+    }};
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}) },
+        .{ .flex = .{} },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = fields.len }, .ext = @enumFromInt(2) } },
+    };
+    const checked_types = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .record_field_pool = &fields,
+    };
+
+    var plan = try analyzeProgram(gpa, .{
+        .root_view = .{
+            .canonical_names = &canonical_names,
+            .checked_types = checked_types,
+        },
+        .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(3))},
+    }, .{});
+    defer plan.deinit();
+
+    const record = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
+    const record_children = plan.childSlice(record.children);
+    try std.testing.expectEqual(@as(usize, 1), record_children.len);
+    try std.testing.expectEqual(kind_var, record_children[0].record_field_kind.undeterminedVariable().?);
+
+    const slot = plan.representations.items[@intFromEnum(record_children[0].rep)];
+    try std.testing.expectEqual(RepresentationKind.tag_union, slot.kind);
+    try std.testing.expectEqual(@as(?u16, 1), slot.presence_slot_present_discriminant);
+    try std.testing.expect(slot.descriptor != null);
 }
 
 test "boxy planner represents open record rows dynamically" {
