@@ -570,6 +570,9 @@ hoist_selected_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32),
 /// expression selection and local binding selection from duplicating the same
 /// root.
 hoist_selected_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32),
+/// Unit-valued roots that validate one refutable destructure, keyed by the
+/// source destructure pattern.
+hoist_selected_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32),
 /// Expressions whose original subtrees were replaced with explicit runtime
 /// errors after hoist selection had already seen them. Selected roots and
 /// dependencies inside these subtrees must be pruned before publication.
@@ -1568,6 +1571,7 @@ const CompletedHoistResult = struct {
 };
 
 const HoistPatternExtraction = hoist_roots.PatternExtraction;
+const HoistPatternValidation = hoist_roots.PatternValidation;
 
 const HoistKnownValue = union(enum) {
     binding_rhs: CIR.Expr.Idx,
@@ -1593,6 +1597,7 @@ const HoistSelectionTransaction = struct {
     staged_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot) = .empty,
     staged_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
     staged_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
+    staged_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
     known_updates: std.ArrayListUnmanaged(HoistKnownUpdate) = .empty,
     committed: bool = false,
 
@@ -1609,6 +1614,7 @@ const HoistSelectionTransaction = struct {
         self.staged_roots.deinit(self.checker.gpa);
         self.staged_exprs.deinit(self.checker.gpa);
         self.staged_bindings.deinit(self.checker.gpa);
+        self.staged_pattern_validations.deinit(self.checker.gpa);
         self.known_updates.deinit(self.checker.gpa);
     }
 
@@ -1649,6 +1655,7 @@ const HoistSelectionTransaction = struct {
                     std.debug.assert(root.pattern != null);
                     std.debug.assert(root.pattern.? == pattern);
                 },
+                .pattern_validation => unreachable,
             }
         } else {
             const root = &self.checker.selected_hoisted_roots.items[root_index];
@@ -1720,6 +1727,24 @@ const HoistSelectionTransaction = struct {
             .body = .{ .pattern_extraction = extraction },
         });
         try self.stageBindingAssociation(pattern, root_index);
+        return root_index;
+    }
+
+    fn stagePatternValidationRoot(
+        self: *HoistSelectionTransaction,
+        validation: HoistPatternValidation,
+    ) Allocator.Error!u32 {
+        if (self.checker.hoist_selected_pattern_validations.get(validation.scrutinee_pattern)) |root_index| return root_index;
+        if (self.staged_pattern_validations.get(validation.scrutinee_pattern)) |root_index| return root_index;
+
+        try self.stageExprDependencies(validation.base_expr);
+
+        const root_index: u32 = @intCast(self.selectedRootCount() + self.staged_roots.items.len);
+        try self.staged_roots.append(self.checker.gpa, .{
+            .expr = validation.base_expr,
+            .body = .{ .pattern_validation = validation },
+        });
+        try self.staged_pattern_validations.put(self.checker.gpa, validation.scrutinee_pattern, root_index);
         return root_index;
     }
 
@@ -1960,6 +1985,7 @@ const HoistSelectionTransaction = struct {
         try self.checker.selected_hoisted_roots.ensureUnusedCapacity(self.checker.gpa, self.staged_roots.items.len);
         try self.checker.hoist_selected_exprs.ensureUnusedCapacity(self.checker.gpa, self.staged_exprs.count());
         try self.checker.hoist_selected_bindings.ensureUnusedCapacity(self.checker.gpa, self.staged_bindings.count());
+        try self.checker.hoist_selected_pattern_validations.ensureUnusedCapacity(self.checker.gpa, self.staged_pattern_validations.count());
 
         const selected_start = self.checker.selected_hoisted_roots.items.len;
         for (self.staged_roots.items, 0..) |root, offset| {
@@ -1968,7 +1994,13 @@ const HoistSelectionTransaction = struct {
             switch (root.body) {
                 .expr => self.checker.hoist_selected_exprs.putAssumeCapacityNoClobber(root.expr, root_index),
                 .pattern_extraction => {},
+                .pattern_validation => {},
             }
+        }
+
+        var validation_iter = self.staged_pattern_validations.iterator();
+        while (validation_iter.next()) |entry| {
+            self.checker.hoist_selected_pattern_validations.putAssumeCapacityNoClobber(entry.key_ptr.*, entry.value_ptr.*);
         }
 
         var binding_iter = self.staged_bindings.iterator();
@@ -2338,6 +2370,7 @@ fn initAssumePrepared(
         .hoist_contextual_binding_scope_patterns = .empty,
         .hoist_selected_bindings = .{},
         .hoist_selected_exprs = .{},
+        .hoist_selected_pattern_validations = .{},
         .hoist_invalidated_exprs = .{},
         .selected_hoisted_roots = .empty,
         .executable_root_defs = .empty,
@@ -2450,6 +2483,7 @@ pub fn deinit(self: *Self) void {
     self.hoist_contextual_binding_scope_patterns.deinit(self.gpa);
     self.hoist_selected_bindings.deinit(self.gpa);
     self.hoist_selected_exprs.deinit(self.gpa);
+    self.hoist_selected_pattern_validations.deinit(self.gpa);
     self.hoist_invalidated_exprs.deinit(self.gpa);
     for (self.selected_hoisted_roots.items) |*root| {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
@@ -2570,6 +2604,7 @@ pub fn selectedHoistedRootIsTopLevel(self: *const Self, root: hoist_roots.Select
     const pattern = switch (root.body) {
         .expr => root.pattern orelse return false,
         .pattern_extraction => |extraction| extraction.scrutinee_pattern,
+        .pattern_validation => |validation| validation.scrutinee_pattern,
     };
     return self.patternIsTopLevelDef(pattern);
 }
@@ -2819,6 +2854,31 @@ fn recordHoistPatternProvenance(
         .str_literal,
         => try self.recordHoistPatternExtractionProvenanceHelp(pattern, expr, pattern, .deferred),
     }
+}
+
+/// A pending destructure diagnostic is a strict compile-time demand on the
+/// complete scrutinee, independent of whether any binder is later referenced.
+/// Select one validation root from the same producer-proven eligibility facts
+/// used for ordinary local binding hoists.
+fn selectPendingDestructureValidationRoot(
+    self: *Self,
+    pattern: CIR.Pattern.Idx,
+    expr: CIR.Expr.Idx,
+    hoist_position: HoistPosition,
+) Allocator.Error!void {
+    const completed = self.last_hoist_result orelse return;
+    if (completed.expr != expr) return;
+    if (builtin.mode == .Debug) std.debug.assert(completed.hoist_position == hoist_position);
+    if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
+    if (!self.exprCanBeHoistedBindingRoot(expr)) return;
+    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
+    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
+
+    _ = try self.ensureHoistedPatternValidationRoot(.{
+        .base_expr = expr,
+        .scrutinee_pattern = pattern,
+    });
+    self.problems.markPendingStaticExhaustivenessEmpirical(.{ .destructure_pattern = pattern });
 }
 
 fn patternCanOwnHoistedBindingRoot(self: *Self, pattern: CIR.Pattern.Idx) bool {
@@ -3243,6 +3303,18 @@ fn ensureHoistedPatternExtractionRoot(
     return root_index;
 }
 
+fn ensureHoistedPatternValidationRoot(
+    self: *Self,
+    validation: HoistPatternValidation,
+) Allocator.Error!u32 {
+    if (self.hoist_selected_pattern_validations.get(validation.scrutinee_pattern)) |root_index| return root_index;
+    var transaction = HoistSelectionTransaction.init(self);
+    defer transaction.deinit();
+    const root_index = try transaction.stagePatternValidationRoot(validation);
+    try transaction.commit();
+    return root_index;
+}
+
 fn ensureHoistedExprRoot(self: *Self, expr: CIR.Expr.Idx, pattern: ?CIR.Pattern.Idx) Allocator.Error!u32 {
     var transaction = HoistSelectionTransaction.init(self);
     defer transaction.deinit();
@@ -3514,11 +3586,24 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
         std.debug.assert(selected.pattern.? == entry.key_ptr.*);
     }
 
+    var validation_iter = self.hoist_selected_pattern_validations.iterator();
+    while (validation_iter.next()) |entry| {
+        const root_index = entry.value_ptr.*;
+        std.debug.assert(root_index < self.selected_hoisted_roots.items.len);
+        const selected = self.selected_hoisted_roots.items[root_index];
+        const validation = switch (selected.body) {
+            .pattern_validation => |value| value,
+            .expr, .pattern_extraction => unreachable,
+        };
+        std.debug.assert(validation.scrutinee_pattern == entry.key_ptr.*);
+    }
+
     for (self.selected_hoisted_roots.items, 0..) |root, i| {
         const root_index: u32 = @intCast(i);
         switch (root.body) {
             .expr => std.debug.assert(self.hoist_selected_exprs.get(root.expr) == root_index),
             .pattern_extraction => {},
+            .pattern_validation => |validation| std.debug.assert(self.hoist_selected_pattern_validations.get(validation.scrutinee_pattern) == root_index),
         }
         if (root.pattern) |pattern| {
             std.debug.assert(self.hoist_selected_bindings.get(pattern) == root_index);
@@ -3526,6 +3611,7 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
             switch (root.body) {
                 .expr => {},
                 .pattern_extraction => std.debug.panic("check invariant violated: pattern extraction hoisted root had no binding pattern", .{}),
+                .pattern_validation => {},
             }
         }
     }
@@ -3549,6 +3635,7 @@ const HoistSelectionTestState = struct {
         checker.hoist_contextual_binding_scope_patterns = .empty;
         checker.hoist_selected_bindings = .{};
         checker.hoist_selected_exprs = .{};
+        checker.hoist_selected_pattern_validations = .{};
         checker.hoist_invalidated_exprs = .{};
         checker.selected_hoisted_roots = .empty;
         checker.last_hoist_result = null;
@@ -3574,6 +3661,7 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_contextual_binding_scope_patterns.deinit(self.allocator);
         self.checker.hoist_selected_bindings.deinit(self.allocator);
         self.checker.hoist_selected_exprs.deinit(self.allocator);
+        self.checker.hoist_selected_pattern_validations.deinit(self.allocator);
         self.checker.hoist_invalidated_exprs.deinit(self.allocator);
         for (self.checker.selected_hoisted_roots.items) |*root| {
             hoist_roots.deinitSelectedRoot(self.allocator, root);
@@ -3856,7 +3944,7 @@ test "hoisted pattern extraction root selection is atomic when binding map alloc
     try std.testing.expectEqual(@as(?u32, 0), state.checker.hoist_selected_bindings.get(result_pattern));
     const selected_extraction = switch (state.checker.selected_hoisted_roots.items[0].body) {
         .pattern_extraction => |selected| selected,
-        .expr => return error.ExpectedPatternExtractionRoot,
+        .expr, .pattern_validation => return error.ExpectedPatternExtractionRoot,
     };
     try std.testing.expectEqual(extraction.base_expr, selected_extraction.base_expr);
     try std.testing.expectEqual(extraction.scrutinee_pattern, selected_extraction.scrutinee_pattern);
@@ -7258,6 +7346,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var kept_count: usize = 0;
     var kept_expr_count: u32 = 0;
     var kept_pattern_count: u32 = 0;
+    var kept_validation_count: u32 = 0;
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
         const intrinsic = !self.hoistExprInvalidated(root.expr) and try self.hoistedRootIsIntrinsicallyKept(root);
@@ -7270,14 +7359,36 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         switch (root.body) {
             .expr => kept_expr_count += 1,
             .pattern_extraction => {},
+            .pattern_validation => kept_validation_count += 1,
         }
         if (root.pattern != null) kept_pattern_count += 1;
     }
+
+    // A kept extraction evaluates the same scrutinee and complete source
+    // pattern as its validation root. Let it own that exhaustiveness site so
+    // the right-hand side is not evaluated twice. If the extraction's result
+    // type is not concrete, pruning leaves the unit-valued validation root in
+    // place instead.
+    for (self.selected_hoisted_roots.items, 0..) |root, i| {
+        if (!keep_roots[i]) continue;
+        const extraction = switch (root.body) {
+            .pattern_extraction => |extraction| extraction,
+            .expr, .pattern_validation => continue,
+        };
+        const validation_index = self.hoist_selected_pattern_validations.get(extraction.scrutinee_pattern) orelse continue;
+        if (!keep_roots[validation_index]) continue;
+        keep_roots[validation_index] = false;
+        kept_count -= 1;
+        kept_validation_count -= 1;
+    }
+
     try self.hoist_selected_exprs.ensureTotalCapacity(self.gpa, kept_expr_count);
     try self.hoist_selected_bindings.ensureTotalCapacity(self.gpa, kept_pattern_count);
+    try self.hoist_selected_pattern_validations.ensureTotalCapacity(self.gpa, kept_validation_count);
 
     self.hoist_selected_exprs.clearRetainingCapacity();
     self.hoist_selected_bindings.clearRetainingCapacity();
+    self.hoist_selected_pattern_validations.clearRetainingCapacity();
 
     var kept: usize = 0;
     for (self.selected_hoisted_roots.items, keep_roots, 0..) |*root, keep, i| {
@@ -7294,6 +7405,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         switch (self.selected_hoisted_roots.items[kept].body) {
             .expr => self.hoist_selected_exprs.putAssumeCapacityNoClobber(self.selected_hoisted_roots.items[kept].expr, root_index),
             .pattern_extraction => {},
+            .pattern_validation => |validation| self.hoist_selected_pattern_validations.putAssumeCapacityNoClobber(validation.scrutinee_pattern, root_index),
         }
         if (self.selected_hoisted_roots.items[kept].pattern) |pattern| {
             self.hoist_selected_bindings.putAssumeCapacityNoClobber(pattern, root_index);
@@ -7311,6 +7423,11 @@ fn hoistedRootIsIntrinsicallyKept(
     self: *Self,
     root: *hoist_roots.SelectedHoistedRoot,
 ) Allocator.Error!bool {
+    if (root.body == .pattern_validation) {
+        root.value_kind = .data_constant;
+        return true;
+    }
+
     const type_var = if (root.pattern) |pattern|
         ModuleEnv.varFrom(pattern)
     else
@@ -7610,6 +7727,7 @@ const HoistedRootKeepOracle = struct {
                     entry.value_ptr.* = root_index;
                 },
                 .pattern_extraction => {},
+                .pattern_validation => {},
             }
             if (root.pattern) |pattern| {
                 const entry = oracle.pattern_roots.getOrPutAssumeCapacity(pattern);
@@ -11297,7 +11415,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     if (ptrn_result.isOk()) {
         const def_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(def.pattern));
-        try self.checkDestructureExhaustiveness(def.pattern, def.expr, expr_var, env, def_region);
+        _ = try self.checkDestructureExhaustiveness(def.pattern, def.expr, expr_var, env, def_region);
         if (self.cir.store.getPattern(def.pattern) != .assign) {
             try self.recordHoistPatternExtractionProvenanceHelp(def.pattern, def.expr, def.pattern, .immediate);
         }
@@ -18375,13 +18493,13 @@ fn checkDestructureExhaustiveness(
     value_var: Var,
     env: *Env,
     region: Region,
-) std.mem.Allocator.Error!void {
-    if (!self.patternNeedsExhaustiveness(pattern_idx)) return;
+) std.mem.Allocator.Error!bool {
+    if (!self.patternNeedsExhaustiveness(pattern_idx)) return false;
 
     self.known_empty_payload_vars_destructure.clearRetainingCapacity();
     const value_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(value_expr_idx, value_var, &self.known_empty_payload_vars_destructure);
 
-    try self.checkPatternExhaustiveness(
+    return try self.checkPatternExhaustiveness(
         pattern_idx,
         value_var,
         self.known_empty_payload_vars_destructure.items,
@@ -18403,8 +18521,8 @@ fn checkPatternExhaustiveness(
     value_constructors_known: bool,
     env: *Env,
     region: Region,
-) std.mem.Allocator.Error!void {
-    if (!self.patternNeedsExhaustiveness(pattern_idx)) return;
+) std.mem.Allocator.Error!bool {
+    if (!self.patternNeedsExhaustiveness(pattern_idx)) return false;
 
     // Same reasoning as the match-expression analysis site: the analysis and
     // its union-closing see sub-patterns through the scrutinee row, so the
@@ -18427,7 +18545,7 @@ fn checkPatternExhaustiveness(
     try self.backfillRegionsForAnalysisVars();
     const result = result_or_err catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.TypeError => return,
+        error.TypeError => return false,
     };
     defer result.deinit(self.cir.gpa);
 
@@ -18458,7 +18576,9 @@ fn checkPatternExhaustiveness(
             .value_snapshot = value_snapshot,
             .missing_patterns = missing_patterns_range,
         } });
+        return true;
     }
+    return false;
 }
 
 /// Run exhaustiveness analysis on every recorded lambda/function parameter
@@ -18498,7 +18618,7 @@ fn checkPatternExhaustivenessWithoutValue(
 
     const value_var = ModuleEnv.varFrom(pattern_idx);
     const region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
-    try self.checkPatternExhaustiveness(pattern_idx, value_var, &.{}, false, env, region);
+    _ = try self.checkPatternExhaustiveness(pattern_idx, value_var, &.{}, false, env, region);
 }
 
 // stmts //
@@ -18635,7 +18755,10 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     try self.unify(decl_pattern_var, decl_expr_var, env);
 
                 if (decl_pattern_result.isOk()) {
-                    try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
+                    const needs_comptime_validation = try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
+                    if (needs_comptime_validation) {
+                        try self.selectPendingDestructureValidationRoot(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
+                    }
                     try self.recordHoistPatternProvenance(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
                 }
                 try self.bindTypeSchemeVar(decl_expr_var, decl_pattern_var);
@@ -18716,7 +18839,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 _ = try self.unify(stmt_var, var_expr, env);
 
                 if (var_pattern_result.isOk()) {
-                    try self.checkDestructureExhaustiveness(var_stmt.pattern_idx, var_stmt.expr, var_expr, env, stmt_region);
+                    _ = try self.checkDestructureExhaustiveness(var_stmt.pattern_idx, var_stmt.expr, var_expr, env, stmt_region);
                 }
 
                 // `var` statements are binding roots too (they never
@@ -18780,7 +18903,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 _ = try self.unify(stmt_var, reassign_expr_var, env);
 
                 if (reassign_pattern_result.isOk()) {
-                    try self.checkDestructureExhaustiveness(reassign.pattern_idx, reassign.expr, reassign_expr_var, env, stmt_region);
+                    _ = try self.checkDestructureExhaustiveness(reassign.pattern_idx, reassign.expr, reassign_expr_var, env, stmt_region);
                 }
             },
             .s_for => |for_stmt| {
