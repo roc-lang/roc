@@ -176,10 +176,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     const hosted_indices = collectHostedProcGlobalIndices(gpa, modules) catch {
         return error.OutOfMemory;
     };
-    defer {
-        for (hosted_indices) |index| gpa.free(index.sort_key);
-        gpa.free(hosted_indices);
-    }
+    defer gpa.free(hosted_indices);
     var hosted_symbols = collectHostedSymbols(gpa, &platform_info) catch {
         return error.OutOfMemory;
     };
@@ -1058,7 +1055,6 @@ const HostedProcGlobalIndex = struct {
     artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
     def_idx: can.CIR.Def.Idx,
     index: usize,
-    sort_key: []const u8,
 };
 
 fn checkedArtifactKeysEqual(
@@ -1103,31 +1099,59 @@ fn hostedProcForDef(
     return null;
 }
 
+/// The host dispatch slot of every hosted procedure the platform binds.
+///
+/// The platform header's `hosted` section is the authority for those slots, and
+/// checking outputs it as the hosted binding table, so a slot is the binding's
+/// position in that table. Post-check lowering emits the same number as each
+/// hosted call's `dispatch_index`, so generated glue and compiled Roc index one
+/// host-side table the same way.
 fn collectHostedProcGlobalIndices(
     allocator: Allocator,
     modules: []const BuildEnv.CompiledModuleInfo,
 ) Allocator.Error![]HostedProcGlobalIndex {
     var indices = std.ArrayList(HostedProcGlobalIndex).empty;
-    errdefer {
-        for (indices.items) |index| allocator.free(index.sort_key);
-        indices.deinit(allocator);
+    errdefer indices.deinit(allocator);
+
+    if (platformHostedBindings(modules)) |bindings| {
+        try indices.ensureTotalCapacity(allocator, bindings.bindings.len);
+        for (bindings.bindings, 0..) |binding, dispatch_index| {
+            indices.appendAssumeCapacity(.{
+                .artifact_key = .{ .bytes = binding.target_checked_module.bytes },
+                .def_idx = binding.target_def,
+                .index = dispatch_index,
+            });
+        }
+        return try indices.toOwnedSlice(allocator);
+    }
+
+    // No platform binds these declarations, so order them the way the lowerers
+    // order an unbound catalog: by the procedure's deterministic order key.
+    const Candidate = struct {
+        artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+        def_idx: can.CIR.Def.Idx,
+        sort_key: []const u8,
+    };
+    var candidates = std.ArrayList(Candidate).empty;
+    defer {
+        for (candidates.items) |candidate| allocator.free(candidate.sort_key);
+        candidates.deinit(allocator);
     }
 
     for (modules) |mod| {
         if (!(mod.is_platform_sibling or mod.is_platform_main)) continue;
         const artifact = mod.semantic.checked_artifact orelse continue;
         for (artifact.hosted_procs.procs) |hosted| {
-            try indices.append(allocator, .{
+            try candidates.append(allocator, .{
                 .artifact_key = artifact.key,
                 .def_idx = hosted.def_idx,
-                .index = 0,
                 .sort_key = try hostedProcSortKey(allocator, artifact, hosted),
             });
         }
     }
 
     const SortContext = struct {
-        pub fn lessThan(_: void, a: HostedProcGlobalIndex, b: HostedProcGlobalIndex) bool {
+        pub fn lessThan(_: void, a: Candidate, b: Candidate) bool {
             return switch (std.mem.order(u8, a.sort_key, b.sort_key)) {
                 .lt => true,
                 .gt => false,
@@ -1135,13 +1159,30 @@ fn collectHostedProcGlobalIndices(
             };
         }
     };
-    std.mem.sort(HostedProcGlobalIndex, indices.items, {}, SortContext.lessThan);
+    std.mem.sort(Candidate, candidates.items, {}, SortContext.lessThan);
 
-    for (indices.items, 0..) |*index, i| {
-        index.index = i;
+    try indices.ensureTotalCapacity(allocator, candidates.items.len);
+    for (candidates.items, 0..) |candidate, i| {
+        indices.appendAssumeCapacity(.{
+            .artifact_key = candidate.artifact_key,
+            .def_idx = candidate.def_idx,
+            .index = i,
+        });
     }
 
     return try indices.toOwnedSlice(allocator);
+}
+
+/// The platform's hosted binding table, if a platform module is among these.
+fn platformHostedBindings(
+    modules: []const BuildEnv.CompiledModuleInfo,
+) ?*const CheckedArtifact.HostedBindingTable {
+    for (modules) |mod| {
+        const artifact = mod.semantic.checked_artifact orelse continue;
+        if (artifact.module_identity.kind != .platform) continue;
+        return &artifact.hosted_bindings;
+    }
+    return null;
 }
 
 fn hostedGlobalIndexForDef(

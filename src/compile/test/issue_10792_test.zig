@@ -103,6 +103,28 @@ test "issue 10792: a platform root whose requires clause is malformed still chec
     }}, "Declaration Has No Value"));
 }
 
+test "issue 10792: referencing a platform root's annotation-only declaration reports no value" {
+    try std.testing.expect(try checkPlatformReports(&.{.{
+        .name = "main.roc",
+        .source =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\
+        \\never_hosted! : I64 => I64
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |_| {
+        \\    _ = never_hosted!(1)
+        \\    0
+        \\}
+        \\
+        ,
+    }}, "Reference Has No Value"));
+}
+
 test "issue 10792: a hosted declaration the platform header omits reports an invalid hosted section" {
     try std.testing.expect(try checkPlatformReports(&.{
         .{
