@@ -167,15 +167,13 @@ pub const Modules = struct {
             }
             module_result.value_ptr.* = @intCast(i);
 
-            for (module_.moduleEnvConst().store.sliceDefs(module_.moduleEnvConst().global_value_defs)) |def_idx| {
+            for (module_.moduleEnvConst().store.sliceDefs(module_.moduleEnvConst().top_level_value_defs)) |def_idx| {
                 const def = module_.def(def_idx);
                 if (def.data.kind != .let) continue;
                 if (def.pattern.data == .assign) {
                     const assign = def.pattern.data.assign;
                     const def_result = try module_data.top_level_defs_by_ident.getOrPut(allocator, assign.ident);
-                    if (def_result.found_existing) {
-                        continue;
-                    }
+                    std.debug.assert(!def_result.found_existing);
                     def_result.value_ptr.* = def_idx;
                 }
             }

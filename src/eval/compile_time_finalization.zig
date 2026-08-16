@@ -2185,8 +2185,11 @@ fn finishConstRoot(
     };
     const const_ref = switch (root.kind) {
         .constant => blk: {
-            const pattern = root.pattern orelse finalizationInvariant("constant root had no checked pattern");
-            const top_level = module.top_level_values.lookupByPattern(pattern) orelse
+            const def_idx = switch (root.source) {
+                .def => |def| def,
+                .expr, .statement, .required_binding, .hoisted => finalizationInvariant("constant root source was not a top-level definition"),
+            };
+            const top_level = module.top_level_values.lookupByDef(def_idx) orelse
                 finalizationInvariant("constant root had no top-level value");
             break :blk switch (top_level.value) {
                 .const_ref => |ref| ref,

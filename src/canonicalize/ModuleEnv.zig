@@ -866,6 +866,14 @@ all_defs: CIR.Def.Span,
 /// Module-global value definitions: top-level values, associated items, and
 /// compiler-created hosted globals. Local block definitions are not included.
 global_value_defs: CIR.Def.Span,
+/// Exact module-global value definitions selected by canonicalization's
+/// source-name collision policy. Contains one definition per source-visible
+/// name plus every definition whose pattern has no single source name.
+top_level_value_defs: CIR.Def.Span,
+/// Module-global definitions that introduce checked value bindings. Concrete
+/// shadowed definitions retain their exact identities; annotation-only
+/// declarations superseded by an implementation are excluded.
+value_binding_defs: CIR.Def.Span,
 /// Exact definitions rewritten from annotation-only declarations to hosted lambdas.
 hosted_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
@@ -1124,6 +1132,8 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.module_role = .user;
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.global_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
+    self.top_level_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
+    self.value_binding_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.hosted_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.type_decls = .{ .span = .{ .start = 0, .len = 0 } };
@@ -1167,6 +1177,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_role = .user,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .global_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .top_level_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .value_binding_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .hosted_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .type_decls = .{ .span = .{ .start = 0, .len = 0 } },
@@ -3688,6 +3700,8 @@ pub const Serialized = extern struct {
     module_role: ModuleRole,
     all_defs: CIR.Def.Span,
     global_value_defs: CIR.Def.Span,
+    top_level_value_defs: CIR.Def.Span,
+    value_binding_defs: CIR.Def.Span,
     hosted_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     type_decls: CIR.Statement.Span,
@@ -3780,6 +3794,8 @@ pub const Serialized = extern struct {
         self.module_role = env.module_role;
         self.all_defs = env.all_defs;
         self.global_value_defs = env.global_value_defs;
+        self.top_level_value_defs = env.top_level_value_defs;
+        self.value_binding_defs = env.value_binding_defs;
         self.hosted_defs = env.hosted_defs;
         self.all_statements = env.all_statements;
         self.type_decls = env.type_decls;
@@ -3872,6 +3888,8 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .top_level_value_defs = self.top_level_value_defs,
+            .value_binding_defs = self.value_binding_defs,
             .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
@@ -3940,6 +3958,8 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .top_level_value_defs = self.top_level_value_defs,
+            .value_binding_defs = self.value_binding_defs,
             .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
@@ -4008,6 +4028,8 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .top_level_value_defs = self.top_level_value_defs,
+            .value_binding_defs = self.value_binding_defs,
             .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,

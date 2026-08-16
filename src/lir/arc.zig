@@ -10149,6 +10149,79 @@ test "RC specialization: caller body survives variant proc append" {
     return error.ExpectedSpecializedCall;
 }
 
+test "RC specialization: a variant's frame excludes the source's base dismantle temporaries" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/10787: the callee's base
+    // emission dismantles a pair it owns, which appends a residual-field
+    // temporary to the callee's frame inventory. A specialized variant of that
+    // same callee is emitted afterwards and solves from the callee's
+    // producer-authored frame, so each emission's frame owns exactly the
+    // temporaries that emission generated.
+    const param = try f.local(.str);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const field = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const callee_ret = try f.ret(param);
+    const append = try f.assignLowLevel(appended, &.{ field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), callee_ret);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const field_read = try f.assignRefField(field, pair, 0, elem_assign);
+    const pair_assign = try f.assignStruct(pair, &.{ first, second }, field_read);
+    const second_assign = try f.assignList(second, &.{}, pair_assign);
+    const callee_body = try f.assignList(first, &.{}, second_assign);
+    const callee = try f.addProc(&.{param}, callee_body, .str);
+
+    // The caller's string dies at the call, which demands an owned return the
+    // callee's borrowed signature does not provide, so a variant is emitted.
+    const value = try f.local(.str);
+    const result = try f.local(.str);
+    const done = try f.local(.i64);
+    const caller_ret = try f.ret(done);
+    const done_assign = try f.assignI64(done, 1, caller_ret);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.span(&.{value}),
+        .next = done_assign,
+    } });
+    const caller_body = try f.assignStr(value, "arg", call);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    const producer_local_count = f.store.localCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+
+    const base_frame = f.store.getLocalSpan(f.store.getProcSpec(callee).frame_locals);
+    const variant_frame = f.store.getLocalSpan(f.store.getProcSpec(variant).frame_locals);
+    var base_generated: usize = 0;
+    var variant_generated: usize = 0;
+    var shared_generated: usize = 0;
+    for (0..GuardedList.borrowLen(base_frame)) |base_index| {
+        const base_local = GuardedList.at(base_frame, base_index);
+        if (@intFromEnum(base_local) < producer_local_count) continue;
+        base_generated += 1;
+        for (0..GuardedList.borrowLen(variant_frame)) |variant_index| {
+            if (GuardedList.at(variant_frame, variant_index) == base_local) shared_generated += 1;
+        }
+    }
+    for (0..GuardedList.borrowLen(variant_frame)) |variant_index| {
+        if (@intFromEnum(GuardedList.at(variant_frame, variant_index)) >= producer_local_count) variant_generated += 1;
+    }
+
+    // Both emissions dismantle the pair, so both frames grow, and no generated
+    // temporary belongs to a frame other than the one that generated it.
+    try testing.expect(base_generated > 0);
+    try testing.expect(variant_generated > 0);
+    try testing.expectEqual(@as(usize, 0), shared_generated);
+}
+
 test "RC without specialization: owned final argument drops after the call" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();

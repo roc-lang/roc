@@ -4111,7 +4111,7 @@ pub const Coordinator = struct {
 
     fn topLevelDefForIdentName(env: *const ModuleEnv, ident_name: []const u8) ?CIR.Def.Idx {
         const ident = env.common.findIdent(ident_name) orelse return null;
-        for (env.store.sliceDefs(env.global_value_defs)) |def_idx| {
+        for (env.store.sliceDefs(env.top_level_value_defs)) |def_idx| {
             const def = env.store.getDef(def_idx);
             if (defPatternIdent(&env.store, def.pattern)) |pattern_ident| {
                 if (pattern_ident.eql(ident)) return def_idx;
