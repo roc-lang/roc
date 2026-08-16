@@ -16376,6 +16376,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 break :blk;
             }
 
+            if (self.localLookupHasNoValue(lookup.pattern_idx)) {
+                try self.reportValuelessDeclarationUse(expr_var, expr_region);
+                break :blk;
+            }
+
             try self.value_lookup_tracking.append(self.gpa, .{
                 .expr_idx = expr_idx,
                 .pattern_idx = lookup.pattern_idx,
@@ -16584,6 +16589,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const target_def: CIR.Def.Idx = @enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx));
                 if (generatedDerivedMethodDef(ext_ref.other_cir, target_def)) {
                     try self.reportAnnotationOnlyValueUse(expr_var, expr_region, env);
+                } else if (annotationOnlyValueDef(ext_ref.other_cir, target_def)) {
+                    try self.reportValuelessDeclarationUse(expr_var, expr_region);
                 } else {
                     const ext_instantiated_var = try self.instantiateImportedBindingVar(
                         ext_ref.local_var,
@@ -18100,7 +18107,11 @@ fn staticDispatchBindingIsUnsupportedGeneratedMethod(lookup: StaticDispatchMetho
     return expr.e_anno_only.kind == .unsupported_generated_method;
 }
 
-fn rejectUnsupportedGeneratedMethodDispatch(
+/// Reject a dispatch whose method declaration names no value. A bare underscore
+/// requesting an unsupported generated method reports itself at the declaration;
+/// every other annotation without a body reports here, because the dispatch is
+/// the site with nothing to call.
+fn rejectValuelessMethodDispatch(
     self: *Self,
     lookup: StaticDispatchMethodBinding,
     dispatcher_var: Var,
@@ -18108,7 +18119,14 @@ fn rejectUnsupportedGeneratedMethodDispatch(
     env: *Env,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!bool {
-    if (!staticDispatchBindingIsUnsupportedGeneratedMethod(lookup)) return false;
+    if (!annotationOnlyValueDef(lookup.env, lookup.binding.def_idx)) return false;
+    if (!staticDispatchBindingIsUnsupportedGeneratedMethod(lookup)) {
+        if (failure_expr orelse self.constraintSourceExpr(dispatcher_var, constraint)) |expr_idx| {
+            _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value_use = .{
+                .region = self.cir.store.getExprRegion(expr_idx),
+            } });
+        }
+    }
     try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
     try self.markStaticDispatchRejected(constraint);
     return true;
@@ -18337,6 +18355,22 @@ fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ide
 fn generatedDerivedMethodDef(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
     const def = module_env.store.getDef(def_idx);
     return module_env.store.getExpr(def.expr) == .e_derived_method;
+}
+
+/// A declaration that carries a type annotation and names no value. Builtin.roc
+/// writes its compiler-owned intrinsic wrappers this way and post-check lowering
+/// supplies their bodies, so those do name a value. A platform package's hosted
+/// declarations reach checking as `e_hosted_lambda`, which this never sees;
+/// `Coordinator.enable_hosted_transform` selects that rewrite and every entry
+/// point that compiles a platform sets it, so a hosted declaration is never an
+/// annotation without a body by the time checking runs. Every other annotation
+/// without a body has nothing to evaluate.
+fn annotationOnlyValueDef(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
+    const def = module_env.store.getDef(def_idx);
+    const expr = module_env.store.getExpr(def.expr);
+    if (expr != .e_anno_only) return false;
+    return !can.BuiltinLowLevel.isBuiltinModule(module_env) or
+        !can.BuiltinLowLevel.isIntrinsicAnnotation(module_env, expr.e_anno_only.ident);
 }
 
 fn isExprNodeTag(tag: CIR.Node.Tag) bool {
@@ -21485,6 +21519,11 @@ fn checkResolvedAssociatedTarget(
 ) Allocator.Error!void {
     if (generatedDerivedMethodDef(target_env, target_def_idx)) {
         try self.reportAnnotationOnlyValueUse(expr_var, region, env);
+        return;
+    }
+
+    if (annotationOnlyValueDef(target_env, target_def_idx)) {
+        try self.reportValuelessDeclarationUse(expr_var, region);
         return;
     }
 
@@ -26441,7 +26480,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                         unreachable;
                     }
-                    if (try self.rejectUnsupportedGeneratedMethodDispatch(
+                    if (try self.rejectValuelessMethodDispatch(
                         method_lookup,
                         deferred_constraint.var_,
                         constraint,
@@ -26822,7 +26861,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         );
                         continue;
                     };
-                    if (try self.rejectUnsupportedGeneratedMethodDispatch(
+                    if (try self.rejectValuelessMethodDispatch(
                         method_lookup,
                         deferred_constraint.var_,
                         constraint,
@@ -30407,6 +30446,20 @@ fn recordGeneratedCodecDerivationSnapshot(
 fn localLookupIsGeneratedDerivedMethodMarker(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
     const processing_def = self.topLevelPattern(pattern_idx) orelse return false;
     return generatedDerivedMethodDef(self.cir, processing_def.def_idx);
+}
+
+fn localLookupHasNoValue(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    const processing_def = self.topLevelPattern(pattern_idx) orelse return false;
+    return annotationOnlyValueDef(self.cir, processing_def.def_idx);
+}
+
+fn reportValuelessDeclarationUse(
+    self: *Self,
+    expr_var: Var,
+    region: Region,
+) Allocator.Error!void {
+    _ = try self.problems.appendProblem(self.gpa, .{ .annotation_only_value_use = .{ .region = region } });
+    try self.markErroneous(expr_var);
 }
 
 fn reportAnnotationOnlyValueUse(

@@ -199,6 +199,7 @@ TYPE MISMATCH - fuzz_crash_020.md:52:2:52:2
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:74:1:74:22
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:113:1:113:7
 MISSING METHOD - fuzz_crash_020.md:86:11:86:17
+REFERENCE HAS NO VALUE - fuzz_crash_020.md:89:3:89:6
 TYPE MISMATCH - fuzz_crash_020.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_020.md:105:2:105:54
 TYPE MISMATCH - fuzz_crash_020.md:93:22:93:24
@@ -928,6 +929,16 @@ method.
 The value's type, which does not have a method named from_quote, is:
 
     {}
+
+── ✗ reference has no value ───────────────────────────── fuzz_crash_020.md:89:3
+
+This refers to a declaration that has a type annotation but no implementation,
+so there is no value here to use.
+
+one(er,   ), 456, # two
+^^^
+
+Give that declaration a value body, or stop referring to it here.
 
 ── ✗ type mismatch ────────────────────────────────────── fuzz_crash_020.md:98:4
 
