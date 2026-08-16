@@ -89,6 +89,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:47:34:47:40
 UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
 UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
+TYPE MISMATCH - can_import_exposing_types.md:50:22:50:74
 # PROBLEMS
 ── ● duplicate definition ───────────────────── can_import_exposing_types.md:1:1
 

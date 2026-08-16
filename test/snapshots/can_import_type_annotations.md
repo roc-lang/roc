@@ -62,6 +62,7 @@ MOD NOT FOUND - can_import_type_annotations.md:24:29:24:36
 MOD NOT FOUND - can_import_type_annotations.md:24:53:24:59
 MOD NOT FOUND - can_import_type_annotations.md:24:72:24:78
 NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
+TYPE MISMATCH - can_import_type_annotations.md:15:21:15:43
 # PROBLEMS
 ── ● duplicate definition ─────────────────── can_import_type_annotations.md:2:1
 

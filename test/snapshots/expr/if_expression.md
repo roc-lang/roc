@@ -8,7 +8,7 @@ type=expr
 if x > 5 "big" else "small"
 ~~~
 # EXPECTED
-UNCONDITIONAL CONDITION - if_expression.md:1:4:1:9
+NIL
 # PROBLEMS
 NIL
 # TOKENS
