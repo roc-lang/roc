@@ -4183,6 +4183,20 @@ fn runExprStatementKernel(
                             continue :expr_kernel .suffix;
                         }
 
+                        // A body-depth newline ends the row even when the next token is a
+                        // comma. Checking this after `peek() == .Comma` would consume that
+                        // comma and merge the following line's values into this row.
+                        if (self.newlineBeforeCurrent()) {
+                            switch (try finish_row.run(self, &expr_table_state)) {
+                                .abort => |expr| {
+                                    expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
+                                    continue :expr_kernel .suffix;
+                                },
+                                .ok => {},
+                            }
+                            continue :expr_kernel .table_row_next;
+                        }
+
                         if (self.peek() == .Comma) {
                             self.advance();
                             if (self.peek() == .CloseCurly or self.newlineBeforeCurrent()) {
@@ -4217,17 +4231,6 @@ fn runExprStatementKernel(
                             });
                             expr_state = .{ .start = self.pos, .min_bp = 0 };
                             continue :expr_kernel .prefix;
-                        }
-
-                        if (self.newlineBeforeCurrent()) {
-                            switch (try finish_row.run(self, &expr_table_state)) {
-                                .abort => |expr| {
-                                    expr_finish_state = .{ .start = expr_table_state.start, .min_bp = expr_table_state.min_bp, .expr = expr };
-                                    continue :expr_kernel .suffix;
-                                },
-                                .ok => {},
-                            }
-                            continue :expr_kernel .table_row_next;
                         }
 
                         const expr = try self.abortTable(
