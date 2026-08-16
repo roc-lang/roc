@@ -306,6 +306,41 @@ test "cross-module - defaulted record - textually identical local declaration do
     try test_env_b.assertOneTypeError("Type Mismatch");
 }
 
+test "cross-module - defaulted record - foreign-helper dispatch cycle is check's residue" {
+    // The cycle's connecting edges are invisible to canonicalization TWICE
+    // over: `call_go`'s body calls `Helper.go`—a FOREIGN def whose body CAN
+    // cannot walk—and `go` dispatches on its parameter, resolved only by
+    // constraint discharge back to B's own `make`, whose body omits `x`.
+    // The checker's residue walk closes it through scheme-use evidence:
+    // seeding at the walked lookup nodes joins the where-clause constraint's
+    // per-use copies to the discharged instantiation that stamped the local
+    // target (design.md "Defaulted Fields"). (The default routes through a
+    // local wrapper because a type declaration canonicalizes in the forward
+    // pass, before imports are in scope for its default expression.)
+    const source_helper =
+        \\Helper := {}.{
+        \\  go : c -> U8 where [c.make : c -> U8]
+        \\  go = |c| c.make()
+        \\}
+    ;
+    var test_env_helper = try TestEnv.init("Helper", source_helper);
+    defer test_env_helper.deinit();
+
+    const source_b =
+        \\import Helper
+        \\
+        \\call_go = |c| Helper.go(c)
+        \\
+        \\Cfg := { x : U8 ?? call_go(Cfg.{ x: 1 }) }.{
+        \\    make = |_cfg| Cfg.{}.x
+        \\}
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "Helper", &test_env_helper);
+    defer test_env_b.deinit();
+    try test_env_b.assertCanErrors(&.{});
+    try test_env_b.assertOneTypeError("Recursive Default Value");
+}
+
 test "cross-module - check type - static dispatch" {
     const source_a =
         \\A := [A(Str)].{

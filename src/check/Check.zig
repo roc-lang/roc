@@ -22860,13 +22860,53 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     var recursive_defaults: std.ArrayList(PendingDefaultCheck) = .empty;
     defer recursive_defaults.deinit(self.gpa);
 
+    var evidence = DefaultWalkEvidence{};
+    defer evidence.deinit(self.gpa);
+
     // Top-level binder pattern -> def body, for following reference edges
     // through def bodies during the residue walk.
-    var pattern_to_def_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty;
-    defer pattern_to_def_expr.deinit(self.gpa);
     for (self.cir.store.sliceDefs(self.cir.all_defs)) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
-        try pattern_to_def_expr.put(self.gpa, def.pattern, def.expr);
+        try evidence.pattern_to_def_expr.put(self.gpa, def.pattern, def.expr);
+    }
+
+    // Scheme-use evidence indexes for the dispatch joins. A dispatch fired
+    // inside an INSTANTIATED scheme carries the instantiation copy's
+    // constraint var, never the var written at the body's dispatch site
+    // (generalization copies it per use), so var equality alone can only
+    // join monomorphic sites. The recorded scheme-use pairs are the exact
+    // (scheme var -> fresh copy) linkage:
+    //  - value_use / nested_function_use records key by their LOCAL
+    //    instantiating node, so any walked expression that instantiated a
+    //    scheme (a generic def lookup, a foreign helper lookup) seeds the
+    //    fresh copies of that scheme's constrained vars;
+    //  - dispatch_target records key by the discharged constraint's raw fn
+    //    var ("unique per constraint instantiation"), chaining a followed
+    //    target's OWN interior dispatches without node ambiguity (a
+    //    dispatch_target record's node_idx may be a foreign module's CIR
+    //    index and is never compared against local nodes here).
+    for (self.cir.scheme_uses.items.items, 0..) |record, record_index| {
+        const slot: ModuleEnv.SchemeUseRecord.Slot = @enumFromInt(record.slot_kind);
+        switch (slot) {
+            .value_use, .nested_function_use => {
+                const entry = try evidence.node_to_scheme_uses.getOrPut(self.gpa, record.node_idx);
+                if (!entry.found_existing) entry.value_ptr.* = .empty;
+                try entry.value_ptr.append(self.gpa, @intCast(record_index));
+            },
+            .dispatch_target => {
+                try evidence.dispatch_scheme_uses.put(self.gpa, record.slot_data, @intCast(record_index));
+            },
+            // A shared use copies no vars (it shares the in-flight
+            // definition's), so it has no fresh pairs to seed; the walk
+            // reaches the shared body through the ordinary reference edge.
+            .shared_value_use => {},
+        }
+    }
+    for (self.dispatch_target_instantiations.items, 0..) |instantiation, index| {
+        const resolved = self.types.resolveVar(instantiation.constraint_fn_var).var_;
+        const entry = try evidence.instantiations_by_var.getOrPut(self.gpa, resolved);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.gpa, @intCast(index));
     }
 
     for (self.pending_default_checks.items) |pending| {
@@ -22874,7 +22914,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         // a unify mismatch against its field type—both leave the var `.err`);
         // walking it would cascade a second problem onto the same default.
         if (self.types.resolveVar(ModuleEnv.varFrom(pending.default_expr)).desc.content == .err) continue;
-        if (try self.defaultMaterializationIsRecursive(pending.default_expr, &pattern_to_def_expr)) {
+        if (try self.defaultMaterializationIsRecursive(pending.default_expr, &evidence)) {
             try recursive_defaults.append(self.gpa, pending);
         }
     }
@@ -23067,20 +23107,46 @@ fn checkDefaultLiteralDispatchConcrete(self: *Self, pending: PendingDefaultCheck
     }
 }
 
+/// Prebuilt evidence indexes for one `checkDefaultRestrictions` run (built
+/// once, shared by every default's residue walk).
+const DefaultWalkEvidence = struct {
+    pattern_to_def_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+    /// Local instantiating node -> scheme-use record indices
+    /// (`value_use`/`nested_function_use` slots only).
+    node_to_scheme_uses: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)) = .empty,
+    /// Discharged constraint's raw fn var -> its `dispatch_target`
+    /// scheme-use record index.
+    dispatch_scheme_uses: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    /// Resolved constraint fn var -> `dispatch_target_instantiations` indices.
+    instantiations_by_var: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
+
+    fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
+        evidence.pattern_to_def_expr.deinit(gpa);
+        var node_lists = evidence.node_to_scheme_uses.valueIterator();
+        while (node_lists.next()) |list| list.deinit(gpa);
+        evidence.node_to_scheme_uses.deinit(gpa);
+        evidence.dispatch_scheme_uses.deinit(gpa);
+        var inst_lists = evidence.instantiations_by_var.valueIterator();
+        while (inst_lists.next()) |list| list.deinit(gpa);
+        evidence.instantiations_by_var.deinit(gpa);
+    }
+};
+
 /// Whether materializing `root` transitively reaches a construction omitting
 /// the field that carries `root` as its own default. The walk descends every
 /// expression form and follows the edges only type checking can resolve—
 /// same-module reference edges into def bodies (re-traversed by necessity: a
 /// mixed cycle needs its whole path, though purely name-resolvable cycles
 /// were already dropped by canonicalization's cycle pass), dispatch-resolved
-/// call targets (`dispatch_target_instantiations`, stamped by constraint
-/// validation), type-dispatch method bindings, and every omitted defaulted
-/// field on a construction's SOLVED row. Foreign defaults were validated in
-/// their declaring module, which cannot reference this one.
+/// call targets (`dispatch_target_instantiations`, joined through scheme-use
+/// evidence, see `followDispatchSeed`), type-dispatch method bindings, and
+/// every omitted defaulted field on a construction's SOLVED row. Foreign
+/// defaults were validated in their declaring module, which cannot reference
+/// this one.
 fn defaultMaterializationIsRecursive(
     self: *Self,
     root: CIR.Expr.Idx,
-    pattern_to_def_expr: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
+    evidence: *const DefaultWalkEvidence,
 ) std.mem.Allocator.Error!bool {
     const target_expr_node: u32 = @intFromEnum(root);
     const self_module = self.cir.selfModuleIdentity();
@@ -23093,14 +23159,62 @@ fn defaultMaterializationIsRecursive(
     defer visited_defaults.deinit(self.gpa);
     var visited_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
     defer visited_exprs.deinit(self.gpa);
+    var seed_work: std.ArrayList(Var) = .empty;
+    defer seed_work.deinit(self.gpa);
+    var visited_seed_vars: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited_seed_vars.deinit(self.gpa);
+    var visited_instantiations: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    defer visited_instantiations.deinit(self.gpa);
 
-    while (expr_work.pop()) |expr_idx| {
+    while (true) {
+        // Drain dispatch seeds: a seed var identifies a constraint whose
+        // discharge selected a method target. A LOCAL target's body joins
+        // the walk; either way, the target instantiation's own scheme-use
+        // pairs seed its interior constraint copies (the `slot_data` join,
+        // unique per constraint instantiation).
+        while (seed_work.pop()) |seed_var| {
+            const resolved_seed = self.types.resolveVar(seed_var).var_;
+            const seen_seed = try visited_seed_vars.getOrPut(self.gpa, resolved_seed);
+            if (seen_seed.found_existing) continue;
+            const inst_indices = evidence.instantiations_by_var.get(resolved_seed) orelse continue;
+            for (inst_indices.items) |inst_index| {
+                const seen_inst = try visited_instantiations.getOrPut(self.gpa, inst_index);
+                if (seen_inst.found_existing) continue;
+                const instantiation = self.dispatch_target_instantiations.items[inst_index];
+                if (instantiation.target_env == self.cir) {
+                    try expr_work.append(self.gpa, self.cir.store.getDef(instantiation.target_binding.def_idx).expr);
+                }
+                if (evidence.dispatch_scheme_uses.get(@intFromEnum(instantiation.constraint_fn_var))) |record_index| {
+                    const record = self.cir.scheme_uses.items.items[record_index];
+                    const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+                    for (pairs) |pair| {
+                        try seed_work.append(self.gpa, @enumFromInt(pair.fresh_var));
+                    }
+                }
+            }
+        }
+        const expr_idx = expr_work.pop() orelse break;
         const seen = try visited_exprs.getOrPut(self.gpa, expr_idx);
         if (seen.found_existing) continue;
+        // Any scheme instantiated AT this expression (a generic def lookup,
+        // a foreign helper lookup, a stored nested function) may have fired
+        // dispatch constraints; its recorded fresh copies seed the join.
+        // This is how a dispatch performed INSIDE an instantiated scheme
+        // body—local or foreign—reaches its stamped target: the body-side
+        // dispatch node carries the pristine scheme's var, never the copy.
+        if (evidence.node_to_scheme_uses.get(@intFromEnum(expr_idx))) |record_indices| {
+            for (record_indices.items) |record_index| {
+                const record = self.cir.scheme_uses.items.items[record_index];
+                const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+                for (pairs) |pair| {
+                    try seed_work.append(self.gpa, @enumFromInt(pair.fresh_var));
+                }
+            }
+        }
         const expr = self.cir.store.getExpr(expr_idx);
         switch (expr) {
             .e_lookup_local => |lookup| {
-                if (pattern_to_def_expr.get(lookup.pattern_idx)) |def_expr| {
+                if (evidence.pattern_to_def_expr.get(lookup.pattern_idx)) |def_expr| {
                     try expr_work.append(self.gpa, def_expr);
                 }
             },
@@ -23111,13 +23225,11 @@ fn defaultMaterializationIsRecursive(
             },
             .e_dispatch_call => |call| {
                 // The edge canonicalization cannot see: this call's stamped
-                // target. A same-module target's body joins the walk.
-                const call_fn_var = self.types.resolveVar(call.constraint_fn_var).var_;
-                for (self.dispatch_target_instantiations.items) |instantiation| {
-                    if (self.types.resolveVar(instantiation.constraint_fn_var).var_ != call_fn_var) continue;
-                    if (instantiation.target_env != self.cir) continue;
-                    try expr_work.append(self.gpa, self.cir.store.getDef(instantiation.target_binding.def_idx).expr);
-                }
+                // target(s). A monomorphic site's constraint var matches an
+                // instantiation directly; a site inside a generalized body
+                // reaches its per-use copies through the scheme-use seeds
+                // (see the drain loop above).
+                try seed_work.append(self.gpa, call.constraint_fn_var);
                 try expr_work.append(self.gpa, call.receiver);
                 try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
             },
@@ -23186,7 +23298,7 @@ fn defaultMaterializationIsRecursive(
                 try expr_work.append(self.gpa, closure.lambda_idx);
                 for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
                     const capture = self.cir.store.getCapture(capture_idx);
-                    if (pattern_to_def_expr.get(capture.pattern_idx)) |def_expr| {
+                    if (evidence.pattern_to_def_expr.get(capture.pattern_idx)) |def_expr| {
                         try expr_work.append(self.gpa, def_expr);
                     }
                 }
