@@ -247,7 +247,7 @@ pub const Store = struct {
                     .unset_of_required_field,
                     .unset_of_defaulted_field,
                     .effectful_default_value,
-                    .default_literal_not_concrete,
+                    .default_constrains_type_parameter,
                     .recursive_default_value,
                     .circular_value_definition,
                     .literal_defaulted,

@@ -1739,11 +1739,106 @@ test "check type - record - default - parametric literal default rejected" {
         \\config = Config.{}
     ;
     // The default EXPRESSION may be polymorphic (`?? []` is pinned accepted
-    // above), but a numeral/quote literal inside it lowers through the
-    // materialization site's type—`Config(Str)` would dispatch
-    // `from_numeral` on Str—so a literal whose own type stays parametric
-    // at the declaration is rejected (design.md "Defaulted Fields").
-    try checkTypesModule(source, .fail_first, "Default Literal Needs A Concrete Type");
+    // above), but this default hangs a `from_numeral` constraint on the
+    // parameter `a`, and defaults are OBLIGATION-FREE: type declarations
+    // carry no where clauses and none are inferred, so there is nowhere the
+    // requirement could live (design.md "Defaulted Fields").
+    try checkTypesModule(source, .fail_first, "Default Constrains A Type Parameter");
+}
+
+test "check type - record - default - constrained helper call carries the constraint" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\zero : {} -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+        \\zero = |_| 0
+        \\
+        \\Config(a) := { value : a ?? zero({}) }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // A CALL of a where-constrained helper: the constraint arrives through
+    // `zero`'s instantiated scheme rather than a literal written in the
+    // default, and the constraint-based judgment sees both identically (the
+    // constraint parks on the same parameter copy).
+    try checkTypesModule(source, .fail_with,
+        \\**Default Constrains A Type Parameter**
+        \\The default value for the `value` field requires the type parameter `a` to have a `from_numeral` method.
+        \\```roc
+        \\Config(a) := { value : a ?? zero({}) }
+        \\```
+        \\                            ^^^^^^^^
+        \\
+        \\A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - unannotated numeral reference carries the constraint" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\zero = 0
+        \\
+        \\Config(a) := { value : a ?? zero }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // An UNANNOTATED top-level numeral def generalizes with its
+    // `from_numeral` constraint still pending (it is not boundary-defaulted
+    // before defaults are checked), so referencing it from a default smuggles
+    // the same constraint as writing the literal inline—and the judgment
+    // rejects both identically.
+    try checkTypesModule(source, .fail_with,
+        \\**Default Constrains A Type Parameter**
+        \\The default value for the `value` field requires the type parameter `a` to have a `from_numeral` method.
+        \\```roc
+        \\Config(a) := { value : a ?? zero }
+        \\```
+        \\                            ^^^^
+        \\
+        \\A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - internal numeral on concrete field accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Config := { value : U8 ?? 1 + 2 }
+        \\
+        \\config : Config
+        \\config = Config.{}
+    ;
+    // Internal numeral constraints discharge against the concrete field
+    // type (or default normally); they never touch a declaration
+    // parameter, so the parameter-constraint judgment stays silent.
+    try checkTypesModule(source, .{ .pass = .{ .def = "config" } },
+        \\Config
+    );
+}
+
+test "check type - record - default - unconstrained generic helper on parametric field accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\id = |x| x
+        \\
+        \\Config(a) := { items : List(a) ?? id([]) }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // A helper whose scheme carries no dispatch constraints demands nothing
+    // of the parameter: unconstrained parametricity stays legal.
+    try checkTypesModule(source, .{ .pass = .{ .def = "config" } },
+        \\Config(Str)
+    );
 }
 
 test "check type - record - default - indirect reference that never omits is accepted" {

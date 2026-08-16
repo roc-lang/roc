@@ -4999,24 +4999,34 @@ Restrictions:
     `recursive_default_value` fires only for cycles involving a
     check-only edge. This judgment still runs before `CheckedModule` is
     built, so postcheck lowering only receives acyclic defaults.
-- A numeral or string LITERAL directly inside the default expression must
-  have a CONCRETE solved type at the declaration
-  (`checkDefaultLiteralDispatchConcrete`, judged in `checkPendingDefaults`
-  immediately after the field unification, BEFORE the defaulting rounds
-  would commit a still-flex copy): literal lowering is dispatch-directed by
-  the materialization site's monotype (`from_numeral`/`from_quote`), and a
-  parametric field can hand it an instantiation with no implementation—
-  `Cfg(a) := { x : a ?? 0 }` at `Cfg(Str)` has nothing to dispatch to.
-  Rejected as `default_literal_not_concrete` ("Default Literal Needs A
-  Concrete Type"). The default EXPRESSION itself may still be
-  parametric—`Pair(x) := { items : List(x) ?? [] }` is legal and
-  materializes per specialization. The judgment walks only the default's
-  DIRECT subtree, not through references: a POLYMORPHIC REFERENCE that
-  carries a literal-dispatch constraint into a non-implementing
-  instantiation (e.g. `zero = 0` used as `?? zero` on a parametric field)
-  is a KNOWN GAP—closing it needs the default's deferred constraints
-  re-judged per specialization, the same machinery an inferred where-clause
-  would need.
+- A default may constrain NO declaration type parameter: it must
+  type-check with ZERO residual dispatch constraints on the declaration's
+  type parameters. This is forced by two hard requirements—type
+  declarations NEVER carry written `where` clauses, and the compiler NEVER
+  infers such requirements onto a type—so a default that would require a
+  capability of a parameter (a literal's `from_numeral`/`from_quote`, a
+  constraint smuggled in through a referenced def's instantiated scheme, a
+  where-constrained helper call) has no place that requirement could live,
+  and is rejected at the declaration as
+  `default_constrains_type_parameter` ("Default Constrains A Type
+  Parameter", naming the field, the parameter, and the demanded method).
+  Judged in `checkPendingDefaults` (`checkDefaultParameterConstraints`)
+  immediately after the default unifies with an instantiated copy of its
+  field type, BEFORE the defaulting rounds could commit a still-flex
+  parameter copy. Detection consumes the check's explicit constraint data
+  in both forms it takes: a constraint that unified against a still-flex
+  parameter copy PARKS in that flex's constraint set (flex ~ flex merges
+  union constraints), and a constraint that met concrete structure DEFERS
+  into the env's list—so the judgment inspects the parameter copies the
+  instantiation minted for the declaration's rigids (snapshotted from the
+  instantiation's var map, which also names the parameter for the report),
+  then the deferred suffix recorded since this default's check began. The
+  default checks AT the instantiated field type (the expected type steers
+  interior numerals the way an annotated def's body checks at its
+  annotation, so `?? 1 + 2` on a `U8` field checks both numerals at U8).
+  The default EXPRESSION itself may still be parametric—`Pair(x) := {
+  items : List(x) ?? [] }` is legal and materializes per specialization;
+  unconstrained parametricity demands nothing of the parameter.
 
 The CheckedModule preserves the kind: a defaulted field serializes as a
 required field CARRYING its default identity (`CheckedFieldDefault`), with

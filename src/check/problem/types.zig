@@ -70,7 +70,7 @@ pub const Problem = union(enum) {
     unset_of_required_field: UnsetOfRequiredField,
     unset_of_defaulted_field: UnsetOfDefaultedField,
     effectful_default_value: EffectfulDefaultValue,
-    default_literal_not_concrete: DefaultLiteralNotConcrete,
+    default_constrains_type_parameter: DefaultConstrainsTypeParameter,
     recursive_default_value: RecursiveDefaultValue,
     circular_value_definition: CircularValueDefinition,
     literal_defaulted: LiteralDefaulted,
@@ -317,16 +317,19 @@ pub const EffectfulDefaultValue = struct {
     field_name: Ident.Idx,
 };
 
-/// A numeral or string literal DIRECTLY inside a `??` default expression
-/// whose solved type is not concrete: literal lowering is dispatch-directed
-/// by the materialization site's monotype, and a parametric field can hand
-/// it an instantiation with no `from_numeral`/`from_quote` implementation,
-/// so the literal's own dispatch type must be pinned at the declaration
-/// (design.md "Defaulted Fields"). The default EXPRESSION may still be
-/// polymorphic (e.g. `?? []`)—only its literal-dispatch types must not be.
-pub const DefaultLiteralNotConcrete = struct {
+/// A `??` default whose check left a residual dispatch constraint on one of
+/// the declaration's type parameters (a literal's `from_numeral`/`from_quote`,
+/// or a constraint arriving through a referenced def's instantiated scheme).
+/// Defaults may constrain NO type parameter: type declarations never carry
+/// written `where` clauses and the compiler never infers such requirements
+/// onto a type, so there is no place the constraint could live (design.md
+/// "Defaulted Fields"). The default EXPRESSION may still be polymorphic
+/// (e.g. `?? []`)—it just may not demand anything of a parameter.
+pub const DefaultConstrainsTypeParameter = struct {
     region: base.Region,
     field_name: Ident.Idx,
+    method_name: Ident.Idx,
+    type_param: Ident.Idx,
 };
 
 /// A record field default whose literal construction transitively omits the

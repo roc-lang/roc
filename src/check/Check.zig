@@ -272,6 +272,9 @@ type_decl_invalid: std.ArrayListUnmanaged(bool) = .empty,
 type_decl_dependencies: std.ArrayListUnmanaged(TypeDeclDependency) = .empty,
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
+/// scratch (parameter name, instantiated flex copy) pairs for the default
+/// parameter-constraint judgment (`checkDefaultParameterConstraints`)
+scratch_default_param_vars: base.Scratch(DefaultParamVar),
 /// scratch tags used to build up intermediate lists, used for various things
 scratch_tags: base.Scratch(types_mod.Tag),
 /// scratch record fields used to build up intermediate lists, used for various things
@@ -2368,6 +2371,7 @@ fn initAssumePrepared(
         .scratch_record_field_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
+        .scratch_default_param_vars = try base.Scratch(DefaultParamVar).init(gpa),
         .import_cache = ImportCache{},
         .associated_lookup_cache = .empty,
         .bool_var = undefined,
@@ -2561,6 +2565,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_record_field_vars.deinit();
     self.scratch_static_dispatch_constraints.deinit();
     self.scratch_deferred_static_dispatch_constraints.deinit();
+    self.scratch_default_param_vars.deinit();
     self.scratch_generated_codec_calls.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.imported_method_schemes.deinit(self.gpa);
@@ -7195,6 +7200,14 @@ const LiteralFieldKind = struct {
 const PendingRecordUpdate = struct {
     presence_var: Var,
     region: Region,
+};
+
+/// One declaration type parameter of a defaulted field's instantiated type:
+/// the rigid's name and the fresh flex copy this instantiation minted for it
+/// (see `checkDefaultParameterConstraints`).
+const DefaultParamVar = struct {
+    name: Ident.Idx,
+    var_: Var,
 };
 
 const PendingDefaultCheck = struct {
@@ -22821,7 +22834,37 @@ fn defaultLiteralFieldKinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
 /// every construction site that omits the field, so it must be pure.
 fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.pending_default_checks.items) |pending| {
-        const default_does_fx = try self.checkExpr(pending.default_expr, env, .{});
+        // Watermark the deferred-constraint accumulation so the
+        // parameter-constraint judgment below can attribute a deferred
+        // suffix to THIS default's check
+        // (see `checkDefaultParameterConstraints`).
+        const deferred_watermark = env.deferred_static_dispatch_constraints.items.items.len;
+        // The default checks AT an instantiated copy of its field type,
+        // exactly like an annotated def's body checks at its annotation:
+        // the expected type steers interior numerals to the field's type
+        // instead of letting the defaulting rounds commit them blind
+        // (`?? 1 + 2` on a `U8` field checks both numerals at U8).
+        const expected_field_type = try self.instantiateVar(pending.field_type_var, env, .use_last_var);
+        // Snapshot the parameter-derived fresh vars of THIS instantiation
+        // before anything can repopulate `var_map`: an entry whose OLD var is
+        // rigid content is a declaration type parameter, and its NEW var is
+        // the flex copy the default is about to unify against. The rigid also
+        // names the parameter for the report.
+        const params_top = self.scratch_default_param_vars.top();
+        defer self.scratch_default_param_vars.clearFrom(params_top);
+        var param_iter = self.var_map.iterator();
+        while (param_iter.next()) |entry| {
+            switch (self.types.resolveVar(entry.key_ptr.*).desc.content) {
+                .rigid => |rigid| try self.scratch_default_param_vars.append(.{
+                    .name = rigid.name,
+                    .var_ = entry.value_ptr.*,
+                }),
+                .flex, .alias, .field_presence, .structure, .err => {},
+            }
+        }
+        const default_does_fx = try self.checkExpr(pending.default_expr, env, .{
+            .expected_type = .{ .var_ = expected_field_type, .context = .none },
+        });
         // The LIVE purity judgment (design.md "Defaulted Fields"): a default
         // is any pure expression, and the compiler materializes it at every
         // construction site that omits the field—running effects at those
@@ -22841,14 +22884,11 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
             try self.unifyWith(ModuleEnv.varFrom(pending.default_expr), .err, env);
             continue;
         }
-        const expected_field_type = try self.instantiateVar(pending.field_type_var, env, .use_last_var);
         _ = try self.unify(ModuleEnv.varFrom(pending.default_expr), expected_field_type, env);
-        // Judged HERE, before the numeric-defaulting rounds commit still-flex
-        // literals: a literal left non-concrete by the field unification sits
-        // in a parametric position of the declared field type, and its
-        // dispatch has no implementation to resolve to at some
-        // instantiations (see `checkDefaultLiteralDispatchConcrete`).
-        try self.checkDefaultLiteralDispatchConcrete(pending);
+        // Judged HERE, before the numeric-defaulting rounds could commit a
+        // still-flex parameter copy: a default may constrain NO declaration
+        // type parameter (design.md "Defaulted Fields").
+        try self.checkDefaultParameterConstraints(pending, params_top, deferred_watermark, env);
     }
     // The list is kept for `checkDefaultRestrictions`, which runs after the
     // defaulting rounds and constraint validation settle the types.
@@ -22970,148 +23010,72 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     self.pending_default_checks.clearRetainingCapacity();
 }
 
-/// Judge the literal-dispatch concreteness of a default's DIRECT expression
-/// subtree (design.md "Defaulted Fields"): materialization lowers the
-/// expression at each site's monotype, and a numeral/quote literal's
-/// lowering dispatches `from_numeral`/`from_quote` on that monotype—so a
-/// literal whose solved type is still parametric at finalize has
-/// instantiations with no implementation to dispatch to. The walk does NOT
-/// follow references: a referenced def's literals are typed in that def's
-/// own context (the constraint-carrying polymorphic-reference residue is a
-/// documented gap, see design.md).
-fn checkDefaultLiteralDispatchConcrete(self: *Self, pending: PendingDefaultCheck) std.mem.Allocator.Error!void {
-    var expr_work: std.ArrayList(CIR.Expr.Idx) = .empty;
-    defer expr_work.deinit(self.gpa);
-    try expr_work.append(self.gpa, pending.default_expr);
+/// The parameter-constraint judgment (design.md "Defaulted Fields"): a
+/// default must type-check with ZERO residual dispatch constraints on the
+/// declaration's type parameters. Type declarations never carry written
+/// `where` clauses, and the compiler never infers such requirements onto a
+/// type—so a default that would require a capability of a parameter (a
+/// literal's `from_numeral`/`from_quote`, a constraint arriving through a
+/// referenced def's instantiated scheme, a where-constrained helper call)
+/// has no place to put that requirement and is rejected at the declaration.
+///
+/// Detection consumes the check's explicit constraint data, in two forms:
+/// a constraint that unified against a still-flex parameter copy PARKS in
+/// that flex's `constraints` (flex ~ flex merges union constraints), and a
+/// constraint that met concrete structure DEFERS into the env's list—so the
+/// judgment inspects the parameter copies' parked constraints first, then
+/// the deferred suffix recorded since this default's check began. Both are
+/// judged before the numeric-defaulting rounds could commit a parameter
+/// copy. Unconstrained parametricity stays legal: `?? []` on `List(x)`
+/// parks nothing.
+fn checkDefaultParameterConstraints(
+    self: *Self,
+    pending: PendingDefaultCheck,
+    params_top: u32,
+    deferred_watermark: usize,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    const params = self.scratch_default_param_vars.sliceFromStart(params_top);
+    if (params.len == 0) return;
 
-    while (expr_work.pop()) |expr_idx| {
-        const expr = self.cir.store.getExpr(expr_idx);
-        switch (expr) {
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_num_from_numeral,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            .e_str,
-            => {
-                if (!try self.varIsConcreteHoistedConstType(ModuleEnv.varFrom(expr_idx))) {
-                    _ = try self.problems.appendProblem(self.gpa, .{ .default_literal_not_concrete = .{
-                        .region = self.cir.store.getExprRegion(expr_idx),
-                        .field_name = pending.field_name,
-                    } });
-                    return;
-                }
-                if (expr == .e_str) {
-                    try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(expr.e_str.span));
-                }
+    for (params) |param| {
+        switch (self.types.resolveVar(param.var_).desc.content) {
+            .flex => |flex| if (flex.constraints.len() > 0) {
+                const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+                return self.rejectDefaultParameterConstraint(pending, param.name, constraints[0].fn_name, env);
             },
-            .e_unary_minus => |unary| try expr_work.append(self.gpa, unary.expr),
-            .e_unary_not => |unary| try expr_work.append(self.gpa, unary.expr),
-            .e_list => |list| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
-            .e_tuple => |tuple| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tuple.elems)),
-            .e_tag => |tag| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(tag.args)),
-            .e_nominal => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
-            .e_nominal_external => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
-            .e_record => |record| {
-                for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
-                    try expr_work.append(self.gpa, self.cir.store.getRecordField(field_idx).value);
-                }
-                if (record.ext) |ext_idx| try expr_work.append(self.gpa, ext_idx);
-            },
-            .e_call => |call| {
-                try expr_work.append(self.gpa, call.func);
-                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
-            },
-            .e_if => |if_expr| {
-                for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
-                    const branch = self.cir.store.getIfBranch(branch_idx);
-                    try expr_work.append(self.gpa, branch.cond);
-                    try expr_work.append(self.gpa, branch.body);
-                }
-                try expr_work.append(self.gpa, if_expr.final_else);
-            },
-            .e_match => |match_expr| {
-                try expr_work.append(self.gpa, match_expr.cond);
-                for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
-                    const branch = self.cir.store.getMatchBranch(branch_idx);
-                    try expr_work.append(self.gpa, branch.value);
-                    if (branch.guard) |guard_idx| try expr_work.append(self.gpa, guard_idx);
-                }
-            },
-            .e_block => |block| {
-                for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
-                    try self.appendDefaultWalkStmtExprs(stmt_idx, &expr_work);
-                }
-                try expr_work.append(self.gpa, block.final_expr);
-            },
-            .e_binop => |binop| {
-                try expr_work.append(self.gpa, binop.lhs);
-                try expr_work.append(self.gpa, binop.rhs);
-            },
-            .e_field_access => |access| try expr_work.append(self.gpa, access.receiver),
-            .e_tuple_access => |access| try expr_work.append(self.gpa, access.tuple),
-            .e_interpolation => |interpolation| {
-                try expr_work.append(self.gpa, interpolation.first);
-                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(interpolation.parts));
-            },
-            .e_lambda => |lambda| try expr_work.append(self.gpa, lambda.body),
-            .e_closure => |closure| try expr_work.append(self.gpa, closure.lambda_idx),
-            .e_method_call => |call| {
-                try expr_work.append(self.gpa, call.receiver);
-                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
-            },
-            .e_dispatch_call => |call| {
-                try expr_work.append(self.gpa, call.receiver);
-                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
-            },
-            .e_type_method_call => |call| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args)),
-            .e_type_dispatch_call => |call| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args)),
-            .e_structural_eq => |eq| {
-                try expr_work.append(self.gpa, eq.lhs);
-                try expr_work.append(self.gpa, eq.rhs);
-            },
-            .e_structural_hash => |h| {
-                try expr_work.append(self.gpa, h.value);
-                try expr_work.append(self.gpa, h.hasher);
-            },
-            .e_method_eq => |eq| {
-                try expr_work.append(self.gpa, eq.lhs);
-                try expr_work.append(self.gpa, eq.rhs);
-            },
-            .e_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
-            .e_expect_err => |expect_err| try expr_work.append(self.gpa, expect_err.expr),
-            .e_expect => |expect| try expr_work.append(self.gpa, expect.body),
-            .e_return => |ret| try expr_work.append(self.gpa, ret.expr),
-            .e_for => |for_expr| {
-                try expr_work.append(self.gpa, for_expr.expr);
-                try expr_work.append(self.gpa, for_expr.body);
-            },
-            .e_run_low_level => |run_ll| try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(run_ll.args)),
-            .e_str_segment,
-            .e_bytes_literal,
-            .e_empty_list,
-            .e_empty_record,
-            .e_zero_argument_tag,
-            .e_lookup_local,
-            .e_lookup_external,
-            .e_lookup_associated_local,
-            .e_lookup_associated,
-            .e_lookup_associated_resolved,
-            .e_lookup_required,
-            .e_runtime_error,
-            .e_crash,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_derived_method,
-            .e_break,
-            .e_hosted_lambda,
-            => {},
+            .rigid, .alias, .field_presence, .structure, .err => {},
         }
     }
+
+    const deferred = env.deferred_static_dispatch_constraints.items.items;
+    for (deferred[deferred_watermark..]) |entry| {
+        const entry_root = self.types.resolveVar(entry.var_).var_;
+        for (params) |param| {
+            if (self.types.resolveVar(param.var_).var_ != entry_root) continue;
+            const constraints = self.types.sliceStaticDispatchConstraints(entry.constraints);
+            return self.rejectDefaultParameterConstraint(pending, param.name, constraints[0].fn_name, env);
+        }
+    }
+}
+
+/// Report one obligation rejection and poison the default (the standard
+/// diagnostic recovery, same as the effectful judgment above): downstream
+/// judgments and lowering treat the default as an already-reported error.
+fn rejectDefaultParameterConstraint(
+    self: *Self,
+    pending: PendingDefaultCheck,
+    type_param: base.Ident.Idx,
+    method_name: base.Ident.Idx,
+    env: *Env,
+) std.mem.Allocator.Error!void {
+    _ = try self.problems.appendProblem(self.gpa, .{ .default_constrains_type_parameter = .{
+        .region = self.cir.store.getExprRegion(pending.default_expr),
+        .field_name = pending.field_name,
+        .method_name = method_name,
+        .type_param = type_param,
+    } });
+    try self.unifyWith(ModuleEnv.varFrom(pending.default_expr), .err, env);
 }
 
 /// Prebuilt evidence indexes for one `checkDefaultRestrictions` run (built
