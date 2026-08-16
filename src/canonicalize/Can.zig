@@ -3719,6 +3719,43 @@ fn reportInvalidAssociatedStatement(
     });
 }
 
+/// Canonicalize an `expect` written directly inside an associated block.
+///
+/// A module-visible type's associated block is part of the module's top-level
+/// surface, so its expects join `all_statements` exactly like expects written at
+/// the top level of the file, which is what makes `roc test` run them. An
+/// associated block nested inside a function body belongs to that function's
+/// block instead, so its expects become statements of the enclosing block and
+/// run inline wherever the block runs.
+fn canonicalizeAssociatedExpect(
+    self: *Self,
+    expect_stmt: std.meta.fieldInfo(AST.Statement, .expect).type,
+    owner_is_module_visible: bool,
+    block_context: ?BlockStatementContext,
+) std.mem.Allocator.Error!void {
+    const region = self.parse_ir.tokenizedRegionToRegion(expect_stmt.region);
+
+    // Track that we're inside an expect so the ? operator fails the expect on
+    // Err instead of returning early.
+    const was_in_expect = self.in_expect;
+    self.in_expect = true;
+    defer self.in_expect = was_in_expect;
+
+    const body = try self.canonicalizeExprOrMalformed(expect_stmt.body);
+    const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
+        .body = body.idx,
+    } }, region);
+
+    if (owner_is_module_visible) {
+        try self.env.store.addScratchStatement(stmt_idx);
+    } else {
+        try self.addBlockStatement(
+            self.localAssociatedContext(block_context),
+            CanonicalizedStatement{ .idx = stmt_idx, .free_vars = body.free_vars },
+        );
+    }
+}
+
 fn canonicalizeAssociatedItems(
     self: *Self,
     state: *AssociatedItemsState,
@@ -4085,10 +4122,13 @@ fn canonicalizeAssociatedItems(
             .@"while" => |while_stmt| try self.reportInvalidAssociatedStatement("while", while_stmt.region),
             .@"return" => |return_stmt| try self.reportInvalidAssociatedStatement("return", return_stmt.region),
             .@"break" => |break_stmt| try self.reportInvalidAssociatedStatement("break", break_stmt.region),
-            .@"var", .expr, .expect, .file_import, .malformed => {
+            .expect => |expect_stmt| try self.canonicalizeAssociatedExpect(
+                expect_stmt,
+                owner_is_module_visible,
+                block_context,
+            ),
+            .@"var", .expr, .file_import, .malformed => {
                 // var, expr, file_import and malformed are already reported by the parser.
-                // expect is not reported by anything today; see #10730 for whether it should
-                // run inside an associated block or be rejected like the statements above.
             },
         }
     }
