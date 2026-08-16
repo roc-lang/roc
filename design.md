@@ -6791,7 +6791,7 @@ is still *declared*, so `MethodRegistry` records its `(MethodOwner,
 MethodNameId)` key with no target rather than omitting it, and
 `lookupCheckedMethodTarget` answers `rejected` instead of "no such method".
 Omitting the key would be indistinguishable from a method no view declares,
-which is a publication bug for an owned value dispatch. A registry key with no
+which `EvidencePass` treats as a compiler bug for an owned value dispatch. A registry key with no
 target is the only representation of this state: post-check stages consume
 `MethodTarget` as a lowerable target and must never receive one for a rejected
 declaration, so the distinction lives in the lookup result, not in
