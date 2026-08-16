@@ -123,21 +123,28 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
         std.debug.print("provided aliased callable maker returned null\n", .{});
         return 1;
     };
+    if (host_env.alloc_count == 0) {
+        std.debug.print("provided aliased callable maker did not allocate\n", .{});
+        return 1;
+    }
     const aliased: *const AliasedCallables = @ptrCast(@alignCast(aliased_ptr));
     const first = aliased.first;
     const second = aliased.second;
     roc_drop_aliased_boxed_callables(aliased_ptr);
+
+    var failed = false;
     if (first != second) {
         std.debug.print("provided aliased callables arrived as {?*} and {?*}\n", .{ first, second });
-        return 1;
+        failed = true;
     }
     if (host_env.dealloc_count != host_env.alloc_count) {
         std.debug.print("provided aliased callable drop released {d} of {d} allocations\n", .{
             host_env.dealloc_count,
             host_env.alloc_count,
         });
-        return 1;
+        failed = true;
     }
+    if (failed) return 1;
 
     std.debug.print("provided boxed callable identity ok\n", .{});
     return 0;
