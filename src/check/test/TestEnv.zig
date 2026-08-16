@@ -253,7 +253,6 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
             .builtin_indices = builtin_indices,
         },
         .imported_modules = &module_envs,
-        .explicit_root_names = explicit_root_names,
     });
     errdefer can.deinit();
 

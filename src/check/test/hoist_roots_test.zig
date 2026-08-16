@@ -311,6 +311,57 @@ test "hoist roots are not selected for static dispatch requiring where evidence"
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
+test "hoist roots are not selected for a boxed callable" {
+    var test_env = try TestEnv.init("Test",
+        \\make_probe = || Box.box(|value| value + 1.I64)
+        \\
+        \\main = |arg| {
+        \\    boxed = make_probe()
+        \\    Box.unbox(boxed)(arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for an opaque nominal wrapping a callable" {
+    var test_env = try TestEnv.init("Test",
+        \\Holder :: { inner : Box((I64 -> I64)) }
+        \\
+        \\make_probe = || Box.box(|value| value + 1.I64)
+        \\
+        \\main = |arg| {
+        \\    holder : Holder
+        \\    holder = { inner: make_probe() }
+        \\    Box.unbox(holder.inner)(arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are selected for an opaque nominal wrapping only data" {
+    var test_env = try TestEnv.init("Test",
+        \\Holder :: { inner : I64 }
+        \\
+        \\main = |arg| {
+        \\    holder : Holder
+        \\    holder = { inner: 41.I64 }
+        \\    holder.inner + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    // The binding and its record literal are both closed data.
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+}
+
 test "hoist roots are not selected for ordinary call with runtime argument" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64
