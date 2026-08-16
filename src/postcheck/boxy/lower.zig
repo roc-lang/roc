@@ -2642,6 +2642,7 @@ const ProcedureBuilder = struct {
             .field_names = try self.staticFieldNamesForRep(identity_worker),
             .inspect_opaque = self.repInspectsOpaque(identity_worker),
             .inspect_method = try self.staticInspectMethodForRep(identity_source orelse identity_worker),
+            .presence_slot_present_discriminant = worker_rep.presence_slot_present_discriminant,
             .debug_checked_type = worker_rep.source_type.ty,
         };
         self.result.boxy_type_descs.items[@intFromEnum(desc_id)] = completed_desc;
@@ -3442,6 +3443,7 @@ const ProcedureBuilder = struct {
             .field_names = try self.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.repInspectsOpaque(rep_id),
             .inspect_method = try self.staticInspectMethodForRep(rep_id),
+            .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
         self.result.boxy_type_descs.items[@intFromEnum(desc_id)] = completed_desc;
@@ -19067,7 +19069,15 @@ const ProcBodyBuilder = struct {
                         source_view,
                         target_view,
                         target_label,
-                    ) orelse boxyLowerInvariant("boxy record adapter source was missing target field");
+                    ) orelse {
+                        switch (target_child.record_field_kind.tag) {
+                            .optional, .undetermined => {
+                                target_field_index += 1;
+                                continue;
+                            },
+                            .required, .defaulted, .err => boxyLowerInvariant("boxy record adapter source was missing target field"),
+                        }
+                    };
 
                     const source_field_desc_info: ResultDescriptorSource = if (self.recordFieldNestedDescriptorIndex(
                         source_record_rep,
@@ -21374,7 +21384,7 @@ const ProcBodyBuilder = struct {
                         descriptor_fields[layout_index] = .{
                             .local = local,
                             .target_rep = child.rep,
-                            .source_rep = if (child.record_field_kind == .optional)
+                            .source_rep = if (child.record_field_kind.tag == .optional or child.record_field_kind.tag == .undetermined)
                                 child.rep
                             else
                                 self.exprTagPayloadStorageRep(local, child.rep, self.repForType(expr.ty)),
@@ -21384,7 +21394,7 @@ const ProcBodyBuilder = struct {
                         }
                         source_field_locals[source_index] = local;
                         source_field_target_reps[source_index] = child.rep;
-                        source_field_kinds[source_index] = child.record_field_kind;
+                        source_field_kinds[source_index] = child.record_field_kind.tag;
                         field_sources[layout_index] = .expr;
                     } else if (extension) |ext| {
                         const local = try self.addFrameLocal(field_layout);
@@ -21405,7 +21415,7 @@ const ProcBodyBuilder = struct {
                             .field_view = rep_field_view,
                             .label = label,
                         } };
-                    } else switch (child.record_field_kind) {
+                    } else switch (child.record_field_kind.tag) {
                         .optional => {
                             const local = try self.addFrameLocal(field_layout);
                             field_locals[layout_index] = local;
@@ -21501,7 +21511,7 @@ const ProcBodyBuilder = struct {
             const target_local = source_field_locals[source_index].?;
             const target_rep = source_field_target_reps[source_index] orelse
                 boxyLowerInvariant("record expression field target rep was not recorded");
-            continuation = if (source_field_kinds[source_index] == .optional)
+            continuation = if (source_field_kinds[source_index] == .optional or source_field_kinds[source_index] == .undetermined)
                 try self.lowerOptionalSlotPresentInto(target_local, target_rep, expr_fields[source_index].value, continuation)
             else
                 try self.lowerExprIntoTagPayloadStorage(target_local, target_rep, expr_fields[source_index].value, continuation);
@@ -23684,6 +23694,18 @@ const ProcBodyBuilder = struct {
         for_: anytype,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const plan_id = for_.plan orelse
+            boxyLowerInvariant("checked iterator for reached boxy lowering without an iterator dispatch plan");
+        const plan = self.iteratorForPlan(plan_id);
+        inline for (.{ plan.iter.resolution, plan.next.resolution }) |resolution| {
+            switch (resolution) {
+                .checked_error => return try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
+                .@"unreachable" => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
+                .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+                .direct_closed, .direct_parametric, .evidence_dependent => {},
+                .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
+            }
+        }
         if (!self.isZstLocal(target)) {
             boxyLowerInvariant("checked iterator for reached boxy lowering with non-Unit result layout");
         }
@@ -23696,9 +23718,6 @@ const ProcBodyBuilder = struct {
         try self.reserveMatchPatternBindings(for_.pattern);
         try self.reserveMatchPatternDescriptors(for_.pattern, &.{});
 
-        const plan_id = for_.plan orelse
-            boxyLowerInvariant("checked iterator for reached boxy lowering without an iterator dispatch plan");
-        const plan = self.iteratorForPlan(plan_id);
         const iter_call_plan = self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, .iter, self.worker_layout.worker);
         const next_call_plan = self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, .next, self.worker_layout.worker);
         const iterator_type = if (iter_call_plan) |call_plan|
@@ -26482,6 +26501,7 @@ const ProcBodyBuilder = struct {
 
         const initial = try self.descriptorMaterializationForKnownRep(rep_id);
         const desc_local = try self.addFrameLocal(.opaque_ptr);
+        try self.recordDescriptorLocalTemplate(desc_local, initial);
         if (self.parent.layoutNeedsNestedBoxyDesc(self.parent.result.store.getLocal(value).layout_idx)) {
             self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
         }
@@ -26867,6 +26887,7 @@ const ProcBodyBuilder = struct {
             .field_names = try self.parent.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
             .inspect_method = try self.parent.staticInspectMethodForRep(rep_id),
+            .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
         self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)] = completed_desc;
@@ -27631,7 +27652,9 @@ const ProcBodyBuilder = struct {
             .record_unbound,
             => try self.lowerRecordInspectLocalsInto(target, source, rep, next),
             .tuple => try self.lowerTupleInspectLocalsInto(target, source, rep, next),
-            .tag_union => if (self.tagUnionRepHasExtension(rep))
+            .tag_union => if (rep.presence_slot_present_discriminant != null)
+                try self.lowerPresenceSlotInspectLocalsInto(target, source, rep, next)
+            else if (self.tagUnionRepHasExtension(rep))
                 try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next)
             else
                 try self.lowerTagUnionInspectLocalsInto(target, source, rep, next),
@@ -27859,6 +27882,62 @@ const ProcBodyBuilder = struct {
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(branches),
             .default_branch = bad_discriminant,
+            .continuation = null,
+        } });
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = discriminant,
+            .op = .{ .discriminant = .{ .source = source } },
+            .next = switch_stmt,
+        } });
+    }
+
+    fn lowerPresenceSlotInspectLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        rep: Plan.TypeRepresentation,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const present_discriminant = rep.presence_slot_present_discriminant orelse
+            boxyLowerInvariant("presence-slot inspect lacked its Present discriminant");
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        const present_index: usize = present_discriminant;
+        if (variants.len != 2 or present_index >= variants.len) {
+            boxyLowerInvariant("presence-slot inspect did not have exactly two variants");
+        }
+        const present_payloads = self.parent.plan.childSlice(variants[present_index].payloads);
+        if (present_payloads.len != 1) {
+            boxyLowerInvariant("presence-slot inspect Present arm did not have one payload");
+        }
+        const payload_child = present_payloads[0];
+        switch (payload_child.role) {
+            .tag_payload => |payload| if (payload.tag != variants[present_index].name or payload.index != 0) {
+                boxyLowerInvariant("presence-slot inspect payload did not match its Present variant");
+            },
+            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("presence-slot inspect Present arm had a non-payload child"),
+        }
+
+        const missing_discriminant: u16 = if (present_discriminant == 0) 1 else 0;
+        if (variants[missing_discriminant].payloads.len != 0) {
+            boxyLowerInvariant("presence-slot inspect Missing arm carried a payload");
+        }
+
+        const present_body = try self.lowerInspectPartInto(target, .{ .tag_payload = .{
+            .source = source,
+            .variant_index = present_discriminant,
+            .payload_index = null,
+            .rep = payload_child.rep,
+        } }, next);
+        const missing_body = try self.assignStringBytesLiteral(target, "<missing>", next);
+        const branches = [_]LIR.CFSwitchBranch{
+            .{ .value = missing_discriminant, .body = missing_body },
+            .{ .value = present_discriminant, .body = present_body },
+        };
+        const discriminant = try self.addFrameLocal(.u16);
+        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = discriminant,
+            .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
+            .default_branch = try self.parent.result.store.addCFStmt(.runtime_error),
             .continuation = null,
         } });
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
@@ -36360,7 +36439,7 @@ const ProcBodyBuilder = struct {
                             .record_rep = record_rep_id,
                             .field_idx = index,
                             .field_rep = child.rep,
-                            .field_kind = child.record_field_kind,
+                            .field_kind = child.record_field_kind.tag,
                         };
                     }
                     index += 1;

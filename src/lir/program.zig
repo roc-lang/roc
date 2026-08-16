@@ -181,6 +181,10 @@ pub const BoxyTypeDesc = struct {
     /// Record field names in payload field order, one per field. Empty for
     /// non-record payloads (including tuples, which print positionally).
     field_names: BoxySpan = .{},
+    /// Present-variant discriminant when these bytes use the canonical
+    /// optional-field slot convention. This is compiler-produced semantic
+    /// data, not a runtime inference from tags or layouts.
+    presence_slot_present_discriminant: ?u16 = null,
     /// The described value is an opaque nominal type: inspect must not
     /// reveal its backing structure.
     inspect_opaque: bool = false,

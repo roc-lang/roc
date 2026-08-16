@@ -2097,6 +2097,20 @@ right-hand side and complete scrutinee pattern. Those roots are emitted in
 dependency-first order and later lookups resolve through the selected binder,
 never as runtime-local pattern references.
 
+A non-exhaustive destructure in an unguarded runtime position is itself a strict
+compile-time demand when its right-hand side is top-level-equivalent. This demand
+does not depend on whether the pattern contains a binder or whether any binder is
+later referenced. The checker selects a unit-valued pattern-validation root that
+evaluates the right-hand side and matches the complete source pattern. Binder
+extractions remain liveness-driven. After solving, a selected concrete extraction
+subsumes the matching validation root so a live binder does not make the
+right-hand side evaluate twice; with no selected concrete extraction, the
+unit-valued validation root remains and no dead binder value is archived.
+The pending exhaustiveness site is explicitly classified for empirical
+compile-time validation only after this root selection succeeds. No validation
+root is selected inside an ordinary top-level constant, because that enclosing
+root already evaluates and owns the destructure site.
+
 Hoisted-root selection is positional as well as dependency-based. Selection may
 fire only in structurally unguarded positions of runtime bodies, and the checker
 must carry that position as explicit checking context while computing
@@ -4543,11 +4557,29 @@ complete):
   Required and defaulted children use their inline representation; optional
   children use a memoized `[#Missing, #Present(payload)]` representation and
   carry an explicit descriptor requirement because the payload may be erased
-  through the containing record. Boxy record construction uses that same child
-  kind to wrap supplied optional fields, emit missing optional slots, restore
-  omitted defaults, and copy unmentioned update slots. Its `.?` lowering
-  consumes the checked access segment modes and constructs the promised flat
-  `Try` result. It does not infer field kinds from layouts or reserved labels.
+  through the containing record. A still-undetermined scheme-interior kind
+  preserves its checked kind-variable identity and uses that same checker-defined
+  presence-slot representation: one non-specialized worker can therefore
+  serve both required and optional instantiations without cloning its body.
+  The slot descriptor records the `#Present` discriminant explicitly. Worker
+  boundaries use that metadata to wrap an inline required value in `#Present`
+  or unwrap a `#Present` slot for an inline required result; optional callers
+  pass the slot through unchanged. Thus required instantiations pay only the
+  explicit boundary conversion needed by a shared representation, while
+  specialized lowering remains free to use its resolved zero-cost inline
+  representation. Boxy record construction uses the same child kind to wrap
+  supplied optional or still-undetermined fields, emit missing optional slots,
+  restore omitted defaults, and copy unmentioned update slots. Its `.?`
+  lowering consumes the checked access segment modes and constructs the
+  promised flat `Try` result. It does not infer field kinds from layouts,
+  variant shapes, or reserved labels. At a named record call boundary, a target
+  field absent from the worker source is legal only when the target child's
+  checked kind is explicitly `optional` or `undetermined`; descriptor lowering
+  preserves that target slot descriptor unchanged. Runtime materialization
+  validates its explicit presence-slot marker and writes the descriptor's
+  non-Present discriminant, while borrowed-result retention validates that the
+  already-materialized slot is Missing and performs no payload retain. A
+  missing required, defaulted, or unmarked field is an invariant violation.
 - Construction (`lowerRecordExpr`): graph-owned construction consumes the
   resolved field-kind cell. Construction from an already-sealed Monotype
   consumes the target `Type.Field`'s explicit resolved metadata
@@ -4626,8 +4658,13 @@ complete):
   slot-kind sibling of the Try(τ, [Missing]) codec convention, pinned by
   test/cli/JsonOptionalFieldKinds.roc. A user-annotated `[Missing, Present(τ)]` field
   is an ordinary tag union everywhere (inspect renders `Present(5)` as
-  `Present(5)`); the reserved-label union shares its LAYOUT (two
-  variants, variant 0 zero-sized) but not its identity. Every other
+  `Present(5)`). Boxy carries the same decision explicitly as
+  `presence_slot_present_discriminant` on the representation and runtime
+  descriptor. Both its static and descriptor-driven inspect paths consume that
+  marker: the Present arm delegates directly to the payload's inspect plan,
+  while the Missing arm renders `<missing>`. They never infer presence slots
+  from a tag union's shape or labels. The reserved-label union shares its
+  LAYOUT (two variants, variant 0 zero-sized) but not its identity. Every other
   consumer (`.?` chains, construction, update, destructure, glue) reads
   the explicit checked kind and never inspects labels at all.
 
@@ -4646,8 +4683,11 @@ legitimately join a `?:` annotation later—which is also why the sweep
 never runs at per-def generalization boundaries. Consequently the read
 boundaries' still-flex arms (TypeWriter rendering, `copyCheckedRecordFields`
 CheckedModule output, the `writeFieldPresenceForKey` type-digest writer) now cover scheme
-interiors, which every reader treats required-equivalent; monomorphic
-literal-minted kinds reach them already committed.
+interiors. Source-facing readers render and digest that state as
+required-equivalent, while representation strategies must either resolve it
+per instantiation or preserve it explicitly: Boxy planning uses the checker-defined
+presence-slot representation described above. Monomorphic literal-minted kinds
+reach these readers already committed.
 
 Deferred (explicitly not yet implemented):
 
@@ -5341,6 +5381,8 @@ the operations needed for a value representation:
 - the explicit nested drop/incref/free/copy plan for payload bytes
 - the concrete LIR layout for known concrete payloads
 - descriptor references for nested dynamic payload positions
+- an optional explicit `#Present` discriminant when the described value uses
+  the checker-defined field-presence slot convention
 - optional structural operation entries such as equality and hashing
 - an optional planned `to_inspect` method slot for a nominal identity that can
   reach the generic `Str.inspect` intrinsic; this narrow method entry preserves
@@ -5350,7 +5392,9 @@ The exact field order and encoding of `TypeDesc` is LIR-owned static data.
 Every descriptor has an explicit id in the lowered program. Backends and the
 interpreter consume descriptor ids or descriptor-pointer locals through LIR
 statements; they do not synthesize descriptors from type names, layout shapes,
-or object symbols.
+or object symbols. In particular, Boxy adapters wrap and unwrap generalized
+field-presence slots only from the explicit presence-slot discriminant; tag
+names and tag-union shapes are never used to recover that field-presence kind.
 
 Descriptors are never stored inside ordinary Roc values. A value of type
 variable `a` is a one-word box pointer, not `{ data, desc }`. A record field,
@@ -6024,6 +6068,28 @@ reserve their ids inside the type interner while the group is being sealed, but
 no type id that is visible in Monotype IR is later refilled or changed. This is
 ordinary type solving inside one stage. Once Monotype IR is output, no
 unresolved node remains reachable and no later stage may change a type.
+
+Instantiation-graph row relations carry the checker's width mode explicitly.
+An exact relation rejects every field added to a closed record. A construction
+relation may instead absorb an unmatched field only when its graph field kind
+has explicitly resolved `optional` or `defaulted`; an unresolved or required
+kind still violates the relation. The mode travels with every pending relation
+and its processed-relation stamp, so nested construction structure cannot lose
+the judgment or be mistaken for a previously processed exact relation. A
+fresh checked procedure-template instance relates to its caller-specialized request
+with construction width because the template body owns that construction;
+relating a finished Monotype or an ordinary committed interface remains exact.
+When a request carries compiler-generated private representation, the same
+row-width mode travels through every ordinary descendant. A live graph may use
+the explicit construction-selection capability to retain the producer's
+private backing while joining the widened surrounding container. A finished
+Monotype remains immutable instead: its public/private records stay distinct,
+and the explicit construction relation authorizes the omitted field for
+boundary adaptation. Outside a representation boundary, absorption joins the
+construction to the target record class, making omitted optional/defaulted
+fields explicit before body lowering materializes Missing or the archived
+default. No row shape or slot representation is inspected to make this
+decision.
 
 A Monotype imported into another specialization graph is a finished snapshot,
 never a refreshable view: a specialization that needs more than its requested
