@@ -69,8 +69,10 @@ Typed columns are applied to the whole list so numeric literals pick up the colu
 (here `12` is a `U8` rather than the default `Dec`). An empty body is allowed when the
 columns are typed: `table name : Str, age : U8 {}`.
 
-`table` is a contextual keyword. `table(x)`, `table = …`, and `foo.table` keep using `table`
-as an ordinary name. A table needs at least one column; `table {}` is invalid.
+`table` is a contextual keyword. A table literal starts only when `table` is followed on
+the same line by a column name or `{`. `table(x)`, `table = …`, `foo.table`, and a bare
+`table` at the end of a line keep using `table` as an ordinary name. A table needs at
+least one column; `table {}` is invalid.
 
 Each body line is one row of comma-separated expressions. A newline at table-body depth
 ends the row. Newlines inside `()`, `[]`, `{}`, or a lambda do not. Trailing commas before

@@ -1080,3 +1080,22 @@ test "table cell newline before comma is a row end, not a same-row separator" {
     const expr_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
     try std.testing.expectEqual(.malformed, std.meta.activeTag(ast.store.getExpr(expr_idx)));
 }
+
+test "bare table ident is not a table literal when the next line starts with a lowercase name" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\table_for_host = table
+        \\
+        \\names_for_host : List(Str)
+        \\names_for_host = names
+    ;
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try file(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+}

@@ -650,13 +650,28 @@ fn tokenText(self: *const Parser, token: Token.Idx) []const u8 {
     return self.tok_buf.env.source[region.start.offset..region.end.offset];
 }
 
-fn newlineBeforeCurrent(self: *Parser) bool {
-    if (self.pos == 0) return false;
-    const prev_end = self.tok_buf.resolve(self.pos - 1).end.offset;
-    const curr_start = self.tok_buf.resolve(self.pos).start.offset;
+fn newlineBeforeToken(self: *const Parser, pos: Token.Idx) bool {
+    if (pos == 0 or pos >= self.tok_buf.tokens.len) return false;
+    const prev_end = self.tok_buf.resolve(pos - 1).end.offset;
+    const curr_start = self.tok_buf.resolve(pos).start.offset;
     if (prev_end >= curr_start) return false;
     const between = self.tok_buf.env.source[prev_end..curr_start];
     return std.mem.indexOfScalar(u8, between, '\n') != null or std.mem.indexOfScalar(u8, between, '\r') != null;
+}
+
+fn newlineBeforeCurrent(self: *const Parser) bool {
+    return self.newlineBeforeToken(self.pos);
+}
+
+fn startsTableLiteral(self: *Parser) bool {
+    if (self.peek() != .LowerIdent) return false;
+    if (!std.mem.eql(u8, self.tokenText(self.pos), "table")) return false;
+    const next = self.peekNext();
+    if (next != .LowerIdent and next != .OpenCurly) return false;
+    // `table` is only a table literal when the header continues on the same
+    // line. A following lowercase name on the next line is an ordinary ident,
+    // e.g. `table_for_host = table` then `names_for_host = names`.
+    return !self.newlineBeforeToken(self.pos + 1);
 }
 
 fn recoverTableCloseCurly(self: *Parser) void {
@@ -3494,10 +3509,7 @@ fn runExprStatementKernel(
             } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
                 if (tok == .LowerIdent or tok == .NamedUnderscore) {
                     const start = self.pos;
-                    if (tok == .LowerIdent and
-                        std.mem.eql(u8, self.tokenText(start), "table") and
-                        (self.peekNext() == .LowerIdent or self.peekNext() == .OpenCurly))
-                    {
+                    if (self.startsTableLiteral()) {
                         self.advance();
                         expr_table_state = .{
                             .start = start,
