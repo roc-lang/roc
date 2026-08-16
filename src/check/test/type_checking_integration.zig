@@ -1791,6 +1791,37 @@ test "check type - record - default - omitted recursive default is rejected at C
     try test_env.assertCanErrors(&.{"Default Value Cycle"});
 }
 
+test "check type - record - default - dispatch-mediated cycle is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { x : U8 ?? go(Cfg.{ x: 1 }) }.{
+        \\    make = |_cfg| Cfg.{}.x
+        \\}
+        \\
+        \\go = |c| c.make()
+    ;
+    // The cycle threads through an edge canonicalization CANNOT see: the
+    // default references `go` (a CAN-visible reference edge), but `go`
+    // dispatches on its PARAMETER (`c.make()`), and the argument
+    // `Cfg.{ x: 1 }` supplies `x`, so CAN records no omission edge either.
+    // Only constraint discharge resolves `make`—whose body's `Cfg.{}` omits
+    // `x`—so the checker's residue walk must close the cycle: the site's
+    // constraint var inside `go`'s generalized body is joined to the
+    // discharged copy through the recorded scheme-use pairs (the site var
+    // itself never equals the instantiation's var; generalization copies it
+    // per use).
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
 test "check type - record - default - nested omitted defaults terminate" {
     const source =
         \\main! = |_| {}

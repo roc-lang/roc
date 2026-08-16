@@ -4970,10 +4970,30 @@ Restrictions:
   - CHECK owns the residue only type checking can see: the extended
     `defaultMaterializationIsRecursive` walk descends every expression
     form and additionally follows same-module reference edges,
-    DISPATCH-RESOLVED call targets (`dispatch_target_instantiations`,
-    joined on the call's constraint fn var), type-dispatch method
-    bindings, and omitted defaulted fields on SOLVED rows (which also
-    covers foreign-omission edges). It re-traverses name edges by
+    DISPATCH-RESOLVED call targets, type-dispatch method bindings, and
+    omitted defaulted fields on SOLVED rows (which also covers
+    foreign-omission edges). Dispatch targets join through SCHEME-USE
+    EVIDENCE, not var equality alone: a dispatch fired inside an
+    instantiated scheme carries the instantiation COPY's constraint var,
+    never the var written at the body's dispatch site (generalization
+    copies it per use), so the walk seeds from three exact,
+    module-unambiguous joins—(1) a monomorphic site's resolved
+    constraint var matches its `dispatch_target_instantiations` entry
+    directly; (2) every walked expression that instantiated a scheme (a
+    generic def lookup, a foreign helper reference) seeds the fresh
+    copies recorded in its `value_use`/`nested_function_use` scheme-use
+    pairs, which is how a dispatch performed inside a LOCAL OR FOREIGN
+    generalized body reaches its stamped local target; (3) a followed
+    target's own interior dispatches chain through the `dispatch_target`
+    scheme-use record keyed by the discharged constraint's raw fn var
+    (unique per constraint instantiation; its node_idx may be a foreign
+    CIR index and is never compared against local nodes). A same-module
+    target's body joins the walk; foreign targets cannot reference this
+    module and are chained but not walked. Pinned by the
+    parameter-dispatch cycle in
+    src/check/test/type_checking_integration.zig ("dispatch-mediated
+    cycle is check's residue") and the foreign-helper cycle in
+    src/check/test/cross_module_test.zig. It re-traverses name edges by
     necessity—a mixed cycle needs its whole path—but purely
     name-resolvable cycles were already dropped at CAN, so
     `recursive_default_value` fires only for cycles involving a
