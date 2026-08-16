@@ -2139,7 +2139,7 @@ does not depend on whether the pattern contains a binder or whether any binder i
 later referenced. The checker records the complete checked source pattern and
 right-hand side as a deferred validation candidate, together with the prospective
 maximal expression root that can own its evaluation. The candidate retains a
-dedicated validation fallback until post-solve pruning proves that the expression
+dedicated validation root until post-solve pruning proves that the expression
 owner or a concrete live-binder extraction was actually kept. This prevents a
 non-concrete or otherwise rejected prospective owner from losing the validation,
 while a kept owner prevents the right-hand side from evaluating twice.
@@ -2162,6 +2162,13 @@ dependency become its own data or callable extraction root. Consequently
 selection does not duplicate a closed computation merely because a nested value
 is named, and the representation requirements of the root result never constrain
 transient local or match-branch binders.
+
+A callable extraction root is admitted only when the extracted value is itself
+a function and its complete checked signature is concrete. The checker records
+it as one exact callable root, never as ConstStore data. Data roots use a separate
+concreteness purpose that rejects a function anywhere in their stored type, so a
+value containing a callable remains one ordinary runtime allocation rather than
+being copied into independently restored callables.
 
 Hoisted-root selection is positional as well as dependency-based. Selection may
 fire only in structurally unguarded positions of runtime bodies, and the checker

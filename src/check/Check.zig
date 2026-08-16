@@ -7693,7 +7693,7 @@ fn hoistedRootIsIntrinsicallyKept(
             return if (self.selectedHoistedRootIsTopLevel(root.*))
                 true
             else
-                try self.varIsConcreteSelectedRootType(type_var);
+                try self.varIsConcreteCallableRootType(type_var);
         }
     }
 
@@ -7728,7 +7728,13 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
 
 fn varIsConcreteHoistedConstType(self: *Self, var_: Var) Allocator.Error!bool {
     self.var_set.clearRetainingCapacity();
-    return try self.varIsConcreteHoistedConstTypeInternal(.value_graph, var_, &self.var_set);
+    return try self.varIsConcreteHoistedConstTypeInternal(.value_graph, .data_constant, var_, &self.var_set);
+}
+
+fn varIsConcreteCallableRootType(self: *Self, var_: Var) Allocator.Error!bool {
+    if (builtin.mode == .Debug) std.debug.assert(self.varIsFunctionType(var_));
+    self.var_set.clearRetainingCapacity();
+    return try self.varIsConcreteHoistedConstTypeInternal(.value_graph, .callable_binding, var_, &self.var_set);
 }
 
 /// Resolve a nominal application's declaration backing TEMPLATE for read-only
@@ -7762,6 +7768,12 @@ fn nominalDeclBackingTemplate(self: *const Self, nominal: types_mod.NominalType)
 /// checked, so they count as concrete).
 const HoistedConstWalk = enum { value_graph, decl_template };
 
+/// The representation whose complete checked type this walk is proving.
+/// Data archived in ConstStore must not contain a callable. A callable binding
+/// instead has an exact callable payload, so its signature may itself contain
+/// function types in argument and result positions.
+const HoistedRootTypePurpose = enum { data_constant, callable_binding };
+
 /// Copy a record's field value-type variables onto `scratch_record_field_vars`
 /// and return the start mark of the pushed batch. The batch is
 /// `[mark, scratch_record_field_vars.top())`; the caller reads it *by index* and
@@ -7788,6 +7800,7 @@ fn dupeRecordFieldTypeVars(self: *Self, presences: []const types_mod.RecordField
 fn varIsConcreteHoistedConstTypeInternal(
     self: *Self,
     comptime walk: HoistedConstWalk,
+    comptime purpose: HoistedRootTypePurpose,
     var_: Var,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
@@ -7801,20 +7814,21 @@ fn varIsConcreteHoistedConstTypeInternal(
         .field_presence,
         => false,
         .rigid => walk == .decl_template,
-        .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceAliasArgs(alias), visited)) and
-            try self.varIsConcreteHoistedConstTypeInternal(walk, self.types.getAliasBackingVar(alias), visited),
-        .structure => |flat| try self.flatTypeIsConcreteHoistedConst(walk, flat, visited),
+        .alias => |alias| (try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceAliasArgs(alias), visited)) and
+            try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, self.types.getAliasBackingVar(alias), visited),
+        .structure => |flat| try self.flatTypeIsConcreteHoistedConst(walk, purpose, flat, visited),
     };
 }
 
 fn varsAreConcreteHoistedConstTypes(
     self: *Self,
     comptime walk: HoistedConstWalk,
+    comptime purpose: HoistedRootTypePurpose,
     vars: []const Var,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
     for (vars) |var_| {
-        if (!try self.varIsConcreteHoistedConstTypeInternal(walk, var_, visited)) return false;
+        if (!try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, var_, visited)) return false;
     }
     return true;
 }
@@ -7822,6 +7836,7 @@ fn varsAreConcreteHoistedConstTypes(
 fn flatTypeIsConcreteHoistedConst(
     self: *Self,
     comptime walk: HoistedConstWalk,
+    comptime purpose: HoistedRootTypePurpose,
     flat: FlatType,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
@@ -7829,38 +7844,35 @@ fn flatTypeIsConcreteHoistedConst(
         .empty_record,
         .empty_tag_union,
         => true,
-        // Archiving a value copies it: the ConstStore holds no allocation
-        // identity, so a callable reached from an archived value is rebuilt
-        // per restore and a source value that reaches two roots becomes two
-        // runtime callables. Platforms read a boxed callable's pointer as the
-        // value's identity, so a value containing one is never archived.
-        .fn_pure, .fn_effectful, .fn_unbound => false,
+        .fn_pure, .fn_effectful, .fn_unbound => |func| purpose == .callable_binding and
+            (try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceVars(func.args), visited)) and
+            try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, func.ret, visited),
         .record => |record| blk: {
             const fields = self.types.getRecordFieldsSlice(record.fields);
             for (fields.items(.presence)) |presence| {
                 const field_var = presence.typeVar();
-                if (!try self.varIsConcreteHoistedConstTypeInternal(walk, field_var, visited)) break :blk false;
+                if (!try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, field_var, visited)) break :blk false;
             }
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, record.ext, visited);
+            break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, record.ext, visited);
         },
         .record_unbound => |fields| blk: {
             const fields_slice = self.types.getRecordFieldsSlice(fields);
             for (fields_slice.items(.presence)) |presence| {
                 const field_var = presence.typeVar();
-                if (!try self.varIsConcreteHoistedConstTypeInternal(walk, field_var, visited)) break :blk false;
+                if (!try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, field_var, visited)) break :blk false;
             }
             break :blk true;
         },
-        .tuple => |tuple| try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceVars(tuple.elems), visited),
+        .tuple => |tuple| try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceVars(tuple.elems), visited),
         .tag_union => |tag_union| blk: {
             const tags = self.types.getTagsSlice(tag_union.tags);
             for (tags.items(.args)) |tag_args| {
-                if (!try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceVars(tag_args), visited)) break :blk false;
+                if (!try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceVars(tag_args), visited)) break :blk false;
             }
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, tag_union.ext, visited);
+            break :blk try self.varIsConcreteHoistedConstTypeInternal(walk, purpose, tag_union.ext, visited);
         },
         .nominal_type => |nominal| blk: {
-            if (!try self.varsAreConcreteHoistedConstTypes(walk, self.types.sliceNominalArgs(nominal), visited)) break :blk false;
+            if (!try self.varsAreConcreteHoistedConstTypes(walk, purpose, self.types.sliceNominalArgs(nominal), visited)) break :blk false;
             if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| {
                 switch (builtin_decl) {
                     .list,
@@ -7881,7 +7893,7 @@ fn flatTypeIsConcreteHoistedConst(
             // backing template. Formals in the template stand for the args
             // checked above, so the template walk admits rigids.
             const template = self.nominalDeclBackingTemplate(nominal) orelse break :blk false;
-            break :blk try self.varIsConcreteHoistedConstTypeInternal(.decl_template, template, visited);
+            break :blk try self.varIsConcreteHoistedConstTypeInternal(.decl_template, purpose, template, visited);
         },
     };
 }
