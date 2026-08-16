@@ -2682,7 +2682,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     // Any eligible binding RHS suppresses smaller expression candidates, but
     // only a pattern that can publish that RHS as a binding root may become a
     // prospective owner for its deferred validation. Other patterns must
-    // bubble validation to an enclosing root or a dedicated fallback root.
+    // bubble validation to an enclosing root or retain a dedicated validation root.
     const current_covers_deferred_roots = current_covers_children and
         (!frame.binding_rhs or
             (frame.binding_pattern != null and self.patternCanOwnHoistedBindingRoot(frame.binding_pattern.?)));
@@ -2716,8 +2716,8 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
             }
         }
         if (should_flush_deferred_roots) {
-            // Binding roots go first so post-solve pruning can prefer a kept
-            // live extraction over the dedicated validation fallback.
+            // Binding roots go first so post-solve pruning can let a kept live
+            // extraction subsume the dedicated validation root.
             for (self.hoist_deferred_roots.items[frame.deferred_dependency_start..]) |deferred| {
                 switch (deferred) {
                     .binding => |pattern| _ = try transaction.stageBindingRoot(pattern),
@@ -2749,8 +2749,8 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         self.hoist_deferred_roots.shrinkRetainingCapacity(frame.deferred_dependency_start);
     } else if (current_covers_deferred_roots) {
         // The current expression may become the maximal selected owner. Keep a
-        // validation fallback until post-solve pruning proves that it did, but
-        // consume binding dependencies that the expression evaluates locally.
+        // distinct validation root until post-solve pruning proves that it did,
+        // but consume binding dependencies that the expression evaluates locally.
         var retained = frame.deferred_dependency_start;
         for (self.hoist_deferred_roots.items[frame.deferred_dependency_start..]) |deferred| {
             switch (deferred) {
@@ -7451,9 +7451,9 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         if (root.pattern != null) kept_pattern_count += 1;
     }
 
-    // A validation keeps its dedicated fallback until solving has proved that
-    // the prospective maximal expression root is itself publishable. Only a
-    // kept owner may subsume the validation.
+    // A validation keeps its dedicated root until solving has proved that the
+    // prospective maximal expression root is itself publishable. Only a kept
+    // owner may subsume the validation.
     for (self.selected_hoisted_roots.items, 0..) |root, validation_index| {
         if (!keep_roots[validation_index]) continue;
         if (root.body != .pattern_validation) continue;
