@@ -48,6 +48,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Basic effectful functions: Stdout.line!, Stderr.line!",
     },
     .{
+        .roc_file = "test/fx/phantom_capability_parameter.roc",
+        .io_spec = "1>41",
+        .description = "Repro for issue 10770: a nominal's phantom parameter survives a call boundary",
+    },
+    .{
         .roc_file = "test/fx/subdir/app.roc",
         .io_spec = "1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!",
         .description = "Relative paths starting with ..",
