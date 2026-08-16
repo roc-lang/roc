@@ -16796,8 +16796,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
                     };
                     // Resolve the func var
-                    const resolved_func = self.types.resolveVar(func_var).desc.content;
-                    var did_err = resolved_func == .err;
+                    var did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{call.func});
 
                     // Second, check the arguments being called
                     // It could be effectful, e.g. `fn(mk_arg!())`
@@ -16807,18 +16806,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         self.checking_immediate_callee = false;
                         does_fx = try self.checkExpr(call_arg_idx, env, child_expected) or does_fx;
 
-                        // Check if this arg errored
-                        did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(call_arg_idx)).desc.content == .err);
+                        did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{call_arg_idx}) or did_err;
                     }
 
-                    if (did_err) {
-                        // If the fn or any args had error, propagate the error
-                        // without doing any additional work. The call itself is
-                        // the executable boundary that reaches the invalid
-                        // child, so publish it as an explicit runtime error.
-                        try self.markErroneous(expr_var);
-                        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-                    } else {
+                    if (!did_err) {
                         // From the base function type, extract its shape. Effect
                         // classification happens only after arguments unify below:
                         // those unifications may resolve directed higher-order
@@ -17218,7 +17209,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const first_var = ModuleEnv.varFrom(interpolation.first);
             const str_var = try self.freshStr(env, expr_region);
             _ = try self.unify(first_var, str_var, env);
-            var did_err = self.types.resolveVar(first_var).desc.content == .err;
+            var did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{interpolation.first});
 
             const parts = self.cir.store.sliceExpr(interpolation.parts);
             std.debug.assert(parts.len % 2 == 0);
@@ -17227,14 +17218,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             while (part_i < parts.len) : (part_i += 2) {
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(parts[part_i], env, child_expected) or does_fx;
-                const interpolated_var = ModuleEnv.varFrom(parts[part_i]);
-                did_err = did_err or (self.types.resolveVar(interpolated_var).desc.content == .err);
+                did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{parts[part_i]}) or did_err;
 
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(parts[part_i + 1], env, child_expected) or does_fx;
                 const following_segment_var = ModuleEnv.varFrom(parts[part_i + 1]);
                 _ = try self.unify(str_var, following_segment_var, env);
-                did_err = did_err or (self.types.resolveVar(following_segment_var).desc.content == .err);
+                did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{parts[part_i + 1]}) or did_err;
             }
 
             const pair_elems = try self.types.appendVars(&.{ item_var, str_var });
@@ -17252,9 +17242,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 .ret = step_ret_var,
             } } }, env, expr_region);
 
-            if (did_err) {
-                try self.markErroneous(expr_var);
-            } else {
+            if (!did_err) {
                 const dispatcher_var = (try self.explicitTypeSuffixVar(expr_idx, expr_region, env)) orelse expr_var;
                 const arg_vars = [_]Var{ first_var, rest_var };
                 const constraint_fn_var = try self.mkInterpolationConstraint(
@@ -17281,7 +17269,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_method_call => |method_call| {
             does_fx = try self.checkExpr(method_call.receiver, env, child_expected) or does_fx;
             const receiver_var = ModuleEnv.varFrom(method_call.receiver);
-            var did_err = self.types.resolveVar(receiver_var).desc.content == .err;
+            var did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{method_call.receiver});
 
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
             var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
@@ -17294,12 +17282,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
                 const arg_var = ModuleEnv.varFrom(arg_expr_idx);
                 arg_vars[i] = arg_var;
-                did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
+                did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{arg_expr_idx}) or did_err;
             }
 
-            if (did_err) {
-                try self.markErroneous(expr_var);
-            } else {
+            if (!did_err) {
                 const constraint_fn_var = try self.mkMethodCallConstraint(
                     receiver_var,
                     arg_vars,
@@ -17326,17 +17312,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_dispatch_call => |method_call| {
             does_fx = try self.checkExpr(method_call.receiver, env, child_expected) or does_fx;
-            var did_err = self.types.resolveVar(ModuleEnv.varFrom(method_call.receiver)).desc.content == .err;
+            _ = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{method_call.receiver});
 
             for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
-                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
+                _ = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{arg_expr_idx});
             }
 
-            if (did_err) {
-                try self.markErroneous(expr_var);
-            }
             if (try self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
                 self.markCurrentHoistObservableEffect();
                 does_fx = true;
@@ -17373,11 +17356,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             const lhs_var = ModuleEnv.varFrom(eq.lhs);
             arg_vars[0] = ModuleEnv.varFrom(eq.rhs);
-            if (self.types.resolveVar(lhs_var).desc.content == .err or
-                self.types.resolveVar(arg_vars[0]).desc.content == .err)
-            {
-                try self.markErroneous(expr_var);
-            } else {
+            if (!try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{ eq.lhs, eq.rhs })) {
                 const constraint_fn_var = try self.mkMethodCallConstraint(
                     lhs_var,
                     arg_vars,
@@ -17409,12 +17388,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
                 const arg_var = ModuleEnv.varFrom(arg_expr_idx);
                 arg_vars[i] = arg_var;
-                did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
+                did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{arg_expr_idx}) or did_err;
             }
 
-            if (did_err) {
-                try self.markErroneous(expr_var);
-            } else {
+            if (!did_err) {
                 const dispatcher_var = self.typeDispatchOwnerVar(method_call.type_dispatch_stmt);
                 const constraint_fn_var = try self.mkTypeMethodCallConstraint(
                     dispatcher_var,
@@ -17440,16 +17417,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_type_dispatch_call => |method_call| {
-            var did_err = false;
             for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
-                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
+                _ = try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{arg_expr_idx});
             }
 
-            if (did_err) {
-                try self.markErroneous(expr_var);
-            }
             if (try self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
                 self.markCurrentHoistObservableEffect();
                 does_fx = true;
@@ -17716,6 +17689,28 @@ fn checkExprInCallPosition(
     defer self.checking_call_arg = saved_checking_call_arg;
     defer self.checking_immediate_callee = saved_checking_immediate_callee;
     return self.checkExpr(expr_idx, env, expected);
+}
+
+/// Retire a call-like expression before it introduces dispatch or call
+/// relations when one of its already-checked operands is an erroneous value.
+/// The child expression set is explicit checker output; do not reconstruct
+/// this decision from the operand's solved type shape.
+fn retireCallLikeExprWithErroneousOperands(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    operand_exprs: []const CIR.Expr.Idx,
+) Allocator.Error!bool {
+    for (operand_exprs) |operand_expr| {
+        if (!self.erroneous_value_exprs.contains(operand_expr)) continue;
+
+        if (!self.erroneous_value_exprs.contains(expr_idx)) {
+            try self.markErroneous(ModuleEnv.varFrom(expr_idx));
+            try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+        }
+        return true;
+    }
+
+    return false;
 }
 
 fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
@@ -19978,6 +19973,7 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
 
     // Check the operand expression
     const does_fx = try self.checkExpr(unary.expr, env, child_expected);
+    if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{unary.expr})) return does_fx;
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -20008,6 +20004,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, e
 
     // Check the operand expression
     const does_fx = try self.checkExpr(unary.expr, env, child_expected);
+    if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{unary.expr})) return does_fx;
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -20048,6 +20045,12 @@ fn checkBinopExpr(
     var does_fx = false;
     does_fx = try self.checkExpr(binop.lhs, env, child_expected) or does_fx;
     does_fx = try self.checkExpr(binop.rhs, env, child_expected) or does_fx;
+
+    if (binop.op != .@"and" and binop.op != .@"or" and
+        try self.retireCallLikeExprWithErroneousOperands(expr_idx, &.{ binop.lhs, binop.rhs }))
+    {
+        return does_fx;
+    }
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .div_trunc => {

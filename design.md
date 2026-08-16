@@ -2606,6 +2606,25 @@ checking selected. In particular, `builtin_direct` stores neither the synthetic
 conversion callable nor a runtime dispatch plan, and
 `specialization_dispatch` is not a standalone compile-time root.
 
+#### Erroneous Call Operand Retirement
+
+After checking an operand expression, the checker records whether evaluating
+that exact expression is already an erroneous value. A call-like parent that
+must evaluate such an operand is retired before it introduces a static-dispatch
+constraint or stamps a dispatch plan: `retireCallLikeExprWithErroneousOperands`
+marks the parent erroneous and records it as the next executable error boundary.
+This is a diagnostic-recovery mechanism, not a typing rule; an error-free operand
+never takes this path. The decision consumes the checker's explicit
+expression-identity record. It must not be reconstructed from the shape of a
+constraint callable or from a later union-find representative.
+
+Retirement is atomic with dispatch introduction. A retired expression emits no
+constraint and no plan, while independently valid sibling expressions still
+introduce and solve their own constraints normally. This keeps an erroneous
+callable out of a receiver's constraint scheme instead of asking unification to
+coalesce it with a valid callable and asking checked-module publication to
+guess which site survived.
+
 Source dispatch, type dispatch, method equality, and iterator `for` plans all
 use checked dispatch plans. Iterator `for` uses its own iterator-dispatch
 operand shape because the `.next` call receives the compiler-created iterator
@@ -5029,6 +5048,11 @@ Other solved-graph mutations:
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by
   unifying that node with a fresh error variable.
+- `retireCallLikeExprWithErroneousOperands` (`markErroneous` plus the explicit
+  erroneous-expression set)—mechanism: Erroneous Call Operand Retirement
+  (above). An operand already owns a reported error, so its call-like parent is
+  recorded as the next executable error boundary before any dispatch
+  constraint or plan is introduced.
 - `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
   an already-reported error. An erroneous scrutinee cannot relate the branch
   patterns to each other, so they unify against a shared fresh variable instead
