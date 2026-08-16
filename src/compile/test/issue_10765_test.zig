@@ -37,12 +37,15 @@ fn expectChecksWithNameNotInScope(source: []const u8) Issue10765TestError!void {
     defer build_env.freeDrainedReports(drained);
 
     var found_name_not_in_scope = false;
+    var found_missing_method = false;
     for (drained) |mod| {
         for (mod.reports) |report| {
             if (std.mem.eql(u8, report.title, "Name Not In Scope")) found_name_not_in_scope = true;
+            if (std.mem.eql(u8, report.title, "Missing Method")) found_missing_method = true;
         }
     }
     try std.testing.expect(found_name_not_in_scope);
+    try std.testing.expect(!found_missing_method);
 }
 
 // repro for https://github.com/roc-lang/roc/issues/10765
@@ -71,6 +74,17 @@ test "issue 10765: a later erroneous dispatch does not retire an earlier valid s
 test "issue 10765: nested erroneous dispatch operand reports the name" {
     try expectChecksWithNameNotInScope(
         \\f = |n| n.foo({ bad: d }) + n.foo({ bad: 2 })
+        \\
+        \\main! = |_| Ok({})
+        \\
+    );
+}
+
+test "issue 10765: erroneous for iterable does not introduce iterator constraints" {
+    try expectChecksWithNameNotInScope(
+        \\f = || {
+        \\    for _ in { bad: d } 0
+        \\}
         \\
         \\main! = |_| Ok({})
         \\

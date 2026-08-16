@@ -2617,13 +2617,21 @@ This is a diagnostic-recovery mechanism, not a typing rule; an error-free operan
 never takes this path. The decision consumes the checker's explicit
 expression-identity record. It must not be reconstructed from the shape of a
 constraint callable or from a later union-find representative.
+Statement-owned iterator loops have no parent expression to mark; they consume
+the same operand record and leave the erroneous iterable expression as the
+executable error boundary. Checked for-nodes require a topology plan even on
+recovery, so the checker mints the plan's callable shapes without attaching
+constraints, marks both callable classes rejected, and records the required
+plan. Checked-artifact publication consumes those rejection markers to seal
+both calls with explicit `checked_error` resolutions.
 
 Retirement is atomic with dispatch introduction. A retired expression emits no
-constraint and no plan, while independently valid sibling expressions still
-introduce and solve their own constraints normally. This keeps an erroneous
-callable out of a receiver's constraint scheme instead of asking unification to
-coalesce it with a valid callable and asking checked-module publication to
-guess which site survived.
+constraint and no live plan; a required iterator recovery plan carries rejected
+callables but still emits no constraints. Independently valid sibling
+expressions introduce and solve their own constraints normally. This keeps an
+erroneous callable out of a receiver's constraint scheme instead of asking
+unification to coalesce it with a valid callable and asking checked-module
+publication to guess which site survived.
 
 Source dispatch, type dispatch, method equality, and iterator `for` plans all
 use checked dispatch plans. Iterator `for` uses its own iterator-dispatch
@@ -5048,11 +5056,13 @@ Other solved-graph mutations:
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by
   unifying that node with a fresh error variable.
-- `retireCallLikeExprWithErroneousOperands` (`markErroneous` plus the explicit
+- `retireCallLikeExprWithErroneousOperands` / statement-owned iterator plan
+  recovery (`markErroneous`, `markStaticDispatchFnRejected`, and the explicit
   erroneous-expression set)—mechanism: Erroneous Call Operand Retirement
   (above). An operand already owns a reported error, so its call-like parent is
-  recorded as the next executable error boundary before any dispatch
-  constraint or plan is introduced.
+  recorded as the next executable error boundary before any dispatch constraint
+  is introduced; a required iterator plan is sealed with rejected callable
+  metadata instead.
 - `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
   an already-reported error. An erroneous scrutinee cannot relate the branch
   patterns to each other, so they unify against a shared fresh variable instead
