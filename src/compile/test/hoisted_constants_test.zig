@@ -15,6 +15,7 @@ const CoreCtx = @import("ctx").CoreCtx;
 const static_data_exports = @import("static_data");
 
 const HoistedConstantsTestError = std.mem.Allocator.Error ||
+    lir.CheckedPipeline.LowerResourceError ||
     Coordinator.AppDiscoveryError ||
     check.CheckedArtifact.CompileTimeFinalizer.Error ||
     eval.BuiltinModules.InitError ||
@@ -1263,6 +1264,354 @@ test "hoisted pattern extraction successful base match resolves pending diagnost
     try std.testing.expect(!coord.hasUserErrors());
 }
 
+test "hoisted roots admit non-concrete transient locals without losing validation" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    _ = [
+        \\        {
+        \\            xs = []
+        \\            List.len(xs).to_i64_wrap()
+        \\        },
+        \\        List.len(args).to_i64_wrap(),
+        \\    ]
+        \\    _ = {
+        \\        Ok(_) = (0xFF.U32).to_u8_try()
+        \\        []
+        \\    }
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+
+    try std.testing.expect(!coord.hasUserErrors());
+    const artifact = coord.appRootCheckedArtifact();
+    var found = false;
+    var found_validation = false;
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.kind == .hoisted_validation) found_validation = true;
+        if (root.kind != .hoisted_constant or root.source != .hoisted) continue;
+        if (root.payload != .const_node) continue;
+        found = true;
+    }
+    try std.testing.expect(found);
+    try std.testing.expect(found_validation);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10721
+test "issue 10721: compile-time known destructure of a match-returned closure resolves" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\to_u8_clamp = |limit| {
+        \\    match limit.to_u8_try() {
+        \\        Ok(limit_u8) => Ok(|v| if v < limit v.to_u8_wrap() else limit_u8)
+        \\        Err(_) => Err(LimitTooBig)
+        \\    }
+        \\}
+        \\
+        \\f = || {
+        \\    Ok(converter) = to_u8_clamp(0xFF.U32)
+        \\    converter(120)
+        \\}
+        \\
+        \\main! = |_| {
+        \\    Echo.line!(Str.inspect(f()))
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+
+    var found_non_exhaustive = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.report.title, "Non Exhaustive Destructure")) found_non_exhaustive = true;
+    }
+    try std.testing.expect(!found_non_exhaustive);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const artifact = coord.appRootCheckedArtifact();
+    var found_maximal_data_root = false;
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.source != .hoisted) continue;
+        if (root.kind == .hoisted_constant) found_maximal_data_root = true;
+        try std.testing.expect(root.kind != .callable_binding);
+        try std.testing.expect(root.kind != .hoisted_validation);
+    }
+    try std.testing.expect(found_maximal_data_root);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10721
+test "issue 10721: compile-time known destructure inside an effectful body resolves" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |_| {
+        \\    Ok(_) = (0xFF.U32).to_u8_try()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+
+    var found_non_exhaustive = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.report.title, "Non Exhaustive Destructure")) found_non_exhaustive = true;
+    }
+    try std.testing.expect(!found_non_exhaustive);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const artifact = coord.appRootCheckedArtifact();
+    var found_validation_root = false;
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .hoisted_validation) continue;
+        try std.testing.expectEqual(check.CheckedArtifact.CompileTimeRootPayload.discarded, root.payload);
+        const body = root.hoisted_body orelse return error.ExpectedHoistedValidationBody;
+        try std.testing.expect(body == .pattern_validation);
+        try std.testing.expect(body.pattern_validation.erase_runtime);
+        found_validation_root = true;
+    }
+    try std.testing.expect(found_validation_root);
+}
+
+test "issue 10721: compile-time validation reports a known failing destructure" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |_| {
+        \\    Ok(_) = (0x1FF.U32).to_u8_try()
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(coord.hasUserErrors());
+
+    var found_non_exhaustive = false;
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.report.title, "Non Exhaustive Destructure")) found_non_exhaustive = true;
+    }
+    try std.testing.expect(found_non_exhaustive);
+}
+
+test "issue 10721: runtime-dependent callable use keeps one validating extraction root" {
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\to_u8_clamp = |limit| {
+        \\    match limit.to_u8_try() {
+        \\        Ok(limit_u8) => Ok(|v| if v < limit v.to_u8_wrap() else limit_u8)
+        \\        Err(_) => Err(LimitTooBig)
+        \\    }
+        \\}
+        \\
+        \\f = |runtime_value| {
+        \\    Ok(converter) = to_u8_clamp(0xFF.U32)
+        \\    converter(runtime_value)
+        \\}
+        \\
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(f(List.len(args).to_u32_wrap())))
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const artifact = coord.appRootCheckedArtifact();
+    var validating_extraction_roots: usize = 0;
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.source != .hoisted) continue;
+        if (root.kind == .hoisted_validation) return error.DuplicateValidationRoot;
+        if (root.kind != .callable_binding) continue;
+        const body = root.hoisted_body orelse return error.ExpectedHoistedCallableBody;
+        if (body != .pattern_extraction) continue;
+        try std.testing.expect(root.payload == .fn_value);
+        validating_extraction_roots += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), validating_extraction_roots);
+}
+
 test "hoisted match guard does not report unused branch warning" {
     const gpa = std.testing.allocator;
 
@@ -1501,6 +1850,7 @@ fn expectCompileTimeRootKindsPresent(
             .hoisted_constant => {
                 saw_hoisted_constant = true;
             },
+            .hoisted_validation,
             .expect,
             .numeral_conversion,
             .quote_conversion,
@@ -1583,7 +1933,7 @@ fn compileTimeRootKindMatchesRequest(
     request_kind: check.CheckedArtifact.RootRequestKind,
 ) bool {
     return switch (root_kind) {
-        .constant, .hoisted_constant => request_kind == .compile_time_constant,
+        .constant, .hoisted_constant, .hoisted_validation => request_kind == .compile_time_constant,
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .numeral_conversion, .quote_conversion, .field_default => request_kind == .compile_time_constant,
@@ -1973,6 +2323,7 @@ fn storedI64(
         .const_node => |node| node,
         .pending,
         .fn_value,
+        .discarded,
         .expect,
         => return error.HoistedRootDidNotStoreConstNode,
     };
@@ -1996,6 +2347,7 @@ fn rootStoredI64(
         .const_node => |const_node| const_node,
         .pending,
         .fn_value,
+        .discarded,
         .expect,
         => return error.RootDidNotStoreConstNode,
     };

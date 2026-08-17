@@ -41,7 +41,7 @@ const LirImage = lir.LirImage;
 const GuardedList = lir.LirStore.GuardedList;
 
 /// Failures while compiling or executing an inspected root.
-pub const Error = Allocator.Error || std.Thread.SpawnError || std.DynLib.Error || std.Io.File.OpenError || std.Io.File.Reader.Error || std.Io.File.Writer.Error || std.Io.File.StatError || std.Io.File.ReadPositionalError || std.Io.Writer.Error || check.CheckedArtifact.CompileTimeFinalizer.Error || error{
+pub const Error = Allocator.Error || lir.CheckedPipeline.LowerResourceError || std.Thread.SpawnError || std.DynLib.Error || std.Io.File.OpenError || std.Io.File.Reader.Error || std.Io.File.Writer.Error || std.Io.File.StatError || std.Io.File.ReadPositionalError || std.Io.Writer.Error || check.CheckedArtifact.CompileTimeFinalizer.Error || error{
     InvalidUtf8,
     LlvmBackendUnavailable,
     DevBackendUnavailable,
@@ -1656,7 +1656,6 @@ pub fn parseCheckModule(
             .builtin_indices = builtin_indices,
         },
         .imported_modules = if (available_imports.len == 0) null else &imported_modules,
-        .explicit_root_names = explicit_root_names,
     });
     errdefer czer.deinit();
 

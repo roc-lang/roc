@@ -1304,6 +1304,14 @@ fn relateCheckedMonoRequestNodeAt(
         .named => |checked_named| switch (request_content) {
             .named => |request_named| {
                 if (sameNamedValueDefinition(checked_named, request_named)) {
+                    // A declaration's arguments are components of the value the
+                    // same way a record's fields are. Relating only the backing
+                    // reaches every argument the backing mentions, so this
+                    // relation exists for the phantom arguments: the ones the
+                    // backing never mentions.
+                    for (checked_named.args, request_named.args) |checked_arg, request_arg| {
+                        try relateCheckedMonoRequestNodeAt(graph, checked_arg, request_arg, row_width, seen);
+                    }
                     const checked_backing = checked_named.backing orelse {
                         try graph.unify(checked_root, request_root);
                         return;
@@ -2380,7 +2388,7 @@ const Builder = struct {
 
     fn initHostedCatalog(self: *Builder) Allocator.Error!void {
         var entries = std.ArrayList(HostedCatalogEntry).empty;
-        errdefer entries.deinit(self.allocator);
+        defer entries.deinit(self.allocator);
 
         try self.appendHostedCatalogFromView(&entries, moduleView(self.root_view));
         for (self.modules.imports, 0..) |imported, index| {
@@ -2393,57 +2401,62 @@ const Builder = struct {
         }
 
         if (self.hostedBindingView()) |binding_view| {
-            if (entries.items.len != binding_view.table.bindings.len) {
-                Common.invariantFmt(
-                    "platform hosted binding count {d} disagrees with hosted catalog size {d}",
-                    .{ binding_view.table.bindings.len, entries.items.len },
-                );
-            }
-
-            var entries_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
-            defer entries_by_target.deinit();
-            try entries_by_target.ensureTotalCapacity(@intCast(entries.items.len));
+            // The platform header's hosted section is the complete list of
+            // functions the host supplies, and it is what gives each one its
+            // external symbol and dispatch slot. Build the catalog from that
+            // list rather than from every hosted declaration in scope: a
+            // declaration the section leaves out has no symbol to call and no
+            // slot to occupy, and checking already reports it against the
+            // section it is missing from.
+            var declared_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
+            defer declared_by_target.deinit();
+            try declared_by_target.ensureTotalCapacity(@intCast(entries.items.len));
             for (entries.items, 0..) |entry, index| {
-                entries_by_target.putAssumeCapacityNoClobber(.{
+                declared_by_target.putAssumeCapacityNoClobber(.{
                     .checked_module_digest = entry.target_checked_module_digest,
                     .def_idx = entry.def_idx,
                 }, index);
             }
 
+            var bound = std.ArrayList(HostedCatalogEntry).empty;
+            errdefer bound.deinit(self.allocator);
+            try bound.ensureTotalCapacity(self.allocator, binding_view.table.bindings.len);
             for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
-                const entry_index = entries_by_target.get(.{
+                const entry_index = declared_by_target.get(.{
                     .checked_module_digest = binding.target_checked_module.bytes,
                     .def_idx = @intFromEnum(binding.target_def),
-                }) orelse Common.invariant("hosted function is missing from the checked hosted binding table");
-                entries.items[entry_index].dispatch_index = @intCast(dispatch_index);
-                entries.items[entry_index].external_symbol_name = try self.program.names.internExternalSymbolName(
+                }) orelse Common.invariant("hosted section names a function with no hosted declaration in scope");
+                var entry = entries.items[entry_index];
+                entry.dispatch_index = @intCast(dispatch_index);
+                entry.external_symbol_name = try self.program.names.internExternalSymbolName(
                     binding_view.names.externalSymbolNameText(binding.external_symbol_name),
                 );
+                bound.appendAssumeCapacity(entry);
             }
 
-            const DispatchSort = struct {
-                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
-                    return a.dispatch_index < b.dispatch_index;
-                }
-            };
-            std.mem.sort(HostedCatalogEntry, entries.items, {}, DispatchSort.lessThan);
-        } else {
-            const SortContext = struct {
-                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
-                    return switch (std.mem.order(u8, a.order, b.order)) {
-                        .lt => true,
-                        .gt => false,
-                        .eq => if (a.def_idx != b.def_idx)
-                            a.def_idx < b.def_idx
-                        else
-                            std.mem.order(u8, &a.target_checked_module_digest, &b.target_checked_module_digest) == .lt,
-                    };
-                }
-            };
-            std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
-            for (entries.items, 0..) |*entry, index| {
-                entry.dispatch_index = @intCast(index);
+            // Bindings are walked in declaration order, so the catalog is
+            // already ordered by dispatch index.
+            self.hosted_catalog = try bound.toOwnedSlice(self.allocator);
+            return;
+        }
+
+        // Without a platform header there is no section to bind against, so
+        // every declaration in scope is its own dispatch slot in a stable order.
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
+                return switch (std.mem.order(u8, a.order, b.order)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => if (a.def_idx != b.def_idx)
+                        a.def_idx < b.def_idx
+                    else
+                        std.mem.order(u8, &a.target_checked_module_digest, &b.target_checked_module_digest) == .lt,
+                };
             }
+        };
+        std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
+        for (entries.items, 0..) |*entry, index| {
+            entry.dispatch_index = @intCast(index);
         }
 
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
@@ -3128,7 +3141,7 @@ const Builder = struct {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -5260,7 +5273,12 @@ const Builder = struct {
 
         const stable = switch (view.const_store.get(node)) {
             .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
-            .fn_value => false,
+            // Static data emits an erased callable as one allocation naming
+            // its procedure through a relocation, so a capture-free function
+            // value is fully decided by the ConstStore. A capture record is
+            // not: its slots carry their own evidence, which this walk has no
+            // ConstStore node to answer for.
+            .fn_value => |fn_id| view.const_store.getFn(fn_id).captures.len == 0,
             .zst,
             .scalar,
             .str,
@@ -5385,7 +5403,8 @@ const Builder = struct {
     ) ?MethodLookup {
         const view_owner = static_dispatch.methodOwnerInImportedStore(&self.program.names, view.names, owner) orelse return null;
         const view_method = view.names.lookupMethodName(method_name) orelse return null;
-        const target = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null;
+        const found = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null;
+        const target = found.requireTarget("Monotype lowering");
         if (!allow_local_proc and target.kind == .local_proc) return null;
         return .{ .view = view, .target = target };
     }
@@ -17111,6 +17130,7 @@ const BodyContext = struct {
         self.source_region_override = switch (root.kind) {
             .constant,
             .hoisted_constant,
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .numeral_conversion,
@@ -17127,6 +17147,7 @@ const BodyContext = struct {
             // comptime-root path.
             .constant,
             .hoisted_constant,
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .field_default,
@@ -19471,7 +19492,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFn(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -19540,7 +19561,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
             .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
             .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -19749,6 +19770,17 @@ const BodyContext = struct {
             return existing.expr;
         }
         return null;
+    }
+
+    /// Whether a constant restored here can only name what it builds.
+    ///
+    /// A node reached while an enclosing ConstStore node is still being built
+    /// restores to a read of that node's binding local, and static data is
+    /// emitted by a standalone initializer procedure with no such local in
+    /// scope. A node's own binding is not in this stack by the time its
+    /// candidate is decided, so only genuinely enclosing ones are counted.
+    fn constRestorationIsClosed(self: *BodyContext) bool {
+        return self.draft.active_const_node_bindings.items.len == 0;
     }
 
     fn constNodeRepresentationsEql(
@@ -29106,7 +29138,8 @@ const BodyContext = struct {
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
-        if (self.builder.static_data_literals and
+        if (self.constRestorationIsClosed() and
+            self.builder.static_data_literals and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
@@ -29148,15 +29181,25 @@ const BodyContext = struct {
             request_node,
             const_locator,
         );
-        if (self.builder.static_data_literals and
+        if (self.constRestorationIsClosed() and
+            self.builder.static_data_literals and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
         {
+            // A resolved request already names a committed type, so sealing it
+            // here lets this use share one static allocation with every other
+            // use of the same constant. An unresolved request keeps its graph
+            // cell and its own allocation, which stays correct because the
+            // static data it names is a copy of the same bytes.
+            const request_cell = if (try self.graph.typeIsResolved(request_node))
+                DraftTypeCell.fromSealed(try self.resolvedTypeViewForNode(request_node))
+            else
+                DraftTypeCell.fromGraphNode(request_node);
             const id = try self.builder.staticDataValue(
                 const_locator,
                 node,
                 checked_type,
-                DraftTypeCell.fromGraphNode(request_node),
+                request_cell,
             );
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_node), .{ .static_data_candidate = .{
                 .static_data = id,
@@ -32441,7 +32484,7 @@ const BodyContext = struct {
         if (declaring_view.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr)) |root| {
             switch (root.payload) {
                 .const_node => |node| return try self.restoreConstNodeAtType(declaring_view, declaring_view, node, field_ty),
-                .pending, .fn_value, .expect => {},
+                .pending, .fn_value, .discarded, .expect => {},
             }
         }
         if (!moduleViewIdentityMatches(self.view, origin_hash)) {
@@ -34620,7 +34663,7 @@ const BodyContext = struct {
         return switch (root.payload) {
             .const_node => |node| try self.restoreConstNodeAtType(self.view, self.view, node, ty),
             .pending => null,
-            .fn_value, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
+            .fn_value, .discarded, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
         };
     }
 
@@ -46174,7 +46217,8 @@ const BodyContext = struct {
                 // information but has no runtime value to bind.
                 .anno_only => false,
                 .pending => Common.invariant("pending checked declaration reached Monotype runtime statement filter"),
-                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => self.view.hoisted_constants.lookupByPattern(decl.pattern) == null,
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => self.view.hoisted_constants.lookupByPattern(decl.pattern) == null and
+                    !self.view.compile_time_roots.validationResolvedByPattern(decl.pattern),
             },
             .var_,
             .var_uninitialized,
@@ -47929,7 +47973,7 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .local_proc_context);
         defer timing_scope.end();
-        for (self.view.method_registry.entries) |entry| switch (entry.target.kind) {
+        for (self.view.method_registry.entries) |entry| switch ((entry.target orelse continue).kind) {
             .local_proc => |local| {
                 if (local.context_anchor == statement_id) {
                     try self.registerLocalProcDeclaration(.{
@@ -47986,7 +48030,7 @@ const BodyContext = struct {
         const restored = self.restored_local_proc_scope orelse
             Common.invariant("local procedure use reached Monotype before its declaration context");
         var context_anchor: ?checked.CheckedStatementId = null;
-        for (view.method_registry.entries) |entry| switch (entry.target.kind) {
+        for (view.method_registry.entries) |entry| switch ((entry.target orelse continue).kind) {
             .local_proc => |local| {
                 if (local.binder != binder or local.expr != expr) continue;
                 if (context_anchor) |existing| {

@@ -416,6 +416,7 @@ fn resolveCallableEvalTemplate(
         .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
         .pending => boxyLowerInvariant("pending callable eval root reached runtime boxy worker resolution before compile-time finalization"),
         .const_node,
+        .discarded,
         .expect,
         => boxyLowerInvariant("callable eval binding root did not output a callable value"),
     };
@@ -679,18 +680,21 @@ const HostedCatalogEntry = struct {
     symbol_text: []const u8,
     dispatch_index: u32,
     order: []const u8,
+    module_key: [32]u8,
     def_idx: u32,
 };
 
-const HostedSectionMap = struct {
-    keys: []const []const u8,
-    symbols: []const []const u8,
+/// Which checked definition a hosted binding names.
+const HostedProcedureKey = struct {
+    module_key: [32]u8,
+    def_idx: u32,
+};
 
-    fn deinit(self: HostedSectionMap, allocator: Allocator) void {
-        for (self.keys) |key| allocator.free(key);
-        allocator.free(self.keys);
-        allocator.free(self.symbols);
-    }
+/// The platform header's hosted bindings plus the names that read their
+/// external symbols.
+const HostedBindingView = struct {
+    table: *const checked.HostedBindingTable,
+    names: *const names.CanonicalNameStore,
 };
 
 const StaticDictCacheEntry = struct {
@@ -3376,8 +3380,8 @@ const ProcedureBuilder = struct {
     ) ?MethodTargetLookup {
         const candidate_owner = methodOwnerInProcedureNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
         const candidate_method = candidate.canonical_names.lookupMethodName(method_text) orelse return null;
-        const target = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
-        return .{ .module = candidate, .target = target };
+        const found = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
+        return .{ .module = candidate, .target = found.requireTarget("boxy procedure lowering") };
     }
 
     fn typeDescForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxyTypeDescId {
@@ -4232,7 +4236,7 @@ const ProcedureBuilder = struct {
         if (self.resolved_workers.items.len == 0) return;
 
         var entries = std.ArrayList(HostedCatalogEntry).empty;
-        errdefer entries.deinit(self.allocator);
+        defer entries.deinit(self.allocator);
 
         try self.appendHostedCatalogFromModule(&entries, rootProcedureModule(self.modules));
         for (self.modules.imports, 0..) |imported, index| {
@@ -4244,6 +4248,43 @@ const ProcedureBuilder = struct {
             try self.appendHostedCatalogFromModule(&entries, procedureModuleFromImport(relation));
         }
 
+        if (self.hostedBindingView()) |binding_view| {
+            // The platform header's hosted section is what gives each hosted
+            // function its linker symbol and its host dispatch slot, so build
+            // the catalog from the bindings checking output for that section
+            // rather than from every hosted declaration in scope.
+            var declared_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
+            defer declared_by_target.deinit();
+            try declared_by_target.ensureTotalCapacity(@intCast(entries.items.len));
+            for (entries.items, 0..) |entry, index| {
+                declared_by_target.putAssumeCapacityNoClobber(.{
+                    .module_key = entry.module_key,
+                    .def_idx = entry.def_idx,
+                }, index);
+            }
+
+            var bound = std.ArrayList(HostedCatalogEntry).empty;
+            errdefer bound.deinit(self.allocator);
+            try bound.ensureTotalCapacity(self.allocator, binding_view.table.bindings.len);
+            for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
+                const entry_index = declared_by_target.get(.{
+                    .module_key = binding.target_checked_module.bytes,
+                    .def_idx = @intFromEnum(binding.target_def),
+                }) orelse boxyLowerInvariant("hosted section names a function with no hosted declaration in scope");
+                var entry = entries.items[entry_index];
+                entry.dispatch_index = @intCast(dispatch_index);
+                entry.symbol_text = binding_view.names.externalSymbolNameText(binding.external_symbol_name);
+                bound.appendAssumeCapacity(entry);
+            }
+
+            // Bindings are walked in declaration order, so the catalog is
+            // already ordered by dispatch index.
+            self.hosted_catalog = try bound.toOwnedSlice(self.allocator);
+            return;
+        }
+
+        // Without a platform header there is no section to bind against, so
+        // every declaration in scope is its own dispatch slot in a stable order.
         const SortContext = struct {
             pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
                 return switch (std.mem.order(u8, a.order, b.order)) {
@@ -4259,34 +4300,28 @@ const ProcedureBuilder = struct {
             entry.dispatch_index = @intCast(index);
         }
 
-        if (entries.items.len != 0) {
-            if (try self.buildHostedSectionMap()) |map| {
-                defer map.deinit(self.allocator);
+        self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
+    }
 
-                if (entries.items.len != map.keys.len) {
-                    boxyLowerInvariant("platform hosted section disagrees with the hosted catalog size");
-                }
-                for (entries.items) |*entry| {
-                    const pos = blk: {
-                        for (map.keys, 0..) |key, key_index| {
-                            if (std.mem.eql(u8, key, entry.order)) break :blk key_index;
-                        }
-                        boxyLowerInvariant("hosted function is missing from the platform hosted section");
-                    };
-                    entry.dispatch_index = @intCast(pos);
-                    entry.symbol_text = map.symbols[pos];
-                }
-
-                const DispatchSort = struct {
-                    pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
-                        return a.dispatch_index < b.dispatch_index;
-                    }
-                };
-                std.mem.sort(HostedCatalogEntry, entries.items, {}, DispatchSort.lessThan);
+    /// The hosted bindings of the one platform module visible to this lowering.
+    fn hostedBindingView(self: *ProcedureBuilder) ?HostedBindingView {
+        if (self.modules.root.module.module_identity.kind == .platform) {
+            return .{
+                .table = &self.modules.root.module.hosted_bindings,
+                .names = &self.modules.root.module.canonical_names,
+            };
+        }
+        for (self.modules.imports) |imported| {
+            if (imported.module_identity.kind == .platform) {
+                return .{ .table = imported.hosted_bindings, .names = imported.canonical_names };
             }
         }
-
-        self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
+        for (self.modules.root.relation_modules) |relation| {
+            if (relation.module_identity.kind == .platform) {
+                return .{ .table = relation.hosted_bindings, .names = relation.canonical_names };
+            }
+        }
+        return null;
     }
 
     fn appendHostedCatalogFromModule(
@@ -4300,50 +4335,10 @@ const ProcedureBuilder = struct {
                 .symbol_text = module.canonical_names.externalSymbolNameText(hosted.external_symbol_name),
                 .dispatch_index = 0,
                 .order = hosted.orderKey(module.hosted_procs),
+                .module_key = module.key.bytes,
                 .def_idx = @intFromEnum(hosted.def_idx),
             });
         }
-    }
-
-    fn buildHostedSectionMap(self: *ProcedureBuilder) Allocator.Error!?HostedSectionMap {
-        const platform_env = blk: {
-            const root_env = self.modules.root.module.moduleEnvConst();
-            if (root_env.hosted_entries.items.items.len != 0) break :blk root_env;
-            for (self.modules.imports) |imported| {
-                const env = imported.module_env;
-                if (env.hosted_entries.items.items.len != 0) break :blk env;
-            }
-            for (self.modules.root.relation_modules) |relation| {
-                const env = relation.module_env;
-                if (env.hosted_entries.items.items.len != 0) break :blk env;
-            }
-            return null;
-        };
-
-        const section = platform_env.hosted_entries.items.items;
-        var keys = try self.allocator.alloc([]const u8, section.len);
-        var key_count: usize = 0;
-        errdefer {
-            for (keys[0..key_count]) |key| self.allocator.free(key);
-            self.allocator.free(keys);
-        }
-        const symbols = try self.allocator.alloc([]const u8, section.len);
-        errdefer self.allocator.free(symbols);
-
-        for (section, 0..) |entry, index| {
-            var func_text = platform_env.getIdentText(entry.func_ident);
-            if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
-                func_text = func_text[0 .. func_text.len - 1];
-            }
-            keys[index] = if (entry.module_ident) |module_ident|
-                try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ platform_env.getIdentText(module_ident), func_text })
-            else
-                try self.allocator.dupe(u8, func_text);
-            key_count = index + 1;
-            symbols[index] = platform_env.getString(entry.symbol);
-        }
-
-        return .{ .keys = keys, .symbols = symbols };
     }
 
     fn importModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.CheckedModuleArtifactKey, import_index: usize) bool {
@@ -13179,6 +13174,7 @@ const ProcBodyBuilder = struct {
             ),
             .pending => try self.lowerPendingQuoteConversionInto(target, expr_id, checked_ty, quote.plan, next),
             .fn_value,
+            .discarded,
             .expect,
             => boxyLowerInvariant("from_quote conversion root had a non-data payload"),
         };
@@ -13325,6 +13321,7 @@ const ProcBodyBuilder = struct {
             ),
             .pending => try self.lowerPendingNumeralConversionInto(target, expr_id, checked_ty, maybe_plan, next),
             .fn_value,
+            .discarded,
             .expect,
             => boxyLowerInvariant("from_numeral conversion root had a non-data payload"),
         };
@@ -17042,7 +17039,7 @@ const ProcBodyBuilder = struct {
                 break :blk self.workerSourceForConstFnValue(module.const_store.getFn(fn_id));
             },
             .pending => self.workerSourceForCallableRootExpr(module, root.expr),
-            .const_node, .expect => null,
+            .const_node, .discarded, .expect => null,
         };
     }
 
@@ -21614,7 +21611,7 @@ const ProcBodyBuilder = struct {
         const node = switch (root.payload) {
             .const_node => |node| node,
             .pending => boxyLowerInvariant("pending field-default root reached runtime boxy lowering"),
-            .fn_value, .expect => boxyLowerInvariant("field-default root did not contain constant data"),
+            .fn_value, .discarded, .expect => boxyLowerInvariant("field-default root did not contain constant data"),
         };
         const type_module = procedureModuleById(self.parent.modules, field_type.module);
         return try self.restoreConstNodeInto(target, declaring_module, type_module, node, field_type.ty, next);

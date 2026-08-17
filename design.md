@@ -1232,6 +1232,55 @@ an auto-imported type, redeclares an existing type, or repeats the same external
 type must live in one place. Callers may choose which source operation they are
 performing, but they must not duplicate the type-binding collision matrix.
 
+Canonicalization also outputs two exact module-global value-definition lists.
+The selected-name list contains one definition for each source-visible value
+name, plus every global definition whose pattern has no single source name. The
+value-binding list contains every concrete shadowed definition by exact identity
+and excludes annotation-only declarations superseded by an implementation.
+Duplicate and superseded definitions remain in the complete definition list so
+checking can report and type-check them. Name-sensitive consumers use the
+selected-name list; checked value, procedure, and compile-time-root construction
+use the value-binding list. Neither repeats name deduplication or chooses a
+definition based on its expression shape.
+
+A platform header's hosted section is the complete list of functions the host
+supplies, and it is what gives each one its linker symbol and its host dispatch
+slot. The hosted catalog is therefore built from the section's bindings rather
+than from a scan of every hosted declaration in scope, so the section decides
+how many dispatch slots exist and which declaration occupies each one; naming
+one declaration twice is two slots, and lowering never reconciles a catalog it
+scanned for itself against the bindings the section names.
+
+A hosted declaration the section leaves out has neither a symbol nor a slot, so
+there is nothing for a call to it to reach. Checking reports that declaration
+against the section it is missing from. A section entry names its target through
+an import, so no entry can reach a declaration written in the platform root
+itself; the root is checked against the section alongside the modules it owns,
+which is what reports such a declaration rather than leaving it to a stage with
+nothing to say. The checked-modules-to-LIR entrance
+refuses a program that still carries it, so lowering is never asked to emit a
+call with no host function behind it. Glue reads the same section to name each
+hosted function's symbol, so it stops on a platform checking rejected rather
+than reading a surface that section never described. A module whose own
+checking has not finished has no bindings yet, and compile-time finalization
+lowers exactly such a module, so that entrance reads nothing into their absence
+there.
+
+An annotation-only declaration that no implementation supersedes names no value
+at all, whatever its annotation says, and `e_anno_only` is the body-free state
+that records this. Two rewrites give such an annotation a body, and only these
+two: a platform package's hosted rewrite, which produces `e_hosted_lambda`
+during canonicalization, and Builtin.roc's compiler-owned intrinsic annotations,
+whose bodies post-check lowering emits at each checked call site. Every other
+`e_anno_only` declaration keeps its declared type, so surrounding code still
+checks, but reading it is an error: checking reports the missing value at the
+reference and marks that expression erroneous, exactly as it already does for
+the sibling body-free state `e_derived_method`. This holds for a plain lookup,
+an imported lookup, a qualified associated read, and a method dispatch alike, so
+no reference to a valueless declaration survives checking. Post-check stages
+therefore never see one, and their rule that a procedure use carries a
+function-shaped request node needs no exception for it.
+
 The `Scope.type_bindings` table has one ordinary mutation API for type names.
 It accepts the full scope slice, the target scope index, the introduced name,
 and the incoming binding:
@@ -1391,13 +1440,17 @@ calling ordinary union or writing a raw redirect.
 
 An already-erroneous operand cannot overwrite a solved type or a flex carrying
 constraints. Encountering `.err` against either terminates the current
-unification successfully for diagnostic recovery, before any enclosing
-structure is merged. An unconstrained flex placeholder may adopt `.err`; this
-is how an erroneous expression explicitly fills its owning binding or
-annotation slot without contaminating an independently constrained producer.
-Checker sites that own a reported error use `markErroneous` to poison the owning
-solved class directly. No successful ordinary unification propagates an
-existing `.err` into a type that already carries information.
+unification with `suppressed_by_error` for diagnostic recovery, before any
+enclosing structure is merged. This outcome means no additional mismatch
+diagnostic is needed; it does not prove that the requested relation was
+established. `unified` is the only outcome that provides that proof. An
+unconstrained flex placeholder may adopt `.err`; this is a real merge and
+therefore returns `unified`. This is how an erroneous expression explicitly
+fills its owning binding or annotation slot without contaminating an
+independently constrained producer. Checker sites that own a reported error use
+`markErroneous` to poison the owning solved class directly. No successful
+ordinary unification propagates an existing `.err` into a type that already
+carries information.
 
 A relation an expression merely consults is not a relation it may destroy. A
 call checks its callee and its arguments, and a field access checks the record
@@ -1410,17 +1463,23 @@ cascades into unrelated uses of that producer nor leaves an `.err` on a binding
 whose value post-check lowering must still instantiate.
 
 Because `.err` no longer merges, it also no longer relates the operands unified
-against it. A checker site that relies on one variable to carry a relation
-between several others has to supply that relation itself once the carrier is
-erroneous. `match` is the one such site: every branch pattern describes the same
-scrutinee value, and that mutual consistency normally travels through the
-scrutinee's variable. When the scrutinee is already erroneous, the patterns
-unify against a shared fresh variable instead, so a disagreement between two
-patterns is still reported at the pattern that disagrees rather than surfacing
-later as an unexplained branch-body mismatch. The scrutinee's own error is not
-re-reported, the patterns are never related back to it, and the first
-disagreement poisons the shared variable so later patterns short-circuit exactly
-as they do when the scrutinee carries the relation.
+against it. A checker site that only needs diagnostic recovery may accept both
+`unified` and `suppressed_by_error`. A site that uses the relation as evidence
+for a speculative commit, a shared representative, dispatch success, or another
+checked output whose validity depends on the whole requested relation must
+require `unified`; `suppressed_by_error` cannot authorize that action. Evidence
+for a child relation that completed before suppression remains independently
+valid. A site that relies on one variable to carry a relation between several
+others has to supply that relation itself once the carrier is erroneous.
+`match` is one such site: every branch pattern describes the same scrutinee
+value, and that mutual consistency normally travels through the scrutinee's
+variable. When the scrutinee is already erroneous, the patterns unify against a
+shared fresh variable instead, so a disagreement between two patterns is still
+reported at the pattern that disagrees rather than surfacing later as an
+unexplained branch-body mismatch. The scrutinee's own error is not re-reported,
+the patterns are never related back to it, and the first disagreement poisons
+the shared variable so later patterns short-circuit exactly as they do when the
+scrutinee carries the relation.
 
 ## Type Alias Invariant
 
@@ -1481,13 +1540,48 @@ may likewise resolve to a nominal type; that is substitution of the declaration
 parameter, not an inverse lift through a concrete structural backing.
 
 This rule is implemented inside pure unification as explicit caller-supplied
-relation data. The checker must not probe a solved operand and then mutate or
-poison the graph separately, and Monotype must not repair an invalid checked
-constructor. A rejected root relation produces the existing nominal-constructor
-type mismatch diagnostic. The rejected side is pinned by
-`test/snapshots/issue/issue_10195_nominal_record_update_rewrapped.md`; accepted
-nested-nominal and implicit-record-update controls are pinned in
-`src/check/test/type_checking_integration.zig`.
+relation data. Deciding it never mutates or poisons the solved graph outside
+that unification—the one probe that re-reads a solved operand, the settled-state
+re-decision below, writes no descriptor and no redirect—and Monotype must not
+repair an invalid checked constructor. A rejected root relation produces the
+existing nominal-constructor type mismatch diagnostic. The rejected side is
+pinned by
+`test/snapshots/issue/issue_10195_nominal_record_update_rewrapped.md` in
+expression position and by
+`test/snapshots/issue/issue_10788_nominal_pattern_backing_mismatch.md` in
+pattern position; accepted nested-nominal and implicit-record-update controls
+are pinned in `src/check/test/type_checking_integration.zig`.
+
+The rejection is owned by the constructor expression alone. The operand's solved
+class belongs to an ordinary value that keeps flowing—in the rewrap case
+`..receiver` has already lifted the update to the nominal, so the operand's class
+*is* the receiver's—and poisoning a class other expressions still read leaves
+erroneous types on nodes Monotype must instantiate. So the relation reports its
+own diagnostic instead of poisoning either operand, and only the constructor's
+own var becomes erroneous.
+
+### Settled-State Re-Decision
+
+Whether the operand has already lifted to a nominal is decided from its solved
+shape, and unification can widen that shape after the relation runs: an operand
+that is still an open row when the constructor is checked—an inline lambda
+parameter, say—lifts to the nominal once a later call pins it. The rule is
+therefore decided twice, and the second verdict is the binding one: every
+accepted relation whose expected backing was anonymous is re-decided against the
+settled graph, and one that now inverse-lifts is rejected there. This is what
+makes the verdict independent of where the constructor happens to be written, so
+the same program is accepted or rejected whether its lambda is written inline or
+extracted to an annotated top-level function.
+
+A relation accepted at check time has already handed the constructor's result
+type to every consumer, so the settled-state rejection reports the same
+nominal-constructor mismatch and replaces the constructor with a runtime error
+without poisoning any var. The rejected side is pinned by
+`test/snapshots/issue/issue_10788_nominal_record_update_rewrap_deferred.md` and
+by the CLI specs on `test/cli/issue_10788_nominal_record_update_rewrap/`; the
+accepted control—the same constructor built from a fresh record literal in the
+same inline-lambda position—is pinned by
+`test/snapshots/issue/issue_10788_nominal_record_construction_in_lambda.md`.
 
 ## Module Completion Boundary
 
@@ -2090,16 +2184,39 @@ never as runtime-local pattern references.
 A non-exhaustive destructure in an unguarded runtime position is itself a strict
 compile-time demand when its right-hand side is top-level-equivalent. This demand
 does not depend on whether the pattern contains a binder or whether any binder is
-later referenced. The checker selects a unit-valued pattern-validation root that
-evaluates the right-hand side and matches the complete source pattern. Binder
-extractions remain liveness-driven. After solving, a selected concrete extraction
-subsumes the matching validation root so a live binder does not make the
-right-hand side evaluate twice; with no selected concrete extraction, the
-unit-valued validation root remains and no dead binder value is archived.
-The pending exhaustiveness site is explicitly classified for empirical
-compile-time validation only after this root selection succeeds. No validation
-root is selected inside an ordinary top-level constant, because that enclosing
-root already evaluates and owns the destructure site.
+later referenced. The checker records the complete checked source pattern and
+right-hand side as a deferred validation candidate, together with the prospective
+maximal expression root that can own its evaluation. The candidate retains a
+dedicated validation root until post-solve pruning proves that the expression
+owner or a concrete live-binder extraction was actually kept. This prevents a
+non-concrete or otherwise rejected prospective owner from losing the validation,
+while a kept owner prevents the right-hand side from evaluating twice.
+
+A surviving validation-only root evaluates the right-hand side and matches the
+complete source pattern, but its successful result is discarded rather than
+archived as a unit constant. A binder-free source declaration may then be erased
+from runtime lowering. The pending exhaustiveness site is explicitly classified
+for empirical compile-time validation when the eligible candidate is recorded.
+No candidate is recorded inside an ordinary top-level constant, because that
+enclosing root already evaluates and owns the destructure site. Validation uses
+the checked pattern compiler and compile-time evaluator; it never reinterprets
+source patterns separately.
+
+Local binding dependencies likewise remain candidates until their enclosing
+expression is either selected or rejected. A selected maximal parent owns the
+computation and its transient binders, including callable-typed binders that
+never enter static storage. Only when no eligible parent can own the use does the
+dependency become its own data or callable extraction root. Consequently
+selection does not duplicate a closed computation merely because a nested value
+is named, and the representation requirements of the root result never constrain
+transient local or match-branch binders.
+
+A callable extraction root is admitted only when the extracted value is itself
+a function and its complete checked signature is concrete. The checker records
+it as one exact callable root, never as ConstStore data. Data roots use a separate
+concreteness purpose that rejects a function anywhere in their stored type, so a
+value containing a callable remains one ordinary runtime allocation rather than
+being copied into independently restored callables.
 
 Hoisted-root selection is positional as well as dependency-based. Selection may
 fire only in structurally unguarded positions of runtime bodies, and the checker
@@ -2605,6 +2722,43 @@ They must not inspect the checked target type to reconstruct which literal path
 checking selected. In particular, `builtin_direct` stores neither the synthetic
 conversion callable nor a runtime dispatch plan, and
 `specialization_dispatch` is not a standalone compile-time root.
+
+#### Erroneous Call Operand Retirement
+
+After checking an unannotated operand expression, the checker records its exact
+identity in the dense `call_operand_type_error_exprs` table when its checked
+value type contains an error. A repeated check replaces the expression's slot,
+so the table always describes the latest check. This record is narrower than
+`erroneous_value_exprs`: a relation may
+replace an expression with a runtime error while preserving a usable checked
+type for independent consumers, and that expression does not poison a parent
+call relation. A call-like parent whose operand is in the narrower set is
+retired before it introduces a static-dispatch constraint or stamps a dispatch
+plan. `retireCallLikeExprWithErroneousOperands` marks the parent's effective
+checker variable erroneous and inserts the parent expression into both sets.
+This is a diagnostic-recovery mechanism, not a typing rule; an error-free operand
+never takes this path. The decision consumes the checker's explicit
+expression-identity record. It must not be reconstructed from the shape of a
+constraint callable or from a later union-find representative.
+An ordinary call judges its callee from the callable variable produced by
+scheme instantiation; imported static methods may use an erroneous source
+placeholder whose instantiated callable is valid. Its arguments consume
+`call_operand_type_error_exprs` like the other call-like forms.
+Statement-owned iterator loops have no parent expression to mark; they consume
+the same operand record and leave the erroneous iterable expression in
+`erroneous_value_exprs`. Checked for-nodes require a topology plan even on
+recovery, so the checker mints the plan's callable shapes without attaching
+constraints, marks both callable classes rejected, and records the required
+plan. CheckedModule construction consumes those rejection markers to seal
+both calls with explicit `checked_error` resolutions.
+
+Retirement is atomic with dispatch introduction. A retired expression emits no
+constraint and no live plan; a required iterator recovery plan carries rejected
+callables but still emits no constraints. Independently valid sibling
+expressions introduce and solve their own constraints normally. This keeps an
+erroneous callable out of a receiver's constraint scheme instead of asking
+unification to coalesce it with a valid callable and asking checked-module
+construction to choose a call site from the coalesced class.
 
 Source dispatch, type dispatch, method equality, and iterator `for` plans all
 use checked dispatch plans. Iterator `for` uses its own iterator-dispatch
@@ -5029,6 +5183,13 @@ Other solved-graph mutations:
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by
   unifying that node with a fresh error variable.
+- `retireCallLikeExprWithErroneousOperands` / statement-owned iterator plan
+  recovery (`markErroneous`, `markStaticDispatchFnRejected`, and the explicit
+  `call_operand_type_error_exprs` table)—mechanism: Erroneous Call Operand Retirement
+  (above). An operand already owns a reported error, so its call-like parent is
+  inserted into both expression sets before any dispatch constraint is
+  introduced; a required iterator plan is sealed with rejected callable metadata
+  instead.
 - `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
   an already-reported error. An erroneous scrutinee cannot relate the branch
   patterns to each other, so they unify against a shared fresh variable instead
@@ -5098,8 +5259,24 @@ stamped plan—is documented and enforced at the restamp sites
 (`rewriteEqBinopAsMethodEq`, `rewriteDerivedIsEqMethodCallAsStructuralEq`,
 `rewriteDerivedMethodCallAsStructuralHash`). Plan stamping at creation
 (`replaceExprWithDispatchCall` and friends at plan-creation sites) is the
-plan's first stamp, not a restamp; `replaceExprWithRuntimeError` is diagnostic
-recovery.
+plan's first stamp, not a restamp; `replaceExprWithRuntimeError` retires the
+plans in the subtree it replaces, which is diagnostic recovery at every call
+site except `recheckNominalConstructorBackings`, where it is the rejection
+mechanism of a declared rule (see below).
+
+- `recheckNominalConstructorBackings`—policy: Nominal Constructor Backing
+  Relation, "Settled-State Re-Decision" (above). This is the one probe of
+  solved types whose verdict rejects a program: it re-reads the constructor
+  operand's settled shape and, when the operand has lifted to a nominal since
+  the relation ran, reports the relation's own mismatch and replaces the
+  constructor with a runtime error. It writes no descriptor and no redirect—
+  the solved graph the verdict was read from is left exactly as it stands, so
+  every type that consumed the constructor's result stays intact—and the CIR
+  mutation is confined to the rejected constructor and the plans in its own
+  subtree. Both sides are pinned:
+  `test/snapshots/issue/issue_10788_nominal_record_update_rewrap_deferred.md`
+  rejects, `test/snapshots/issue/issue_10788_nominal_record_construction_in_lambda.md`
+  accepts the same constructor shape in the same position.
 
 Read-only acceptance probes (no mutation; their rules live in doc comments
 at their definitions): `staticDispatchConstraintAcceptsCandidate` states the
@@ -6781,6 +6958,22 @@ literal conversion). That explicit receiver-error state also resolves to
 error fences the containing value, while `rejected_static_dispatches` records
 only failures of the dispatch check itself. `EvidencePass` never infers either
 case from the constraint callable or its return type.
+
+The dispatch *target*'s declaration is the third route to `checked_error`, and
+it fences the target the way the paragraph above fences the receiver. A method
+whose declaration canonicalization could not canonicalize, or whose body
+checking poisoned, carries `e_runtime_error` as its bound expression; its
+diagnostic is already reported and it has no runtime target. Such a declaration
+is still *declared*, so `MethodRegistry` records its `(MethodOwner,
+MethodNameId)` key with no target rather than omitting it, and
+`lookupCheckedMethodTarget` answers `rejected` instead of "no such method".
+Omitting the key would be indistinguishable from a method no view declares,
+which `EvidencePass` treats as a compiler bug for an owned value dispatch. A registry key with no
+target is the only representation of this state: post-check stages consume
+`MethodTarget` as a lowerable target and must never receive one for a rejected
+declaration, so the distinction lives in the lookup result, not in
+`MethodTargetKind`. `EvidencePass` resolves a `rejected` lookup to
+`checked_error` and adds no second diagnostic at the dispatch site.
 
 `checked_error` and `unreachable` are rejected, non-returning
 dispatches. Monotype lowers both to an ordinary Roc runtime crash instead of a

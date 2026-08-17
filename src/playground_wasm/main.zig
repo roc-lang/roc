@@ -1238,12 +1238,7 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
     return compileSourceWithValidation(source, module_name, .checking);
 }
 
-const SourceValidationMode = enum {
-    checking,
-    explicit_roots,
-};
-
-fn compileSourceWithValidation(source: []const u8, module_name: []const u8, validation_mode: SourceValidationMode) PlaygroundCompileError!CompilerStageData {
+fn compileSourceWithValidation(source: []const u8, module_name: []const u8, validation_mode: Can.Validation) PlaygroundCompileError!CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input

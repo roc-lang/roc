@@ -676,7 +676,7 @@ fn lowerEvalAndFinishRoots(
         );
     }
 
-    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+    var lowered = try lowerFinalizationModulesToLir(
         allocator,
         .{
             .root = checked.loweringViewWithRelations(module, relation_modules),
@@ -839,7 +839,10 @@ fn lowerEvalAndFinishRoots(
                     error.ExpectErr => unreachable,
                 };
                 defer interpreter.dropValue(eval_result.value, root.ret_layout);
-                break :blk try writer.storeRoot(root, eval_result.value);
+                break :blk if (compile_time_root.kind == .hoisted_validation)
+                    .discarded
+                else
+                    try writer.storeRoot(root, eval_result.value);
             }
 
             const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout);
@@ -847,7 +850,10 @@ fn lowerEvalAndFinishRoots(
             switch (eval_result) {
                 .value => |value| {
                     defer interpreter.dropValue(value.value, root.ret_layout);
-                    break :blk try writer.storeRoot(root, value.value);
+                    break :blk if (compile_time_root.kind == .hoisted_validation)
+                        .discarded
+                    else
+                        try writer.storeRoot(root, value.value);
                 },
                 .failed => |failed_payload| break :blk failed_payload,
             }
@@ -868,6 +874,7 @@ fn lowerEvalAndFinishRoots(
         module.compile_time_roots.fillPayload(root_id, payload);
         const stored_root_type = switch (compile_time_root.kind) {
             .constant, .hoisted_constant => try writer.storeRootType(root),
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .numeral_conversion,
@@ -1170,7 +1177,7 @@ fn lowerDevEvalAndFinishRoots(
     coverage: *ComptimeCoverage,
     options: Options,
 ) FinalizeError!bool {
-    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+    var lowered = try lowerFinalizationModulesToLir(
         allocator,
         .{
             .root = checked.loweringViewWithRelations(module, relation_modules),
@@ -1469,7 +1476,10 @@ fn lowerDevEvalAndFinishRoots(
                 job.host.failed_region,
                 &had_problem,
             ),
-            .success => try writer.storeRoot(job.root, .{ .ptr = job.ret_buf.ptr }),
+            .success => if (job.compile_time_root.kind == .hoisted_validation)
+                .discarded
+            else
+                try writer.storeRoot(job.root, .{ .ptr = job.ret_buf.ptr }),
         };
 
         try recordComptimeSiteHits(problem_store, coverage, module, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
@@ -1487,6 +1497,7 @@ fn lowerDevEvalAndFinishRoots(
         module.compile_time_roots.fillPayload(job.root_id, payload);
         const stored_root_type = switch (job.compile_time_root.kind) {
             .constant, .hoisted_constant => try writer.storeRootType(job.root),
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .numeral_conversion,
@@ -1733,7 +1744,7 @@ fn finishLiteralConversionRootDetailed(
 ) FinalizeError!LiteralConversionFinish {
     const try_node = switch (payload) {
         .const_node => |node| node,
-        .pending, .fn_value, .expect => finalizationInvariant("numeral conversion root did not store a constant"),
+        .pending, .fn_value, .discarded, .expect => finalizationInvariant("numeral conversion root did not store a constant"),
     };
     switch (module.const_store.get(try_node)) {
         // The from_numeral implementation itself crashed; that crash was
@@ -1929,7 +1940,9 @@ fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
         .quote_conversion,
         .field_default,
         => true,
-        .hoisted_constant => false,
+        .hoisted_constant,
+        .hoisted_validation,
+        => false,
     };
 }
 
@@ -2064,6 +2077,7 @@ fn failedRootPayload(
 ) Allocator.Error!checked.CompileTimeRootPayload {
     return switch (root.kind) {
         .expect => .expect,
+        .hoisted_validation => .discarded,
         .constant,
         .hoisted_constant,
         .callable_binding,
@@ -2136,7 +2150,7 @@ fn compileTimeRootForRequest(
     }
     const root = module.compile_time_roots.roots[raw];
     const kind_matches = switch (request.kind) {
-        .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .field_default,
+        .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .field_default,
         .compile_time_callable => root.kind == .callable_binding,
         .runtime_entrypoint,
         .provided_export,
@@ -2165,13 +2179,17 @@ fn finishConstRoot(
         .const_node => |id| id,
         .pending,
         .fn_value,
+        .discarded,
         .expect,
         => finalizationInvariant("constant root finalized with non-constant payload"),
     };
     const const_ref = switch (root.kind) {
         .constant => blk: {
-            const pattern = root.pattern orelse finalizationInvariant("constant root had no checked pattern");
-            const top_level = module.top_level_values.lookupByPattern(pattern) orelse
+            const def_idx = switch (root.source) {
+                .def => |def| def,
+                .expr, .statement, .required_binding, .hoisted => finalizationInvariant("constant root source was not a top-level definition"),
+            };
+            const top_level = module.top_level_values.lookupByDef(def_idx) orelse
                 finalizationInvariant("constant root had no top-level value");
             break :blk switch (top_level.value) {
                 .const_ref => |ref| ref,
@@ -2183,6 +2201,7 @@ fn finishConstRoot(
                 finalizationInvariant("hoisted constant root had no hoisted const entry");
             break :blk hoisted.const_ref;
         },
+        .hoisted_validation,
         .callable_binding,
         .expect,
         .numeral_conversion,
@@ -2213,6 +2232,26 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
 
 fn artifactMatches(a: anytype, b: checked.CheckedModuleArtifactKey) bool {
     return std.meta.eql(a.bytes, b.bytes);
+}
+
+/// Lower a module that is still being checked.
+///
+/// `lowerCheckedModulesToLir` binds hosted declarations against a platform
+/// header's hosted section only once the module holding that section finished
+/// checking, so the unbound-declaration rejection cannot reach compile-time
+/// finalization.
+fn lowerFinalizationModulesToLir(
+    allocator: Allocator,
+    modules: lir.CheckedPipeline.CheckedModuleSet,
+    roots: lir.CheckedPipeline.RootRequestSet,
+    target: lir.CheckedPipeline.TargetConfig,
+) Allocator.Error!lir.CheckedPipeline.LoweredProgram {
+    return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.HostedFunctionNotBound => finalizationInvariant(
+            "compile-time finalization lowering rejected a hosted declaration the platform header did not bind",
+        ),
+    };
 }
 
 fn finalizationInvariant(comptime message: []const u8) noreturn {

@@ -93,18 +93,7 @@ R000ee(k) := [No0e(R000ee(o))].{
 				(args)
 				(e-call (constraint-fn-var 252)
 					(e-block
-						(e-match
-							(match
-								(cond
-									(e-num (value "0")))
-								(branches
-									(branch
-										(patterns
-											(pattern (degenerate false)
-												(p-nominal
-													(p-applied-tag))))
-										(value
-											(e-runtime-error (tag "erroneous_value_expr"))))))))))))
+						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(s-nominal-decl
 		(ty-header (name "R000ee")
 			(ty-args

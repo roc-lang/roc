@@ -4334,12 +4334,7 @@ const Subst = struct {
     }
 
     fn put(self: *Subst, program: *Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
-        const previous = self.exact.get(local);
-        try self.changes.append(self.allocator, .{
-            .key = .{ .local = local },
-            .previous = previous,
-        });
-        try self.exact.put(local, value);
+        try self.putExact(local, value);
 
         const identity = binderIdentityOf(program, local) orelse return;
         try self.putAlias(identity, value);
@@ -4361,6 +4356,22 @@ const Subst = struct {
             .previous = previous_binder,
         });
         try self.binder_subst.put(identity, value);
+    }
+
+    /// Install a substitution for one exact local id without touching its
+    /// binder's maps. A binder-wide entry claims that every version of the
+    /// variable resolves to this value, which holds only where the value is in
+    /// scope. Pinning a binding whose scope is narrower than the position being
+    /// cloned—a loop param, read from the loop's own initial values—must stay
+    /// exact, or a sibling version of the same variable resolves to a binding
+    /// that does not exist at its use site.
+    fn putExact(self: *Subst, local: Ast.LocalId, value: Value) Allocator.Error!void {
+        const previous = self.exact.get(local);
+        try self.changes.append(self.allocator, .{
+            .key = .{ .local = local },
+            .previous = previous,
+        });
+        try self.exact.put(local, value);
     }
 
     fn putAlias(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
@@ -7296,8 +7307,16 @@ const Cloner = struct {
         // its initialized-ness at the loop head. The emitted params do not
         // exist yet, so pin those references to the source param ids while
         // cloning; each emission below retargets them to its fresh params.
+        //
+        // The pin is exact, never binder-wide. A loop-carried `var` shares one
+        // binder across its pre-loop version, its param, and its post-loop
+        // version, and the slot's own initial value is that pre-loop version.
+        // Claiming the param binder-wide here would resolve that initial value
+        // to the param, so the loop would seed its slot from the binding it is
+        // about to introduce. The param becomes the binder's value only inside
+        // the loop, which is what `putLoopCarried` installs below.
         const forward_start = self.subst.watermark();
-        for (params) |param| try self.shadowLocal(param.local);
+        for (params) |param| try self.pinSourceLocal(param.local);
         for (initial_values, 0..) |initial, index| {
             values[index] = try self.cloneExprValueDemandingShapeInto(initial, bindings);
             switch (try self.pass.shapeFromValue(values[index])) {
@@ -9489,6 +9508,15 @@ const Cloner = struct {
     fn shadowLocal(self: *Cloner, local: Ast.LocalId) Common.LowerError!void {
         const ty = self.pass.program.getLocal(local).ty;
         try self.subst.put(self.pass.program, local, .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .local = local } }) });
+    }
+
+    /// Record an identity substitution for one exact local id, leaving its
+    /// binder's other versions to resolve however they already do. This is the
+    /// pin for a binding whose scope does not cover the position being cloned,
+    /// where `shadowLocal`'s binder-wide claim would be false.
+    fn pinSourceLocal(self: *Cloner, local: Ast.LocalId) Common.LowerError!void {
+        const ty = self.pass.program.getLocal(local).ty;
+        try self.subst.putExact(local, .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .local = local } }) });
     }
 
     fn putLocalAlias(self: *Cloner, source: Ast.LocalId, target: Ast.LocalId) Common.LowerError!void {
