@@ -781,6 +781,11 @@ boundary_reachable_vars: std.AutoHashMap(Var, void),
 /// (or module finalize) for adjudication, exactly like a signature-reachable
 /// literal stays open.
 boundary_lower_rank_reachable: std.AutoHashMap(Var, void),
+/// Whether `boundary_lower_rank_reachable` has been populated for the
+/// current boundary. Reset at each boundary entry; the set is gathered
+/// lazily on first consult (`ensureBoundaryLowerRankReachable`) so
+/// boundaries with no open literal candidate skip the enclosing-scope walk.
+boundary_lower_rank_reachable_computed: bool,
 /// Scratch for `boundaryDefaultLeaksIntoSignature`: closure of one boundary
 /// literal's constraint signatures, intersected with
 /// `boundary_reachable_vars` to detect interface leaks.
@@ -2429,6 +2434,7 @@ fn initAssumePrepared(
         .scheme_relation_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_reachable_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_lower_rank_reachable = std.AutoHashMap(Var, void).init(gpa),
+        .boundary_lower_rank_reachable_computed = true,
         .boundary_leak_vars = std.AutoHashMap(Var, void).init(gpa),
         .boundary_eql_edges = .empty,
         .literal_defaulting_open_roots = .empty,
@@ -23493,6 +23499,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                     // unified into an outer container; rank adjustment does not
                     // lower it, since it walks this rank's roots, not the outer
                     // container that structurally holds it.)
+                    try self.ensureBoundaryLowerRankReachable(env, boundary.rank);
                     if (self.boundary_lower_rank_reachable.contains(resolved.var_)) continue;
                     const gop = try self.literal_defaulting_seen_roots.getOrPut(resolved.var_);
                     if (gop.found_existing) continue;
@@ -23992,6 +23999,25 @@ fn defaultLiteralsAtGeneralizationBoundary(
     try self.defaultLiteralsAtGeneralizationBoundaryMultiRoot(&.{root}, env);
 }
 
+/// Populate `boundary_lower_rank_reachable` — the structural closure of every
+/// enclosing-scope (lower-rank) pool var — on its first consult for the
+/// current boundary. The first consult happens during the first defaulting
+/// round's gather, before any of this boundary's commits, so the set is
+/// identical to an eager computation at boundary entry; boundaries whose
+/// candidate scan never reaches the escape check pay nothing. Ranks below
+/// `.outermost` are `.generalized`, which holds no live scope var, so the
+/// scan starts at `.outermost`.
+fn ensureBoundaryLowerRankReachable(self: *Self, env: *Env, rank: Rank) std.mem.Allocator.Error!void {
+    if (self.boundary_lower_rank_reachable_computed) return;
+    var lower_rank_int: u8 = @intFromEnum(Rank.outermost);
+    while (lower_rank_int < @intFromEnum(rank)) : (lower_rank_int += 1) {
+        for (env.var_pool.getVarsForRank(@enumFromInt(lower_rank_int))) |lower_var| {
+            try self.collectReachableVars(lower_var, &self.boundary_lower_rank_reachable);
+        }
+    }
+    self.boundary_lower_rank_reachable_computed = true;
+}
+
 fn ensureTypeScheme(self: *Self, root_var: Var, capture_rank: Rank) Allocator.Error!usize {
     if (self.typeSchemeIndexForRoot(root_var)) |scheme_idx| return scheme_idx;
     try self.type_scheme_by_var.ensureUnusedCapacity(self.gpa, 1);
@@ -24419,18 +24445,13 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
 
     // The structural closure of every enclosing-scope (lower-rank) pool var.
     // A literal here escapes this boundary rather than defaulting (see the
-    // gather in `runLiteralDefaultingRounds`). Ranks below `.outermost` are
-    // `.generalized`, which holds no live scope var, so the scan starts at
-    // `.outermost`.
+    // gather in `runLiteralDefaultingRounds`). Computed lazily on first
+    // consult (`ensureBoundaryLowerRankReachable`): most boundaries have no
+    // open literal candidate, and the first consult happens during the first
+    // round's gather — before any of this boundary's commits — so the set is
+    // identical to computing it eagerly here.
     self.boundary_lower_rank_reachable.clearRetainingCapacity();
-    {
-        var lower_rank_int: u8 = @intFromEnum(Rank.outermost);
-        while (lower_rank_int < @intFromEnum(rank)) : (lower_rank_int += 1) {
-            for (env.var_pool.getVarsForRank(@enumFromInt(lower_rank_int))) |lower_var| {
-                try self.collectReachableVars(lower_var, &self.boundary_lower_rank_reachable);
-            }
-        }
-    }
+    self.boundary_lower_rank_reachable_computed = false;
     // Default every unreachable candidate through the shared component machinery—
     // identical to `finalizeLiteralDefaults` except for the candidate universe
     // and the per-commit leak warnings—and cascade the dispatches whose
