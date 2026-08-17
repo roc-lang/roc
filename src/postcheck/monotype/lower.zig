@@ -535,7 +535,7 @@ const MethodLookup = struct {
 /// vector is self-contained (dictionary passing evaluated at compile time).
 const SpecEvidence = union(enum) {
     target: *const SpecEvidenceTarget,
-    structural: static_dispatch.StructuralDerivation,
+    structural: SpecStructuralEvidence,
     /// The edge left the requirement's dispatcher unsolved: no value of that
     /// type can ever reach the dispatch. Monotype represents that non-returning
     /// path with an ordinary Roc runtime crash instead of a dispatch call.
@@ -544,6 +544,17 @@ const SpecEvidence = union(enum) {
     /// if `roc run` continues and reaches the dispatch, Monotype emits an
     /// ordinary Roc runtime crash instead of returning a value.
     checked_error,
+};
+
+/// The checker's structural decision, retaining the exact checked evidence
+/// record when one exists. Generated codecs use that record's stable contract
+/// reference instead of reconstructing their internal method instantiations.
+const SpecStructuralEvidence = struct {
+    derivation: static_dispatch.StructuralDerivation,
+    checked: ?struct {
+        view: ModuleView,
+        evidence: static_dispatch.StructuralEvidence,
+    } = null,
 };
 
 const SpecEvidenceTarget = struct {
@@ -677,51 +688,113 @@ fn enterEvidenceScope(
 }
 
 fn relateFunctionRequestInterface(graph: *InstGraph, public_fn: NodeId, private_fn: NodeId) Allocator.Error!void {
-    if (try graph.containsGeneratedPrivate(public_fn) or try graph.containsGeneratedPrivate(private_fn)) {
-        try relateRequestComponent(graph, public_fn, private_fn);
-    } else {
-        try graph.unify(public_fn, private_fn);
-    }
+    try relateRequestComponentAtWidth(graph, public_fn, private_fn, .exact);
+}
+
+/// Relate a fresh checked procedure-template instance to a caller request that the
+/// checker formed through a construction-width relation. Ordinary structure
+/// still unifies exactly; only explicit optional/defaulted record fields may
+/// be absorbed by a closed row.
+fn relateConstructionFunctionRequestInterface(graph: *InstGraph, checked_fn: NodeId, request_fn: NodeId) Allocator.Error!void {
+    try relateRequestComponentAtWidth(graph, checked_fn, request_fn, .construction);
 }
 
 fn relateRequestComponent(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!void {
+    try relateRequestComponentAtWidth(graph, left_node, right_node, .exact);
+}
+
+fn unifyRequestComponentAtWidth(
+    graph: *InstGraph,
+    left_node: NodeId,
+    right_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!void {
+    switch (row_width) {
+        .exact => try graph.unify(left_node, right_node),
+        .construction => try graph.unifyConstruction(left_node, right_node),
+    }
+}
+
+fn relateOpaqueRequestComponentAtWidth(
+    graph: *InstGraph,
+    public_node: NodeId,
+    private_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!void {
+    switch (row_width) {
+        .exact => try graph.relateOpaqueInterface(public_node, private_node),
+        .construction => try graph.relateOpaqueConstructionInterface(public_node, private_node),
+    }
+}
+
+fn relatePublicPrivateRequestComponentAtWidth(
+    graph: *InstGraph,
+    public_node: NodeId,
+    private_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!void {
+    switch (row_width) {
+        .exact => try graph.relateOpaqueInterface(public_node, private_node),
+        .construction => {
+            if (try graph.containsFinishedMono(public_node) or
+                try graph.containsFinishedMono(private_node))
+            {
+                try graph.relateOpaqueConstructionInterface(public_node, private_node);
+            } else {
+                try graph.selectGeneratedPrivateConstructionRepresentation(public_node, private_node);
+            }
+        },
+    }
+}
+
+fn relateRequestComponentAtWidth(
+    graph: *InstGraph,
+    left_node: NodeId,
+    right_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!void {
     const left_root_private = isGeneratedPrivateRootNode(graph, left_node);
     const right_root_private = isGeneratedPrivateRootNode(graph, right_node);
     if (left_root_private and right_root_private) {
-        try graph.unify(left_node, right_node);
+        try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width);
         return;
     }
     if (right_root_private) {
-        try graph.relateOpaqueInterface(left_node, right_node);
+        try relatePublicPrivateRequestComponentAtWidth(graph, left_node, right_node, row_width);
         return;
     }
     if (left_root_private) {
-        try graph.relateOpaqueInterface(right_node, left_node);
+        try relatePublicPrivateRequestComponentAtWidth(graph, right_node, left_node, row_width);
         return;
     }
 
     const left_private = try graph.containsGeneratedPrivate(left_node);
     const right_private = try graph.containsGeneratedPrivate(right_node);
     if (left_private and right_private) {
-        if (try relateMatchingRequestContainers(graph, left_node, right_node)) return;
-        try graph.unify(left_node, right_node);
+        if (try relateMatchingRequestContainers(graph, left_node, right_node, row_width)) return;
+        try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width);
     } else if (right_private) {
-        try graph.relateOpaqueInterface(left_node, right_node);
+        try relatePublicPrivateRequestComponentAtWidth(graph, left_node, right_node, row_width);
     } else if (left_private) {
-        try graph.relateOpaqueInterface(right_node, left_node);
+        try relatePublicPrivateRequestComponentAtWidth(graph, right_node, left_node, row_width);
     } else {
-        try graph.unify(left_node, right_node);
+        try unifyRequestComponentAtWidth(graph, left_node, right_node, row_width);
     }
 }
 
-fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!bool {
+fn relateMatchingRequestContainers(
+    graph: *InstGraph,
+    left_node: NodeId,
+    right_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!bool {
     if (graph.sameClass(left_node, right_node)) return true;
     const left_content = graph.content(left_node);
     const right_content = graph.content(right_node);
     switch (left_content) {
         .list => |left_elem| switch (right_content) {
             .list => |right_elem| {
-                try relateRequestComponent(graph, left_elem, right_elem);
+                try relateRequestComponentAtWidth(graph, left_elem, right_elem, row_width);
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
             },
@@ -729,7 +802,7 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
         },
         .box => |left_elem| switch (right_content) {
             .box => |right_elem| {
-                try relateRequestComponent(graph, left_elem, right_elem);
+                try relateRequestComponentAtWidth(graph, left_elem, right_elem, row_width);
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
             },
@@ -741,7 +814,7 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
                     Common.invariant("request component relation received tuples of different arity");
                 }
                 for (left_items, right_items) |left_item, right_item| {
-                    try relateRequestComponent(graph, left_item, right_item);
+                    try relateRequestComponentAtWidth(graph, left_item, right_item, row_width);
                 }
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
@@ -754,9 +827,9 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
                     Common.invariant("request component relation received functions of different arity");
                 }
                 for (left_fn.args, right_fn.args) |left_arg, right_arg| {
-                    try relateRequestComponent(graph, left_arg, right_arg);
+                    try relateRequestComponentAtWidth(graph, left_arg, right_arg, row_width);
                 }
-                try relateRequestComponent(graph, left_fn.ret, right_fn.ret);
+                try relateRequestComponentAtWidth(graph, left_fn.ret, right_fn.ret, row_width);
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
             },
@@ -764,7 +837,7 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
         },
         .tag_union => switch (right_content) {
             .tag_union => {
-                try graph.relateOpaqueInterface(left_node, right_node);
+                try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
             },
@@ -772,7 +845,7 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
         },
         .record => switch (right_content) {
             .record => {
-                try graph.relateOpaqueInterface(left_node, right_node);
+                try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
                 try graph.joinRelatedRequestContainer(left_node, right_node);
                 return true;
             },
@@ -787,11 +860,11 @@ fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_n
                     return false;
                 }
                 for (left_named.args, right_named.args) |left_arg, right_arg| {
-                    try relateRequestComponent(graph, left_arg, right_arg);
+                    try relateRequestComponentAtWidth(graph, left_arg, right_arg, row_width);
                 }
                 if (left_named.backing) |left_backing| {
                     const right_backing = right_named.backing orelse return false;
-                    try relateRequestComponent(graph, left_backing.node, right_backing.node);
+                    try relateRequestComponentAtWidth(graph, left_backing.node, right_backing.node, row_width);
                 } else if (right_named.backing != null) {
                     return false;
                 }
@@ -1175,21 +1248,26 @@ fn hostedExternAbiViolationMessage(
 }
 
 fn relateCheckedNodeToMono(graph: *InstGraph, checked_node: NodeId, mono_node: NodeId) Allocator.Error!void {
-    _ = try checkedMonoRequestNode(graph, checked_node, mono_node);
+    _ = try checkedMonoRequestNode(graph, checked_node, mono_node, .exact);
 }
 
 /// Relate a checker-public node to an explicit Monotype request node. The
 /// returned node is the one specialization identity must consume: ordinary
 /// Monotypes join the checked class, while generated-private evidence remains
 /// a distinct request node related recursively to the public interface.
-fn checkedMonoRequestNode(graph: *InstGraph, checked_node: NodeId, mono_node: NodeId) Allocator.Error!NodeId {
+fn checkedMonoRequestNode(
+    graph: *InstGraph,
+    checked_node: NodeId,
+    mono_node: NodeId,
+    row_width: solve.RowWidthRelation,
+) Allocator.Error!NodeId {
     if (try graph.containsGeneratedPrivate(mono_node)) {
-        try graph.relateOpaqueInterface(checked_node, mono_node);
+        try relateRequestComponentAtWidth(graph, checked_node, mono_node, row_width);
         return mono_node;
     }
     var seen = std.AutoHashMap(CheckedMonoRequestPair, void).init(graph.allocator);
     defer seen.deinit();
-    try relateCheckedMonoRequestNodeAt(graph, checked_node, mono_node, &seen);
+    try relateCheckedMonoRequestNodeAt(graph, checked_node, mono_node, row_width, &seen);
     return checked_node;
 }
 
@@ -1202,6 +1280,7 @@ fn relateCheckedMonoRequestNodeAt(
     graph: *InstGraph,
     checked_node: NodeId,
     request_node: NodeId,
+    row_width: solve.RowWidthRelation,
     seen: *std.AutoHashMap(CheckedMonoRequestPair, void),
 ) Allocator.Error!void {
     const checked_root = graph.rootNode(checked_node);
@@ -1211,7 +1290,7 @@ fn relateCheckedMonoRequestNodeAt(
     if (try graph.containsGeneratedPrivate(checked_root) or
         try graph.containsGeneratedPrivate(request_root))
     {
-        try relateRequestComponent(graph, checked_root, request_root);
+        try relateRequestComponentAtWidth(graph, checked_root, request_root, row_width);
         return;
     }
 
@@ -1237,6 +1316,7 @@ fn relateCheckedMonoRequestNodeAt(
                         graph,
                         checked_backing.node,
                         request_backing.node,
+                        row_width,
                         seen,
                     );
                     return;
@@ -1246,7 +1326,7 @@ fn relateCheckedMonoRequestNodeAt(
         },
         .list => |checked_elem| switch (request_content) {
             .list => |request_elem| {
-                try relateCheckedMonoRequestNodeAt(graph, checked_elem, request_elem, seen);
+                try relateCheckedMonoRequestNodeAt(graph, checked_elem, request_elem, row_width, seen);
                 try graph.joinRelatedRequestContainer(checked_root, request_root);
                 return;
             },
@@ -1254,7 +1334,7 @@ fn relateCheckedMonoRequestNodeAt(
         },
         .box => |checked_elem| switch (request_content) {
             .box => |request_elem| {
-                try relateCheckedMonoRequestNodeAt(graph, checked_elem, request_elem, seen);
+                try relateCheckedMonoRequestNodeAt(graph, checked_elem, request_elem, row_width, seen);
                 try graph.joinRelatedRequestContainer(checked_root, request_root);
                 return;
             },
@@ -1266,7 +1346,7 @@ fn relateCheckedMonoRequestNodeAt(
                     Common.invariant("checked Monotype request related tuples of different arity");
                 }
                 for (checked_items, request_items) |checked_item, request_item| {
-                    try relateCheckedMonoRequestNodeAt(graph, checked_item, request_item, seen);
+                    try relateCheckedMonoRequestNodeAt(graph, checked_item, request_item, row_width, seen);
                 }
                 try graph.joinRelatedRequestContainer(checked_root, request_root);
                 return;
@@ -1279,9 +1359,9 @@ fn relateCheckedMonoRequestNodeAt(
                     Common.invariant("checked Monotype request related functions of different arity");
                 }
                 for (checked_fn.args, request_fn.args) |checked_arg, request_arg| {
-                    try relateCheckedMonoRequestNodeAt(graph, checked_arg, request_arg, seen);
+                    try relateCheckedMonoRequestNodeAt(graph, checked_arg, request_arg, row_width, seen);
                 }
-                try relateCheckedMonoRequestNodeAt(graph, checked_fn.ret, request_fn.ret, seen);
+                try relateCheckedMonoRequestNodeAt(graph, checked_fn.ret, request_fn.ret, row_width, seen);
                 try graph.joinRelatedRequestContainer(checked_root, request_root);
                 return;
             },
@@ -1299,11 +1379,12 @@ fn relateCheckedMonoRequestNodeAt(
                                 graph,
                                 checked_field.value_ty orelse checked_field.ty,
                                 request_field.value_ty orelse request_field.ty,
+                                row_width,
                                 seen,
                             );
-                            try relateCheckedMonoRequestNodeAt(graph, checked_field.ty, request_field.ty, seen);
+                            try relateCheckedMonoRequestNodeAt(graph, checked_field.ty, request_field.ty, row_width, seen);
                         }
-                        try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, seen);
+                        try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, row_width, seen);
                         try graph.joinRelatedRequestContainer(checked_root, request_root);
                         return;
                     }
@@ -1319,10 +1400,10 @@ fn relateCheckedMonoRequestNodeAt(
                     } else {
                         for (checked_row.tags, request_row.tags) |checked_tag, request_tag| {
                             for (checked_tag.payloads, request_tag.payloads) |checked_payload, request_payload| {
-                                try relateCheckedMonoRequestNodeAt(graph, checked_payload, request_payload, seen);
+                                try relateCheckedMonoRequestNodeAt(graph, checked_payload, request_payload, row_width, seen);
                             }
                         }
-                        try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, seen);
+                        try relateCheckedMonoRequestNodeAt(graph, checked_row.ext, request_row.ext, row_width, seen);
                         try graph.joinRelatedRequestContainer(checked_root, request_root);
                         return;
                     }
@@ -1332,7 +1413,10 @@ fn relateCheckedMonoRequestNodeAt(
         },
         .redirect, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
     }
-    try graph.unify(checked_root, request_root);
+    switch (row_width) {
+        .exact => try graph.unify(checked_root, request_root),
+        .construction => try graph.unifyConstruction(checked_root, request_root),
+    }
 }
 
 fn sameNamedValueDefinition(left: anytype, right: anytype) bool {
@@ -1399,8 +1483,12 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
             },
             .structural, .unreachable_value, .checked_error => false,
         },
-        .structural => |a_kind| switch (b) {
-            .structural => |b_kind| std.meta.eql(a_kind, b_kind),
+        .structural => |a_structural| switch (b) {
+            // The checked contract is provenance for materializing the
+            // derivation's internal calls, not a distinct dispatch choice.
+            // Once the monomorphic callable agrees, structural specialization
+            // identity is exactly the derivation selected by checking.
+            .structural => |b_structural| std.meta.eql(a_structural.derivation, b_structural.derivation),
             .target, .unreachable_value, .checked_error => false,
         },
         .unreachable_value => b == .unreachable_value,
@@ -2292,7 +2380,7 @@ const Builder = struct {
 
     fn initHostedCatalog(self: *Builder) Allocator.Error!void {
         var entries = std.ArrayList(HostedCatalogEntry).empty;
-        errdefer entries.deinit(self.allocator);
+        defer entries.deinit(self.allocator);
 
         try self.appendHostedCatalogFromView(&entries, moduleView(self.root_view));
         for (self.modules.imports, 0..) |imported, index| {
@@ -2305,57 +2393,62 @@ const Builder = struct {
         }
 
         if (self.hostedBindingView()) |binding_view| {
-            if (entries.items.len != binding_view.table.bindings.len) {
-                Common.invariantFmt(
-                    "platform hosted binding count {d} disagrees with hosted catalog size {d}",
-                    .{ binding_view.table.bindings.len, entries.items.len },
-                );
-            }
-
-            var entries_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
-            defer entries_by_target.deinit();
-            try entries_by_target.ensureTotalCapacity(@intCast(entries.items.len));
+            // The platform header's hosted section is the complete list of
+            // functions the host supplies, and it is what gives each one its
+            // external symbol and dispatch slot. Build the catalog from that
+            // list rather than from every hosted declaration in scope: a
+            // declaration the section leaves out has no symbol to call and no
+            // slot to occupy, and checking already reports it against the
+            // section it is missing from.
+            var declared_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
+            defer declared_by_target.deinit();
+            try declared_by_target.ensureTotalCapacity(@intCast(entries.items.len));
             for (entries.items, 0..) |entry, index| {
-                entries_by_target.putAssumeCapacityNoClobber(.{
+                declared_by_target.putAssumeCapacityNoClobber(.{
                     .checked_module_digest = entry.target_checked_module_digest,
                     .def_idx = entry.def_idx,
                 }, index);
             }
 
+            var bound = std.ArrayList(HostedCatalogEntry).empty;
+            errdefer bound.deinit(self.allocator);
+            try bound.ensureTotalCapacity(self.allocator, binding_view.table.bindings.len);
             for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
-                const entry_index = entries_by_target.get(.{
+                const entry_index = declared_by_target.get(.{
                     .checked_module_digest = binding.target_checked_module.bytes,
                     .def_idx = @intFromEnum(binding.target_def),
-                }) orelse Common.invariant("hosted function is missing from the checked hosted binding table");
-                entries.items[entry_index].dispatch_index = @intCast(dispatch_index);
-                entries.items[entry_index].external_symbol_name = try self.program.names.internExternalSymbolName(
+                }) orelse Common.invariant("hosted section names a function with no hosted declaration in scope");
+                var entry = entries.items[entry_index];
+                entry.dispatch_index = @intCast(dispatch_index);
+                entry.external_symbol_name = try self.program.names.internExternalSymbolName(
                     binding_view.names.externalSymbolNameText(binding.external_symbol_name),
                 );
+                bound.appendAssumeCapacity(entry);
             }
 
-            const DispatchSort = struct {
-                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
-                    return a.dispatch_index < b.dispatch_index;
-                }
-            };
-            std.mem.sort(HostedCatalogEntry, entries.items, {}, DispatchSort.lessThan);
-        } else {
-            const SortContext = struct {
-                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
-                    return switch (std.mem.order(u8, a.order, b.order)) {
-                        .lt => true,
-                        .gt => false,
-                        .eq => if (a.def_idx != b.def_idx)
-                            a.def_idx < b.def_idx
-                        else
-                            std.mem.order(u8, &a.target_checked_module_digest, &b.target_checked_module_digest) == .lt,
-                    };
-                }
-            };
-            std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
-            for (entries.items, 0..) |*entry, index| {
-                entry.dispatch_index = @intCast(index);
+            // Bindings are walked in declaration order, so the catalog is
+            // already ordered by dispatch index.
+            self.hosted_catalog = try bound.toOwnedSlice(self.allocator);
+            return;
+        }
+
+        // Without a platform header there is no section to bind against, so
+        // every declaration in scope is its own dispatch slot in a stable order.
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
+                return switch (std.mem.order(u8, a.order, b.order)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => if (a.def_idx != b.def_idx)
+                        a.def_idx < b.def_idx
+                    else
+                        std.mem.order(u8, &a.target_checked_module_digest, &b.target_checked_module_digest) == .lt,
+                };
             }
+        };
+        std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
+        for (entries.items, 0..) |*entry, index| {
+            entry.dispatch_index = @intCast(index);
         }
 
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
@@ -3040,7 +3133,7 @@ const Builder = struct {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -3237,7 +3330,7 @@ const Builder = struct {
                     .nested = nested,
                 } };
             },
-            .structural => |kind| try nodes.append(self.allocator, .{ .structural = kind }),
+            .structural => |structural| try nodes.append(self.allocator, .{ .structural = structural.derivation }),
             .unreachable_value => try nodes.append(self.allocator, .unreachable_value),
             .checked_error => try nodes.append(self.allocator, .checked_error),
         };
@@ -4035,6 +4128,7 @@ const Builder = struct {
         {
             const public_request = source_ctx.graph.requestSourceInterface(request_fn_node) orelse request_fn_node;
             try constrainDeferredTemplateTypeArguments(source_ctx.graph, root_node, public_request);
+            try relateConstructionFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
         } else {
             if (template.target == .hosted) {
                 try relateHostedFunctionRequestInterface(
@@ -4052,7 +4146,10 @@ const Builder = struct {
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
         }
-        if (!local_context_dependent and template.target != .hosted) {
+        if (!local_context_dependent and
+            signature_relation != .independent_roots and
+            template.target != .hosted)
+        {
             try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
         }
         try body_ctx.instantiateTemplateDispatchRelations(template, null);
@@ -5011,12 +5108,10 @@ const Builder = struct {
         };
     }
 
-    /// Builds the declared-field-order span for a nominal/opaque record backing
-    /// from its source declaration (the declaration backing preserves source
-    /// order, unlike the lexicographically-sorted lowered row). Returns the empty
-    /// span for non-record backings or encodings that intentionally have no
-    /// declaration backing. The span feeds layout selection only; the lowered
-    /// row stays lexicographic.
+    /// Builds the declared-field span for a nominal/opaque record backing from
+    /// explicit checked metadata. Boxy uses it for aggregate descriptor
+    /// planning; LSS consumes it as layout order only when it contains padding.
+    /// The lowered backing row remains lexicographic.
     fn declaredOrderForNominal(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!Type.Span {
         if (nominal.declared_fields.len != 0) {
             return try self.lowerCheckedDeclaredOrder(view, nominal.declared_fields, view, nominal.padding_field_types);
@@ -5295,7 +5390,8 @@ const Builder = struct {
     ) ?MethodLookup {
         const view_owner = static_dispatch.methodOwnerInImportedStore(&self.program.names, view.names, owner) orelse return null;
         const view_method = view.names.lookupMethodName(method_name) orelse return null;
-        const target = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null;
+        const found = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null;
+        const target = found.requireTarget("Monotype lowering");
         if (!allow_local_proc and target.kind == .local_proc) return null;
         return .{ .view = view, .target = target };
     }
@@ -6435,6 +6531,11 @@ const Builder = struct {
         defer ctx.deinit();
         ctx.evidence = boundary.evidence;
         ctx.current_fn_key = boundary.current_fn_key;
+        ctx.active_codec_contract = .{
+            .structural = boundary.structural,
+            .callable_node = boundary.callable_node,
+            .shape_node = boundary.shape_node,
+        };
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
         const kind: CodecKind = switch (boundary.plan.result_mode) {
@@ -10550,6 +10651,7 @@ const DraftDeferredStructuralSerialization = struct {
     plan: static_dispatch.StaticDispatchCallPlan,
     callable_node: NodeId,
     shape_node: NodeId,
+    structural: SpecStructuralEvidence,
     encoding: DraftExprId,
     evidence: EvidenceChain,
     current_fn_key: names.TypeDigest,
@@ -13055,6 +13157,13 @@ const BodyContext = struct {
     /// Phase-B structural serialization may consume these sealed requests but
     /// may not instantiate or lower another checked callable.
     frozen_codec_calls: ?*const FrozenPreparedCodecCalls = null,
+    /// Exact checker-authored contract for the structural codec currently
+    /// being prepared, plus the live constructor and shape cells it denotes.
+    active_codec_contract: ?struct {
+        structural: SpecStructuralEvidence,
+        callable_node: NodeId,
+        shape_node: NodeId,
+    } = null,
     /// Final structural serialization emission consumes only durable types and
     /// exact prepared call identities instead of reconstructing checked requests.
     frozen_sealed_emission: bool = false,
@@ -16954,7 +17063,7 @@ const BodyContext = struct {
                 request_fn_node,
             );
         } else {
-            try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
+            try relateConstructionFunctionRequestInterface(self.graph, root_node, request_fn_node);
         }
         try callee_ctx.instantiateTemplateDispatchRelations(template, null);
 
@@ -17008,6 +17117,7 @@ const BodyContext = struct {
         self.source_region_override = switch (root.kind) {
             .constant,
             .hoisted_constant,
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .numeral_conversion,
@@ -17024,6 +17134,7 @@ const BodyContext = struct {
             // comptime-root path.
             .constant,
             .hoisted_constant,
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .field_default,
@@ -19169,7 +19280,7 @@ const BodyContext = struct {
             .declared_return => {},
             .argument => |index| {
                 if (index >= callable.args.len) Common.invariant("checked intrinsic result argument was outside its callable request");
-                const request_ret = try checkedMonoRequestNode(self.graph, callable.ret, callable.args[index]);
+                const request_ret = try checkedMonoRequestNode(self.graph, callable.ret, callable.args[index], .exact);
                 callable_node = try functionRequestNode(self.graph, callable_node, callable.args, request_ret);
                 callable = try self.graph.functionNodes(callable_node);
             },
@@ -19368,7 +19479,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFn(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -19437,7 +19548,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
             .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
             .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
-            .expect => Common.invariant("callable eval binding root output an expect payload"),
+            .discarded, .expect => Common.invariant("callable eval binding root output a non-callable payload"),
         };
     }
 
@@ -21233,7 +21344,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const checked_node = try self.instNode(checked_fn_ty);
         const request_node = try self.graph.importMono(mono_fn_ty);
-        const related = try checkedMonoRequestNode(self.graph, checked_node, request_node);
+        const related = try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
         return related;
     }
 
@@ -26773,7 +26884,7 @@ const BodyContext = struct {
             request_ret = if (try self.graph.containsGeneratedPrivate(expected))
                 expected
             else
-                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
+                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected, .exact);
         }
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
     }
@@ -26880,7 +26991,7 @@ const BodyContext = struct {
             request_ret = if (try self.graph.containsGeneratedPrivate(expected))
                 expected
             else
-                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
+                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected, .exact);
         } else {
             const caller_ret = try caller.instNode(checked_ret_ty);
             if (try self.graph.containsGeneratedPrivate(caller_ret)) {
@@ -26990,12 +27101,14 @@ const BodyContext = struct {
                 self.graph,
                 formal_node,
                 try self.graph.importMono(arg_ty),
+                .exact,
             );
         }
         const request_ret = try checkedMonoRequestNode(
             self.graph,
             function_nodes.ret,
             try self.graph.importMono(ret_ty),
+            .exact,
         );
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
     }
@@ -29886,6 +29999,7 @@ const BodyContext = struct {
             self.graph,
             try fn_ctx.instNode(fn_value.source_fn_ty),
             request_fn_node,
+            .exact,
         );
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
@@ -32335,7 +32449,7 @@ const BodyContext = struct {
         if (declaring_view.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr)) |root| {
             switch (root.payload) {
                 .const_node => |node| return try self.restoreConstNodeAtType(declaring_view, declaring_view, node, field_ty),
-                .pending, .fn_value, .expect => {},
+                .pending, .fn_value, .discarded, .expect => {},
             }
         }
         if (!moduleViewIdentityMatches(self.view, origin_hash)) {
@@ -34035,11 +34149,12 @@ const BodyContext = struct {
         const resolved = switch (self.evidenceResolution(plan) orelse
             Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
             .target => |lookup| lookup,
-            .structural => |derivation| return switch (derivation) {
+            .structural => |structural| return switch (structural.derivation) {
                 .equality => try self.lowerStructuralEqualityAtNode(plan, callable_node, self, pre_lowered.items),
                 .hash => try self.lowerStructuralHashAtNode(plan, callable_node, self, pre_lowered.items),
                 .parser, .encoder => try self.deferStructuralSerializationAtNode(
                     plan,
+                    structural,
                     callable_node,
                     try call_ctx.instNode(plan.dispatcher_ty),
                     pre_lowered.items,
@@ -34060,7 +34175,7 @@ const BodyContext = struct {
             try self.freshInstNode(checked_ret_ty)
         else
             try self.lowerTypeNode(checked_ret_ty);
-        _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node);
+        _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node, .exact);
         if (direct_parametric_low_level) |op| {
             const args = try self.lowerDispatchOperandsAtNodes(
                 plan_args,
@@ -34513,7 +34628,7 @@ const BodyContext = struct {
         return switch (root.payload) {
             .const_node => |node| try self.restoreConstNodeAtType(self.view, self.view, node, ty),
             .pending => null,
-            .fn_value, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
+            .fn_value, .discarded, .expect => Common.invariant("numeral conversion root stored a non-constant payload"),
         };
     }
 
@@ -35344,7 +35459,10 @@ const BodyContext = struct {
                     Common.invariant("checked evidence reference was absent from its lexical chain");
                 return entry;
             },
-            .structural => |evidence| return .{ .structural = evidence.derivation },
+            .structural => |evidence| return .{ .structural = .{
+                .derivation = evidence.derivation,
+                .checked = .{ .view = self.view, .evidence = evidence },
+            } },
             .from_callable => Common.invariant("callable-derived checked evidence escaped a nested procedure construction recipe"),
             .checked_error => return .checked_error,
             .unreachable_value => return .unreachable_value,
@@ -35509,7 +35627,7 @@ const BodyContext = struct {
                     };
                     break :blk .{ .target = materialized };
                 },
-                .structural => |kind| .{ .structural = kind },
+                .structural => |kind| .{ .structural = .{ .derivation = kind } },
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
             };
@@ -35592,7 +35710,7 @@ const BodyContext = struct {
     /// structural decision.
     const EvidenceResolved = union(enum) {
         target: MethodLookup,
-        structural: static_dispatch.StructuralDerivation,
+        structural: SpecStructuralEvidence,
     };
 
     /// The plan's checked or edge-supplied resolution. Null is reserved for
@@ -35624,7 +35742,7 @@ const BodyContext = struct {
                     .unreachable_value, .checked_error => null,
                 };
             },
-            .structural => |derivation| return .{ .structural = derivation },
+            .structural => |derivation| return .{ .structural = .{ .derivation = derivation } },
             .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
             .checked_error, .@"unreachable" => return null,
         }
@@ -36098,7 +36216,7 @@ const BodyContext = struct {
         if (self.methodOwnerFromNode(component_node)) |owner| {
             if (try self.builder.lookupMethodTarget(self.method_scope, owner, view, method)) |found| {
                 if (found.target.kind == .structural) {
-                    return .{ .structural = structuralDerivationWithoutMap(found.target.kind.structural) };
+                    return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(found.target.kind.structural) } };
                 }
                 const arena = self.builder.evidence_arena.allocator();
                 const target = try arena.create(SpecEvidenceTarget);
@@ -36112,10 +36230,10 @@ const BodyContext = struct {
                 };
                 return .{ .target = target };
             }
-            if (structural) |kind| return .{ .structural = structuralDerivationWithoutMap(kind) };
+            if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
             Common.invariant("compiler-generated graph component owner had no exact checked method target");
         }
-        if (structural) |kind| return .{ .structural = structuralDerivationWithoutMap(kind) };
+        if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
         if (try self.nodeIsProvenUninhabited(component_node)) return .unreachable_value;
         Common.invariant("compiler-generated ownerless graph component had no checked structural or uninhabited evidence");
     }
@@ -36171,7 +36289,7 @@ const BodyContext = struct {
         if (methodOwnerFromType(&self.builder.program.types, component_ty)) |owner| {
             if (try self.builder.lookupMethodTarget(self.method_scope, owner, view, method)) |found| {
                 if (found.target.kind == .structural) {
-                    return .{ .structural = structuralDerivationWithoutMap(found.target.kind.structural) };
+                    return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(found.target.kind.structural) } };
                 }
                 const arena = self.builder.evidence_arena.allocator();
                 const target = try arena.create(SpecEvidenceTarget);
@@ -36185,10 +36303,10 @@ const BodyContext = struct {
                 };
                 return .{ .target = target };
             }
-            if (structural) |kind| return .{ .structural = structuralDerivationWithoutMap(kind) };
+            if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
             Common.invariant("compiler-generated component owner had no exact checked method target");
         }
-        if (structural) |kind| return .{ .structural = structuralDerivationWithoutMap(kind) };
+        if (structural) |kind| return .{ .structural = .{ .derivation = structuralDerivationWithoutMap(kind) } };
         if (self.typeIsClosedEmptyTagUnion(component_ty)) return .unreachable_value;
         Common.invariant("compiler-generated ownerless component had no checked structural or uninhabited evidence");
     }
@@ -36949,6 +37067,7 @@ const BodyContext = struct {
     fn deferStructuralSerializationAtNode(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
+        structural: SpecStructuralEvidence,
         callable_node: NodeId,
         shape_node: NodeId,
         pre_lowered: []const PreLoweredOperand,
@@ -36976,6 +37095,7 @@ const BodyContext = struct {
             .plan = plan,
             .callable_node = callable_node,
             .shape_node = shape_node,
+            .structural = structural,
             .encoding = encoding,
             .evidence = self.evidence,
             .current_fn_key = self.current_fn_key,
@@ -36986,6 +37106,13 @@ const BodyContext = struct {
             .parser_for => .parser,
             .encoder_for => .encoder,
             .value, .equality, .hash, .map, .map_effectful => Common.invariant("non-codec result mode reached structural serialization deferral"),
+        };
+        const previous_contract = self.active_codec_contract;
+        defer self.active_codec_contract = previous_contract;
+        self.active_codec_contract = .{
+            .structural = structural,
+            .callable_node = callable_node,
+            .shape_node = shape_node,
         };
         var seen = collections.DenseMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
@@ -39844,6 +39971,101 @@ const BodyContext = struct {
         return try FrozenPreparedCodecCalls.init(self.allocator, try out.toOwnedSlice(self.allocator));
     }
 
+    const CheckedGeneratedCodecCallee = struct {
+        lookup: MethodLookup,
+        callable_node: NodeId,
+        evidence: []const SpecEvidence,
+    };
+
+    /// Resolve one generated-codec method call from the exact contract emitted
+    /// by checking. The contract's snapshot types all instantiate in one graph
+    /// context, so its subject identity selects the precise call even when the
+    /// same method occurs at several nested shapes.
+    fn checkedGeneratedCodecCallee(
+        self: *BodyContext,
+        method_name: []const u8,
+        subject_node: NodeId,
+        expected_lookup: MethodLookup,
+    ) Allocator.Error!?CheckedGeneratedCodecCallee {
+        const active = self.active_codec_contract orelse return null;
+        const checked_structural = active.structural.checked orelse return null;
+        const derivation_id = checked_structural.evidence.generated_codec_derivation orelse
+            Common.invariant("checked structural codec evidence had no generated derivation contract");
+        if (@intFromEnum(derivation_id) >= checked_structural.view.static_dispatch_plans.generated_codec_derivations.len) {
+            Common.invariant("checked structural codec evidence referenced a missing generated derivation");
+        }
+        const derivation = checked_structural.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+        const expected_kind: static_dispatch.GeneratedCodecDerivationKind = switch (active.structural.derivation.kind()) {
+            .parser => .parser,
+            .encoder => .encoder,
+            .equality, .hash, .map, .map_effectful => Common.invariant("non-codec structural evidence carried a generated codec contract"),
+        };
+        if (derivation.kind != expected_kind) {
+            Common.invariant("checked structural codec evidence referenced a derivation of the wrong kind");
+        }
+
+        var contract_ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self.builder,
+            checked_structural.view,
+            self.method_scope,
+            self.owner_template,
+            self.graph,
+            self.draft,
+        );
+        defer contract_ctx.deinit();
+        contract_ctx.evidence = self.evidence;
+        try relateFunctionRequestInterface(
+            self.graph,
+            try contract_ctx.instNode(derivation.constructor_ty),
+            active.callable_node,
+        );
+        try relateRequestComponent(
+            self.graph,
+            try contract_ctx.instNode(derivation.shape_ty),
+            active.shape_node,
+        );
+
+        var selected: ?static_dispatch.GeneratedCodecCall = null;
+        for (derivation.callsSlice(checked_structural.view.static_dispatch_plans)) |candidate| {
+            if (!std.mem.eql(u8, checked_structural.view.names.methodNameText(candidate.method), method_name)) continue;
+            const subject_ty = candidate.subject_ty orelse continue;
+            if (!self.graph.sameClass(try contract_ctx.instNode(subject_ty), subject_node)) continue;
+            if (selected != null) {
+                Common.invariant("checked generated codec contract had ambiguous subject method calls");
+            }
+            selected = candidate;
+        }
+        const call = selected orelse
+            Common.invariant("checked generated codec contract was missing its subject method call");
+        const dispatcher_node = try contract_ctx.instNode(call.dispatcher_ty);
+        const owner = self.methodOwnerFromNode(dispatcher_node) orelse
+            Common.invariant("checked generated codec call dispatcher had no method owner");
+        const exact_lookup = (try self.builder.lookupMethodTarget(
+            self.method_scope,
+            owner,
+            checked_structural.view,
+            call.method,
+        )) orelse Common.invariant("checked generated codec call target was absent from the method registry");
+        if (!moduleBytesEqual(exact_lookup.view.key.bytes, expected_lookup.view.key.bytes) or
+            !std.meta.eql(exact_lookup.target, expected_lookup.target))
+        {
+            Common.invariant("checked generated codec call target disagreed with graph method lookup");
+        }
+        var lookup = expected_lookup;
+        lookup.instantiation = .{
+            .view = checked_structural.view,
+            .callable_ty = call.callable_ty,
+        };
+        return .{
+            .lookup = lookup,
+            .callable_node = try contract_ctx.instNode(call.callable_ty),
+            .evidence = try contract_ctx.materializeEvidence(
+                checked_structural.view.static_dispatch_plans.generatedCodecCallEvidence(call),
+            ),
+        };
+    }
+
     fn prepareCustomCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
@@ -39893,14 +40115,28 @@ const BodyContext = struct {
                 try relateRequestComponent(self.graph, target_runtime.ret, runtime.ret);
             },
         }
-        const callee = try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
+        const checked_call = try self.checkedGeneratedCodecCallee(
+            switch (kind) {
+                .parser => "parser_for",
+                .encoder => "encoder_for",
+            },
+            shape_node,
+            lookup,
+        );
+        const callee = if (checked_call) |exact| blk: {
+            break :blk try self.methodTargetCalleeAtNode(
+                exact.lookup,
+                exact.callable_node,
+                .{ .resolved = exact.evidence },
+            );
+        } else try self.methodTargetCalleeAtNode(lookup, target_node, .synthesize);
         try self.draft.prepared_codec_calls.append(self.allocator, .{
             .boundary_expr = boundary_expr,
             .kind = kind,
             .purpose = .custom,
             .shape_node = shape_node,
             .lookup = lookup,
-            .callable_node = target_node,
+            .callable_node = if (checked_call) |exact| exact.callable_node else target_node,
             .callee = callee,
         });
         return true;
@@ -45946,7 +46182,8 @@ const BodyContext = struct {
                 // information but has no runtime value to bind.
                 .anno_only => false,
                 .pending => Common.invariant("pending checked declaration reached Monotype runtime statement filter"),
-                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => self.view.hoisted_constants.lookupByPattern(decl.pattern) == null,
+                .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => self.view.hoisted_constants.lookupByPattern(decl.pattern) == null and
+                    !self.view.compile_time_roots.validationResolvedByPattern(decl.pattern),
             },
             .var_,
             .var_uninitialized,
@@ -46634,6 +46871,7 @@ const BodyContext = struct {
                             self.graph,
                             public_node,
                             evidence_node,
+                            .exact,
                         );
                     } else {
                         request_arg.* = formal_node;
@@ -46645,6 +46883,7 @@ const BodyContext = struct {
                         self.graph,
                         formal_node,
                         try iterator.ty.toGraphNode(self.graph),
+                        .exact,
                     );
                 },
             }
@@ -46656,7 +46895,7 @@ const BodyContext = struct {
             request_ret = if (try self.graph.containsGeneratedPrivate(expected_node))
                 expected_node
             else
-                try checkedMonoRequestNode(self.graph, function_nodes.ret, expected_node);
+                try checkedMonoRequestNode(self.graph, function_nodes.ret, expected_node, .exact);
             if (try self.graph.containsGeneratedPrivate(request_ret)) contains_generated_private = true;
         }
         if (contains_generated_private) return try self.graphFunctionNode(request_args, request_ret);
@@ -47699,7 +47938,7 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .local_proc_context);
         defer timing_scope.end();
-        for (self.view.method_registry.entries) |entry| switch (entry.target.kind) {
+        for (self.view.method_registry.entries) |entry| switch ((entry.target orelse continue).kind) {
             .local_proc => |local| {
                 if (local.context_anchor == statement_id) {
                     try self.registerLocalProcDeclaration(.{
@@ -47756,7 +47995,7 @@ const BodyContext = struct {
         const restored = self.restored_local_proc_scope orelse
             Common.invariant("local procedure use reached Monotype before its declaration context");
         var context_anchor: ?checked.CheckedStatementId = null;
-        for (view.method_registry.entries) |entry| switch (entry.target.kind) {
+        for (view.method_registry.entries) |entry| switch ((entry.target orelse continue).kind) {
             .local_proc => |local| {
                 if (local.binder != binder or local.expr != expr) continue;
                 if (context_anchor) |existing| {
@@ -49254,7 +49493,7 @@ test "specialization evidence equality includes exact target instantiation" {
         .target = method,
         .instantiation = .{ .view = instantiation_view, .callable_ty = @enumFromInt(8) },
         .local_proc_context = null,
-        .nested = .{ .resolved = &.{.{ .structural = .equality }} },
+        .nested = .{ .resolved = &.{.{ .structural = .{ .derivation = .equality } }} },
     };
     try std.testing.expect(specEvidenceEql(.{ .target = &exact }, .{ .target = &exact }));
 
@@ -50879,7 +51118,7 @@ test "direct call request preserves generated-private return provenance" {
     const args = try graph.arena().alloc(NodeId, 0);
     const public_fn = try graph.newNode(.{ .func = .{ .args = args, .ret = public_ret } });
 
-    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret);
+    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret, .exact);
     const request_fn = try functionRequestNode(graph, public_fn, args, request_ret);
 
     try std.testing.expect(request_fn != public_fn);
@@ -50925,7 +51164,7 @@ test "dispatch call target relation preserves generated-private return provenanc
     const private_ret = try graph.newNode(.{ .box = private_opaque });
     const args = try graph.arena().alloc(NodeId, 0);
     const target_fn = try graph.newNode(.{ .func = .{ .args = args, .ret = public_ret } });
-    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret);
+    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret, .exact);
     const request_fn = try functionRequestNode(graph, target_fn, args, request_ret);
 
     try relateFunctionRequestInterface(graph, target_fn, request_fn);
@@ -50980,8 +51219,8 @@ test "iterator request nodes preserve generated-private operand and result prove
     const public_result = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{public_opaque}) });
     const private_result = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{private_opaque}) });
 
-    const request_operand = try checkedMonoRequestNode(graph, public_operand, private_operand);
-    const request_result = try checkedMonoRequestNode(graph, public_result, private_result);
+    const request_operand = try checkedMonoRequestNode(graph, public_operand, private_operand, .exact);
+    const request_result = try checkedMonoRequestNode(graph, public_result, private_result, .exact);
 
     try std.testing.expectEqual(private_operand, request_operand);
     try std.testing.expectEqual(private_result, request_result);
@@ -51034,8 +51273,8 @@ test "partial synthetic request nodes preserve generated-private argument and re
     const public_ret = try graph.newNode(.{ .list = public_opaque });
     const private_ret = try graph.newNode(.{ .list = private_opaque });
 
-    const request_arg = try checkedMonoRequestNode(graph, public_arg, private_arg);
-    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret);
+    const request_arg = try checkedMonoRequestNode(graph, public_arg, private_arg, .exact);
+    const request_ret = try checkedMonoRequestNode(graph, public_ret, private_ret, .exact);
 
     try std.testing.expectEqual(private_arg, request_arg);
     try std.testing.expectEqual(private_ret, request_ret);

@@ -647,11 +647,10 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                         .payload_index = plan.payload_index,
                     };
                 }
-                // Provenance (introducing expression + expect region) is module-scoped:
-                // its indices refer to the SOURCE module's CIR and are meaningless here.
-                // Clear it on the boundary crossing so a consumer never dereferences a
-                // foreign expr index against the destination module (the old module-local
-                // side tables likewise had no entry for an imported constraint).
+                // The introducing expression is module-scoped: its index refers to the
+                // SOURCE module's CIR and is meaningless here. Clear it on the boundary
+                // crossing so a consumer never dereferences a foreign expression index
+                // against the destination module.
                 frame.pending.provenance = .{};
                 try machine.pending_constraints.append(ctx.allocator, frame.pending);
                 frame.idx += 1;

@@ -103,7 +103,7 @@ _ = function(value)
 			(e-literal (string "my string"))))
 	(d-let
 		(p-underscore)
-		(e-call (constraint-fn-var 255)
+		(e-call (constraint-fn-var 256)
 			(e-lookup-local
 				(p-assign (ident "function")))
 			(e-lookup-local

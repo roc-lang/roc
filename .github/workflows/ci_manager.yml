@@ -349,6 +349,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libdw-dev libcurl4-openssl-dev
 
+      - name: Install Valgrind (Ubuntu full)
+        if: matrix.shard == 'ubuntu-full'
+        run: |
+          # libc6-dbg is required for Valgrind's function redirections.
+          sudo apt-get update && sudo apt-get install -y libc6-dbg
+          sudo snap install valgrind --classic
+          valgrind --version
+
       # The embedded lld-link resolves /defaultlib via the LIB env and roc's
       # linker locates the Windows SDK/MSVC libpaths at runtime (needed by
       # run-test-cli / run-test-dylib / run-test-archive inside minici).

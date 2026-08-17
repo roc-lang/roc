@@ -144,7 +144,12 @@ pub const Constants = struct {
     /// 59: Range syntax produces Builtin.Num.Range values, range dispatch uses
     ///     `_to` methods, and stored ranges mint iterator representations while
     ///     numeric range hooks explicitly delegate to that representation.
-    pub const CACHE_VERSION = 59;
+    /// 60: Checked modules retain explicit rank-1 binding-scheme identities.
+    /// 61: Static dispatch constraints no longer serialize checker-local expect regions.
+    /// 62: For-loop dispatch plans retain explicit iterator and step type variables.
+    /// 63: ModuleEnv retains canonicalization-selected top-level and value-binding definitions.
+    /// 64: Compile-time root selection rejects values containing callables.
+    pub const CACHE_VERSION = 64;
 };
 
 /// Configuration for the Roc cache system.

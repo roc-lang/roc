@@ -376,12 +376,33 @@ const core_tests = [_]TestCase{
         .source =
         \\make = |value| { a: value }
         \\
-        \\record : { a ?: U8 }
+        \\record : { a ?: U8, b ?: U8 }
         \\record = make(5)
         \\
-        \\main = record.?a ?? 0
+        \\main = (record.?a ?? 0) + (record.?b ?? 20)
         ,
-        .expected = .{ .inspect_str = "5" },
+        .expected = .{ .inspect_str = "25" },
+    },
+    .{
+        .name = "optional record field: construction width preserves nested iterator values",
+        .source_kind = .module,
+        .source =
+        \\wrap = |items| { it: items.iter() }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped : { it : Iter(U64), unused ?: U64 }
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum + (wrapped.?unused ?? 0)
+        \\}
+        \\
+        \\main = sum_it([1, 2, 3])
+        ,
+        .expected = .{ .inspect_str = "6" },
     },
     .{
         .name = "optional record field: generalized update cannot change a committed optional slot",

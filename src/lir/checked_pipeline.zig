@@ -28,8 +28,15 @@ const postcheck = @import("postcheck");
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
 
-/// Resource failure while lowering checked modules to LIR.
-pub const LowerResourceError = Allocator.Error;
+/// Resource failure while lowering checked modules to LIR, plus the one
+/// checked input this entrance rejects outright: see
+/// `requireHostedProceduresBound`.
+pub const LowerResourceError = Allocator.Error || HostedBindingError;
+
+/// A hosted declaration the platform header's hosted section never named. The
+/// compile that produced it already carries checking's report of the missing
+/// entry, so callers stop rather than adding a message of their own.
+pub const HostedBindingError = error{HostedFunctionNotBound};
 /// An explicit checked constant requested for target static-data materialization.
 pub const StaticDataRequest = postcheck.Common.StaticDataRequest;
 
@@ -469,6 +476,7 @@ pub fn lowerCheckedModulesToLir(
     target: TargetConfig,
 ) LowerResourceError!LoweredProgram {
     try verifyCheckedBoundary(modules, target);
+    try requireHostedProceduresBound(modules, target);
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
@@ -696,6 +704,74 @@ fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Alloca
         .complete => try modules.root.module.verifyComplete(),
         .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
     }
+}
+
+/// Reject a checked program whose platform header left one of its hosted
+/// declarations out of the hosted section.
+///
+/// The section is the complete list of functions the host supplies, and it is
+/// what gives each one its external symbol and its host dispatch slot. A
+/// declaration the section never names has neither, so a call to it has no
+/// symbol to reach and lowering has nothing to emit. Checking reports that
+/// declaration against the section it is missing from, so the compile has
+/// already failed by the time lowering starts; this stops it there instead of
+/// lowering a call that names no host function.
+///
+/// A platform module publishes its bindings when its checked artifact is
+/// published, so a module still being checked has none to bind against and
+/// this reads nothing into their absence.
+fn requireHostedProceduresBound(
+    modules: CheckedModuleSet,
+    target: TargetConfig,
+) HostedBindingError!void {
+    switch (target.checked_module_state) {
+        .complete => {},
+        .checking_finalization => return,
+    }
+
+    const root_view = checked.importedView(modules.root.module);
+    const bindings = platformHostedBindings(root_view, modules) orelse return;
+
+    if (!hostedProceduresBound(root_view, bindings)) return error.HostedFunctionNotBound;
+    for (modules.imports) |imported| {
+        if (!hostedProceduresBound(imported, bindings)) return error.HostedFunctionNotBound;
+    }
+    for (modules.root.relation_modules) |relation| {
+        if (!hostedProceduresBound(relation, bindings)) return error.HostedFunctionNotBound;
+    }
+}
+
+/// The hosted bindings of the one platform module visible to this lowering, or
+/// null when no platform module is in scope and so no section binds anything.
+fn platformHostedBindings(
+    root_view: checked.ImportedModuleView,
+    modules: CheckedModuleSet,
+) ?[]const checked.HostedBinding {
+    if (root_view.module_identity.kind == .platform) return root_view.hosted_bindings.bindings;
+    for (modules.imports) |imported| {
+        if (imported.module_identity.kind == .platform) return imported.hosted_bindings.bindings;
+    }
+    for (modules.root.relation_modules) |relation| {
+        if (relation.module_identity.kind == .platform) return relation.hosted_bindings.bindings;
+    }
+    return null;
+}
+
+fn hostedProceduresBound(
+    view: checked.ImportedModuleView,
+    bindings: []const checked.HostedBinding,
+) bool {
+    for (view.hosted_procs.procs) |proc| {
+        var bound = false;
+        for (bindings) |binding| {
+            if (!std.mem.eql(u8, &binding.target_checked_module.bytes, &view.key.bytes)) continue;
+            if (binding.target_def != proc.def_idx) continue;
+            bound = true;
+            break;
+        }
+        if (!bound) return false;
+    }
+    return true;
 }
 
 fn checkedModules(modules: CheckedModuleSet) postcheck.Common.CheckedModules {

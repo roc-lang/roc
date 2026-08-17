@@ -534,10 +534,36 @@ pub const MethodTarget = struct {
     callable_ty: CheckedTypeId,
 };
 
+/// What resolving an (owner, method) pair against the checked method
+/// registries found. Distinct from "no view declares this method": a
+/// declaration the earlier stages rejected is still declared, but it has no
+/// runtime target, so every dispatch that lands on it is a `checked_error`.
+pub const CheckedMethodLookup = union(enum) {
+    target: MethodTarget,
+    rejected,
+
+    /// The lowerable target. Post-check stages run only on programs with no
+    /// diagnostics, so a rejected declaration reaching one is a compiler bug,
+    /// not a shape to route around.
+    pub fn requireTarget(self: CheckedMethodLookup, comptime context: []const u8) MethodTarget {
+        return switch (self) {
+            .target => |target| target,
+            .rejected => std.debug.panic(
+                "checked method lookup invariant violated: rejected declaration reached " ++ context,
+                .{},
+            ),
+        };
+    }
+};
+
 /// Public `MethodRegistryEntry` declaration.
 pub const MethodRegistryEntry = struct {
     key: MethodKey,
-    target: MethodTarget,
+    /// `null` when canonicalization or checking rejected this method's
+    /// declaration (`methodBindingIsRejectedDeclaration`). Storing the key with
+    /// no target is what keeps a rejected method distinguishable from a method
+    /// no view declares at all.
+    target: ?MethodTarget,
 };
 
 /// Public `MethodRegistry` declaration.
@@ -554,7 +580,7 @@ pub const MethodRegistry = struct {
         }
     };
 
-    pub fn lookup(self: *const MethodRegistry, key: MethodKey) ?MethodTarget {
+    pub fn lookup(self: *const MethodRegistry, key: MethodKey) ?CheckedMethodLookup {
         // Stack-built keys carry undefined bytes in the owner union's padding
         // and inactive-variant region; ReleaseFast fuses the comparator's
         // field reads into wide loads that touch them. Zero those bytes so
@@ -562,7 +588,8 @@ pub const MethodRegistry = struct {
         var normalized = key;
         collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
         const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
-        return found.target;
+        const target = found.target orelse return .rejected;
+        return .{ .target = target };
     }
 
     /// Build-time-only teardown (see `StaticDispatchPlanTable.deinit`): a frozen
@@ -618,6 +645,18 @@ pub const MethodRegistry = struct {
                 available_artifacts,
                 entry.key.ownerIdent(),
             );
+            const method_key: MethodKey = .{
+                .owner = method_owner,
+                .method = try names.internMethodIdent(idents, entry.key.methodIdent()),
+            };
+            // A rejected declaration is still declared. Record the key with no
+            // target so dispatch resolution can tell it apart from a method no
+            // view declares, and resolve it to a checked error instead of
+            // hunting for a runtime target that cannot exist.
+            if (methodBindingIsRejectedDeclaration(module, entry.value)) {
+                try entries.append(allocator, .{ .key = method_key, .target = null });
+                continue;
+            }
             var referenced_callable_var: ?Var = null;
             const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value)) |generated|
                 .{ .structural = generated }
@@ -660,10 +699,7 @@ pub const MethodRegistry = struct {
             const callable_var = referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind);
 
             try entries.append(allocator, .{
-                .key = .{
-                    .owner = method_owner,
-                    .method = try names.internMethodIdent(idents, entry.key.methodIdent()),
-                },
+                .key = method_key,
                 .target = .{
                     .module_idx = module_idx,
                     .def_idx = def_idx,
@@ -678,6 +714,20 @@ pub const MethodRegistry = struct {
         return .{ .entries = try entries.toOwnedSlice(allocator) };
     }
 };
+
+/// Whether this method binding's declaration was rejected before publication.
+///
+/// Canonicalization emits `e_runtime_error` for a body it could not
+/// canonicalize, and checking rewrites a poisoned body to the same node, so
+/// this is the single explicit marker for "this declaration has no runtime
+/// target, and its diagnostic is already reported".
+fn methodBindingIsRejectedDeclaration(
+    module: TypedCIR.Module,
+    binding: ModuleEnv.MethodBinding,
+) bool {
+    const expr_idx = methodBindingExpr(module, binding) orelse return false;
+    return std.meta.activeTag(module.expr(expr_idx).data) == .e_runtime_error;
+}
 
 fn methodTargetCallableVar(
     module: TypedCIR.Module,
@@ -1996,8 +2046,8 @@ pub const StaticDispatchPlanTable = struct {
             const item_ty = try checkedTypeIdForVar(allocator, module, checked_types, module.patternType(pattern_idx));
             const iter_callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(for_plan.iter_fn_var));
             const next_callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(for_plan.next_fn_var));
-            const iterator_ty = checkedFunctionReturnTypeId(checked_types, iter_callable_ty);
-            const step_ty = checkedFunctionReturnTypeId(checked_types, next_callable_ty);
+            const iterator_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(for_plan.iterator_var));
+            const step_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(for_plan.step_var));
             const step_topology = IteratorStepTopology{
                 .done_tag = try names.internTagIdent(module.identStoreConst(), @bitCast(for_plan.step_topology.done_tag_ident)),
                 .one_tag = try names.internTagIdent(module.identStoreConst(), @bitCast(for_plan.step_topology.one_tag_ident)),
@@ -2042,6 +2092,7 @@ pub const StaticDispatchPlanTable = struct {
                 });
                 try iterator_plan_sources.append(allocator, .{
                     .iter_dispatcher_var = module.exprType(iterable_idx),
+                    .next_dispatcher_var = @enumFromInt(for_plan.iterator_var),
                     .iter_fn_var = @enumFromInt(for_plan.iter_fn_var),
                     .next_fn_var = @enumFromInt(for_plan.next_fn_var),
                 });
@@ -2184,6 +2235,7 @@ pub const PlanSource = struct {
 /// `iterator_for_plans`.
 pub const IteratorPlanSource = struct {
     iter_dispatcher_var: Var,
+    next_dispatcher_var: Var,
     iter_fn_var: Var,
     next_fn_var: Var,
 };
@@ -2486,17 +2538,20 @@ pub fn lookupCheckedMethodTarget(
     imported_views: anytype,
     owner: MethodOwner,
     method: canonical.MethodNameId,
-) ?MethodTarget {
-    if (local_method_registry.lookup(.{ .owner = owner, .method = method })) |target| return target;
+) ?CheckedMethodLookup {
+    if (local_method_registry.lookup(.{ .owner = owner, .method = method })) |found| return found;
 
     const method_name = names.methodNameText(method);
     for (imported_views) |imported| {
         const imported_owner = methodOwnerInImportedStore(names, imported.canonical_names, owner) orelse continue;
         const imported_method = imported.canonical_names.lookupMethodName(method_name) orelse continue;
-        if (imported.method_registry.lookup(.{ .owner = imported_owner, .method = imported_method })) |target| {
-            switch (target.kind) {
-                .procedure, .structural => return target,
-                .local_proc => continue,
+        if (imported.method_registry.lookup(.{ .owner = imported_owner, .method = imported_method })) |found| {
+            switch (found) {
+                .rejected => return found,
+                .target => |target| switch (target.kind) {
+                    .procedure, .structural => return found,
+                    .local_proc => continue,
+                },
             }
         }
     }
@@ -2534,27 +2589,6 @@ fn checkedTypeIdForVar(
         }
         unreachable;
     };
-}
-
-fn checkedFunctionReturnTypeId(
-    checked_types: anytype,
-    callable_ty: CheckedTypeId,
-) CheckedTypeId {
-    const raw = @intFromEnum(callable_ty);
-    if (raw >= checked_types.store.payloadCount()) {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch invariant violated: callable type root was outside the checked type store", .{});
-        }
-        unreachable;
-    }
-    const payload = checked_types.store.payload(callable_ty);
-    if (std.meta.activeTag(payload) != .function) {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch invariant violated: for-loop dispatch constraint was not a function", .{});
-        }
-        unreachable;
-    }
-    return payload.function.ret;
 }
 
 fn staticDispatchOperandsForSlice(
@@ -2598,7 +2632,7 @@ test "method registry finalization sorts entries for binary lookup" {
         .key = .{ .owner = .{ .builtin = .box }, .method = @enumFromInt(2) },
         .target = testMethodTarget(@enumFromInt(20)),
     };
-    entries[0].target.kind = .{ .structural = .equality };
+    entries[0].target.?.kind = .{ .structural = .equality };
     entries[1] = .{
         .key = .{ .owner = .{ .builtin = .list }, .method = @enumFromInt(1) },
         .target = testMethodTarget(@enumFromInt(10)),
@@ -2612,10 +2646,39 @@ test "method registry finalization sorts entries for binary lookup" {
 
     var registry = MethodRegistry{ .entries = entries };
     const found = registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @enumFromInt(1) }) orelse return error.MissingSortedMethodTarget;
-    try std.testing.expectEqual(@as(CIR.Def.Idx, @enumFromInt(15)), found.def_idx);
+    try std.testing.expectEqual(@as(CIR.Def.Idx, @enumFromInt(15)), found.target.def_idx);
     const structural = registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @enumFromInt(2) }) orelse return error.MissingStructuralMethodTarget;
-    try std.testing.expectEqual(StructuralKind.equality, structural.kind.structural);
+    try std.testing.expectEqual(StructuralKind.equality, structural.target.kind.structural);
     try std.testing.expect(registry.lookup(.{ .owner = .{ .builtin = .list }, .method = @enumFromInt(2) }) == null);
+}
+
+test "method registry distinguishes a rejected declaration from an undeclared method" {
+    const allocator = std.testing.allocator;
+
+    const entries = try allocator.alloc(MethodRegistryEntry, 2);
+    defer allocator.free(entries);
+
+    entries[0] = .{
+        .key = .{ .owner = .{ .builtin = .box }, .method = @enumFromInt(1) },
+        .target = testMethodTarget(@enumFromInt(10)),
+    };
+    entries[1] = .{
+        .key = .{ .owner = .{ .builtin = .box }, .method = @enumFromInt(2) },
+        .target = null,
+    };
+
+    finalizeMethodRegistryEntries(entries);
+
+    var registry = MethodRegistry{ .entries = entries };
+    const declared = registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @enumFromInt(1) }) orelse
+        return error.MissingDeclaredMethodTarget;
+    try std.testing.expectEqual(@as(CIR.Def.Idx, @enumFromInt(10)), declared.target.def_idx);
+
+    const rejected = registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @enumFromInt(2) }) orelse
+        return error.MissingRejectedMethodEntry;
+    try std.testing.expect(rejected == .rejected);
+
+    try std.testing.expect(registry.lookup(.{ .owner = .{ .builtin = .box }, .method = @enumFromInt(3) }) == null);
 }
 
 /// Convert an intentional fixture-table position while preserving enum inference.

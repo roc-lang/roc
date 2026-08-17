@@ -925,4 +925,49 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .crash = {} },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/10763
+        .name = "issue 10763: separate calls instantiate a partial scheme independently",
+        .source_kind = .module,
+        .source =
+        \\mk : {} -> ((() -> val), val -> Try({}, [NotEq, ..])) where [val.is_eq : val, val -> Bool]
+        \\mk = |_| |thunk, expected| if thunk() == expected { Ok({}) } else { Err(NotEq) }
+        \\
+        \\main = {
+        \\    check_num = mk({})
+        \\    check_str = mk({})
+        \\    (check_num(|| 42.U64, 42), check_str(|| "a", "a"), check_str(|| "a", "b"))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(Ok({}), Ok({}), Err(NotEq))" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10483
+        .name = "issue 10483: top-level record destructure binder is callable from another root",
+        .source_kind = .module,
+        .source =
+        \\s : { scale : U64 -> U64, other : U64 }
+        \\s = { scale: |x| x * 2, other: 0 }
+        \\
+        \\{ scale, .. } = s
+        \\
+        \\main = scale(21)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10483
+        .name = "issue 10483: top-level destructure preserves callable values nested in data",
+        .source_kind = .module,
+        .source =
+        \\s : { ops : { scale : U64 -> U64 }, other : U64 }
+        \\s = { ops: { scale: |x| x * 2 }, other: 0 }
+        \\
+        \\{ ops, .. } = s
+        \\
+        \\scale = ops.scale
+        \\main = scale(21)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
 };

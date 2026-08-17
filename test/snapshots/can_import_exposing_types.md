@@ -89,6 +89,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:47:34:47:40
 UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
 UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
 NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
+TYPE MISMATCH - can_import_exposing_types.md:50:22:50:74
 # PROBLEMS
 ── ● duplicate definition ───────────────────── can_import_exposing_types.md:1:1
 
@@ -322,6 +323,25 @@ Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
                         ^^^^^^^^^^^
 
 Is it misspelled, or is there an import missing?
+
+── ✗ type mismatch ────────────────────────── can_import_exposing_types.md:50:22
+
+The first branch of this match does not match the previous branch .
+
+Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The first branch is:
+
+    [Ok({ body: Error, status: Error }), ..]
+
+But the previous branch results in:
+
+    Try(Error, Error)
+
+All branches in a match must have compatible types.
+Note: You can wrap branches values in a tag to make them compatible.
+To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
 
 # TOKENS
 ~~~zig

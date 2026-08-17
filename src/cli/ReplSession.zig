@@ -1313,6 +1313,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
                 error.FileNotFound,
                 error.FileTooBig,
                 error.FtruncateFailed,
+                error.HostedFunctionNotBound,
                 error.InputOutput,
                 error.Internal,
                 error.InvalidHandle,
@@ -1420,6 +1421,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
                 error.FileNotFound,
                 error.FileTooBig,
                 error.FtruncateFailed,
+                error.HostedFunctionNotBound,
                 error.InputOutput,
                 error.Internal,
                 error.InvalidHandle,
@@ -1529,6 +1531,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         error.FileNotFound,
         error.FileTooBig,
         error.FtruncateFailed,
+        error.HostedFunctionNotBound,
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
@@ -1663,6 +1666,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         error.FileNotFound,
         error.FileTooBig,
         error.FtruncateFailed,
+        error.HostedFunctionNotBound,
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
@@ -1830,6 +1834,7 @@ fn renderModuleProblems(self: *ReplSession, source: []const u8, imports: []const
         error.FileNotFound,
         error.FileTooBig,
         error.FtruncateFailed,
+        error.HostedFunctionNotBound,
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
@@ -3194,6 +3199,22 @@ test "Repl - top-level destructure definitions publish their binders" {
     const tuple_sum = try repl.step("a + b");
     defer testing.allocator.free(tuple_sum);
     try testing.expectEqualStrings("3.0", tuple_sum);
+
+    const funcs_anno = try repl.step("funcs : { scale : U64 -> U64, other : U64 }");
+    defer testing.allocator.free(funcs_anno);
+    try testing.expectEqualStrings("", funcs_anno);
+
+    const funcs_assigned = try repl.step("funcs = { scale: |x| x * 2, other: 0 }");
+    defer testing.allocator.free(funcs_assigned);
+    try testing.expectEqualStrings("assigned `funcs`", funcs_assigned);
+
+    const funcs_destructure = try repl.step("{ scale, .. } = funcs");
+    defer testing.allocator.free(funcs_destructure);
+    try testing.expectEqualStrings("assigned `scale`", funcs_destructure);
+
+    const scaled = try repl.step("scale(21)");
+    defer testing.allocator.free(scaled);
+    try testing.expectEqualStrings("42", scaled);
 
     const config = reporting.ReportingConfig.initForTesting();
     const req_type = try repl.executeCommandWithConfig(.{ .type_of = "req" }, config);

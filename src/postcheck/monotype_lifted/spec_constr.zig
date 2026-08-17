@@ -680,6 +680,16 @@ const SpecAdmission = enum {
     denied_spec_count,
 };
 
+/// The phase that owns a clone. Loop-exit selection is deliberately separate
+/// from specialization and ordinary rewrites: their full lexical clones can
+/// expose another projectable loop through an inlined callee, so only the final
+/// call-opaque exit-selection phase may initiate another selected exit ABI.
+const ClonePurpose = enum {
+    specialization,
+    rewrite,
+    loop_exit_selection,
+};
+
 const InlineCallMode = enum {
     all,
     iterator_fusion,
@@ -3669,11 +3679,8 @@ const Pass = struct {
             const aggregate_projectable = try self.bodyHasAggregateProjectableLoopResult(body);
             if (!tuple_projectable and !aggregate_projectable) continue;
 
-            var cloner = Cloner.initForRewrite(self);
+            var cloner = Cloner.initForLoopExitSelection(self);
             defer cloner.deinit();
-            cloner.inline_calls = .none;
-            cloner.rewrite_call_patterns = false;
-            cloner.emit_callable_workers = false;
             const cloned = try cloner.cloneExpr(body);
             self.program.setFn(fn_id, .{
                 .symbol = fn_.symbol,
@@ -4327,12 +4334,7 @@ const Subst = struct {
     }
 
     fn put(self: *Subst, program: *Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
-        const previous = self.exact.get(local);
-        try self.changes.append(self.allocator, .{
-            .key = .{ .local = local },
-            .previous = previous,
-        });
-        try self.exact.put(local, value);
+        try self.putExact(local, value);
 
         const identity = binderIdentityOf(program, local) orelse return;
         try self.putAlias(identity, value);
@@ -4354,6 +4356,22 @@ const Subst = struct {
             .previous = previous_binder,
         });
         try self.binder_subst.put(identity, value);
+    }
+
+    /// Install a substitution for one exact local id without touching its
+    /// binder's maps. A binder-wide entry claims that every version of the
+    /// variable resolves to this value, which holds only where the value is in
+    /// scope. Pinning a binding whose scope is narrower than the position being
+    /// cloned—a loop param, read from the loop's own initial values—must stay
+    /// exact, or a sibling version of the same variable resolves to a binding
+    /// that does not exist at its use site.
+    fn putExact(self: *Subst, local: Ast.LocalId, value: Value) Allocator.Error!void {
+        const previous = self.exact.get(local);
+        try self.changes.append(self.allocator, .{
+            .key = .{ .local = local },
+            .previous = previous,
+        });
+        try self.exact.put(local, value);
     }
 
     fn putAlias(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
@@ -4507,6 +4525,7 @@ const Subst = struct {
 
 const Cloner = struct {
     pass: *Pass,
+    purpose: ClonePurpose,
     /// Symbolic values, shapes, and strict-binding chains owned by this clone.
     /// Accepted call patterns are copied into the pass-wide arena before this
     /// short-lived scratch arena is released.
@@ -4600,6 +4619,7 @@ const Cloner = struct {
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
         return .{
             .pass = pass,
+            .purpose = .specialization,
             .arena = std.heap.ArenaAllocator.init(pass.allocator),
             .source_fn = source_fn,
             .pattern = pattern,
@@ -4632,6 +4652,7 @@ const Cloner = struct {
     fn initForRewrite(pass: *Pass) Cloner {
         return .{
             .pass = pass,
+            .purpose = .rewrite,
             .arena = std.heap.ArenaAllocator.init(pass.allocator),
             .source_fn = undefined, // initForRewrite never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
@@ -4659,6 +4680,15 @@ const Cloner = struct {
             .current_region = Region.zero(),
             .current_inline_scope = Ast.InlineScopeId.none,
         };
+    }
+
+    fn initForLoopExitSelection(pass: *Pass) Cloner {
+        var cloner = initForRewrite(pass);
+        cloner.purpose = .loop_exit_selection;
+        cloner.inline_calls = .none;
+        cloner.rewrite_call_patterns = false;
+        cloner.emit_callable_workers = false;
+        return cloner;
     }
 
     fn deinit(self: *Cloner) void {
@@ -5933,7 +5963,9 @@ const Cloner = struct {
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype, bindings: *BindingChain) Common.LowerError!Value {
-        if (try self.loopWithSelectedExitValues(let_)) |selected| return try self.cloneExprValueInto(selected, bindings);
+        if (self.purpose == .loop_exit_selection) {
+            if (try self.loopWithSelectedExitValues(let_)) |selected| return try self.cloneExprValueInto(selected, bindings);
+        }
 
         var value_bindings: BindingChain = .{};
         const value = try self.cloneExprValueInto(let_.value, &value_bindings);
@@ -7275,8 +7307,16 @@ const Cloner = struct {
         // its initialized-ness at the loop head. The emitted params do not
         // exist yet, so pin those references to the source param ids while
         // cloning; each emission below retargets them to its fresh params.
+        //
+        // The pin is exact, never binder-wide. A loop-carried `var` shares one
+        // binder across its pre-loop version, its param, and its post-loop
+        // version, and the slot's own initial value is that pre-loop version.
+        // Claiming the param binder-wide here would resolve that initial value
+        // to the param, so the loop would seed its slot from the binding it is
+        // about to introduce. The param becomes the binder's value only inside
+        // the loop, which is what `putLoopCarried` installs below.
         const forward_start = self.subst.watermark();
-        for (params) |param| try self.shadowLocal(param.local);
+        for (params) |param| try self.pinSourceLocal(param.local);
         for (initial_values, 0..) |initial, index| {
             values[index] = try self.cloneExprValueDemandingShapeInto(initial, bindings);
             switch (try self.pass.shapeFromValue(values[index])) {
@@ -9468,6 +9508,15 @@ const Cloner = struct {
     fn shadowLocal(self: *Cloner, local: Ast.LocalId) Common.LowerError!void {
         const ty = self.pass.program.getLocal(local).ty;
         try self.subst.put(self.pass.program, local, .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .local = local } }) });
+    }
+
+    /// Record an identity substitution for one exact local id, leaving its
+    /// binder's other versions to resolve however they already do. This is the
+    /// pin for a binding whose scope does not cover the position being cloned,
+    /// where `shadowLocal`'s binder-wide claim would be false.
+    fn pinSourceLocal(self: *Cloner, local: Ast.LocalId) Common.LowerError!void {
+        const ty = self.pass.program.getLocal(local).ty;
+        try self.subst.putExact(local, .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .local = local } }) });
     }
 
     fn putLocalAlias(self: *Cloner, source: Ast.LocalId, target: Ast.LocalId) Common.LowerError!void {
@@ -12505,6 +12554,29 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         .empty, // comptime_sites
         0, // next_symbol
     );
+}
+
+test "loop exit selection clone is isolated from ordinary rewrites" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    var rewrite = Cloner.initForRewrite(&pass);
+    defer rewrite.deinit();
+    try std.testing.expectEqual(ClonePurpose.rewrite, rewrite.purpose);
+    try std.testing.expectEqual(InlineCallMode.all, rewrite.inline_calls);
+    try std.testing.expect(rewrite.rewrite_call_patterns);
+    try std.testing.expect(rewrite.emit_callable_workers);
+
+    var exit_selection = Cloner.initForLoopExitSelection(&pass);
+    defer exit_selection.deinit();
+    try std.testing.expectEqual(ClonePurpose.loop_exit_selection, exit_selection.purpose);
+    try std.testing.expectEqual(InlineCallMode.none, exit_selection.inline_calls);
+    try std.testing.expect(!exit_selection.rewrite_call_patterns);
+    try std.testing.expect(!exit_selection.emit_callable_workers);
 }
 
 test "SpecConstr preserves record update ordering while exposing its final shape" {

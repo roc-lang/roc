@@ -30,7 +30,7 @@
 //!
 //! ```zig
 //! const result = unify(&types_store, &scratch, a_var, b_var);
-//! if (result == .ok) {
+//! if (result == .unified) {
 //!     for (scratch.fresh_vars.items) |v| {
 //!         // handle fresh type variable `v`
 //!     }
@@ -106,13 +106,20 @@ const NominalDirection = enum {
     b_is_nominal,
 };
 
-/// The result of unification
+/// The result of unification.
+///
+/// `unified` is evidence that the requested relation was established.
+/// `suppressed_by_error` only says that an existing `.err` made another
+/// diagnostic unnecessary; it is not evidence that the queried classes were
+/// merged or otherwise related.
 pub const Result = union(enum) {
     const Self = @This();
 
-    /// The relation was accepted. Encountering an existing `.err` can return
-    /// this without merging the queried classes.
-    ok,
+    /// The requested relation was established.
+    unified,
+    /// An existing `.err` stopped unification before the requested relation
+    /// was established. This is accepted for diagnostic recovery only.
+    suppressed_by_error,
     /// A mismatch recorded as a diagnostic.
     problem: Problem.Idx,
     /// A mismatch detected under `write_no_report`: nothing recorded and the
@@ -120,13 +127,22 @@ pub const Result = union(enum) {
     /// completed before the mismatch remain committed.
     mismatch,
 
-    pub fn isOk(self: Self) bool {
-        return self == .ok;
+    /// Whether this result requires no additional type-mismatch diagnostic.
+    pub fn isAccepted(self: Self) bool {
+        return switch (self) {
+            .unified, .suppressed_by_error => true,
+            .problem, .mismatch => false,
+        };
+    }
+
+    /// Whether this result proves that the requested relation was established.
+    pub fn isEstablished(self: Self) bool {
+        return self == .unified;
     }
 
     pub fn isProblem(self: Self) bool {
         switch (self) {
-            .ok => return false,
+            .unified, .suppressed_by_error => return false,
             .problem, .mismatch => return true,
         }
     }
@@ -173,6 +189,45 @@ pub const RootRelation = enum {
     /// actual value through an anonymous expected backing.
     nominal_constructor_backing,
 };
+
+/// Whether the expected side of a constructor-backing pair is the anonymous
+/// structure an already-nominal actual must not lift back through. `null` when
+/// the alias walk found no shape to decide from.
+///
+/// A successful relation merges the two operands into one class, so this side's
+/// verdict is only meaningful before the relation runs. The declaration fixes
+/// the shape, so the pre-relation answer stays the right one afterwards.
+pub fn constructorBackingIsAnonymous(types_store: *const types_mod.Store, expected: Var) ?bool {
+    const expected_content = contentThroughAliasesOrNull(types_store, expected) orelse return null;
+    return std.meta.activeTag(expected_content) == .structure and
+        expected_content.unwrapNominalType() == null;
+}
+
+/// Whether the actual side of a constructor-backing pair has already lifted to
+/// a nominal. `null` when the alias walk found no shape to decide from.
+///
+/// This is decided from the operand's solved shape, and unification can widen
+/// that shape after the relation runs, so the checker re-decides this side
+/// against the settled graph (see design.md, "Settled-State Re-Decision").
+pub fn constructorBackingActualIsNominal(types_store: *const types_mod.Store, actual: Var) ?bool {
+    const actual_content = contentThroughAliasesOrNull(types_store, actual) orelse return null;
+    const nominal = actual_content.unwrapNominalType() orelse return false;
+    return !types_store.nominalDeclIsInvalid(nominal);
+}
+
+/// Walking further than the store holds means the alias chain is cyclic, which
+/// is a shape no decision can be read from; each caller states what it does
+/// with that.
+fn contentThroughAliasesOrNull(types_store: *const types_mod.Store, start: Var) ?Content {
+    var current = start;
+    var remaining = types_store.len();
+    while (remaining > 0) : (remaining -= 1) {
+        const content = types_store.resolveVar(current).desc.content;
+        if (std.meta.activeTag(content) != .alias) return content;
+        current = types_store.getAliasBackingVar(content.alias);
+    }
+    return null;
+}
 
 /// Whether a unification relation may add optional/defaulted fields while
 /// checking a fresh record construction. Committed values and external
@@ -251,7 +306,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     unifier.runWorkLoop() catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.ErroneousType => return .ok,
+            error.ErroneousType => return .suppressed_by_error,
             error.TypeMismatch => {},
         }
 
@@ -274,7 +329,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         return Result{ .problem = problem_idx };
     };
 
-    return .ok;
+    return .unified;
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.
@@ -575,31 +630,16 @@ const Unifier = struct {
         try self.processGuardedPair(a_var, b_var);
     }
 
-    fn contentThroughAliases(self: *Self, start: Var) Error!Content {
-        var current = start;
-        var remaining = self.types_store.len();
-        while (remaining > 0) : (remaining -= 1) {
-            const content = self.types_store.resolveVar(current).desc.content;
-            if (std.meta.activeTag(content) != .alias) return content;
-            current = self.types_store.getAliasBackingVar(content.alias);
-        }
-        return error.TypeMismatch;
-    }
-
-    /// Whether the root constructor-backing pair would use ordinary
-    /// structural-to-nominal lifting in the inverse direction: an anonymous
-    /// expected backing accepting an already-nominal actual operand.
+    /// The root constructor-backing rule, decided against the operands as they
+    /// stand now. A cyclic alias offers no shape to decide from, and a relation
+    /// this unifier cannot decide does not unify, so it mismatches. The actual
+    /// side goes first: it rules out the overwhelmingly common case without
+    /// walking the expected side at all.
     fn constructorBackingWouldInverseLift(self: *Self, expected: Var, actual: Var) Error!bool {
-        const actual_content = try self.contentThroughAliases(actual);
-        if (std.meta.activeTag(actual_content) != .structure) return false;
-        const actual_flat = actual_content.structure;
-        if (std.meta.activeTag(actual_flat) != .nominal_type) return false;
-        const actual_nominal = actual_flat.nominal_type;
-        if (self.types_store.nominalDeclIsInvalid(actual_nominal)) return false;
-
-        const expected_content = try self.contentThroughAliases(expected);
-        return std.meta.activeTag(expected_content) == .structure and
-            std.meta.activeTag(expected_content.structure) != .nominal_type;
+        const actual_is_nominal = constructorBackingActualIsNominal(self.types_store, actual) orelse
+            return error.TypeMismatch;
+        if (!actual_is_nominal) return false;
+        return constructorBackingIsAnonymous(self.types_store, expected) orelse error.TypeMismatch;
     }
 
     fn processGuardedPair(self: *Self, a_var: Var, b_var: Var) Error!void {
@@ -3282,14 +3322,10 @@ const Unifier = struct {
             }
             // Provenance is metadata (excluded from constraint identity): merge it
             // field-wise, keeping the winner's value and falling back to the other
-            // side's so an introducing site or expect region recorded on either
-            // constraint survives the merge—the old var-keyed side tables linked
-            // both unified vars to the same entry.
+            // side's so an introducing site recorded on either constraint
+            // survives the merge.
             if (constraint.provenance.intro_expr == .none) {
                 constraint.provenance.intro_expr = two_constraints.a.provenance.intro_expr;
-            }
-            if (constraint.provenance.expect_region.get() == null) {
-                constraint.provenance.expect_region = two_constraints.a.provenance.expect_region;
             }
             if (!constraint.interpolation.isPresent()) {
                 constraint.interpolation = two_constraints.a.interpolation;

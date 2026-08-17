@@ -220,7 +220,7 @@ EndOfFile,
 						(e-empty_record)))
 				(e-lookup-local
 					(p-assign (ident "$total"))))))
-	(e-call (constraint-fn-var 360)
+	(e-call (constraint-fn-var 362)
 		(e-lookup-local
 			(p-assign (ident "sum_with_last")))
 		(e-list

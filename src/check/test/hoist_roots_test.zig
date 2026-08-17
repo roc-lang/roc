@@ -311,6 +311,57 @@ test "hoist roots are not selected for static dispatch requiring where evidence"
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
+test "hoist roots are not selected for a boxed callable" {
+    var test_env = try TestEnv.init("Test",
+        \\make_probe = || Box.box(|value| value + 1.I64)
+        \\
+        \\main = |arg| {
+        \\    boxed = make_probe()
+        \\    Box.unbox(boxed)(arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for an opaque nominal wrapping a callable" {
+    var test_env = try TestEnv.init("Test",
+        \\Holder :: { inner : Box((I64 -> I64)) }
+        \\
+        \\make_probe = || Box.box(|value| value + 1.I64)
+        \\
+        \\main = |arg| {
+        \\    holder : Holder
+        \\    holder = { inner: make_probe() }
+        \\    Box.unbox(holder.inner)(arg)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are selected for an opaque nominal wrapping only data" {
+    var test_env = try TestEnv.init("Test",
+        \\Holder :: { inner : I64 }
+        \\
+        \\main = |arg| {
+        \\    holder : Holder
+        \\    holder = { inner: 41.I64 }
+        \\    holder.inner + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    // The binding and its record literal are both closed data.
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 2), roots.len);
+}
+
 test "hoist roots are not selected for ordinary call with runtime argument" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64
@@ -696,6 +747,75 @@ test "hoist roots selected for tag payload extraction binders" {
     try std.testing.expect(roots[1].pattern != null);
 }
 
+test "refutable closed destructure selects validation root without live binders" {
+    var test_env = try TestEnv.init("Test",
+        \\main = || {
+        \\    Ok(_) = List.get([1], 0)
+        \\    Ok({})
+        \\}
+    );
+    defer test_env.deinit();
+
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    const validation = switch (roots[0].body) {
+        .pattern_validation => |validation| validation,
+        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+    };
+    try std.testing.expectEqual(roots[0].expr, validation.base_expr);
+    try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
+}
+
+test "unused concrete binder retains refutable destructure validation root" {
+    var test_env = try TestEnv.init("Test",
+        \\main = || {
+        \\    Ok(value) = List.get([1], 0)
+        \\    Ok({})
+        \\}
+    );
+    defer test_env.deinit();
+
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    const validation = switch (roots[0].body) {
+        .pattern_validation => |validation| validation,
+        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+    };
+    try std.testing.expectEqual(roots[0].expr, validation.base_expr);
+}
+
+test "live concrete extraction subsumes refutable destructure validation root" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Ok(value) = List.get([1.I64], 0)
+        \\    value + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try expectPatternExtractionRoot(roots[0]);
+}
+
+test "non-concrete extraction retains refutable destructure validation root" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    Ok(value) = List.get([[]], 0)
+        \\    List.len(value) + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    const validation = switch (roots[0].body) {
+        .pattern_validation => |validation| validation,
+        .expr, .pattern_extraction => return error.ExpectedPatternValidationRoot,
+    };
+    try std.testing.expectEqual(roots[0].expr, validation.base_expr);
+}
+
 test "hoist roots selected for nested tag payload extraction binders" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
@@ -756,17 +876,29 @@ test "hoist roots publish top-level destructure binders used by executable roots
         \\s = { req: 7, other: 1 }
         \\{ req, .. } = s
         \\(a, b) = (1, 2)
-        \\main = req
+        \\ops : { scale : U64 -> U64, other : U64 }
+        \\ops = { scale: |x| x * 2, other: 0 }
+        \\{ scale, .. } = ops
+        \\main = scale(21)
     , &.{"main"});
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
     const roots = test_env.checker.selectedHoistedRoots();
-    try std.testing.expectEqual(@as(usize, 3), roots.len);
+    try std.testing.expectEqual(@as(usize, 4), roots.len);
+    var data_constant_count: usize = 0;
+    var callable_binding_count: usize = 0;
     for (roots) |root| {
         try expectPatternExtractionRoot(root);
         try std.testing.expect(test_env.checker.selectedHoistedRootIsTopLevel(root));
+        switch (root.value_kind) {
+            .data_constant => data_constant_count += 1,
+            .callable_binding => callable_binding_count += 1,
+            .discarded => return error.TestUnexpectedResult,
+        }
     }
+    try std.testing.expectEqual(@as(usize, 3), data_constant_count);
+    try std.testing.expectEqual(@as(usize, 1), callable_binding_count);
 }
 
 test "hoist roots selected for single-branch match tuple binders" {
@@ -924,7 +1056,7 @@ fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) error{ Tes
     try std.testing.expect(root.pattern != null);
     const extraction = switch (root.body) {
         .pattern_extraction => |extraction| extraction,
-        .expr => return error.ExpectedPatternExtractionRoot,
+        .expr, .pattern_validation => return error.ExpectedPatternExtractionRoot,
     };
     try std.testing.expectEqual(root.expr, extraction.base_expr);
     try std.testing.expectEqual(root.pattern.?, extraction.result_pattern);
@@ -953,7 +1085,7 @@ fn countPatternExtractionRoots(roots: []const hoist_roots.SelectedHoistedRoot) u
     for (roots) |root| {
         switch (root.body) {
             .pattern_extraction => count += 1,
-            .expr => {},
+            .expr, .pattern_validation => {},
         }
     }
     return count;
@@ -1133,7 +1265,7 @@ test "hoist roots with non-concrete compile-time types are pruned" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist arbitrary block roots with non-concrete internal locals are pruned" {
+test "hoist block roots admit non-concrete transient internal locals" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1149,10 +1281,10 @@ test "hoist arbitrary block roots with non-concrete internal locals are pruned" 
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist nested block roots with non-concrete destructured internal binders are pruned" {
+test "hoist block roots admit non-concrete transient destructure binders" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1168,10 +1300,10 @@ test "hoist nested block roots with non-concrete destructured internal binders a
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist match roots with non-concrete contextual binders are pruned" {
+test "hoist match roots admit non-concrete transient contextual binders" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1186,10 +1318,10 @@ test "hoist match roots with non-concrete contextual binders are pruned" {
     defer test_env.deinit();
 
     try expectOnlyComptimeConditionWarnings(&test_env, 1);
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots depending on pruned non-concrete roots are pruned" {
+test "hoist roots admit non-concrete transient dependencies" {
     var test_env = try TestEnv.init("Test",
         \\main = |_| {
         \\    x = []
@@ -1200,7 +1332,7 @@ test "hoist roots depending on pruned non-concrete roots are pruned" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
 }
 
 test "hoist roots depending on pruned custom literal roots are pruned" {

@@ -418,7 +418,7 @@ pub const io_spec_tests = [_]TestSpec{
     .{
         .roc_file = "test/fx/dbg_corrupts_recursive_tag_union.roc",
         .io_spec = "1>Child is Text: hello",
-        .expected_build_stderr_contains = &.{"`DBG` IN OPTIMIZED BUILD"},
+        .expected_build_stderr_contains = &.{"`dbg` in optimized build"},
         .description = "Regression test: dbg on recursive tag union preserves variant discriminant (issue #8804)",
     },
     .{
@@ -623,6 +623,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/leak_list_str_drop_nested.roc",
         .io_spec = "0<xy|1>drop done",
         .description = "Leak coverage for dropped heap List(Str) and List(List(Str)) (roc_builtins_list_decref_str / _flat_list callback paths)",
+    },
+    .{
+        .roc_file = "test/fx/hosted_list_str_ownership.roc",
+        .io_spec = "0<abcdefgh|1>hosted bytes: 120 local bytes: 120",
+        .description = "Regression test for #10774: a hosted function owns a List(Str) argument whose elements the caller still holds, so the caller's retain must cover the element strings the host's release drops",
     },
 };
 

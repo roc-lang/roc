@@ -339,14 +339,21 @@ fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) Fx
     };
 }
 
-fn expectProvidedBoxedCallableDrop(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+/// Run one self-test mode of the provided-callable host and require it to
+/// report `<self_test_name> ok` without leaking or panicking.
+fn expectProvidedCallableHostSelfTest(
+    opt_flag: []const u8,
+    output_basename: []const u8,
+    self_test_flag: []const u8,
+    self_test_name: []const u8,
+) FxPlatformTestError!void {
     const allocator = testing.allocator;
     const run_result = try runNativeBackendHostSelfTest(
         allocator,
         "test/provided-callable-host/app.roc",
         opt_flag,
         output_basename,
-        "--run-provided-boxed-callable-drop",
+        self_test_flag,
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -354,23 +361,34 @@ fn expectProvidedBoxedCallableDrop(opt_flag: []const u8, output_basename: []cons
     switch (run_result.term) {
         .exited => |code| {
             if (code != 0) {
-                std.debug.print("provided boxed callable drop test exited with code {}\n", .{code});
+                std.debug.print("{s} test exited with code {}\n", .{ self_test_name, code });
                 std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
                 std.debug.print("STDERR: {s}\n", .{run_result.stderr});
                 return error.UnexpectedExitCode;
             }
         },
         .signal, .stopped, .unknown => {
-            std.debug.print("provided boxed callable drop test terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("{s} test terminated abnormally: {}\n", .{ self_test_name, run_result.term });
             std.debug.print("STDOUT: {s}\n", .{run_result.stdout});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.UnexpectedTermination;
         },
     }
 
-    try testing.expect(std.mem.find(u8, run_result.stderr, "provided boxed callable drop ok") != null);
+    const success = try std.fmt.allocPrint(allocator, "{s} ok", .{self_test_name});
+    defer allocator.free(success);
+    try testing.expect(std.mem.find(u8, run_result.stderr, success) != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "[Roc Memory Info]") == null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "panic") == null);
+}
+
+fn expectProvidedBoxedCallableDrop(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+    try expectProvidedCallableHostSelfTest(
+        opt_flag,
+        output_basename,
+        "--run-provided-boxed-callable-drop",
+        "provided boxed callable drop",
+    );
 }
 
 test "fx platform boxed erased callable host boundary (interpreter)" {
@@ -385,12 +403,32 @@ test "fx platform boxed erased callable host boundary (speed backend)" {
     try runIoSpecTest("--opt=speed", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
+/// Repro for https://github.com/roc-lang/roc/issues/10770: one boxed callable
+/// stored in two fields of a provided root's result is one heap allocation, so
+/// the host must receive the same erased-callable pointer for both fields.
+fn expectProvidedBoxedCallableIdentity(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+    try expectProvidedCallableHostSelfTest(
+        opt_flag,
+        output_basename,
+        "--run-provided-boxed-callable-identity",
+        "provided boxed callable identity",
+    );
+}
+
 test "fx platform provided root drops boxed callable (dev backend)" {
     try expectProvidedBoxedCallableDrop("--opt=dev", "fx_provided_boxed_callable_drop_dev");
 }
 
 test "fx platform provided root drops boxed callable (speed backend)" {
     try expectProvidedBoxedCallableDrop("--opt=speed", "fx_provided_boxed_callable_drop_speed");
+}
+
+test "fx platform provided root preserves boxed callable identity (dev backend)" {
+    try expectProvidedBoxedCallableIdentity("--opt=dev", "fx_provided_boxed_callable_identity_dev");
+}
+
+test "fx platform provided root preserves boxed callable identity (speed backend)" {
+    try expectProvidedBoxedCallableIdentity("--opt=speed", "fx_provided_boxed_callable_identity_speed");
 }
 
 test "fx platform direct run preserves RocOps after F32.abs before list allocation" {

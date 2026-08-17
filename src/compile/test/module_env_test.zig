@@ -32,6 +32,11 @@ test "ModuleEnv.Serialized roundtrip" {
 
     try original.common.calcLineStarts(gpa);
     try original.recordRejectedStaticDispatch(@enumFromInt(1234));
+    try original.recordBindingScheme(@enumFromInt(42));
+    try original.recordBindingScheme(@enumFromInt(7));
+    try original.recordBindingScheme(@enumFromInt(42));
+    original.top_level_value_defs = .{ .span = .{ .start = 17, .len = 2 } };
+    original.value_binding_defs = .{ .span = .{ .start = 23, .len = 4 } };
     _ = try original.provided_low_level_defs.append(gpa, .{
         .def_idx = 7,
         .op = .num_plus_wrap,
@@ -104,6 +109,12 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqual(@as(usize, 2), env.imports.map.count());
     try std.testing.expectEqual(@as(usize, 1), env.rejectedStaticDispatches().len);
     try std.testing.expectEqual(@as(types.Var, @enumFromInt(1234)), env.rejectedStaticDispatches()[0].fnVar());
+    try std.testing.expect(env.nodeIsBindingScheme(@enumFromInt(7)));
+    try std.testing.expect(env.nodeIsBindingScheme(@enumFromInt(42)));
+    try std.testing.expect(!env.nodeIsBindingScheme(@enumFromInt(41)));
+    try std.testing.expectEqual(@as(usize, 2), env.binding_schemes.items.items.len);
+    try std.testing.expectEqual(original.top_level_value_defs.span, env.top_level_value_defs.span);
+    try std.testing.expectEqual(original.value_binding_defs.span, env.value_binding_defs.span);
     try std.testing.expectEqual(base.LowLevel.num_plus_wrap, env.providedLowLevelForDef(@enumFromInt(7)).?);
     try std.testing.expectEqual(base.LowLevel.num_bitwise_xor, env.providedLowLevelForDef(@enumFromInt(11)).?);
     try std.testing.expect(env.providedLowLevelForDef(@enumFromInt(9)) == null);

@@ -880,6 +880,8 @@ generate_rust_file = |hosted_functions, type_table, provides_list| {
 		.concat("\n")
 		.concat(generate_rust_roc_list)
 		.concat("\n")
+		.concat(generate_rust_release_support)
+		.concat("\n")
 		.concat(generate_element_type_structs_rust(type_table, duplicate_names, preferred_names))
 		.concat(generate_tag_union_structs_rust(type_table, duplicate_names, preferred_names))
 		.concat(generate_all_record_structs_rust(hosted_functions, type_table, duplicate_names, preferred_names))
@@ -906,7 +908,12 @@ generate_rust_file_header =
 	\\//!
 	\\//! Hosted argument ownership:
 	\\//! - Roc transfers ownership of refcounted arguments to the hosted function.
-	\\//! - The hosted function must decref owned refcounted arguments when done.
+	\\//! - The hosted function must release owned refcounted arguments when done, using
+	\\//!   the release call named in each hosted symbol's doc comment below.
+	\\//! - Releasing a container releases its elements only when the container's own
+	\\//!   count reaches zero, which is what compiled Roc code does when it drops one
+	\\//!   it owns. Releasing the elements unconditionally double-frees them whenever
+	\\//!   the Roc caller still holds the container.
 	\\//! - If the host stores or returns an argument, it must retain or transfer ownership explicitly.
 	\\//!
 	\\//! Import this module from the platform host and implement the listed hosted symbols
@@ -1586,6 +1593,153 @@ generate_rust_roc_str =
 	\\}
 	\\
 
+## Generate zero-sized, statically dispatched ownership policies for host values.
+## A policy is carried only in the Rust type system; RocOwned has the same runtime
+## size as its value, and release calls monomorphize without a vtable or descriptor.
+generate_rust_release_support : Str
+generate_rust_release_support =
+	\\/// Statically describes how to release one owned Roc ABI value of type `T`.
+	\\///
+	\\/// # Safety
+	\\/// Implementations must match Roc's exact allocation and nested ownership layout.
+	\\pub unsafe trait RocRelease<T> {
+	\\    unsafe fn release(value: T, roc_host: &RocHost);
+	\\}
+	\\
+	\\/// An owning host-language wrapper around a value returned by Roc.
+	\\///
+	\\/// The release policy is zero-sized, so this wrapper adds no runtime metadata.
+	\\/// Dropping it recursively releases the value through the host's direct Roc
+	\\/// runtime symbols. Use `into_raw` to transfer ownership elsewhere.
+	\\#[repr(transparent)]
+	\\pub struct RocOwned<T, P: RocRelease<T>> {
+	\\    value: core::mem::ManuallyDrop<T>,
+	\\    policy: core::marker::PhantomData<P>,
+	\\}
+	\\
+	\\impl<T, P: RocRelease<T>> RocOwned<T, P> {
+	\\    /// Take ownership of a raw value returned by a Roc-provided entrypoint.
+	\\    ///
+	\\    /// # Safety
+	\\    /// `value` must be one live owned result whose concrete release plan is `P`.
+	\\    pub unsafe fn from_raw(value: T) -> Self {
+	\\        Self { value: core::mem::ManuallyDrop::new(value), policy: core::marker::PhantomData }
+	\\    }
+	\\
+	\\    pub fn as_ref(&self) -> &T {
+	\\        &self.value
+	\\    }
+	\\
+	\\    /// Transfer ownership back to raw host code without releasing the value.
+	\\    pub fn into_raw(self) -> T {
+	\\        let mut this = core::mem::ManuallyDrop::new(self);
+	\\        unsafe { core::mem::ManuallyDrop::take(&mut this.value) }
+	\\    }
+	\\}
+	\\
+	\\impl<T, P: RocRelease<T>> core::ops::Deref for RocOwned<T, P> {
+	\\    type Target = T;
+	\\
+	\\    fn deref(&self) -> &T {
+	\\        self.as_ref()
+	\\    }
+	\\}
+	\\
+	\\impl<T, P: RocRelease<T>> Drop for RocOwned<T, P> {
+	\\    fn drop(&mut self) {
+	\\        let value = unsafe { core::mem::ManuallyDrop::take(&mut self.value) };
+	\\        let roc_host = direct_roc_host();
+	\\        unsafe { P::release(value, &roc_host); }
+	\\    }
+	\\}
+	\\
+	\\pub struct RocNoopRelease;
+	\\
+	\\unsafe impl<T> RocRelease<T> for RocNoopRelease {
+	\\    unsafe fn release(_value: T, _roc_host: &RocHost) {}
+	\\}
+	\\
+	\\pub struct RocStrRelease;
+	\\
+	\\unsafe impl RocRelease<RocStr> for RocStrRelease {
+	\\    unsafe fn release(value: RocStr, roc_host: &RocHost) {
+	\\        unsafe { value.decref(roc_host); }
+	\\    }
+	\\}
+	\\
+	\\pub struct RocListRelease<P>(core::marker::PhantomData<P>);
+	\\
+	\\unsafe impl<T, P> RocRelease<RocListWith<T, true>> for RocListRelease<P>
+	\\where
+	\\    P: RocRelease<T>,
+	\\{
+	\\    unsafe fn release(value: RocListWith<T, true>, roc_host: &RocHost) {
+	\\        unsafe { value.release_with::<P>(roc_host); }
+	\\    }
+	\\}
+	\\
+	\\pub struct RocListSpineRelease;
+	\\
+	\\unsafe impl<T> RocRelease<RocListWith<T, false>> for RocListSpineRelease {
+	\\    unsafe fn release(value: RocListWith<T, false>, roc_host: &RocHost) {
+	\\        unsafe { value.decref(roc_host); }
+	\\    }
+	\\}
+	\\
+	\\pub struct RocErasedCallableRelease;
+	\\
+	\\unsafe impl RocRelease<RocErasedCallable> for RocErasedCallableRelease {
+	\\    unsafe fn release(value: RocErasedCallable, roc_host: &RocHost) {
+	\\        unsafe { decref_erased_callable(value, roc_host); }
+	\\    }
+	\\}
+	\\
+	\\pub struct RocBoxRelease<T, P>(core::marker::PhantomData<(T, P)>);
+	\\
+	\\extern "C" fn release_box_payload<T, P>(data_ptr: *mut c_void, roc_host: *mut RocHost)
+	\\where
+	\\    P: RocRelease<T>,
+	\\{
+	\\    if data_ptr.is_null() || roc_host.is_null() {
+	\\        return;
+	\\    }
+	\\    let value = unsafe { core::ptr::read(data_ptr as *const T) };
+	\\    unsafe { P::release(value, &*roc_host); }
+	\\}
+	\\
+	\\unsafe impl<T, P> RocRelease<*mut T> for RocBoxRelease<T, P>
+	\\where
+	\\    P: RocRelease<T>,
+	\\{
+	\\    unsafe fn release(value: *mut T, roc_host: &RocHost) {
+	\\        unsafe {
+	\\            decref_box_with(
+	\\                value as RocBox,
+	\\                core::mem::align_of::<T>(),
+	\\                true,
+	\\                Some(release_box_payload::<T, P>),
+	\\                roc_host,
+	\\            );
+	\\        }
+	\\    }
+	\\}
+	\\
+	\\pub struct RocBoxSpineRelease<T>(core::marker::PhantomData<T>);
+	\\
+	\\unsafe impl<T> RocRelease<*mut T> for RocBoxSpineRelease<T> {
+	\\    unsafe fn release(value: *mut T, roc_host: &RocHost) {
+	\\        unsafe {
+	\\            decref_box_with(
+	\\                value as RocBox,
+	\\                core::mem::align_of::<T>(),
+	\\                false,
+	\\                None,
+	\\                roc_host,
+	\\            );
+	\\        }
+	\\    }
+	\\}
+	\\
 ## Generate self-contained RocList<T> type (simplified, raw pointer approach)
 generate_rust_roc_list : Str
 generate_rust_roc_list =
@@ -1744,7 +1898,13 @@ generate_rust_roc_list =
 	\\        list
 	\\    }
 	\\
-	\\    /// Decrement the reference count; frees the allocation when it reaches zero.
+	\\    /// Drop this reference to the list allocation, freeing it when this was the
+	\\    /// last one.
+	\\    ///
+	\\    /// Shallow: it never touches the elements. To release an owned list whose
+	\\    /// elements are refcounted, call that list's generated `decref_list_of_...`
+	\\    /// helper instead, which drops the elements when this reference is the last
+	\\    /// one and then calls this.
 	\\    ///
 	\\    /// # Safety
 	\\    /// `self` must own one live Roc list reference. Calling this more than once
@@ -1770,6 +1930,46 @@ generate_rust_roc_list =
 	\\            unsafe {
 	\\                roc_host.dealloc(base, align);
 	\\            }
+	\\        }
+	\\    }
+	\\
+	\\    /// Recursively release this list and its elements.
+	\\    ///
+	\\    /// The reference-count decrement claims the final reference atomically
+	\\    /// before reading any elements, so concurrent releases cannot skip or
+	\\    /// duplicate element teardown.
+	\\    ///
+	\\    /// # Safety
+	\\    /// `self` must own one live Roc list reference, and `P` must exactly
+	\\    /// describe how Roc releases one initialized `T` element.
+	\\    pub unsafe fn release_with<P>(self, roc_host: &RocHost)
+	\\    where
+	\\        P: RocRelease<T>,
+	\\    {
+	\\        if self.elements.is_null() {
+	\\            return;
+	\\        }
+	\\        let alloc_ptr = self.get_allocation_ptr();
+	\\        if alloc_ptr.is_null() {
+	\\            return;
+	\\        }
+	\\        let align = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
+	\\        let header_bytes = Self::header_bytes();
+	\\        let rc = unsafe { (alloc_ptr as *mut AtomicIsize).sub(1) };
+	\\        if unsafe { (*rc).load(Ordering::Relaxed) } == 0 {
+	\\            return; // REFCOUNT_STATIC_DATA—elements are in read-only memory
+	\\        }
+	\\        let prev = unsafe { (*rc).fetch_sub(1, Ordering::Release) };
+	\\        if prev == 1 {
+	\\            fence(Ordering::Acquire);
+	\\            if ELEMENTS_REFCOUNTED {
+	\\                for item_ref in self.allocation_items() {
+	\\                    let item = unsafe { core::ptr::read(item_ref) };
+	\\                    unsafe { P::release(item, roc_host); }
+	\\                }
+	\\            }
+	\\            let base = unsafe { alloc_ptr.sub(header_bytes) } as *mut c_void;
+	\\            unsafe { roc_host.dealloc(base, align); }
 	\\        }
 	\\    }
 	\\
@@ -2061,7 +2261,10 @@ generate_args_struct_rust = |func, type_table, duplicate_names, preferred_names|
 		NoMeaningfulArgs => ""
 		SingleRecordArg(record) => {
 			doc = "/// Arguments for ${func.name}\n/// Roc signature: ${func.type_str}\n/// Refcounted fields are owned by the hosted function.\n"
-			generate_record_struct_decl_rust(doc, "${struct_name}Args", type_table, duplicate_names, preferred_names, record.fields, record.anonymous, record.layout)
+			decl = generate_record_struct_decl_rust(doc, "${struct_name}Args", type_table, duplicate_names, preferred_names, record.fields, record.anonymous, record.layout)
+			# This struct is the hosted function's parameter type, so the host
+			# releases its owned refcounted fields through these methods.
+			Str.concat(decl, generate_abi_refcount_helpers_rust(type_table, duplicate_names, preferred_names, "${struct_name}Args", record.fields))
 		}
 		PositionalArgs(arg_type_ids) => {
 			var $positional_fields = ""
@@ -2106,6 +2309,109 @@ indent_lines = |text, prefix| {
 box_payload_decref_name_rust : U64 -> Str
 box_payload_decref_name_rust = |inner_id| "decref_box_payload_type${U64.to_str(inner_id)}"
 
+release_policy_for_type_id_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
+release_policy_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id| {
+	if !is_type_refcounted(type_table, type_id) {
+		return "RocNoopRelease"
+	}
+
+	match type_table.get(type_id) {
+		RocStr => "RocStrRelease"
+		RocList(elem_id) =>
+			if is_type_refcounted(type_table, elem_id) {
+				elem_policy = release_policy_for_type_id_rust(type_table, duplicate_names, preferred_names, elem_id)
+				if elem_policy == "" {
+					""
+				} else {
+					"RocListRelease<${elem_policy}>"
+				}
+			} else {
+				"RocListSpineRelease"
+			}
+		RocBox(inner_id) =>
+			match type_table.get(inner_id) {
+				RocFunction(_) => "RocErasedCallableRelease"
+				RocUnknown(_) => ""
+				_ => {
+					inner_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, inner_id)
+					if inner_rust == "RocBox" or inner_rust == "*mut c_void" {
+						""
+					} else if is_type_refcounted(type_table, inner_id) {
+						inner_policy = release_policy_for_type_id_rust(type_table, duplicate_names, preferred_names, inner_id)
+						if inner_policy == "" {
+							""
+						} else {
+							"RocBoxRelease<${inner_rust}, ${inner_policy}>"
+						}
+					} else {
+						"RocBoxSpineRelease<${inner_rust}>"
+					}
+				}
+			}
+		RocRecord(rec) =>
+			if rec.name == "" {
+				""
+			} else {
+				"${name_to_struct_name(rec.name)}Release"
+			}
+		RocTagUnion(tu) =>
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => release_policy_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id)
+				SingleNoPayload => "RocNoopRelease"
+				NotSingleVariant =>
+					if tu.name == "" {
+						""
+					} else {
+						"${tag_union_struct_name(preferred_names, duplicate_names, type_id, tu)}Release"
+					}
+			}
+		_ => ""
+	}
+}
+
+## Identifier fragment naming one type inside a generated helper name. It is
+## derived from the type's structure rather than its rendered Rust type, so it
+## is always a valid identifier and always the same fragment for the same type.
+type_ident_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
+type_ident_rust = |type_table, duplicate_names, preferred_names, type_id|
+	match type_table.get(type_id) {
+		RocStr => "str"
+		RocList(elem_id) => "list_of_${type_ident_rust(type_table, duplicate_names, preferred_names, elem_id)}"
+		RocBox(inner_id) =>
+			match type_table.get(inner_id) {
+				RocFunction(_) => "erased_callable"
+				_ => "box_of_${type_ident_rust(type_table, duplicate_names, preferred_names, inner_id)}"
+			}
+		RocRecord(rec) =>
+			if rec.name == "" {
+				"type${U64.to_str(type_id)}"
+			} else {
+				to_lower_snake_case(name_to_struct_name(rec.name))
+			}
+		RocTagUnion(tu) =>
+			# Mirrors `resolve_tag_union_type_rust`, except a single-variant
+			# union resolves through its payload's fragment: that function can
+			# return a rendered type such as `RocList<RocStr>`, which is not an
+			# identifier.
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => type_ident_rust(type_table, duplicate_names, preferred_names, payload_id)
+				SingleNoPayload => "type${U64.to_str(type_id)}"
+				NotSingleVariant =>
+					if tu.name != "" {
+						to_lower_snake_case(tag_union_struct_name(preferred_names, duplicate_names, type_id, tu))
+					} else {
+						"type${U64.to_str(type_id)}"
+					}
+				}
+		_ => "type${U64.to_str(type_id)}"
+	}
+
+## Name of the generated helper that releases one owned reference to a list
+## whose elements are refcounted.
+list_decref_helper_name_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64 -> Str
+list_decref_helper_name_rust = |type_table, duplicate_names, preferred_names, elem_id|
+	"decref_list_of_${type_ident_rust(type_table, duplicate_names, preferred_names, elem_id)}"
+
 decref_stmt_for_type_id_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 decref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id, expr| {
 	type_repr = type_table.get(type_id)
@@ -2118,11 +2424,11 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 		RocStr => "    unsafe { ${expr}.decref(roc_host); }\n"
 		RocList(elem_id) => {
 			if is_type_refcounted(type_table, elem_id) {
-				elem_stmt = decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, elem_id, "item")
-				if elem_stmt == "" {
+				elem_policy = release_policy_for_type_id_rust(type_table, duplicate_names, preferred_names, elem_id)
+				if elem_policy == "" {
 					"    compile_error!(\"missing decref helper for refcounted list element type id ${U64.to_str(elem_id)}\");\n"
 				} else {
-					"    {\n        let list = ${expr};\n        if list.has_one_ref() {\n            for item_ref in list.allocation_items() {\n                let item = *item_ref;\n${indent_lines(elem_stmt, "                ")}            }\n        }\n        unsafe { list.decref(roc_host); }\n    }\n"
+					"    unsafe { ${list_decref_helper_name_rust(type_table, duplicate_names, preferred_names, elem_id)}(${expr}, roc_host); }\n"
 				}
 			} else {
 				"    unsafe { ${expr}.decref(roc_host); }\n"
@@ -2202,16 +2508,41 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 
 generate_record_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, RecordRepr -> Str
 generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, rec| {
-	struct_name = name_to_struct_name(rec.name)
+	var $fields = []
+	for field in rec.fields {
+		# Padding fields are raw bytes with no Roc type, so they are never
+		# refcounted and contribute no incref/decref statements.
+		if !field.is_padding {
+			$fields = $fields.append({ ident: name_to_rust_field_ident(field.name), type_id: field.type_id })
+		}
+	}
+
+	generate_refcount_impl_rust(type_table, duplicate_names, preferred_names, name_to_struct_name(rec.name), $fields)
+}
+
+## Same impl for a struct whose fields arrive as committed ABI layout entries,
+## which is how a hosted function's argument record is described.
+generate_abi_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, List(AbiFieldLayout) -> Str
+generate_abi_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, struct_name, abi_fields| {
+	var $fields = []
+	for field in abi_fields {
+		if !field.is_padding {
+			$fields = $fields.append({ ident: name_to_rust_field_ident(field.name), type_id: field.type_id })
+		}
+	}
+
+	generate_refcount_impl_rust(type_table, duplicate_names, preferred_names, struct_name, $fields)
+}
+
+generate_refcount_impl_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, List({ ident : Str, type_id : U64 }) -> Str
+generate_refcount_impl_rust = |type_table, duplicate_names, preferred_names, struct_name, fields| {
 	var $decref_body = ""
 	var $incref_body = ""
 
-	for field in rec.fields {
-		if !field.is_padding {
-			field_expr = "value.${name_to_rust_field_ident(field.name)}"
-			$decref_body = Str.concat($decref_body, decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
-			$incref_body = Str.concat($incref_body, incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
-		}
+	for field in fields {
+		field_expr = "value.${field.ident}"
+		$decref_body = Str.concat($decref_body, decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
+		$incref_body = Str.concat($incref_body, incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, field.type_id, field_expr))
 	}
 
 	if $decref_body == "" {
@@ -2225,7 +2556,7 @@ generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_
 		$incref_body = indent_lines($incref_body, "    ")
 	}
 
-	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted field.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n${$incref_body}    }\n}\n\n"
+	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted field.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let value = self;\n${$decref_body}    }\n\n    /// Increment Roc-owned fields.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n${$incref_body}    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
 }
 
 generate_tag_payload_refcount_branch_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, Str, TagVariant, Str -> Str
@@ -2295,7 +2626,7 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 	is_pure_enum = List.all(tu.tags, |tag| List.is_empty(tag.payload))
 
 	if is_pure_enum {
-		return "impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let _ = self;\n        let _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let _ = self;\n        let _ = amount;\n    }\n}\n\n"
+		return "impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n        let _ = self;\n        let _ = roc_host;\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let _ = self;\n        let _ = amount;\n    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
 	}
 
 	var $decref_branches = ""
@@ -2319,7 +2650,45 @@ generate_tag_union_refcount_helpers_rust = |type_table, duplicate_names, preferr
 		"        let value = self;\n"
 	}
 
-	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n${decref_value_binding}        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n}\n\n"
+	"impl ${struct_name} {\n    /// Recursively decrement Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must own one live Roc reference for each refcounted payload.\n    pub unsafe fn decref(self, roc_host: &RocHost) {\n${decref_value_binding}        let _ = roc_host;\n        match value.tag {\n${indent_lines($decref_branches, "    ")}        }\n    }\n\n    /// Increment Roc-owned payloads.\n    ///\n    /// # Safety\n    /// `self` must point at live Roc allocations. The retained references must\n    /// be balanced by later decrefs.\n    pub unsafe fn incref(self, amount: isize) {\n        let value = self;\n        let _ = amount;\n        match value.tag {\n${indent_lines($incref_branches, "    ")}        }\n    }\n}\n\npub struct ${struct_name}Release;\n\nunsafe impl RocRelease<${struct_name}> for ${struct_name}Release {\n    unsafe fn release(value: ${struct_name}, roc_host: &RocHost) {\n        unsafe { value.decref(roc_host); }\n    }\n}\n\n"
+}
+
+## Generate one release helper per list type whose elements are refcounted.
+##
+## `RocList::decref` is a shallow primitive: it drops the list's own reference
+## and frees the allocation, and knows nothing about the elements. Releasing an
+## owned list therefore needs the element teardown these helpers perform, gated
+## on the list's own count reaching zero. That gate is the whole point—dropping
+## the elements unconditionally double-frees them whenever another owner still
+## holds the list.
+generate_list_decref_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
+generate_list_decref_helpers_rust = |type_table, duplicate_names, preferred_names| {
+	var $helpers = ""
+	var $seen_names = []
+
+	for type_info in type_table_entries(type_table) {
+		match type_info.repr {
+			RocList(elem_id) =>
+				if is_type_refcounted(type_table, elem_id) {
+					helper_name = list_decref_helper_name_rust(type_table, duplicate_names, preferred_names, elem_id)
+					if !(List.contains($seen_names, helper_name)) {
+						elem_policy = release_policy_for_type_id_rust(type_table, duplicate_names, preferred_names, elem_id)
+						if elem_policy != "" {
+							$seen_names = $seen_names.append(helper_name)
+							elem_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, elem_id)
+							doc = "/// Release one owned reference to a `RocList<${elem_rust}>`.\n///\n/// The allocation's final reference is claimed atomically before any element\n/// is read, so concurrent owners cannot skip or duplicate element teardown.\n///\n/// # Safety\n/// `value` must own one live Roc list reference.\n"
+							$helpers = Str.concat(
+								$helpers,
+								"${doc}pub unsafe fn ${helper_name}(value: RocList<${elem_rust}>, roc_host: &RocHost) {\n    unsafe { value.release_with::<${elem_policy}>(roc_host); }\n}\n\n",
+							)
+						}
+					}
+				}
+			_ => {}
+		}
+	}
+
+	$helpers
 }
 
 generate_box_payload_decref_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
@@ -2384,7 +2753,9 @@ generate_refcount_helpers_rust = |type_table, duplicate_names, preferred_names| 
 		$type_id = $type_id + 1
 	}
 
-	$helpers.concat(generate_box_payload_decref_helpers_rust(type_table, duplicate_names, preferred_names))
+	$helpers
+		.concat(generate_list_decref_helpers_rust(type_table, duplicate_names, preferred_names))
+		.concat(generate_box_payload_decref_helpers_rust(type_table, duplicate_names, preferred_names))
 }
 
 ## Build a natural C ABI parameter list from Roc function argument type IDs.
@@ -2406,6 +2777,21 @@ direct_param_list_rust = |type_table, duplicate_names, preferred_names, arg_type
 	}
 
 	$params
+}
+
+direct_arg_name_list_rust : TypeTable, List(U64) -> Str
+direct_arg_name_list_rust = |type_table, arg_type_ids| {
+	var $args = ""
+	var $idx = 0
+	arg_shape = ArgShape.from_table(type_table)
+
+	for _arg_type_id in arg_shape.positional_non_unit_type_ids(arg_type_ids) {
+		sep = if $args == "" { "" } else { ", " }
+		$args = "${$args}${sep}arg${U64.to_str($idx)}"
+		$idx = $idx + 1
+	}
+
+	$args
 }
 
 ## Build a hosted symbol parameter list, using the generated Args wrapper for
@@ -2457,6 +2843,42 @@ generate_runtime_symbol_externs_rust =
 	\\    pub fn roc_crashed(bytes: *const u8, len: usize);
 	\\}
 	\\
+	\\extern "C" fn direct_roc_alloc(_host: *mut RocHost, length: usize, alignment: usize) -> *mut c_void {
+	\\    unsafe { roc_alloc(length, alignment) }
+	\\}
+	\\
+	\\extern "C" fn direct_roc_dealloc(_host: *mut RocHost, ptr: *mut c_void, alignment: usize) {
+	\\    unsafe { roc_dealloc(ptr, alignment); }
+	\\}
+	\\
+	\\extern "C" fn direct_roc_realloc(_host: *mut RocHost, ptr: *mut c_void, new_length: usize, alignment: usize) -> *mut c_void {
+	\\    unsafe { roc_realloc(ptr, new_length, alignment) }
+	\\}
+	\\
+	\\extern "C" fn direct_roc_dbg(_host: *mut RocHost, bytes: *const u8, len: usize) {
+	\\    unsafe { roc_dbg(bytes, len); }
+	\\}
+	\\
+	\\extern "C" fn direct_roc_expect_failed(_host: *mut RocHost, bytes: *const u8, len: usize) {
+	\\    unsafe { roc_expect_failed(bytes, len); }
+	\\}
+	\\
+	\\extern "C" fn direct_roc_crashed(_host: *mut RocHost, bytes: *const u8, len: usize) {
+	\\    unsafe { roc_crashed(bytes, len); }
+	\\}
+	\\
+	\\fn direct_roc_host() -> RocHost {
+	\\    RocHost {
+	\\        env: core::ptr::null_mut(),
+	\\        roc_alloc: direct_roc_alloc,
+	\\        roc_dealloc: direct_roc_dealloc,
+	\\        roc_realloc: direct_roc_realloc,
+	\\        roc_dbg: direct_roc_dbg,
+	\\        roc_expect_failed: direct_roc_expect_failed,
+	\\        roc_crashed: direct_roc_crashed,
+	\\    }
+	\\}
+	\\
 
 ## Generate direct extern declarations for hosted symbols.
 generate_hosted_symbol_externs_rust : List(HostedFunctionInfo), TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
@@ -2476,13 +2898,63 @@ generate_hosted_symbol_externs_rust = |hosted_functions, type_table, duplicate_n
 			" -> ${ret_rust}"
 		}
 
+		ownership = hosted_ownership_doc_rust(type_table, duplicate_names, preferred_names, func)
+
 		$result = Str.concat(
 			$result,
-			"    /// Hosted symbol for ${func.name}\n    /// Roc signature: ${func.type_str}\n    pub fn ${func.ffi_symbol}(${params})${ret_suffix};\n\n",
+			"    /// Hosted symbol for ${func.name}\n    /// Roc signature: ${func.type_str}\n${ownership}    pub fn ${func.ffi_symbol}(${params})${ret_suffix};\n\n",
 		)
 	}
 
 	Str.concat($result, "}\n")
+}
+
+## Document how the host must settle ownership of one hosted function's owned
+## arguments and result, naming the exact release call for each argument.
+##
+## A host author reads this at the signature, which is where the ownership rule
+## has to be legible: for a container the release is the generated helper, not
+## the container's own shallow `decref`.
+hosted_ownership_doc_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, HostedFunctionInfo -> Str
+hosted_ownership_doc_rust = |type_table, duplicate_names, preferred_names, func| {
+	arg_shape = ArgShape.from_table(type_table)
+	use_args_wrapper = arg_shape.single_arg_is_anonymous_record(func.arg_type_ids)
+
+	var $arg_lines = ""
+	var $idx = 0
+
+	for arg_type_id in arg_shape.positional_non_unit_type_ids(func.arg_type_ids) {
+		arg_name = "arg${U64.to_str($idx)}"
+		stmt = if use_args_wrapper {
+			if is_type_refcounted(type_table, arg_type_id) {
+				"unsafe { ${arg_name}.decref(roc_host); }"
+			} else {
+				""
+			}
+		} else {
+			Str.trim(decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, arg_type_id, arg_name))
+		}
+
+		if stmt != "" {
+			$arg_lines = Str.concat($arg_lines, "    ///     ${stmt}\n")
+		}
+
+		$idx = $idx + 1
+	}
+
+	arg_doc = if $arg_lines == "" {
+		""
+	} else {
+		"    /// Owned arguments. Release each exactly once before returning, unless it is\n    /// moved into storage or into the result:\n${$arg_lines}"
+	}
+
+	ret_doc = if is_type_refcounted(type_table, func.ret_type_id) {
+		"    /// The result is owned by Roc: return exactly one owned reference.\n"
+	} else {
+		""
+	}
+
+	Str.concat(arg_doc, ret_doc)
 }
 
 generate_provided_decl_rust : ProvidesEntry, TypeTable, List(Str), TypeNamePlan.PreferredNames, TypeRepr -> Str
@@ -2505,6 +2977,28 @@ generate_provided_decl_rust = |entry, type_table, duplicate_names, preferred_nam
 	}
 }
 
+generate_provided_owned_wrapper_rust : ProvidesEntry, TypeTable, List(Str), TypeNamePlan.PreferredNames, TypeRepr -> Str
+generate_provided_owned_wrapper_rust = |entry, type_table, duplicate_names, preferred_names, type_repr| {
+	match type_repr {
+		RocFunction(func) => {
+			if !is_type_refcounted(type_table, func.ret) {
+				return ""
+			}
+
+			policy = release_policy_for_type_id_rust(type_table, duplicate_names, preferred_names, func.ret)
+			if policy == "" {
+				return ""
+			}
+
+			params = direct_param_list_rust(type_table, duplicate_names, preferred_names, func.args)
+			args = direct_arg_name_list_rust(type_table, func.args)
+			ret_rust = type_id_to_rust(type_table, duplicate_names, preferred_names, func.ret)
+			"const _: () = assert!(core::mem::size_of::<RocOwned<${ret_rust}, ${policy}>>() == core::mem::size_of::<${ret_rust}>(), \"${entry.ffi_symbol} owned result size mismatch\");\nconst _: () = assert!(core::mem::align_of::<RocOwned<${ret_rust}, ${policy}>>() == core::mem::align_of::<${ret_rust}>(), \"${entry.ffi_symbol} owned result alignment mismatch\");\n\n/// Owning wrapper for `${entry.ffi_symbol}`. The returned value is recursively\n/// released on Drop with no runtime descriptor or extra storage.\n///\n/// # Safety\n/// The raw entrypoint and its arguments must satisfy the generated host ABI.\npub unsafe fn ${entry.ffi_symbol}_owned(${params}) -> RocOwned<${ret_rust}, ${policy}> {\n    let value = unsafe { ${entry.ffi_symbol}(${args}) };\n    unsafe { RocOwned::from_raw(value) }\n}\n\n"
+		}
+		_ => ""
+	}
+}
+
 ## Generate extern declarations for entrypoints from the provides clause.
 generate_entrypoint_externs_rust : List(ProvidesEntry), TypeTable, List(Str), TypeNamePlan.PreferredNames -> Str
 generate_entrypoint_externs_rust = |provides_list, type_table, duplicate_names, preferred_names| {
@@ -2513,13 +3007,15 @@ generate_entrypoint_externs_rust = |provides_list, type_table, duplicate_names, 
 	}
 
 	var $result = "// Provided Symbols\n//\n// Roc exports these symbols from the app with their natural C ABI signatures.\n\n#[allow(improper_ctypes)]\nunsafe extern \"C\" {\n"
+	var $wrappers = ""
 
 	for entry in provides_list {
 		type_repr = type_table.get(entry.type_id)
 		$result = Str.concat($result, generate_provided_decl_rust(entry, type_table, duplicate_names, preferred_names, type_repr))
+		$wrappers = Str.concat($wrappers, generate_provided_owned_wrapper_rust(entry, type_table, duplicate_names, preferred_names, type_repr))
 	}
 
-	Str.concat($result, "}\n")
+	Str.concat(Str.concat($result, "}\n\n"), $wrappers)
 }
 
 # =============================================================================

@@ -59,7 +59,11 @@ TypeTable := { entries : List(TypeInfo) }.{
 		}
 
 	is_refcounted : TypeTable, U64 -> Bool
-	is_refcounted = |table, type_id| (table.layout(type_id)).contains_refcounted
+	is_refcounted = |table, type_id|
+		match table.rc_plan(type_id) {
+			RcNoop => Bool.False
+			RcRefcounted => Bool.True
+		}
 
 	repr_is_refcounted : TypeTable, TypeRepr -> Bool
 	repr_is_refcounted = |_table, type_repr|

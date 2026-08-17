@@ -108,7 +108,7 @@ _ = function(value)
 			(ty-lookup (name "I32") (builtin))))
 	(d-let
 		(p-underscore)
-		(e-call (constraint-fn-var 253)
+		(e-call (constraint-fn-var 254)
 			(e-lookup-local
 				(p-assign (ident "function")))
 			(e-lookup-local

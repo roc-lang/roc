@@ -94,23 +94,21 @@ match person {
 									(rest-pattern
 										(p-assign (ident "others"))))))))
 				(value
-					(e-dispatch-call (method "is_gt") (constraint-fn-var 227)
-						(receiver
-							(e-call
-								(e-runtime-error (tag "nested_value_not_found"))
-								(e-lookup-local
-									(p-assign (ident "first_name")))))
-						(args
-							(e-call
-								(e-runtime-error (tag "nested_value_not_found"))
-								(e-field-access
-									(receiver
-										(e-lookup-local
-											(p-assign (ident "others"))))
-									(segments
-										(segment (name "last_name") (mode "required"))))))))))))
+					(e-binop (op "gt")
+						(e-call
+							(e-runtime-error (tag "nested_value_not_found"))
+							(e-lookup-local
+								(p-assign (ident "first_name"))))
+						(e-call
+							(e-runtime-error (tag "nested_value_not_found"))
+							(e-field-access
+								(receiver
+									(e-lookup-local
+										(p-assign (ident "others"))))
+								(segments
+									(segment (name "last_name") (mode "required")))))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Bool"))
+(expr (type "Error"))
 ~~~
