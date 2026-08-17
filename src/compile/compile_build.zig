@@ -43,6 +43,7 @@ pub const BuildWithMainError = BuildError || CompileDiscoveredError;
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
+const Can = can.Can;
 const SemanticModuleData = compile_package.SemanticModuleData;
 const ModuleTimingInfo = compile_package.TimingInfo;
 const CacheManager = @import("cache_manager.zig").CacheManager;
@@ -228,6 +229,13 @@ pub const BuildEnv = struct {
 
     /// Compiler role to assign to the root module of this build.
     root_module_role: ModuleEnv.ModuleRole = .user,
+
+    /// Post-canonicalization validation to apply to the root module of this
+    /// build. `roc test` sets `.explicit_roots` because it runs the root file's
+    /// top-level `expect`s, which are compile-time roots in their own right: a
+    /// headerless root that is neither a type module nor a default app is a
+    /// plain module there rather than a file missing its `main!`.
+    root_validation: Can.Validation = .checking,
 
     /// Optional source directory used to resolve imports from the root module.
     root_source_dir_override: ?[]const u8 = null,
@@ -480,6 +488,10 @@ pub const BuildEnv = struct {
 
     pub fn setRootModuleRole(self: *BuildEnv, role: ModuleEnv.ModuleRole) void {
         self.root_module_role = role;
+    }
+
+    pub fn setRootValidation(self: *BuildEnv, validation: Can.Validation) void {
+        self.root_validation = validation;
     }
 
     pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
@@ -925,6 +937,7 @@ pub const BuildEnv = struct {
         const module_name = base.module_path.getModuleName(pkg_root_file);
         const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
         coord_pkg.modules.items[root_id].module_role = self.root_module_role;
+        coord_pkg.modules.items[root_id].validation = self.root_validation;
         if (self.root_source_dir_override) |source_dir| {
             coord_pkg.modules.items[root_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
         }
@@ -949,7 +962,7 @@ pub const BuildEnv = struct {
                 const entry_module_name = base.module_path.getModuleName(entry_file);
                 const entry_id = try coord_pkg.ensureModule(self.gpa, entry_module_name, entry_file);
                 const entry_module = &coord_pkg.modules.items[entry_id];
-                entry_module.validate_as_explicit_roots = true;
+                entry_module.validation = .explicit_roots;
                 if (entry_module.phase == .Parse) {
                     entry_module.depth = 0;
                     coord_pkg.remaining_modules += 1;

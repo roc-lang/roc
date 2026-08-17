@@ -4773,6 +4773,26 @@ fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?I
     return null;
 }
 
+/// Which post-canonicalization validation a module receives.
+pub const Validation = enum {
+    /// Roc's user-facing app/type-module validation: a headerless file must be
+    /// either a type module whose nominal type matches the file name, or a
+    /// default app with a valid `main!`.
+    checking,
+    /// Validation for a module whose compile-time roots are requested
+    /// explicitly rather than derived from an app entrypoint or a type module.
+    /// A headerless file that is neither of those becomes a plain module.
+    explicit_roots,
+
+    /// Run the validation this mode selects.
+    pub fn run(self: Validation, czer: *Self) std.mem.Allocator.Error!void {
+        switch (self) {
+            .checking => try czer.validateForChecking(),
+            .explicit_roots => try czer.validateForExplicitRoots(),
+        }
+    }
+};
+
 /// Finalize a module that will be published through explicit checked-artifact
 /// root requests instead of Roc's user-facing `roc check` app/type-module
 /// validation.

@@ -421,7 +421,7 @@ pub fn canonicalizeModuleWithSiblings(
     root_dir: []const u8,
     additional_known_modules: []const KnownModule,
     pre_resolved_imports: []const messages.CanonicalizeImport,
-    validate_as_explicit_roots: bool,
+    validation: Can.Validation,
 ) Allocator.Error!void {
     const gpa = roc_ctx.gpa;
 
@@ -549,11 +549,7 @@ pub fn canonicalizeModuleWithSiblings(
     });
     czer.source_dir = root_dir;
     try czer.canonicalizeFile();
-    if (validate_as_explicit_roots) {
-        try czer.validateForExplicitRoots();
-    } else {
-        try czer.validateForChecking();
-    }
+    try validation.run(&czer);
     czer.deinit();
 }
 
