@@ -5385,7 +5385,8 @@ const Builder = struct {
     ) ?MethodLookup {
         const view_owner = static_dispatch.methodOwnerInImportedStore(&self.program.names, view.names, owner) orelse return null;
         const view_method = view.names.lookupMethodName(method_name) orelse return null;
-        const target = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null;
+        const found = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null;
+        const target = found.requireTarget("Monotype lowering");
         if (!allow_local_proc and target.kind == .local_proc) return null;
         return .{ .view = view, .target = target };
     }
@@ -47932,7 +47933,7 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .local_proc_context);
         defer timing_scope.end();
-        for (self.view.method_registry.entries) |entry| switch (entry.target.kind) {
+        for (self.view.method_registry.entries) |entry| switch ((entry.target orelse continue).kind) {
             .local_proc => |local| {
                 if (local.context_anchor == statement_id) {
                     try self.registerLocalProcDeclaration(.{
@@ -47989,7 +47990,7 @@ const BodyContext = struct {
         const restored = self.restored_local_proc_scope orelse
             Common.invariant("local procedure use reached Monotype before its declaration context");
         var context_anchor: ?checked.CheckedStatementId = null;
-        for (view.method_registry.entries) |entry| switch (entry.target.kind) {
+        for (view.method_registry.entries) |entry| switch ((entry.target orelse continue).kind) {
             .local_proc => |local| {
                 if (local.binder != binder or local.expr != expr) continue;
                 if (context_anchor) |existing| {

@@ -3377,8 +3377,8 @@ const ProcedureBuilder = struct {
     ) ?MethodTargetLookup {
         const candidate_owner = methodOwnerInProcedureNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
         const candidate_method = candidate.canonical_names.lookupMethodName(method_text) orelse return null;
-        const target = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
-        return .{ .module = candidate, .target = target };
+        const found = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
+        return .{ .module = candidate, .target = found.requireTarget("boxy procedure lowering") };
     }
 
     fn typeDescForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxyTypeDescId {

@@ -16522,8 +16522,9 @@ fn publishLocalMethodDispatchScopes(
     scope_by_checked_expr: *const collections.DenseMap(CheckedExprId, DispatchScopeId),
 ) void {
     for (method_registry.entries) |*entry| {
-        if (entry.target.kind != .local_proc) continue;
-        const local = &entry.target.kind.local_proc;
+        const target = if (entry.target) |*target| target else continue;
+        if (target.kind != .local_proc) continue;
+        const local = &target.kind.local_proc;
 
         local.dispatch_scope = scope_by_checked_expr.get(local.expr);
     }
@@ -16997,7 +16998,12 @@ const EvidencePass = struct {
             }
             for (artifact_calls, source_calls) |*call, source_call| {
                 const owner = (try self.methodOwnerForSourceContent(@enumFromInt(source_call.dispatcher_var))) orelse continue;
-                const target = self.lookupMethodTargetAcrossViews(owner, call.method) orelse continue;
+                const target = switch (self.lookupMethodTargetAcrossViews(owner, call.method) orelse continue) {
+                    // The declaration this codec contract names was rejected;
+                    // its diagnostic is reported and nothing lowers it.
+                    .rejected => continue,
+                    .target => |target| target,
+                };
                 const evidence_var: Var = @enumFromInt(source_call.evidence_var);
                 switch (target.kind) {
                     .procedure, .local_proc => {
@@ -17127,7 +17133,7 @@ const EvidencePass = struct {
     /// views. (Snapshot-style compiles pass the builtin module only as a
     /// direct import, so searching `available` alone misses every
     /// builtin-owned method.)
-    fn lookupMethodTargetAcrossViews(self: *EvidencePass, owner: static_dispatch.MethodOwner, method: canonical.MethodNameId) ?static_dispatch.MethodTarget {
+    fn lookupMethodTargetAcrossViews(self: *EvidencePass, owner: static_dispatch.MethodOwner, method: canonical.MethodNameId) ?static_dispatch.CheckedMethodLookup {
         if (static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, &.{}, owner, method)) |target| {
             return target;
         }
@@ -17325,8 +17331,15 @@ const EvidencePass = struct {
             .rigid => |rigid| return self.resolveVarObligation(resolved.var_, dispatcher_ty, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .alias, .structure => {
                 if (try self.methodOwnerForSourceContent(resolved.var_)) |owner| {
-                    if (self.lookupMethodTargetAcrossViews(owner, method)) |target| {
-                        return try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var);
+                    if (self.lookupMethodTargetAcrossViews(owner, method)) |found| {
+                        return switch (found) {
+                            // The method is declared, but canonicalization or
+                            // checking rejected its declaration and already
+                            // reported why. The dispatch itself needs no second
+                            // diagnostic; it just must never lower.
+                            .rejected => .checked_error,
+                            .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var),
+                        };
                     }
                     // The dispatcher has an owner, checking passed, and no
                     // registry-visible view declares the method: the checker
@@ -17430,8 +17443,11 @@ const EvidencePass = struct {
                 // resolved; an unresolved one cannot carry it.
                 .checking_finalized => return .checked_error,
             };
-            if (self.lookupMethodTargetAcrossViews(owner, method)) |target| {
-                return try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var);
+            if (self.lookupMethodTargetAcrossViews(owner, method)) |found| {
+                return switch (found) {
+                    .rejected => .checked_error,
+                    .target => |target| try self.resolutionForMethodTarget(target, structural_kind, dispatcher_ty, constraint_fn_var),
+                };
             }
         }
 
@@ -19907,14 +19923,17 @@ const NestedProcSiteBuilder = struct {
         statement_id: CheckedStatementId,
         owner: canonical.ProcedureTemplateRef,
     ) Allocator.Error!void {
-        for (self.method_registry.entries) |entry| switch (entry.target.kind) {
-            .local_proc => |local| {
-                if (local.context_anchor == statement_id) {
-                    try self.scanExpr(local.expr, owner, false);
-                }
-            },
-            .procedure, .structural => {},
-        };
+        for (self.method_registry.entries) |entry| {
+            const target = entry.target orelse continue;
+            switch (target.kind) {
+                .local_proc => |local| {
+                    if (local.context_anchor == statement_id) {
+                        try self.scanExpr(local.expr, owner, false);
+                    }
+                },
+                .procedure, .structural => {},
+            }
+        }
     }
 };
 
@@ -29042,7 +29061,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 65 publishes unit-valued destructure-validation hoisted roots.
     // Version 66 gives validation-only roots a discarded payload state so no
     // unit constant is archived for them.
-    const serialized_layout_version: u32 = 66;
+    // Version 67 records a method whose declaration was rejected under its own
+    // registry key with no target.
+    const serialized_layout_version: u32 = 67;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29854,7 +29875,8 @@ pub const CheckedModuleArtifact = struct {
     /// category without repeating the classification work.
     fn verifyMethodIntrinsicRuntimeTargets(self: *const CheckedModuleArtifact) void {
         for (self.method_registry.entries, 0..) |entry, entry_index| {
-            const procedure = switch (entry.target.kind) {
+            const entry_target = entry.target orelse continue;
+            const procedure = switch (entry_target.kind) {
                 .procedure => |procedure| procedure,
                 .local_proc, .structural => continue,
             };
@@ -35182,8 +35204,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xBE, 0x6F, 0x9A, 0x56, 0x97, 0xCA, 0x76, 0x6D, 0x68, 0x4E, 0x18, 0x86, 0x53, 0xE3, 0x35, 0xF4,
-        0xC6, 0x51, 0x53, 0xFA, 0xB7, 0x44, 0xCB, 0xFB, 0x41, 0xDF, 0xA3, 0x74, 0x64, 0x46, 0xB0, 0x1C,
+        0x93, 0x49, 0x87, 0xCE, 0xA2, 0x39, 0xBC, 0x97, 0x44, 0xB5, 0x16, 0x83, 0xD3, 0xE1, 0xDD, 0x19,
+        0x1F, 0x65, 0x6C, 0x8E, 0x35, 0xB8, 0xFC, 0x8A, 0xBF, 0x8D, 0xFE, 0xB4, 0xD0, 0xCB, 0xBC, 0xE3,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
