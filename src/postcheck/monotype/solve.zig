@@ -407,6 +407,9 @@ pub const InstGraph = struct {
     types: *Type.Store,
     name_store: *const names.NameStore,
     diagnostics: ?*GraphDiagnostics,
+    /// Census-only; see `RowShadow`. Created with the graph when the shadow
+    /// environment switch is set, otherwise never allocated.
+    row_shadow: ?*RowShadow = null,
     arena_impl: std.heap.ArenaAllocator,
     nodes: std.ArrayList(InstNode),
     versions: std.ArrayList(u32),
@@ -490,6 +493,15 @@ pub const InstGraph = struct {
         const graph = try allocator.create(InstGraph);
         graph.* = .{
             .allocator = allocator,
+            .row_shadow = if (rowShadowEnabled()) shadow: {
+                const shadow = try allocator.create(RowShadow);
+                shadow.* = .{
+                    .ids = collections.DenseMap(NodeId, u32).init(allocator),
+                    .parents = .empty,
+                    .sets = .empty,
+                };
+                break :shadow shadow;
+            } else null,
             .relation_state = .producing,
             .types = types,
             .name_store = name_store,
@@ -520,6 +532,85 @@ pub const InstGraph = struct {
         return graph;
     }
 
+    /// Census-only shadow of tag-row joining: a bare union-find over row
+    /// classes plus a per-class label-set union, fed by the same join events
+    /// the unifier processes and compared against every sealed row. Its
+    /// mismatch count measures whether rows need anything from the unifier
+    /// beyond the relation stream and set union — deliberately excluding the
+    /// shared-extension plumbing, so widening that travels through aliased
+    /// extensions shows up as a mismatch instead of being silently mirrored.
+    const RowShadow = struct {
+        ids: collections.DenseMap(NodeId, u32),
+        parents: std.ArrayList(u32),
+        sets: std.ArrayList(std.AutoHashMap(u32, void)),
+        matches: u32 = 0,
+        mismatches: u32 = 0,
+
+        fn findClass(self: *RowShadow, raw: u32) u32 {
+            var id = raw;
+            while (self.parents.items[id] != id) id = self.parents.items[id];
+            return id;
+        }
+    };
+
+    fn rowShadowEnabled() bool {
+        return std.c.getenv("ROC_ROW_SHADOW") != null;
+    }
+
+    fn rowShadowIdFor(self: *InstGraph, shadow: *RowShadow, root: NodeId, tags: []const InstTag) Allocator.Error!u32 {
+        if (shadow.ids.get(root)) |existing| {
+            const id = shadow.findClass(existing);
+            for (tags) |tag| try shadow.sets.items[id].put(@intFromEnum(tag.name), {});
+            return id;
+        }
+        const id: u32 = @intCast(shadow.parents.items.len);
+        try shadow.parents.append(self.allocator, id);
+        var set = std.AutoHashMap(u32, void).init(self.allocator);
+        for (tags) |tag| try set.put(@intFromEnum(tag.name), {});
+        try shadow.sets.append(self.allocator, set);
+        try shadow.ids.put(root, id);
+        return id;
+    }
+
+    fn rowShadowJoin(self: *InstGraph, left: NodeId, right: NodeId, left_tags: []const InstTag, right_tags: []const InstTag) Allocator.Error!void {
+        const shadow = self.row_shadow orelse return;
+        const left_id = try self.rowShadowIdFor(shadow, self.find(left), left_tags);
+        const right_id = try self.rowShadowIdFor(shadow, self.find(right), right_tags);
+        if (left_id == right_id) return;
+        var moved = shadow.sets.items[right_id].keyIterator();
+        while (moved.next()) |label| try shadow.sets.items[left_id].put(label.*, {});
+        shadow.parents.items[right_id] = left_id;
+    }
+
+    fn rowShadowCompareSealed(self: *InstGraph, root: NodeId, sealed_tags: []const InstTag) void {
+        const shadow = self.row_shadow orelse return;
+        const raw = shadow.ids.get(root) orelse return;
+        const id = shadow.findClass(raw);
+        const set = &shadow.sets.items[id];
+        var equal = set.count() == sealed_tags.len;
+        if (equal) {
+            for (sealed_tags) |tag| {
+                if (!set.contains(@intFromEnum(tag.name))) {
+                    equal = false;
+                    break;
+                }
+            }
+        }
+        if (equal) {
+            shadow.matches += 1;
+        } else {
+            shadow.mismatches += 1;
+            if (shadow.mismatches <= 5) {
+                std.debug.print("ROWSHADOW mismatch shadow_labels={d} sealed_labels={d}:", .{ set.count(), sealed_tags.len });
+                for (sealed_tags) |tag| {
+                    const present = set.contains(@intFromEnum(tag.name));
+                    std.debug.print(" {s}{s}", .{ self.tagLabelText(tag.name), if (present) "" else "!" });
+                }
+                std.debug.print("\n", .{});
+            }
+        }
+    }
+
     pub fn setDiagnostics(self: *InstGraph, diagnostics: *GraphDiagnostics) void {
         self.diagnostics = diagnostics;
     }
@@ -538,6 +629,16 @@ pub const InstGraph = struct {
 
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
+        if (self.row_shadow) |shadow| {
+            if (shadow.matches != 0 or shadow.mismatches != 0) {
+                std.debug.print("ROWSHADOW total matches={d} mismatches={d}\n", .{ shadow.matches, shadow.mismatches });
+            }
+            shadow.ids.deinit();
+            shadow.parents.deinit(allocator);
+            for (shadow.sets.items) |*set| set.deinit();
+            shadow.sets.deinit(allocator);
+            allocator.destroy(shadow);
+        }
         var views = self.node_snapshots.valueIterator();
         while (views.next()) |list| {
             list.deinit(allocator);
@@ -3417,6 +3518,7 @@ pub const InstGraph = struct {
         switch (kind) {
             .tag_union => {
                 const flat = try self.flattenTagRow(row);
+                try self.rowShadowJoin(row, empty, flat.tags, &.{});
                 if (flat.tags.len != 0) Common.invariant("instantiation unified a non-empty tag union with an empty tag union");
                 try self.unify(flat.ext, empty);
                 try self.setContent(row, .empty_tag_union);
@@ -3574,6 +3676,7 @@ pub const InstGraph = struct {
     fn unifyTagRows(self: *InstGraph, left: NodeId, right: NodeId, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
         const flat_left = try self.flattenTagRow(left);
         const flat_right = try self.flattenTagRow(right);
+        try self.rowShadowJoin(left, right, flat_left.tags, flat_right.tags);
 
         var merged = std.ArrayList(InstTag).empty;
         defer merged.deinit(self.allocator);
@@ -4354,6 +4457,7 @@ pub const GraphTypeFinals = struct {
 
     fn sealTagRow(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.Span {
         const flat = try self.graph.flattenTagRow(node);
+        self.graph.rowShadowCompareSealed(node, flat.tags);
         if (flat.tags.len == 0) return .empty();
         const tags = try self.graph.allocator.alloc(Type.Tag, flat.tags.len);
         defer self.graph.allocator.free(tags);
