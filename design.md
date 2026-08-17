@@ -2723,6 +2723,43 @@ checking selected. In particular, `builtin_direct` stores neither the synthetic
 conversion callable nor a runtime dispatch plan, and
 `specialization_dispatch` is not a standalone compile-time root.
 
+#### Erroneous Call Operand Retirement
+
+After checking an unannotated operand expression, the checker records its exact
+identity in the dense `call_operand_type_error_exprs` table when its checked
+value type contains an error. A repeated check replaces the expression's slot,
+so the table always describes the latest check. This record is narrower than
+`erroneous_value_exprs`: a relation may
+replace an expression with a runtime error while preserving a usable checked
+type for independent consumers, and that expression does not poison a parent
+call relation. A call-like parent whose operand is in the narrower set is
+retired before it introduces a static-dispatch constraint or stamps a dispatch
+plan. `retireCallLikeExprWithErroneousOperands` marks the parent's effective
+checker variable erroneous and inserts the parent expression into both sets.
+This is a diagnostic-recovery mechanism, not a typing rule; an error-free operand
+never takes this path. The decision consumes the checker's explicit
+expression-identity record. It must not be reconstructed from the shape of a
+constraint callable or from a later union-find representative.
+An ordinary call judges its callee from the callable variable produced by
+scheme instantiation; imported static methods may use an erroneous source
+placeholder whose instantiated callable is valid. Its arguments consume
+`call_operand_type_error_exprs` like the other call-like forms.
+Statement-owned iterator loops have no parent expression to mark; they consume
+the same operand record and leave the erroneous iterable expression in
+`erroneous_value_exprs`. Checked for-nodes require a topology plan even on
+recovery, so the checker mints the plan's callable shapes without attaching
+constraints, marks both callable classes rejected, and records the required
+plan. CheckedModule construction consumes those rejection markers to seal
+both calls with explicit `checked_error` resolutions.
+
+Retirement is atomic with dispatch introduction. A retired expression emits no
+constraint and no live plan; a required iterator recovery plan carries rejected
+callables but still emits no constraints. Independently valid sibling
+expressions introduce and solve their own constraints normally. This keeps an
+erroneous callable out of a receiver's constraint scheme instead of asking
+unification to coalesce it with a valid callable and asking checked-module
+construction to choose a call site from the coalesced class.
+
 Source dispatch, type dispatch, method equality, and iterator `for` plans all
 use checked dispatch plans. Iterator `for` uses its own iterator-dispatch
 operand shape because the `.next` call receives the compiler-created iterator
@@ -5146,6 +5183,13 @@ Other solved-graph mutations:
   an already-reported error. It marks the checker node's solved class directly,
   preserving the class-wide cascade suppression previously provided by
   unifying that node with a fresh error variable.
+- `retireCallLikeExprWithErroneousOperands` / statement-owned iterator plan
+  recovery (`markErroneous`, `markStaticDispatchFnRejected`, and the explicit
+  `call_operand_type_error_exprs` table)—mechanism: Erroneous Call Operand Retirement
+  (above). An operand already owns a reported error, so its call-like parent is
+  inserted into both expression sets before any dispatch constraint is
+  introduced; a required iterator plan is sealed with rejected callable metadata
+  instead.
 - `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
   an already-reported error. An erroneous scrutinee cannot relate the branch
   patterns to each other, so they unify against a shared fresh variable instead

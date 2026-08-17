@@ -278,6 +278,8 @@ DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
 TOO FEW ARGS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:167:3:167:3
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:178:47:178:71
+TYPE MISMATCH - fuzz_crash_023.md:175:26:175:27
+TYPE MISMATCH - fuzz_crash_023.md:175:34:175:40
 DECLARATION HAS NO VALUE - fuzz_crash_023.md:201:1:201:25
 MISSING METHOD - fuzz_crash_023.md:189:26:189:40
 MISSING METHOD - fuzz_crash_023.md:189:26:189:66
@@ -975,6 +977,36 @@ record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 
 Add a value body here, or put hosted functions in a platform type mod so
 they are published through the host boundary.
+
+── ✗ type mismatch ──────────────────────────────────── fuzz_crash_023.md:175:26
+
+This expression is used in an unexpected way.
+
+Stdout.line!("Adding ${n} to ${number}")
+                       ^
+
+It has the type:
+
+    Dec
+
+But you are trying to use it as:
+
+    Str
+
+── ✗ type mismatch ──────────────────────────────────── fuzz_crash_023.md:175:34
+
+This expression is used in an unexpected way.
+
+Stdout.line!("Adding ${n} to ${number}")
+                               ^^^^^^
+
+It has the type:
+
+    Dec
+
+But you are trying to use it as:
+
+    Str
 
 ── ● declaration has no value ────────────────────────── fuzz_crash_023.md:201:1
 
