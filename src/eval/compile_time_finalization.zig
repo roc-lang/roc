@@ -537,8 +537,16 @@ const RootCompletionState = struct {
         self: *RootCompletionState,
         const_use: checked.ConstUseTemplate,
     ) bool {
+        // A declaration with no implementation evaluates nothing, so it
+        // publishes no compile-time root and there is nothing to wait on.
+        if (self.constUseIsUnimplemented(const_use.const_ref)) return true;
         const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
         return self.rootDependencyComplete(root_id);
+    }
+
+    fn constUseIsUnimplemented(self: *RootCompletionState, const_ref: checked.ConstRef) bool {
+        if (!artifactMatches(const_ref.artifact, self.module.key)) return false;
+        return self.module.const_templates.get(const_ref).state == .unimplemented;
     }
 
     fn rootDependencyComplete(

@@ -5187,6 +5187,7 @@ const Builder = struct {
             .reserved,
             .eval_template,
             => Common.invariant("static data request const was not stored before Monotype lowering"),
+            .unimplemented => Common.invariant("static data request reached a declaration with no implementation"),
         };
     }
 
@@ -16763,6 +16764,7 @@ const BodyContext = struct {
                     },
                 };
             },
+            .unimplemented => |declaration| return try self.lowerUnimplementedTemplateAtNode(declaration, fn_nodes, ret_cell),
             .entry_wrapper => |wrapper_id| return try self.lowerEntryWrapperAtCell(wrapper_id, ret_cell),
             .intrinsic_wrapper => |wrapper_id| {
                 const wrapper = self.view.intrinsic_wrappers.get(wrapper_id);
@@ -17948,6 +17950,39 @@ const BodyContext = struct {
         return completed_fn;
     }
 
+    /// Lower a procedure whose declaration carries a type annotation and no
+    /// implementation. The procedure keeps its declared arity so every call
+    /// site still links and still evaluates its arguments, and reaching the
+    /// body crashes.
+    fn lowerUnimplementedTemplateAtNode(
+        self: *BodyContext,
+        declaration: checked.UnimplementedDeclaration,
+        fn_nodes: FunctionNodes,
+        ret_cell: DraftTypeCell,
+    ) Allocator.Error!LoweredTemplateBody {
+        const saved_loc = self.builder.program.current_loc;
+        defer self.builder.program.current_loc = saved_loc;
+        const saved_region = self.builder.program.current_region;
+        defer self.builder.program.current_region = saved_region;
+        self.builder.program.current_loc = try self.sourceLocFor(declaration.region);
+        self.builder.program.current_region = declaration.region;
+
+        const args = try self.allocator.alloc(DraftTypedLocal, fn_nodes.args.len);
+        defer self.allocator.free(args);
+        for (fn_nodes.args, 0..) |arg_node, index| {
+            const cell = DraftTypeCell.fromGraphNode(arg_node);
+            args[index] = .{
+                .local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null),
+                .ty = cell,
+            };
+        }
+        return .{
+            .args = try self.draft.addTypedLocalSpan(args),
+            .body = try self.runtimeCrashExprAtCell(ret_cell, Common.unimplemented_declaration_crash),
+            .ret = ret_cell,
+        };
+    }
+
     fn lowerLambdaTemplateAtNode(
         self: *BodyContext,
         lambda_id: checked.CheckedExprId,
@@ -18509,6 +18544,7 @@ const BodyContext = struct {
                 break :blk try self.lowerConstEvalTemplateUse(self.view, eval, entry.const_ref, ty, source_region, .{ .module = self.view.key, .root = entry.root });
             },
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
+            .unimplemented => Common.invariant("declaration with no implementation reached hoisted const restoration"),
         };
     }
 
@@ -18551,6 +18587,7 @@ const BodyContext = struct {
                 );
             },
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
+            .unimplemented => Common.invariant("declaration with no implementation reached hoisted const restoration"),
         };
     }
 
@@ -18620,6 +18657,7 @@ const BodyContext = struct {
                 try self.instNode(entry.checked_type),
             ),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype type selection"),
+            .unimplemented => Common.invariant("declaration with no implementation reached hoisted const type selection"),
         };
         try relateCheckedNodeToMono(
             self.graph,
@@ -28735,7 +28773,9 @@ const BodyContext = struct {
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
             .stored_const => |stored| try self.storedConstRootMonoType(store_view, stored, requested_ty),
-            .eval_template => try self.lowerTypeView(requested_ty),
+            // An unimplemented declaration keeps its declared type; only the
+            // value is missing, and reaching it crashes.
+            .eval_template, .unimplemented => try self.lowerTypeView(requested_ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype type selection"),
         };
     }
@@ -28751,7 +28791,7 @@ const BodyContext = struct {
         const template = store_view.const_templates.get(const_use.const_ref);
         const requested_node = switch (template.state) {
             .stored_const => |stored| try self.storedConstRootTypeNode(store_view, stored, requested_ty),
-            .eval_template => try self.instNode(requested_ty),
+            .eval_template, .unimplemented => try self.instNode(requested_ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype type selection"),
         };
         return try self.relateCheckedNodeToProducedValue(try self.instNode(checked_ty), requested_node);
@@ -28801,6 +28841,10 @@ const BodyContext = struct {
             .eval_template => |eval| blk: {
                 try self.constrainTypeToMono(requested_ty, ty);
                 break :blk try self.lowerConstEvalTemplateUse(store_view, eval, const_use.const_ref, ty, null, null);
+            },
+            .unimplemented => blk: {
+                try self.constrainTypeToMono(requested_ty, ty);
+                break :blk try self.runtimeCrashExpr(ty, Common.unimplemented_declaration_crash);
             },
         };
     }
@@ -28857,6 +28901,13 @@ const BodyContext = struct {
                     request_node,
                     null,
                     null,
+                );
+            },
+            .unimplemented => blk: {
+                try self.graph.unify(try self.instNode(requested_ty), request_node);
+                break :blk try self.runtimeCrashExprAtCell(
+                    DraftTypeCell.fromGraphNode(request_node),
+                    Common.unimplemented_declaration_crash,
                 );
             },
         };
@@ -28934,7 +28985,7 @@ const BodyContext = struct {
         const root_expr = switch (template.body) {
             .entry_wrapper => |wrapper_id| view.compile_time_roots.root(view.entry_wrappers.get(wrapper_id).root).expr,
             .checked_body => |body_id| view.bodies.body(body_id).root_expr,
-            .intrinsic_wrapper => return null,
+            .intrinsic_wrapper, .unimplemented => return null,
         };
         return try self.rootEdgeEvidenceByExprForPurpose(view, root_expr, template, purpose);
     }
@@ -31933,7 +31984,8 @@ const BodyContext = struct {
                     .match_ => |match| break :blk try self.lowerMatchExprAtTypeCell(checked_expr, match, cell),
                     .if_ => |if_| break :blk try self.lowerIfExprAtTypeCell(checked_expr, if_, cell),
                     .runtime_error => break :blk try self.runtimeCrashExprAtCell(cell, "runtime error"),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
+                    .anno_only => Common.invariant("non-runtime checked expression reached Monotype lowering"),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
                 }
                 switch (expr.data) {
                     .tuple_access => |access| {
