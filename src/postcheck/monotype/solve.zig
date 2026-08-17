@@ -443,9 +443,7 @@ pub const InstGraph = struct {
     /// Current extension root for each row root. This is the authority for
     /// maintaining `row_parents`; stale extension edges are removed when row
     /// content changes.
-    row_exts: std.ArrayList(?NodeId),
     /// Row nodes by the extension node they currently chain through.
-    row_parents: collections.DenseMap(NodeId, std.ArrayList(NodeId)),
     /// Declaration-backed nominal backings already instantiated in this graph,
     /// bucketed by source declaration. Entries compare argument union-find
     /// classes, so a backing instance keeps one identity after evidence merges
@@ -516,8 +514,6 @@ pub const InstGraph = struct {
             .current_snapshots_dirty = false,
             .linked_type_nodes = collections.DenseMap(Type.TypeId, NodeId).init(allocator),
             .imported_monos = collections.DenseMap(NodeId, Type.TypeId).init(allocator),
-            .row_exts = .empty,
-            .row_parents = collections.DenseMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
             .request_source_interfaces = .empty,
             .forced_dynamic_iterator_roots = .empty,
@@ -682,10 +678,6 @@ pub const InstGraph = struct {
         }
         self.node_snapshots.deinit();
         self.current_snapshots.deinit();
-        var parents = self.row_parents.valueIterator();
-        while (parents.next()) |list| {
-            list.deinit(allocator);
-        }
         var backing_buckets = self.nominal_backings.valueIterator();
         while (backing_buckets.next()) |bucket| {
             bucket.deinit(allocator);
@@ -701,8 +693,6 @@ pub const InstGraph = struct {
             entry.dependencies.deinit(allocator);
         }
         self.generated_private_cache.deinit();
-        self.row_parents.deinit();
-        self.row_exts.deinit(allocator);
         self.imported_monos.deinit();
         self.linked_type_nodes.deinit();
         self.processed_relations.deinit();
@@ -1516,9 +1506,7 @@ pub const InstGraph = struct {
         try self.class_member_head.append(self.allocator, id);
         try self.class_member_tail.append(self.allocator, id);
         try self.generated_private_visit_epochs.append(self.allocator, 0);
-        try self.row_exts.append(self.allocator, null);
         try self.request_source_interfaces.append(self.allocator, null);
-        try self.registerRowParent(id, node_content);
         self.countDiagnostic("nodes_created");
         return id;
     }
@@ -1575,68 +1563,6 @@ pub const InstGraph = struct {
         });
         if (!bucket.found_existing) bucket.value_ptr.* = .empty;
         try bucket.value_ptr.append(self.allocator, .{ .args = stored_args, .node = node });
-    }
-
-    fn registerRowParent(self: *InstGraph, row: NodeId, node_content: InstNode) Allocator.Error!void {
-        const row_root = self.find(row);
-        const maybe_ext = if (node_content == .tag_union)
-            node_content.tag_union.ext
-        else if (node_content == .record)
-            node_content.record.ext
-        else
-            null;
-        const ext = if (maybe_ext) |raw_ext| self.find(raw_ext) else {
-            try self.unregisterRowParent(row_root);
-            return;
-        };
-
-        const row_ext = &self.row_exts.items[@intFromEnum(row_root)];
-        if (row_ext.*) |old_ext| {
-            if (old_ext == ext) {
-                try self.addRowParent(ext, row_root);
-                return;
-            }
-            self.removeRowParent(old_ext, row_root);
-        }
-        row_ext.* = ext;
-        try self.addRowParent(ext, row_root);
-    }
-
-    fn unregisterRowParent(self: *InstGraph, row: NodeId) Allocator.Error!void {
-        const row_root = self.find(row);
-        const row_ext = &self.row_exts.items[@intFromEnum(row_root)];
-        if (row_ext.*) |old| {
-            row_ext.* = null;
-            self.removeRowParent(old, row_root);
-        }
-    }
-
-    fn addRowParent(self: *InstGraph, ext: NodeId, row: NodeId) Allocator.Error!void {
-        const entry = try self.row_parents.getOrPut(self.find(ext));
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        const row_root = self.find(row);
-        for (entry.value_ptr.items) |existing| {
-            if (self.find(existing) == row_root) return;
-        }
-        try entry.value_ptr.append(self.allocator, row_root);
-    }
-
-    fn removeRowParent(self: *InstGraph, ext: NodeId, row: NodeId) void {
-        const ext_root = self.find(ext);
-        const parents = self.row_parents.getPtr(ext_root) orelse return;
-        const row_root = self.find(row);
-        var index: usize = 0;
-        while (index < parents.items.len) {
-            if (self.find(parents.items[index]) == row_root) {
-                _ = parents.swapRemove(index);
-                continue;
-            }
-            index += 1;
-        }
-        if (parents.items.len == 0) {
-            var removed = self.row_parents.fetchRemove(ext_root).?;
-            removed.value.deinit(self.allocator);
-        }
     }
 
     fn find(self: *InstGraph, id: NodeId) NodeId {
@@ -2806,22 +2732,12 @@ pub const InstGraph = struct {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
         if (winner == loser) return;
-        try self.unregisterRowParent(loser);
         const winner_tail = self.class_member_tail.items[@intFromEnum(winner)];
         const loser_head = self.class_member_head.items[@intFromEnum(loser)];
         self.class_member_next.items[@intFromEnum(winner_tail)] = loser_head;
         self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
-        if (self.row_parents.fetchRemove(loser)) |moved| {
-            var moved_list = moved.value;
-            for (moved_list.items) |parent| {
-                const parent_root = self.find(parent);
-                self.row_exts.items[@intFromEnum(parent_root)] = winner;
-                try self.addRowParent(winner, parent_root);
-            }
-            moved_list.deinit(self.allocator);
-        }
         self.countDiagnostic("class_unions");
         self.invalidateActiveSnapshots(winner);
     }
@@ -2834,7 +2750,6 @@ pub const InstGraph = struct {
         if (instNodeEql(self.nodes.items[@intFromEnum(root)], new_content)) return false;
         self.nodes.items[@intFromEnum(root)] = new_content;
         self.versions.items[@intFromEnum(root)] +%= 1;
-        try self.registerRowParent(root, new_content);
         return true;
     }
 
