@@ -151,7 +151,9 @@ pub const Constants = struct {
     /// 64: Compile-time root selection rejects values containing callables.
     /// 65: A platform module's own annotation-only declarations stay
     ///     annotation-only instead of becoming hosted declarations.
-    pub const CACHE_VERSION = 65;
+    /// 66: A local function declaration owns a dispatch scope whenever checking
+    ///     recorded a scheme edge naming it, not only when its root generalized.
+    pub const CACHE_VERSION = 66;
 };
 
 /// Configuration for the Roc cache system.
