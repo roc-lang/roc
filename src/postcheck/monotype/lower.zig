@@ -18564,6 +18564,13 @@ const BodyContext = struct {
                 // The caller's request may widen the stored ground row
                 // (implicit output-position openness), so relate it as a
                 // produced-value witness instead of unifying two closed rows.
+                // Pre-freeze, either side's rows can still carry live checked
+                // row defaults, which the witness treats as unresolved; commit
+                // them first so it sees the rows final sealing would produce.
+                if (!self.frozen_sealed_emission) {
+                    try self.graph.groundUnresolvedDefaults(request_node);
+                    try self.graph.groundUnresolvedDefaults(stored_node);
+                }
                 const value_node = try self.relateCheckedNodeToProducedValue(request_node, stored_node);
                 try relateRequestComponent(self.graph, request_node, value_node);
                 const saved_loc = self.builder.program.current_loc;
@@ -28882,6 +28889,13 @@ const BodyContext = struct {
                 // The caller's request may widen the stored ground row
                 // (implicit output-position openness), so relate it as a
                 // produced-value witness instead of unifying two closed rows.
+                // Pre-freeze, either side's rows can still carry live checked
+                // row defaults, which the witness treats as unresolved; commit
+                // them first so it sees the rows final sealing would produce.
+                if (!self.frozen_sealed_emission) {
+                    try self.graph.groundUnresolvedDefaults(request_node);
+                    try self.graph.groundUnresolvedDefaults(stored_node);
+                }
                 const value_node = try self.relateCheckedNodeToProducedValue(request_node, stored_node);
                 try relateRequestComponent(self.graph, request_node, value_node);
                 var active_const_scope: ActiveConstBindingScope = .{};
