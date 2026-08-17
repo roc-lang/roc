@@ -2586,10 +2586,14 @@ fn entryWrapperForRoot(
 
 fn topLevelExprIsAlreadyProcedure(module: TypedCIR.Module, def_idx: CIR.Def.Idx, expr: CIR.Expr) bool {
     if (expr == .e_lambda or expr == .e_closure or expr == .e_hosted_lambda) return true;
-    // An annotation-only declaration is a procedure only when the type it
-    // declares is a function. Annotation-only values are published through the
-    // const path, where their missing value is recorded the same way.
-    return expr == .e_anno_only and sourceTypeIsFunction(module, module.defType(def_idx));
+    if (expr != .e_anno_only) return false;
+    // A compiler-owned intrinsic is a procedure whatever it declares, because
+    // its body comes from the intrinsic wrapper rather than the declaration.
+    if (intrinsicForProcedureDef(module, def_idx) != null) return true;
+    // Every other annotation-only declaration is a procedure only when the
+    // type it declares is a function. Annotation-only values are published
+    // through the const path, which records the missing value the same way.
+    return sourceTypeIsFunction(module, module.defType(def_idx));
 }
 
 fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {

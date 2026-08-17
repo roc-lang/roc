@@ -28842,8 +28842,14 @@ const BodyContext = struct {
                 try self.constrainTypeToMono(requested_ty, ty);
                 break :blk try self.lowerConstEvalTemplateUse(store_view, eval, const_use.const_ref, ty, null, null);
             },
-            .unimplemented => blk: {
+            .unimplemented => |declaration| blk: {
                 try self.constrainTypeToMono(requested_ty, ty);
+                const saved_loc = self.builder.program.current_loc;
+                defer self.builder.program.current_loc = saved_loc;
+                const saved_region = self.builder.program.current_region;
+                defer self.builder.program.current_region = saved_region;
+                self.builder.program.current_loc = try self.sourceLocFor(declaration.region);
+                self.builder.program.current_region = declaration.region;
                 break :blk try self.runtimeCrashExpr(ty, Common.unimplemented_declaration_crash);
             },
         };
@@ -28903,8 +28909,14 @@ const BodyContext = struct {
                     null,
                 );
             },
-            .unimplemented => blk: {
+            .unimplemented => |declaration| blk: {
                 try self.graph.unify(try self.instNode(requested_ty), request_node);
+                const saved_loc = self.builder.program.current_loc;
+                defer self.builder.program.current_loc = saved_loc;
+                const saved_region = self.builder.program.current_region;
+                defer self.builder.program.current_region = saved_region;
+                self.builder.program.current_loc = try self.sourceLocFor(declaration.region);
+                self.builder.program.current_region = declaration.region;
                 break :blk try self.runtimeCrashExprAtCell(
                     DraftTypeCell.fromGraphNode(request_node),
                     Common.unimplemented_declaration_crash,
