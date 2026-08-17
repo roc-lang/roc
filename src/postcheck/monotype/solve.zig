@@ -3750,10 +3750,11 @@ pub const InstGraph = struct {
                     Common.invariant("instantiation tried to write a tag row into a record row variable");
                 }
             }
-            try self.setContent(ext_root, .{ .tag_union = .{
-                .tags = try self.arena().dupe(InstTag, tags),
-                .ext = tail_ext,
-            } });
+            // The surviving row's own content already carries the full merged
+            // tag list and sealing reads the row store, so the extension only
+            // needs its identity related to the tail, not the tags written
+            // through it.
+            try pending.append(self.allocator, .{ .left = ext_root, .right = tail_ext });
         } else {
             const rest = try self.newNode(.{ .tag_union = .{
                 .tags = try self.arena().dupe(InstTag, tags),
@@ -6659,7 +6660,7 @@ test "opaque interface relation preserves nested generated-private backing" {
     try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private_arg).named.backing.?.authority);
 }
 
-test "issue 9647: unresolved tag row extension absorbs rest without allocating a rest node" {
+test "issue 9647: tag row join relates extensions without allocating a rest node" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -6691,12 +6692,19 @@ test "issue 9647: unresolved tag row extension absorbs rest without allocating a
     try graph.unify(left, right);
 
     try std.testing.expectEqual(before_nodes, graph.nodes.items.len);
-    const left_ext_content = graph.content(left_ext);
-    if (left_ext_content != .tag_union) return error.TestUnexpectedResult;
-    const rest = left_ext_content.tag_union;
-    try std.testing.expectEqual(@as(usize, 1), rest.tags.len);
-    try std.testing.expectEqual(extra_name, rest.tags[0].name);
-    try std.testing.expectEqual(graph.find(right_ext), graph.find(rest.ext));
+    // The extensions join as one variable class instead of receiving the rest
+    // tags as content: the surviving row already carries the full merged list
+    // and sealing reads the row store, so the extension only carries identity.
+    try std.testing.expectEqual(graph.find(left_ext), graph.find(right_ext));
+    const merged = graph.content(graph.find(left));
+    if (merged != .tag_union) return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), merged.tag_union.tags.len);
+    try std.testing.expectEqual(shared_name, merged.tag_union.tags[0].name);
+    try std.testing.expectEqual(extra_name, merged.tag_union.tags[1].name);
+    const stored = graph.rowStoreTags(graph.find(left)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), stored.len);
+    try std.testing.expectEqual(shared_name, stored[0].name);
+    try std.testing.expectEqual(extra_name, stored[1].name);
 }
 
 test "issue 9647: same nominal backing wrapper resolves to structural backing once" {
