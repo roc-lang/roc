@@ -199,6 +199,44 @@ test "issue 10804: an annotated polymorphic derived encoder_for checks" {
     try test_env.assertNoErrors();
 }
 
+test "issue 10804: a polymorphic derived parser_for checks at a concrete use" {
+    const source =
+        \\Wrap(a) :: { x : a }.{
+        \\  parser_for : _
+        \\  encoder_for : _
+        \\}
+        \\parse_it : Str -> Try(Wrap(Str), _)
+        \\parse_it = |s| Json.parse(s)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+// A nominal's backing walks as a shape, so the optional fields inside it are
+// judged by the record it belongs to rather than by where that nominal sits.
+test "issue 10804: an optional field inside a nested derived codec checks" {
+    const source =
+        \\Inner :: { a : Str, b ?: Str }.{
+        \\  parser_for : _
+        \\  encoder_for : _
+        \\}
+        \\Outer :: { inner : Inner }.{
+        \\  parser_for : _
+        \\  encoder_for : _
+        \\}
+        \\parse_it : Str -> Try(Outer, _)
+        \\parse_it = |s| Json.parse(s)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 // The marker that says "this codec is the compiler's own" lives in the module
 // that declared the type, so the walk reads it out of another module's env
 // whenever the shape crosses a boundary.
