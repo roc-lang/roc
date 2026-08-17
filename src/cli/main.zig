@@ -14363,6 +14363,11 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     });
     defer build_env.deinit();
 
+    // `roc test` runs the file's top-level `expect`s and nothing else, so the
+    // file needs no entrypoint: a headerless file that is neither a type module
+    // nor a default app is tested as a plain module.
+    build_env.setRootValidation(.explicit_roots);
+
     var extra_buf: [2][]const u8 = undefined;
     const extra_paths = appendExtraWatchPaths(.{ .test_cmd = args }, &extra_buf);
 
