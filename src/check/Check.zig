@@ -16138,21 +16138,35 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const should_generalize = !suppress_group_member_generalize and
         (self.shouldGeneralize(expr, is_binding_rhs, is_call_arg) or value_scheme_binding);
 
+    // An annotated expansive member of a RECURSIVE group predeclares a
+    // scheme (`annotationIsPredeclarableScheme`): references instantiate the
+    // annotation rather than sharing the binding's weak vars, so the weak
+    // warning's claim would be false for it.
+    const binding_has_predeclared_scheme = if (binding_rhs_pattern) |pattern_idx|
+        if (self.topLevelPattern(pattern_idx)) |processed|
+            self.predeclaredSchemeVar(processed.def_idx) != null
+        else
+            false
+    else
+        false;
+
     // A written type variable on an EXPANSIVE binding is WEAK: the binding
     // never generalizes, so every use shares one variable. Warn so the
     // author learns before a use pins the variable and a later use
     // mismatches against seemingly-polymorphic syntax. Function defs
     // (including the `e_closure` wrapper, whose inner lambda generalizes),
     // annotation-only defs (pure signatures — schemes by definition), value
-    // aliases, syntactic values, and crash stubs are exempt: they all
-    // generalize. Emitted AFTER the RHS checks (via defer) so the binding's
-    // real errors precede the advisory warning.
+    // aliases, syntactic values, crash stubs, and predeclared schemes are
+    // exempt: references to all of them instantiate rather than share.
+    // Emitted AFTER the RHS checks (via defer) so the binding's real errors
+    // precede the advisory warning.
     const warn_weak_type_variables = is_binding_rhs and
         !isFunctionDef(&self.cir.store, expr) and
         expr != .e_anno_only and
         !(expr == .e_lookup_local or expr == .e_lookup_external) and
         !self.exprIsSyntacticValue(expr) and
-        !self.exprAlwaysCrashes(expr_idx);
+        !self.exprAlwaysCrashes(expr_idx) and
+        !binding_has_predeclared_scheme;
 
     // A generalizing expression owns every pending dispatch relation created
     // while its body is checked. Save/restore makes nested generalized lambdas

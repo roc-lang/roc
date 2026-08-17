@@ -5939,6 +5939,27 @@ test "check type - where-method output row stays open through the keep-open prob
     try testing.expect(ext_content == .flex);
 }
 
+test "check type - recursive-group value scheme does not warn weak type variable" {
+    // An annotated expansive member of a RECURSIVE group predeclares a
+    // scheme (annotationIsPredeclarableScheme): references instantiate the
+    // annotation instead of sharing the binding's weak vars, so the Weak
+    // Type Variable warning's claim — every use shares one variable — would
+    // be false there. It must not fire.
+    const source =
+        \\make : (List(x) -> List(x)) -> (List(x) -> List(x))
+        \\make = |f| f
+        \\
+        \\a : List(x) -> List(x)
+        \\a = make(|items| b(items))
+        \\
+        \\b : List(y) -> List(y)
+        \\b = make(|items| a(items))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
+}
+
 test "check type - inner generalization boundary does not default an enclosing-scope literal" {
     // `classified`'s annotation gains a variable from polarity opening, so it
     // generalizes — pushing a boundary around its RHS inside the `|input|`
