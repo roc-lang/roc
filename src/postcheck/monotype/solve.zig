@@ -907,6 +907,17 @@ pub const InstGraph = struct {
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator representation target stopped being named"),
             };
             named.def.generated = null;
+            if (std.c.getenv("ROC_MINT_SHADOW") != null) {
+                const freeze_forces = item.force_dynamic or item.depth > generated_iterator_mint_depth_limit;
+                const creation_minted = named.def.iterator_representation == .minted;
+                if (freeze_forces and creation_minted) {
+                    std.debug.print("MINTSHADOW override-to-forced creation_depth={d} fixpoint_depth={d} explicit={}\n", .{ named.def.iterator_depth, item.depth, item.force_dynamic });
+                } else if (!freeze_forces and creation_minted and named.def.iterator_depth != item.depth) {
+                    std.debug.print("MINTSHADOW depth-differs creation={d} fixpoint={d}\n", .{ named.def.iterator_depth, item.depth });
+                } else {
+                    std.debug.print("MINTSHADOW agree minted={} depth={d}\n", .{ creation_minted, item.depth });
+                }
+            }
             if (item.force_dynamic or item.depth > generated_iterator_mint_depth_limit) {
                 if (named.args.len == 0) {
                     Common.invariant("generated iterator representation had no item argument");
