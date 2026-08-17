@@ -1841,6 +1841,63 @@ test "check type - record - default - unconstrained generic helper on parametric
     );
 }
 
+test "check type - record - default - structurally pinning list default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Config(a) := { value : a ?? [] }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // The structural-pin arm of the judgment (formerly an empirical panic:
+    // postcheck "instantiation unified a List with a non-List type"): `[]`
+    // unifies the parameter's copy with `List(elem)`, silently deciding `a`
+    // for every specialization. No dispatch constraint is involved—the
+    // parked and deferred evidence are both empty—so only the copy's
+    // resolution to structure can convict, with the method-less wording.
+    try checkTypesModule(source, .fail_with,
+        \\**Default Constrains A Type Parameter**
+        \\The default value for the `value` field forces the type parameter `a` to a concrete type.
+        \\```roc
+        \\Config(a) := { value : a ?? [] }
+        \\```
+        \\                            ^^
+        \\
+        \\A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - structurally pinning record default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Config(a) := { value : a ?? {} }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // Same structural pin through a record literal: `{}` forces the
+    // parameter's copy to record structure.
+    try checkTypesModule(source, .fail_first, "Default Constrains A Type Parameter");
+}
+
+test "check type - record - default - structurally pinning function default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Config(a) := { value : a ?? (|x| x) }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // Same structural pin through a function value: the lambda forces the
+    // parameter's copy to function structure.
+    try checkTypesModule(source, .fail_first, "Default Constrains A Type Parameter");
+}
+
 test "check type - record - default - indirect reference that never omits is accepted" {
     const source =
         \\main! = |_| {}
@@ -1906,6 +1963,98 @@ test "check type - record - default - dispatch-mediated cycle is check's residue
     // discharged copy through the recorded scheme-use pairs (the site var
     // itself never equals the instantiation's var; generalization copies it
     // per use).
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "check type - record - default - function-valued default referencing a def is accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { n : U8 ?? 0, mk : (U8 -> Cfg) ?? make }
+        \\
+        \\make : U8 -> Cfg
+        \\make = |x| Cfg.{ n: x }
+    ;
+    // Materializing `mk`'s default only creates the `make` function value—
+    // its body is NOT evaluated at materialization, so the omission of `mk`
+    // inside that body is no edge and there is no cycle. The residue walk
+    // follows canonicalization's DefaultCycles rule: a lambda reached as a
+    // VALUE does not walk its body (CAN pins the same acceptance in
+    // src/canonicalize/test/optional_field_test.zig).
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+}
+
+test "check type - record - default - value-position lambda default with omission accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { n : U8 ?? 0, mk : ({} -> Cfg) ?? (|{}| Cfg.{}) }
+    ;
+    // The default IS a lambda value whose body omits both fields:
+    // materialization creates the closure without running the body, so no
+    // cycle exists and the walk must not descend the value-position body.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+}
+
+test "check type - record - default - immediately-invoked lambda cycle behind dispatch is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { x : U8 ?? go(Cfg.{ x: 1 }) }.{
+        \\    make = |_cfg| (|{}| Cfg.{}.x)({})
+        \\}
+        \\
+        \\go = |c| c.make()
+    ;
+    // The dispatch-mediated shape above, with the omitting construction
+    // moved inside an immediately-invoked lambda in `make`'s body: CAN sees
+    // neither the dispatch edge nor the IIFE it guards, so only the
+    // checker's walk can close the cycle—the stamped target's body is
+    // INVOKED (so it walks), and the direct-callee lambda inside it is
+    // invoked too (so its body walks to the omission). If either invoked
+    // position were treated as a value, this cycle would be missed.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "check type - record - default - call through def reference closes the cycle" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Loop := { a : U8 ?? go({}) }
+        \\
+        \\go = |_| Loop.{}.a
+    ;
+    // The callee is a name-resolvable REFERENCE, but the call still
+    // evaluates `go`'s body at materialization, and that body's `Loop.{}`
+    // omits `a`: invoked-ness must follow the reference to the def's body,
+    // or materialization recurses forever. Contrast with the fn-VALUED
+    // default above (`?? make`), whose body stays unwalked. (CAN's
+    // DefaultCycles treats the callee reference as a value edge and accepts
+    // this module, so the cycle is the checker residue's to close.)
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 

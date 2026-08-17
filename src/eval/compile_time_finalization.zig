@@ -1450,6 +1450,8 @@ fn lowerDevEvalAndFinishRoots(
                 job.root.request,
                 job.host.crashMessage() orelse "Roc crashed",
                 job.host.failed_region,
+                job.host.failed_loc,
+                &lowered.lir_result.store,
                 &had_problem,
             ),
             .success => if (job.compile_time_root.kind == .hoisted_validation)
@@ -1642,6 +1644,8 @@ fn devCrashedRootPayload(
     request: checked.RootRequest,
     message: []const u8,
     failed_region: ?base.Region,
+    failed_loc: ?base.SourceLoc,
+    lir_store: *const lir.LirStore,
     had_problem: *bool,
 ) FinalizeError!checked.CompileTimeRootPayload {
     if (request.kind == .compile_time_constant and problem_store == null) {
@@ -1651,10 +1655,21 @@ fn devCrashedRootPayload(
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
     const message_idx = try store.putExtraString(message);
-    const region = failed_region orelse devRootSourceRegion(module, root);
+    const failed_module_name: ?[]const u8 = if (failed_loc) |loc|
+        (if (loc.hasLocation()) lir_store.sourceFileName(loc.file) else null)
+    else
+        null;
+    const site = comptimeCrashSiteFrom(
+        module,
+        devRootSourceRegion(module, root),
+        failed_region,
+        failed_loc,
+        failed_module_name,
+    );
     _ = try store.appendProblem(allocator, .{ .comptime_crash = .{
         .message = message_idx,
-        .region = region,
+        .region = site.region,
+        .origin = try comptimeCrashOrigin(store, site),
     } });
     had_problem.* = true;
     return try failedRootPayload(module, root, message);
@@ -2036,10 +2051,11 @@ fn reportCompileTimeCrash(
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
     const message_idx = try problem_store.putExtraString(message);
-    const region = compileTimeCrashRegion(module, root, interpreter);
+    const site = compileTimeCrashSite(module, root, interpreter);
     _ = try problem_store.appendProblem(allocator, .{ .comptime_crash = .{
         .message = message_idx,
-        .region = region,
+        .region = site.region,
+        .origin = try comptimeCrashOrigin(problem_store, site),
     } });
     return try failedRootPayload(module, root, message);
 }
@@ -2061,13 +2077,70 @@ fn failedRootPayload(
     };
 }
 
-fn compileTimeCrashRegion(
+const ComptimeCrashSite = struct {
+    /// A region in the finalized module's source: the failed statement when
+    /// it belongs to this module, otherwise the consuming compile-time root.
+    region: base.Region,
+    /// The failed statement's declaring module when it is not the finalized
+    /// module (source inlined across modules, e.g. a `??` field default
+    /// materialized per specialization).
+    foreign: ?struct {
+        module_name: []const u8,
+        line: u32,
+        column: u32,
+    },
+};
+
+/// Resolve a crash's report site from the failed LIR statement's explicit
+/// source stamp. The lowerer records each statement's declaring module in the
+/// LIR source-file table, so a failed region is only rendered against this
+/// module's source when it actually belongs to this module; a foreign region
+/// (source inlined across modules, e.g. a `??` field default materialized
+/// per specialization) is reported by its declaring module's name and
+/// resolved position, with the consuming root as the local region.
+fn comptimeCrashSiteFrom(
+    module: *const checked.CheckedModuleArtifact,
+    root_region: base.Region,
+    failed_region: ?base.Region,
+    failed_loc: ?base.SourceLoc,
+    failed_module_name: ?[]const u8,
+) ComptimeCrashSite {
+    const loc = failed_loc orelse return .{ .region = root_region, .foreign = null };
+    const module_name = failed_module_name orelse return .{ .region = root_region, .foreign = null };
+    if (std.mem.eql(u8, module_name, module.moduleEnvConst().module_name)) {
+        return .{ .region = failed_region orelse root_region, .foreign = null };
+    }
+    return .{ .region = root_region, .foreign = .{
+        .module_name = module_name,
+        .line = loc.line,
+        .column = loc.column,
+    } };
+}
+
+fn compileTimeCrashSite(
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     interpreter: *const Interpreter,
-) base.Region {
-    if (interpreter.getFailedCheckedRegion()) |region| return region;
-    return module.checked_bodies.expr(root.expr).source_region;
+) ComptimeCrashSite {
+    return comptimeCrashSiteFrom(
+        module,
+        module.checked_bodies.expr(root.expr).source_region,
+        interpreter.getFailedCheckedRegion(),
+        interpreter.getFailedSourceLoc(),
+        interpreter.getFailedSourceFileName(),
+    );
+}
+
+fn comptimeCrashOrigin(
+    problem_store: *check.problem.Store,
+    site: ComptimeCrashSite,
+) Allocator.Error!?check.problem.types.ComptimeCrash.Origin {
+    const foreign = site.foreign orelse return null;
+    return .{
+        .module_name = try problem_store.putExtraString(foreign.module_name),
+        .line = foreign.line,
+        .column = foreign.column,
+    };
 }
 
 fn finalizationImports(

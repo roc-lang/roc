@@ -145,3 +145,57 @@ expect {
 	result = Json.parse("{}")
 	result == Ok(Twenty.{})
 }
+
+# A NON-LITERAL `??` default reaches the derived parser through Phase-A
+# preparation: the checked default expression is lowered while the
+# specialization graph still accepts relations, and frozen Phase-B emission
+# consumes the prepared value instead of lowering it after the freeze.
+Computed := { name : Str, count : U8 ?? computed_base + 3 }.{
+	parser_for : _
+	is_eq : _
+}
+computed_base : U8
+computed_base = 10
+
+expect {
+	result : Try(Computed, [InvalidJson(Str), MissingRequiredField(Str)])
+	result = Json.parse("{\"name\":\"a\"}")
+	result == Ok(Computed.{ name: "a", count: 13 })
+}
+
+# Same through a call in the default expression.
+Called := { name : Str, count : U8 ?? triple_plus_one(4) }.{
+	parser_for : _
+	is_eq : _
+}
+triple_plus_one : U8 -> U8
+triple_plus_one = |n| n * 3 + 1
+
+expect {
+	result : Try(Called, [InvalidJson(Str), MissingRequiredField(Str)])
+	result = Json.parse("{\"name\":\"a\"}")
+	result == Ok(Called.{ name: "a", count: 13 })
+}
+
+# A present key still wins over a non-literal default.
+expect {
+	result : Try(Called, [InvalidJson(Str), MissingRequiredField(Str)])
+	result = Json.parse("{\"name\":\"a\",\"count\":7}")
+	result == Ok(Called.{ name: "a", count: 7 })
+}
+
+# The default's callee may be an UNANNOTATED generic procedure: the
+# checker publishes the default expression's call-site evidence from the
+# default-root walk, so the derived parser materializes it per
+# specialization like any other default.
+UntypedCalled := { name : Str, count : U8 ?? untyped_triple(4) }.{
+	parser_for : _
+	is_eq : _
+}
+untyped_triple = |n| n * 3 + 1
+
+expect {
+	result : Try(UntypedCalled, [InvalidJson(Str), MissingRequiredField(Str)])
+	result = Json.parse("{\"name\":\"a\"}")
+	result == Ok(UntypedCalled.{ name: "a", count: 13 })
+}

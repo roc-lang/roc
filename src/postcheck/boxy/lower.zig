@@ -21725,6 +21725,16 @@ const ProcBodyBuilder = struct {
     /// rep mapping is neutralized for the duration—its pattern ids are
     /// meaningless against the swapped module's stores, and a closed
     /// expression has no lambda context.
+    ///
+    /// Binder state is swapped to fresh empty arrays for the duration
+    /// (`ensureBinderLocals` re-sizes them lazily against the swapped
+    /// module), mirroring `lowerRuntimeCallableEvalExprInto`. This is
+    /// required even when `expr_module` is the current module: the caller's
+    /// binder arrays index the caller's pattern binders, and boxy binder
+    /// slots are write-once, so a second materialization of the same closed
+    /// expression in one procedure body must not see the first's bindings.
+    /// Saving to stack locals lets nested materializations (a default whose
+    /// expression constructs another defaulted nominal) stack naturally.
     fn lowerModuleExprInto(
         self: *ProcBodyBuilder,
         expr_module: ProcedureModuleView,
@@ -21733,15 +21743,30 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const previous_module = self.module;
+        const previous_binder_locals = self.binder_locals;
+        const previous_binder_reps = self.binder_reps;
         const previous_lambda_arg_patterns = self.lambda_arg_patterns;
+        const previous_lambda_arg_binding_locals = self.lambda_arg_binding_locals;
         const previous_lambda_arg_worker_reps = self.lambda_arg_worker_reps;
+        const previous_current_lambda = self.current_lambda;
+
         self.module = expr_module;
+        self.binder_locals = &.{};
+        self.binder_reps = &.{};
         self.lambda_arg_patterns = &.{};
+        self.lambda_arg_binding_locals = &.{};
         self.lambda_arg_worker_reps = &.{};
+        self.current_lambda = null;
         defer {
+            self.parent.allocator.free(self.binder_reps);
+            self.parent.allocator.free(self.binder_locals);
             self.module = previous_module;
+            self.binder_locals = previous_binder_locals;
+            self.binder_reps = previous_binder_reps;
             self.lambda_arg_patterns = previous_lambda_arg_patterns;
+            self.lambda_arg_binding_locals = previous_lambda_arg_binding_locals;
             self.lambda_arg_worker_reps = previous_lambda_arg_worker_reps;
+            self.current_lambda = previous_current_lambda;
         }
         return try self.lowerExprInto(target, expr_id, next);
     }

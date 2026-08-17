@@ -53,15 +53,27 @@ pub const ComptimeBranchHit = struct {
     branch_index: u32,
 };
 
+/// A generated call frame's checked source region plus the resolved source
+/// location stamped on the calling LIR statement. The location's file entry
+/// carries the declaring module, so a failure region is never rendered
+/// against another module's source.
+pub const CallRegion = struct {
+    region: base.Region,
+    loc: base.SourceLoc,
+};
+
 arena: base.SingleThreadArena,
 host_arena: base.SingleThreadArena,
 allocations: std.AutoHashMapUnmanaged(usize, Allocation) = .empty,
 roc_ops: ?RocOps = null,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
 comptime_branch_hits: std.ArrayListUnmanaged(ComptimeBranchHit) = .empty,
-call_regions: std.ArrayListUnmanaged(base.Region) = .empty,
+call_regions: std.ArrayListUnmanaged(CallRegion) = .empty,
 comptime_failed_site: ?lir.LIR.ComptimeSiteId = null,
 failed_region: ?base.Region = null,
+/// Resolved source location of the failing LIR statement (file entry names
+/// the declaring module), captured alongside `failed_region`.
+failed_loc: ?base.SourceLoc = null,
 jmp_buf: JmpBuf = undefined,
 active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
@@ -104,6 +116,7 @@ pub fn resetForRun(self: *CompileTimeHost) void {
     _ = self.host_arena.reset(.free_all);
     self.comptime_failed_site = null;
     self.failed_region = null;
+    self.failed_loc = null;
     _ = self.arena.reset(.free_all);
     self.termination = .returned;
     self.active_jmp_buf = null;
@@ -166,16 +179,22 @@ pub fn rocComptimeExhaustivenessFailed(roc_ops: *RocOps, site_raw: u32) callconv
     self.jump(.comptime_exhaustiveness);
 }
 
-/// Dev-backend hook recording the source region for an imminent failure.
-pub fn rocComptimeFailureRegion(roc_ops: *RocOps, start_offset: u32, end_offset: u32) callconv(.c) void {
+/// Dev-backend hook recording the source region for an imminent failure,
+/// together with the failing statement's resolved location (whose file entry
+/// names the declaring module).
+pub fn rocComptimeFailureRegion(roc_ops: *RocOps, start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     self.failed_region = base.Region.from_raw_offsets(start_offset, end_offset);
+    self.failed_loc = .{ .file = file, .line = line, .column = column };
 }
 
 /// Dev-backend hook pushing a source region for a generated call frame.
-pub fn rocComptimeCallEnter(roc_ops: *RocOps, start_offset: u32, end_offset: u32) callconv(.c) void {
+pub fn rocComptimeCallEnter(roc_ops: *RocOps, start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    self.call_regions.append(self.host_arena.allocator(), base.Region.from_raw_offsets(start_offset, end_offset)) catch {
+    self.call_regions.append(self.host_arena.allocator(), .{
+        .region = base.Region.from_raw_offsets(start_offset, end_offset),
+        .loc = .{ .file = file, .line = line, .column = column },
+    }) catch {
         self.jump(.host_oom);
     };
 }
@@ -281,7 +300,9 @@ fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c
 fn rocCrashed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     if (self.failed_region == null and self.call_regions.items.len > 0) {
-        self.failed_region = self.call_regions.items[self.call_regions.items.len - 1];
+        const frame = self.call_regions.items[self.call_regions.items.len - 1];
+        self.failed_region = frame.region;
+        self.failed_loc = frame.loc;
     }
     self.appendEvent(.crashed, bytes[0..len]);
     self.jump(.crashed);

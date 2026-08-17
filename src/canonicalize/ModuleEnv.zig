@@ -3043,6 +3043,30 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .default_not_allowed_on_local_type_decl => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Default Not Allowed On Local Type Declaration", "", .runtime_error);
+            try report.headline.addReflowingText("Field defaults (");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(") are only allowed on nominal type declarations at the top level of a module, not on type declarations inside a function or block.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" A default is materialized at every construction site that omits the field, so it cannot depend on the locals of one function. Move the type declaration to the module top level, or remove the default.");
+
+            break :blk report;
+        },
         .unnamed_field_not_allowed_in_structural_record => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

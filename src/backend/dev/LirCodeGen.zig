@@ -263,8 +263,11 @@ pub const GenerationMode = enum {
 pub const ComptimeHooks = struct {
     branch_taken: *const fn (*RocOps, u32, u32) callconv(.c) void,
     exhaustiveness_failed: *const fn (*RocOps, u32) callconv(.c) void,
-    failure_region: *const fn (*RocOps, u32, u32) callconv(.c) void,
-    call_enter: *const fn (*RocOps, u32, u32) callconv(.c) void,
+    /// (roc_ops, region start, region end, source file, line, column): the
+    /// statement's resolved location rides along with its region so the host
+    /// knows which module's source the byte offsets belong to.
+    failure_region: *const fn (*RocOps, u32, u32, u32, u32, u32) callconv(.c) void,
+    call_enter: *const fn (*RocOps, u32, u32, u32, u32, u32) callconv(.c) void,
     call_exit: *const fn (*RocOps) callconv(.c) void,
 };
 
@@ -23562,11 +23565,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const roc_ops_reg = self.roc_ops_reg orelse return;
             const region = self.store.stmtRegion(stmt_id);
             if (region.isEmpty()) return;
+            const loc = self.store.stmtLoc(stmt_id);
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(roc_ops_reg);
             try builder.addImmArg(@intCast(region.start.offset));
             try builder.addImmArg(@intCast(region.end.offset));
+            try builder.addImmArg(@intCast(loc.file));
+            try builder.addImmArg(@intCast(loc.line));
+            try builder.addImmArg(@intCast(loc.column));
             try builder.call(@intFromPtr(hooks.failure_region));
         }
 
@@ -23578,11 +23585,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const roc_ops_reg = self.roc_ops_reg orelse return false;
             const region = self.store.stmtRegion(stmt_id);
             if (region.isEmpty()) return false;
+            const loc = self.store.stmtLoc(stmt_id);
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addRegArg(roc_ops_reg);
             try builder.addImmArg(@intCast(region.start.offset));
             try builder.addImmArg(@intCast(region.end.offset));
+            try builder.addImmArg(@intCast(loc.file));
+            try builder.addImmArg(@intCast(loc.line));
+            try builder.addImmArg(@intCast(loc.column));
             try builder.call(@intFromPtr(hooks.call_enter));
             return true;
         }

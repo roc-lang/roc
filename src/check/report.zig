@@ -781,12 +781,24 @@ pub const ReportBuilder = struct {
                         },
                     }
                 },
-                // Unreachable by construction: every type-mismatch report
-                // probes for this hint first (`findFieldDefaultMismatch` in
-                // `build`) and diverts to the dedicated Incompatible
-                // Defaults report; `compareTypes` is deterministic, so the
-                // re-run here can never surface a hint the probe did not.
-                .field_default_mismatch => unreachable,
+                // Usually diverted before this renderer runs: `build` probes
+                // the mismatch's top-level snapshot pair
+                // (`findFieldDefaultMismatch`) and emits the dedicated
+                // Incompatible Defaults report when the default conflict is
+                // the sole finding. A builder can still re-compare a NESTED
+                // snapshot pair (e.g. record-update field payloads), or the
+                // conflict can accompany other findings, so render the hint
+                // inline here rather than assuming unreachability.
+                .field_default_mismatch => |fdm| {
+                    try D.renderSlice(&.{
+                        D.bytes("Hint:").withAnnotation(.emphasized),
+                        D.bytes("The"),
+                        D.ident(fdm.field).withAnnotation(.inline_code),
+                        D.bytes("field has a"),
+                        D.bytes("??").withAnnotation(.inline_code),
+                        D.bytes("default in both types, but they are two different defaults\u{2014}two separately written defaults never merge, even when their values look the same."),
+                    }, self, report);
+                },
                 .ext_mismatch => |em| {
                     switch (em.type) {
                         .tag_union => {
@@ -3055,6 +3067,15 @@ pub const ReportBuilder = struct {
     /// conflict (design.md "Defaulted Fields": `defaulted(d1) ~
     /// defaulted(d2)` unifies only when d1 = d2). The conflict is fully
     /// visible in the snapshots, so no unify-side detail channel is needed.
+    ///
+    /// The dedicated Incompatible Defaults report exists for the case where
+    /// the generic report would render two identical-looking types, hiding
+    /// that the real difference is two distinct default identities. So this
+    /// only reports a conflict when it is the SOLE finding: any other hint
+    /// kind means the generic report has something visible to say, and
+    /// diverting would replace it with a report about a possibly unrelated
+    /// field (the conflict still renders as an inline hint there, in
+    /// `renderDiffHints`).
     fn findFieldDefaultMismatch(self: *Self, types: TypePair) Allocator.Error!?diff.FieldDefaultMismatch {
         const hints = try diff.compareTypes(
             self.snapshots,
@@ -3065,9 +3086,12 @@ pub const ReportBuilder = struct {
             &self.diff_fields,
             &self.diff_tags,
         );
+        var found: ?diff.FieldDefaultMismatch = null;
         for (hints.slice()) |hint| {
             switch (hint) {
-                .field_default_mismatch => |fdm| return fdm,
+                .field_default_mismatch => |fdm| {
+                    if (found == null) found = fdm;
+                },
                 .arity_mismatch,
                 .fields_missing,
                 .field_typo,
@@ -3075,10 +3099,10 @@ pub const ReportBuilder = struct {
                 .effect_mismatch,
                 .ext_mismatch,
                 .field_presence_mismatch,
-                => {},
+                => return null,
             }
         }
-        return null;
+        return found;
     }
 
     /// Build the dedicated report for a defaulted-field identity conflict:
@@ -3161,15 +3185,25 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Default Constrains A Type Parameter", "", .runtime_error);
         errdefer report.deinit();
 
-        try D.renderSliceInto(&.{
-            D.bytes("The default value for the"),
-            D.ident(data.field_name).withAnnotation(.inline_code),
-            D.bytes("field requires the type parameter"),
-            D.ident(data.type_param).withAnnotation(.inline_code),
-            D.bytes("to have a"),
-            D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("method."),
-        }, self, &report, &report.headline);
+        if (data.method_name) |method_name| {
+            try D.renderSliceInto(&.{
+                D.bytes("The default value for the"),
+                D.ident(data.field_name).withAnnotation(.inline_code),
+                D.bytes("field requires the type parameter"),
+                D.ident(data.type_param).withAnnotation(.inline_code),
+                D.bytes("to have a"),
+                D.ident(method_name).withAnnotation(.inline_code),
+                D.bytes("method."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("The default value for the"),
+                D.ident(data.field_name).withAnnotation(.inline_code),
+                D.bytes("field forces the type parameter"),
+                D.ident(data.type_param).withAnnotation(.inline_code),
+                D.bytes("to a concrete type."),
+            }, self, &report, &report.headline);
+        }
 
         const region_info = self.module_env.calcRegionInfo(data.region);
         try report.document.addSourceRegion(
@@ -4620,6 +4654,32 @@ pub const ReportBuilder = struct {
             self.module_env.getLineStarts(),
         );
         try report.document.addLineBreak();
+
+        if (data.origin) |origin| {
+            // The crash was in source inlined from another module (e.g. a
+            // `??` field default materialized per specialization), so the
+            // failing expression is not in this module's source; name its
+            // declaring module and exact location instead.
+            const origin_location = try std.fmt.allocPrint(self.gpa, "{s} (line {d}, column {d}),", .{
+                self.problems.getExtraString(origin.module_name),
+                origin.line,
+                origin.column,
+            });
+            defer self.gpa.free(origin_location);
+            const owned_origin_location = try report.addOwnedString(origin_location);
+            try D.renderSlice(&.{
+                D.bytes("The"),
+                D.bytes("crash").withAnnotation(.keyword),
+                D.bytes("happened in the module"),
+                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                D.bytes("with this message:"),
+            }, self, &report);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addCodeBlock(owned_message);
+
+            return report;
+        }
 
         try D.renderSlice(&.{
             D.bytes("The"),

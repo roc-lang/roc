@@ -185,6 +185,16 @@ pub const Diagnostic = union(enum) {
     default_not_allowed_in_structural_record: struct {
         region: Region,
     },
+    /// A `??` default on a nominal (or opaque) type declaration inside a
+    /// block: a local declaration's default canonicalizes in function scope,
+    /// so it could capture locals that no other construction site can
+    /// supply, and the end-of-module default-cycle pass only sees top-level
+    /// declarations. Defaults are only legal on module top-level nominal
+    /// declarations; the default is dropped and the field degrades to
+    /// required.
+    default_not_allowed_on_local_type_decl: struct {
+        region: Region,
+    },
     /// A `??` default whose materialization cycles back to itself through
     /// name-resolvable edges: references to same-module top-level defs
     /// and/or local nominal constructions that omit defaulted fields.
@@ -483,6 +493,7 @@ pub const Diagnostic = union(enum) {
             .optional_field_cannot_have_default => |d| d.region,
             .unnamed_field_cannot_have_default => |d| d.region,
             .default_not_allowed_in_structural_record => |d| d.region,
+            .default_not_allowed_on_local_type_decl => |d| d.region,
             .record_default_reference_cycle => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,

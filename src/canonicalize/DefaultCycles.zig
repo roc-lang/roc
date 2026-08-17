@@ -26,13 +26,18 @@
 //! in the SCC is dropped—each is unmaterializable—so check and lowering
 //! never see a cyclic default. The walk is conservative by reachability: an
 //! omission edge on a dead branch still counts, exactly like the checker's
-//! aggregate walk before it.
+//! aggregate walk before it. The one deliberate exception is function
+//! VALUES: materializing a default that is (or references) a lambda only
+//! creates the closure—the body is not evaluated—so a lambda reached as a
+//! value does not walk its body (its captures still do), while a lambda in
+//! direct callee position of a walked call (immediately invoked) does.
 
 const std = @import("std");
 const base = @import("base");
 
 const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
+const default_omissions = @import("default_omissions.zig");
 const Diagnostic = CIR.Diagnostic;
 
 const Expr = CIR.Expr;
@@ -69,10 +74,10 @@ const Pass = struct {
     gpa: Allocator,
 
     defaults: std.ArrayListUnmanaged(DefaultInfo) = .empty,
-    /// Default lookup by declaring statement: (stmt, list of default node ids).
-    decl_defaults: std.AutoHashMapUnmanaged(CIR.Statement.Idx, DeclRange) = .{},
-    /// Flat pool backing `decl_defaults` ranges.
-    decl_default_pool: std.ArrayListUnmanaged(u32) = .empty,
+    /// Defaulted-field anno node -> graph node id of that default. Keyed by
+    /// the field's anno node so the shared omission enumeration
+    /// (`default_omissions.zig`) maps directly to graph nodes.
+    default_node_by_field: std.AutoHashMapUnmanaged(CIR.TypeAnno.RecordField.Idx, u32) = .{},
     /// Top-level binder pattern -> graph node id of the def.
     pattern_to_node: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
     /// Per-def walk roots, indexed by node id - defaults.len.
@@ -87,12 +92,9 @@ const Pass = struct {
     /// Dedup of visited expressions within one node's walk.
     seen_exprs: std.AutoHashMapUnmanaged(Expr.Idx, void) = .{},
 
-    const DeclRange = struct { start: u32, len: u32 };
-
     fn deinit(self: *Pass) void {
         self.defaults.deinit(self.gpa);
-        self.decl_defaults.deinit(self.gpa);
-        self.decl_default_pool.deinit(self.gpa);
+        self.default_node_by_field.deinit(self.gpa);
         self.pattern_to_node.deinit(self.gpa);
         self.def_exprs.deinit(self.gpa);
         self.edges.deinit(self.gpa);
@@ -106,35 +108,29 @@ const Pass = struct {
         return @intCast(self.defaults.items.len + self.def_exprs.items.len);
     }
 
-    /// Every defaulted field of every nominal declaration's backing record.
-    /// `forward_type_decls` re-lists forward-prepared statements also present
-    /// in `type_decls`; the `decl_defaults` map keys by statement, so a
-    /// duplicate statement is skipped rather than double-registered.
+    /// Every defaulted field of every nominal declaration's backing record
+    /// (resolved via `default_omissions.backingRecordFields`, which handles
+    /// parenthesized backings—`Foo := ({ ... })`). `forward_type_decls`
+    /// re-lists forward-prepared statements also present in `type_decls`;
+    /// `default_node_by_field` keys by the field's anno node, so a duplicate
+    /// listing is skipped rather than double-registered.
     fn collectDefaults(self: *Pass) Allocator.Error!void {
         const spans = [_]CIR.Statement.Span{ self.env.type_decls, self.env.forward_type_decls };
         for (spans) |span| {
             for (self.env.store.sliceStatements(span)) |stmt_idx| {
-                const stmt = self.env.store.getStatement(stmt_idx);
-                if (stmt != .s_nominal_decl) continue;
-                if (self.decl_defaults.contains(stmt_idx)) continue;
-                const anno = self.env.store.getTypeAnno(stmt.s_nominal_decl.anno);
-                if (anno != .record) continue;
-                const pool_start: u32 = @intCast(self.decl_default_pool.items.len);
-                for (self.env.store.sliceAnnoRecordFields(anno.record.fields)) |field_idx| {
+                const declared = default_omissions.backingRecordFields(self.env, stmt_idx) orelse continue;
+                for (self.env.store.sliceAnnoRecordFields(declared)) |field_idx| {
                     const field = self.env.store.getAnnoRecordField(field_idx);
                     const default_expr = field.default_value orelse continue;
-                    const node_id: u32 = @intCast(self.defaults.items.len);
+                    const entry = try self.default_node_by_field.getOrPut(self.gpa, field_idx);
+                    if (entry.found_existing) continue;
+                    entry.value_ptr.* = @intCast(self.defaults.items.len);
                     try self.defaults.append(self.gpa, .{
                         .decl_stmt = stmt_idx,
                         .field_idx = field_idx,
                         .field_name = field.name,
                         .default_expr = default_expr,
                     });
-                    try self.decl_default_pool.append(self.gpa, node_id);
-                }
-                const pool_len: u32 = @intCast(self.decl_default_pool.items.len - pool_start);
-                if (pool_len > 0) {
-                    try self.decl_defaults.put(self.gpa, stmt_idx, .{ .start = pool_start, .len = pool_len });
                 }
             }
         }
@@ -213,8 +209,13 @@ const Pass = struct {
                     // walk owns that edge. The supplied values still walk.
                     try self.walk.append(self.gpa, nominal.backing_expr);
                 },
+                // A closure reached as a VALUE materializes only its
+                // captured values—creating the function value does not run
+                // its body; the body runs on a later application, which is
+                // beyond name resolution (calls through values/parameters
+                // are the checker's residue). Captures ARE evaluated at
+                // materialization, so their reference edges stay.
                 .e_closure => |closure| {
-                    try self.walk.append(self.gpa, closure.lambda_idx);
                     for (self.env.store.sliceCaptures(closure.captures)) |capture_idx| {
                         const capture = self.env.store.getCapture(capture_idx);
                         if (self.pattern_to_node.get(capture.pattern_idx)) |node| {
@@ -222,13 +223,29 @@ const Pass = struct {
                         }
                     }
                 },
-                // Reachability is value-level: a lambda body runs whenever
-                // the surrounding value is applied, and this pass does not
-                // track application, so the body walks unconditionally
-                // (conservative, like the omission edges).
-                .e_lambda => |lambda| try self.walk.append(self.gpa, lambda.body),
+                // A lambda reached as a VALUE only creates the function
+                // value; its body is not evaluated at materialization, so
+                // the body is not walked. The one place a body IS evaluated
+                // at materialization—an immediately-invoked lambda—is
+                // handled in `.e_call` below.
+                .e_lambda => {},
                 .e_call => |call| {
-                    try self.walk.append(self.gpa, call.func);
+                    // A lambda/closure in DIRECT callee position is
+                    // immediately invoked: its body IS evaluated at
+                    // materialization, so walk it (a closure callee's
+                    // captures walk via the `.e_closure` arm). Every other
+                    // callee walks as a value.
+                    switch (self.env.store.getExpr(call.func)) {
+                        .e_lambda => |lambda| try self.walk.append(self.gpa, lambda.body),
+                        .e_closure => |closure| {
+                            try self.walk.append(self.gpa, call.func);
+                            // `lambda_idx` always names an `e_lambda` (see
+                            // CIR.Expr.Closure).
+                            const lambda = self.env.store.getExpr(closure.lambda_idx);
+                            try self.walk.append(self.gpa, lambda.e_lambda.body);
+                        },
+                        else => try self.walk.append(self.gpa, call.func),
+                    }
                     try self.appendSpan(call.args);
                 },
                 .e_if => |if_expr| {
@@ -378,34 +395,19 @@ const Pass = struct {
 
     /// A local nominal construction over a record literal: every declared
     /// defaulted field the literal does not mention is an omission edge to
-    /// that field's default. An UPDATE (`{ ..base }`) omits nothing (its
-    /// fields come from the base value), and an unset field is mentioned
-    /// (the checker rejects unset-of-defaulted on its own axis).
+    /// that field's default. The enumeration (update/unset/backing-shape
+    /// rules included) is shared with `DependencyGraph.zig` via
+    /// `default_omissions.zig`, so the cycle graph and the demand graph
+    /// agree on what "omitted" means.
     fn appendOmissionEdges(self: *Pass, decl_stmt: CIR.Statement.Idx, backing_expr: Expr.Idx) Allocator.Error!void {
-        const range = self.decl_defaults.get(decl_stmt) orelse return;
-        const backing = self.env.store.getExpr(backing_expr);
-        const backing_tag = std.meta.activeTag(backing);
-        // Only record-literal backings construct fields; every other backing
-        // shape (tags, tuples, error forms) has no omission to judge.
-        if (backing_tag != .e_record and backing_tag != .e_empty_record) return;
-        const record = if (backing_tag == .e_record) blk: {
-            if (backing.e_record.ext != null) return;
-            break :blk backing.e_record;
-        } else null;
-        for (self.decl_default_pool.items[range.start .. range.start + range.len]) |default_node| {
-            const info = self.defaults.items[default_node];
-            const supplied = if (record) |rec| supplied: {
-                for (self.env.store.sliceRecordFields(rec.fields)) |field_idx| {
-                    const field = self.env.store.getRecordField(field_idx);
-                    if (field.name.eql(info.field_name)) break :supplied true;
-                }
-                for (self.env.store.sliceUnsetFields(rec.unsets)) |unset_idx| {
-                    const unset = self.env.store.getUnsetField(unset_idx);
-                    if (unset.name.eql(info.field_name)) break :supplied true;
-                }
-                break :supplied false;
-            } else false;
-            if (!supplied) try self.addEdge(default_node);
+        var omissions = default_omissions.omittedDefaults(self.env, decl_stmt, backing_expr);
+        while (omissions.next()) |omitted| {
+            // `collectDefaults` registered the defaults of `type_decls` and
+            // `forward_type_decls`; a construction naming a declaration
+            // outside those spans has no graph node (exactly the statements
+            // the old per-decl map skipped).
+            const default_node = self.default_node_by_field.get(omitted.field_idx) orelse continue;
+            try self.addEdge(default_node);
         }
     }
 

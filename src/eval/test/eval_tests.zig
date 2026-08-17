@@ -148,6 +148,52 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "0" },
     },
     .{
+        .name = "defaulted record field: default calling an unannotated generic procedure materializes",
+        .source_kind = .module,
+        .source =
+        \\compute = |n| n * 3 + 1
+        \\
+        \\Cfg := { count : U8 ?? compute(4) }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\main = cfg.count
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
+        .name = "defaulted record field: default calling an annotated procedure materializes",
+        .source_kind = .module,
+        .source =
+        \\compute : U8 -> U8
+        \\compute = |n| n * 3 + 1
+        \\
+        \\Cfg := { count : U8 ?? compute(4) }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\main = cfg.count
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
+        .name = "defaulted record field: default calling a polymorphic identity materializes",
+        .source_kind = .module,
+        .source =
+        \\identity = |x| x
+        \\
+        \\Cfg := { count : U8 ?? identity(4) }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\main = cfg.count
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
         .name = "optional record field: supplied at construction and .? hits",
         .source_kind = .module,
         .source =
@@ -3890,6 +3936,25 @@ const core_tests = [_]TestCase{
         \\main = List.len(bytes.items) + List.len(words.items) + Str.count_utf8_bytes(bytes.label) + Str.count_utf8_bytes(words.label)
         ,
         .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        // Each materialization gets its own instantiation context: two
+        // specializations of one parametric default in a single body must
+        // not collide on a memoized checked-type node.
+        .name = "defaulted record field: two specializations of one parametric default in one body",
+        .source_kind = .module,
+        .source =
+        \\Pair(x) := { items : List(x) ?? [], label : Str }
+        \\
+        \\main = {
+        \\    bytes : Pair(U8)
+        \\    bytes = Pair.{ label: "b" }
+        \\    words : Pair(Str)
+        \\    words = Pair.{ label: "w" }
+        \\    List.len(List.append(bytes.items, 7)) * 10 + List.len(List.append(words.items, "s"))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "11" },
     },
     .{
         .name = "inspect: lambda list param calling List.append",

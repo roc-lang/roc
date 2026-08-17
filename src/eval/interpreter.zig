@@ -926,6 +926,16 @@ pub const Interpreter = struct {
         return null;
     }
 
+    /// The source-file name of the statement that first failed, resolved
+    /// through the LIR store's explicit source-file table. The lowerer stamps
+    /// every statement with its declaring module's file entry (including
+    /// source inlined across modules, e.g. `??` field defaults materialized
+    /// per specialization), so this is the failed region's owning module.
+    pub fn getFailedSourceFileName(self: *const LirInterpreter) ?[]const u8 {
+        if (!self.failed_stmt_loc.hasLocation()) return null;
+        return self.store.sourceFileName(self.failed_stmt_loc.file);
+    }
+
     /// The innermost virtual source frame of the failed statement. Callers can
     /// walk `LirStore.inlineScope(id).parent` to expand the complete inlined
     /// source stack without inferring it from physical procedures.
