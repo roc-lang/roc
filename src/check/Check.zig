@@ -30008,7 +30008,7 @@ fn satisfyImplicitParserConstraint(
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
     var visited = std.AutoHashMap(Var, void).init(self.gpa);
     defer visited.deinit();
-    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, env, region)) |backing| blk: {
+    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, env, region)) |backing| blk: {
         try visited.put(self.types.resolveVar(dispatcher_var).var_, {});
         break :blk backing;
     } else dispatcher_var;
@@ -30090,7 +30090,7 @@ fn satisfyImplicitEncoderForConstraint(
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
     var visited = std.AutoHashMap(Var, void).init(self.gpa);
     defer visited.deinit();
-    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, env, region)) |backing| blk: {
+    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, env, region)) |backing| blk: {
         try visited.put(self.types.resolveVar(dispatcher_var).var_, {});
         break :blk backing;
     } else dispatcher_var;
@@ -30239,37 +30239,34 @@ fn reportAnnotationOnlyValueUse(
     try self.markErroneous(expr_var);
 }
 
-fn isGeneratedStructuralCodecMethodBinding(method: StaticDispatchMethodBinding) bool {
-    const raw_node = @intFromEnum(method.binding.type_node_idx);
-    if (raw_node >= method.env.store.nodes.len()) return false;
-
-    const node_tag = method.env.store.nodes.get(method.binding.type_node_idx).tag;
-    const annotation_idx: CIR.Annotation.Idx, const expr_idx: CIR.Expr.Idx = if (node_tag == .def) blk: {
-        const def = method.env.store.getDef(method.binding.def_idx);
-        break :blk .{ def.annotation orelse return false, def.expr };
-    } else if (node_tag == .statement_decl) blk: {
-        const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
-        const stmt = method.env.store.getStatement(statement);
-        if (stmt != .s_decl) return false;
-        const decl = stmt.s_decl;
-        break :blk .{ decl.anno orelse return false, decl.expr };
-    } else return false;
-    const expr_tag = std.meta.activeTag(method.env.store.getExpr(expr_idx));
-    if (expr_tag != .e_anno_only and expr_tag != .e_hosted_lambda) return false;
-    const annotation = method.env.store.getAnnotation(annotation_idx);
-    return method.env.store.getTypeAnno(annotation.anno) == .underscore;
+/// A derived codec is the compiler's own structural encoder/parser for the
+/// type's backing shape, so its obligations are the shape's obligations.
+/// Canonicalization stamps the requested kind on the marker, which is the only
+/// authority on what the declaration asked for.
+fn isGeneratedStructuralCodecMethodBinding(method: StaticDispatchMethodBinding, kind: CIR.DerivedMethodKind) bool {
+    const expr = method.env.store.getExpr(method.env.store.getDef(method.binding.def_idx).expr);
+    if (expr != .e_derived_method) return false;
+    return expr.e_derived_method.kind == kind;
 }
 
+/// The shape a derived codec's obligations belong to, or null when the
+/// dispatcher owns them itself. `method_ident` keys the method registry;
+/// `kind` is what the declaration asked the compiler to derive.
 fn generatedStructuralCodecBackingVar(
     self: *Self,
     dispatcher_var: Var,
     method_ident: Ident.Idx,
+    kind: CIR.DerivedMethodKind,
     env: *Env,
     region: Region,
 ) Allocator.Error!?Var {
     const content = self.types.resolveVar(dispatcher_var).desc.content;
     if (content != .structure or content.structure != .nominal_type) return null;
     const nominal = content.structure.nominal_type;
+    // Builtin codecs are the format protocol itself, validated against the
+    // format's own methods rather than by walking a backing shape. Monotype
+    // draws the same line when it looks for a custom codec target.
+    if (nominal.originIsBuiltin()) return null;
     const original_env, _ = self.ownerEnvForOriginModule(
         nominal.origin_module,
         nominal.sourceDeclOptional(),
@@ -30282,7 +30279,7 @@ fn generatedStructuralCodecBackingVar(
         self.cir,
         method_ident,
     ) orelse return null;
-    if (!isGeneratedStructuralCodecMethodBinding(method)) return null;
+    if (!isGeneratedStructuralCodecMethodBinding(method, kind)) return null;
     return (try self.openNominalBackingForApp(nominal, env, region)) orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("type checker invariant violated: generated structural codec nominal had no valid backing", .{});
@@ -31764,7 +31761,7 @@ fn validateDerivedParseNominal(
             .method_name = constraint.fn_name,
         },
     });
-    if (!result.isProblem() and isGeneratedStructuralCodecMethodBinding(method_lookup)) {
+    if (!result.isProblem() and isGeneratedStructuralCodecMethodBinding(method_lookup, .parser)) {
         const nominal_root = self.types.resolveVar(nominal_var).var_;
         if (!visited.contains(nominal_root)) {
             try visited.put(nominal_root, {});
@@ -32414,7 +32411,7 @@ fn validateDerivedEncodeNominal(
             .method_name = constraint.fn_name,
         },
     });
-    if (!result.isProblem() and isGeneratedStructuralCodecMethodBinding(method_lookup)) {
+    if (!result.isProblem() and isGeneratedStructuralCodecMethodBinding(method_lookup, .encoder)) {
         const nominal_root = self.types.resolveVar(nominal_var).var_;
         if (!visited.contains(nominal_root)) {
             try visited.put(nominal_root, {});
