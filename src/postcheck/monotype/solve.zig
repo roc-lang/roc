@@ -496,6 +496,9 @@ pub const InstGraph = struct {
                 .ids = collections.DenseMap(NodeId, u32).init(allocator),
                 .parents = .empty,
                 .lists = .empty,
+                .record_ids = collections.DenseMap(NodeId, u32).init(allocator),
+                .record_parents = .empty,
+                .record_lists = .empty,
             },
             .relation_state = .producing,
             .types = types,
@@ -540,6 +543,9 @@ pub const InstGraph = struct {
         ids: collections.DenseMap(NodeId, u32),
         parents: std.ArrayList(u32),
         lists: std.ArrayList(std.ArrayList(InstTag)),
+        record_ids: collections.DenseMap(NodeId, u32),
+        record_parents: std.ArrayList(u32),
+        record_lists: std.ArrayList(std.ArrayList(InstField)),
 
         fn findClass(self: *RowStore, raw: u32) u32 {
             var id = raw;
@@ -553,7 +559,58 @@ pub const InstGraph = struct {
             }
             return false;
         }
+
+        fn findRecordClass(self: *RowStore, raw: u32) u32 {
+            var id = raw;
+            while (self.record_parents.items[id] != id) id = self.record_parents.items[id];
+            return id;
+        }
+
+        fn containsField(list: *const std.ArrayList(InstField), label: names.RecordFieldNameId) bool {
+            for (list.items) |existing| {
+                if (existing.name == label) return true;
+            }
+            return false;
+        }
     };
+
+    fn recordStoreIdFor(self: *InstGraph, store: *RowStore, root: NodeId) Allocator.Error!u32 {
+        if (store.record_ids.get(root)) |existing| return store.findRecordClass(existing);
+        const id: u32 = @intCast(store.record_parents.items.len);
+        try store.record_parents.append(self.allocator, id);
+        try store.record_lists.append(self.allocator, .empty);
+        try store.record_ids.put(root, id);
+        return id;
+    }
+
+    fn recordStoreJoin(self: *InstGraph, left: NodeId, right: NodeId, left_fields: []const InstField, right_fields: []const InstField) Allocator.Error!void {
+        const store = &self.row_store;
+        const left_id = try self.recordStoreIdFor(store, self.find(left));
+        const right_id = try self.recordStoreIdFor(store, self.find(right));
+        var ordered = std.ArrayList(InstField).empty;
+        errdefer ordered.deinit(self.allocator);
+        for (left_fields) |field| try ordered.append(self.allocator, field);
+        for (right_fields) |field| {
+            if (!RowStore.containsField(&ordered, field.name)) {
+                try ordered.append(self.allocator, field);
+            }
+        }
+        if (left_id != right_id) {
+            store.record_parents.items[right_id] = left_id;
+            store.record_lists.items[right_id].deinit(self.allocator);
+            store.record_lists.items[right_id] = .empty;
+        }
+        store.record_lists.items[left_id].deinit(self.allocator);
+        store.record_lists.items[left_id] = ordered;
+    }
+
+    /// The stored field list for a joined record row's class, or null for a
+    /// row no join ever touched.
+    fn recordStoreFields(self: *InstGraph, root: NodeId) ?[]const InstField {
+        const store = &self.row_store;
+        const raw = store.record_ids.get(root) orelse return null;
+        return store.record_lists.items[store.findRecordClass(raw)].items;
+    }
 
     fn rowStoreIdFor(self: *InstGraph, store: *RowStore, root: NodeId) Allocator.Error!u32 {
         if (store.ids.get(root)) |existing| return store.findClass(existing);
@@ -615,6 +672,10 @@ pub const InstGraph = struct {
         self.row_store.parents.deinit(allocator);
         for (self.row_store.lists.items) |*list| list.deinit(allocator);
         self.row_store.lists.deinit(allocator);
+        self.row_store.record_ids.deinit();
+        self.row_store.record_parents.deinit(allocator);
+        for (self.row_store.record_lists.items) |*list| list.deinit(allocator);
+        self.row_store.record_lists.deinit(allocator);
         var views = self.node_snapshots.valueIterator();
         while (views.next()) |list| {
             list.deinit(allocator);
@@ -3502,6 +3563,7 @@ pub const InstGraph = struct {
             },
             .record => {
                 const flat = try self.flattenRecordRow(row);
+                try self.recordStoreJoin(row, empty, flat.fields, &.{});
                 if (flat.fields.len != 0) Common.invariant("instantiation unified a non-empty record with an empty record");
                 try self.unify(flat.ext, empty);
                 try self.setContent(row, .empty_record);
@@ -3767,6 +3829,7 @@ pub const InstGraph = struct {
     fn unifyRecordRows(self: *InstGraph, left: NodeId, right: NodeId, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
         const flat_left = try self.flattenRecordRow(left);
         const flat_right = try self.flattenRecordRow(right);
+        try self.recordStoreJoin(left, right, flat_left.fields, flat_right.fields);
 
         var merged = std.ArrayList(InstField).empty;
         defer merged.deinit(self.allocator);
@@ -3858,10 +3921,10 @@ pub const InstGraph = struct {
                     Common.invariant("instantiation tried to write a record row into a tag row variable");
                 }
             }
-            try self.setContent(ext_root, .{ .record = .{
-                .fields = try self.arena().dupe(InstField, fields),
-                .ext = tail_ext,
-            } });
+            // As with tag rows: the surviving row's content carries the full
+            // merged field list and sealing reads the row store, so the
+            // extension only relates to the tail as identity.
+            try pending.append(self.allocator, .{ .left = ext_root, .right = tail_ext });
         } else {
             const rest = try self.newNode(.{ .record = .{
                 .fields = try self.arena().dupe(InstField, fields),
@@ -4410,10 +4473,21 @@ pub const GraphTypeFinals = struct {
 
     fn sealRecordRow(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.Span {
         const flat = try self.graph.flattenRecordRow(node);
-        if (flat.fields.len == 0) return .empty();
-        const fields = try self.graph.allocator.alloc(Type.Field, flat.fields.len);
+        const source = if (self.graph.recordStoreFields(node)) |stored| stored: {
+            if (stored.len != flat.fields.len) {
+                Common.invariant("sealed record row disagreed with its row store class");
+            }
+            for (stored, flat.fields) |stored_field, flat_field| {
+                if (stored_field.name != flat_field.name) {
+                    Common.invariant("sealed record row disagreed with its row store class");
+                }
+            }
+            break :stored stored;
+        } else flat.fields;
+        if (source.len == 0) return .empty();
+        const fields = try self.graph.allocator.alloc(Type.Field, source.len);
         defer self.graph.allocator.free(fields);
-        for (flat.fields, 0..) |field, index| {
+        for (source, 0..) |field, index| {
             fields[index] = .{
                 .name = field.name,
                 .ty = try self.sealNode(field.ty),
