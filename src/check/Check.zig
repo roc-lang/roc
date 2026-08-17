@@ -31847,20 +31847,26 @@ const DerivedCodecWalk = struct {
 /// reaches itself finds the application already accounted for by the frame
 /// above. Arguments are compared at their resolved roots, which is the
 /// identity instantiation shares between an application and the recursive
-/// occurrences it substitutes into.
+/// occurrences it substitutes into. An application with no declaration entry
+/// has no backing to open either, so the caller reports it rather than
+/// descending.
 fn takeDerivedCodecBackingWalk(
     self: *Self,
     walk: *DerivedCodecWalk,
     nominal: types_mod.NominalType,
 ) Allocator.Error!bool {
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse return true;
-    const args = self.types.sliceNominalArgs(nominal);
+    // The argument list points into the types store, which resolution touches.
+    const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
+    defer self.gpa.free(args);
+    for (args) |*arg| arg.* = self.types.resolveVar(arg.*).var_;
+
     for (walk.walked_apps.items) |app| {
         if (app.decl != decl_idx or app.args_len != args.len) continue;
         const recorded = walk.appArgs(app);
         var same = true;
         for (recorded, args) |recorded_arg, arg| {
-            if (self.types.resolveVar(recorded_arg).var_ != self.types.resolveVar(arg).var_) {
+            if (self.types.resolveVar(recorded_arg).var_ != arg) {
                 same = false;
                 break;
             }
