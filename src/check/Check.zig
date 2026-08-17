@@ -524,6 +524,9 @@ value_lookup_tracking: std.ArrayListUnmanaged(ValueLookupEntry),
 /// Tracks expressions whose checked type contains an error, even if annotation
 /// preservation later gives their raw expr var a non-error type.
 erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
+/// Tracks unannotated expression identities whose checked value type contains
+/// an error and therefore cannot be used to introduce a parent call relation.
+call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
@@ -2388,6 +2391,7 @@ fn initAssumePrepared(
         .binding_scheme_nodes = binding_scheme_nodes,
         .value_lookup_tracking = .empty,
         .erroneous_value_exprs = .empty,
+        .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
         .erroneous_value_patterns = .empty,
         .accepted_nominal_constructor_backings = .empty,
         .hoist_frames = .empty,
@@ -2498,6 +2502,7 @@ pub fn deinit(self: *Self) void {
     self.predeclared_local_scheme_vars.deinit(self.gpa);
     self.value_lookup_tracking.deinit(self.gpa);
     self.erroneous_value_exprs.deinit(self.gpa);
+    self.call_operand_type_error_exprs.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
@@ -10528,15 +10533,44 @@ fn varsHaveUnresolvedNonLiteralStaticDispatchConstraints(
 /// runtime symbols plus the internal roc__ namespace are reserved.
 ///
 /// Applications never pay for this: it only runs for platform modules.
+///
+/// One hosted function declaration, identified by the module and definition
+/// the hosted transform rewrote rather than by any name it goes under.
+const HostedTarget = struct {
+    module: *const ModuleEnv,
+    def: CIR.Def.Idx,
+};
+
+/// Record every hosted function `module` declares, keeping one display name per
+/// definition for the missing-entry diagnostic.
+fn collectDeclaredHostedFunctions(
+    self: *Self,
+    declared: *std.AutoHashMap(HostedTarget, []const u8),
+    module: *const ModuleEnv,
+) std.mem.Allocator.Error!void {
+    for (module.store.sliceDefs(module.hosted_defs)) |def_idx| {
+        const def = module.store.getDef(def_idx);
+        const expr = module.store.getExpr(def.expr);
+        // A declaration the hosted transform rewrote can still be replaced by a
+        // runtime error afterwards, when canonicalization rejects the
+        // declaration itself. That is already reported where it was rejected,
+        // and it names no host function for the section to map.
+        if (expr != .e_hosted_lambda) continue;
+
+        const name = try hostedDefinitionDisplayName(self.gpa, module, expr.e_hosted_lambda.symbol_name);
+        const gop = try declared.getOrPut(.{ .module = module, .def = def_idx });
+        if (gop.found_existing) {
+            self.gpa.free(name);
+        } else {
+            gop.value_ptr.* = name;
+        }
+    }
+}
+
 fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     if (self.cir.module_kind != .platform) return;
 
     const section = self.cir.hosted_entries.items.items;
-
-    const HostedTarget = struct {
-        module: *const ModuleEnv,
-        def: CIR.Def.Idx,
-    };
 
     // Exact definitions of every hosted function declared by imported modules.
     // Display names are retained only for missing-entry diagnostics.
@@ -10550,22 +10584,16 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     // dependencies), since hosted functions can live in modules the platform
     // root never imports directly. The hosted transform publishes the exact
     // rewritten defs, including associated items of nested type modules.
+    //
+    // The platform root is walked alongside them. A section entry names its
+    // target through an import, so an entry can never resolve to a definition
+    // in the root itself; a hosted declaration written there is therefore
+    // always missing from the section, and reporting it here is what tells the
+    // author so instead of leaving a declaration no linker symbol reaches.
     for (self.owner_modules) |imported_env| {
-        for (imported_env.store.sliceDefs(imported_env.hosted_defs)) |def_idx| {
-            const def = imported_env.store.getDef(def_idx);
-            const expr = imported_env.store.getExpr(def.expr);
-            std.debug.assert(expr == .e_hosted_lambda);
-
-            const target = HostedTarget{ .module = imported_env, .def = def_idx };
-            const name = try hostedDefinitionDisplayName(self.gpa, imported_env, expr.e_hosted_lambda.symbol_name);
-            const gop = try declared.getOrPut(target);
-            if (gop.found_existing) {
-                self.gpa.free(name);
-            } else {
-                gop.value_ptr.* = name;
-            }
-        }
+        try self.collectDeclaredHostedFunctions(&declared, imported_env);
     }
+    try self.collectDeclaredHostedFunctions(&declared, self.cir);
 
     // Walk the section's resolved targets, detect duplicate functions and
     // duplicate/reserved symbols (provides symbols share the namespace).
@@ -15886,6 +15914,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const expr = self.cir.store.getExpr(expr_idx);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
     const expr_var_raw = ModuleEnv.varFrom(expr_idx);
+    // Expression nodes can be checked again after more constraints settle. The
+    // dense slot always describes this check, so a prior error cannot retire a
+    // parent after the expression has checked successfully.
+    self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = false;
 
     // Consume the checking_call_arg flag: it applies only to this immediate
     // checkExpr call and must not propagate to recursive calls (e.g. nested call
@@ -17071,9 +17103,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             break :blk_instantiate call_func_expr_var;
                         }
                     };
-                    // Resolve the func var
-                    const resolved_func = self.types.resolveVar(func_var).desc.content;
-                    var did_err = resolved_func == .err;
+                    // The instantiated callable is the authoritative callee result.
+                    // Imported static methods can use an erroneous source placeholder
+                    // whose binding scheme instantiates to a valid callable here.
+                    var did_err = self.types.resolveVar(func_var).desc.content == .err;
 
                     // Second, check the arguments being called
                     // It could be effectful, e.g. `fn(mk_arg!())`
@@ -17082,18 +17115,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         self.checking_call_arg = true;
                         self.checking_immediate_callee = false;
                         does_fx = try self.checkExpr(call_arg_idx, env, child_expected) or does_fx;
-
-                        // Check if this arg errored
-                        did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(call_arg_idx)).desc.content == .err);
                     }
+                    const args_did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, call_arg_expr_idxs);
+                    did_err = args_did_err or did_err;
 
                     if (did_err) {
-                        // If the fn or any args had error, propagate the error
-                        // without doing any additional work. The call itself is
-                        // the executable boundary that reaches the invalid
-                        // child, so publish it as an explicit runtime error.
-                        try self.markErroneous(expr_var);
-                        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+                        try self.retireCallLikeExpr(expr_idx, expr_var);
                     } else {
                         // From the base function type, extract its shape. Effect
                         // classification happens only after arguments unify below:
@@ -17371,13 +17398,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             ) or does_fx;
         },
         .e_binop => |binop| {
-            does_fx = try self.checkBinopExpr(expr_idx, expr_region, env, binop, nested_expected) or does_fx;
+            does_fx = try self.checkBinopExpr(expr_idx, expr_var, expr_region, env, binop, nested_expected) or does_fx;
         },
         .e_unary_minus => |unary| {
-            does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_region, env, unary, nested_expected) or does_fx;
+            does_fx = try self.checkUnaryMinusExpr(expr_idx, expr_var, expr_region, env, unary, nested_expected) or does_fx;
         },
         .e_unary_not => |unary| {
-            does_fx = try self.checkUnaryNotExpr(expr_idx, expr_region, env, unary, nested_expected) or does_fx;
+            does_fx = try self.checkUnaryNotExpr(expr_idx, expr_var, expr_region, env, unary, nested_expected) or does_fx;
         },
         .e_field_access => |field_access| {
             std.debug.assert(field_access.segments.len > 0);
@@ -17494,7 +17521,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const first_var = ModuleEnv.varFrom(interpolation.first);
             const str_var = try self.freshStr(env, expr_region);
             _ = try self.unify(first_var, str_var, env);
-            var did_err = self.types.resolveVar(first_var).desc.content == .err;
+            var did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{interpolation.first});
 
             const parts = self.cir.store.sliceExpr(interpolation.parts);
             std.debug.assert(parts.len % 2 == 0);
@@ -17503,15 +17530,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             while (part_i < parts.len) : (part_i += 2) {
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(parts[part_i], env, child_expected) or does_fx;
-                const interpolated_var = ModuleEnv.varFrom(parts[part_i]);
-                did_err = did_err or (self.types.resolveVar(interpolated_var).desc.content == .err);
 
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(parts[part_i + 1], env, child_expected) or does_fx;
                 const following_segment_var = ModuleEnv.varFrom(parts[part_i + 1]);
                 _ = try self.unify(str_var, following_segment_var, env);
-                did_err = did_err or (self.types.resolveVar(following_segment_var).desc.content == .err);
             }
+            did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, parts) or did_err;
 
             const pair_elems = try self.types.appendVars(&.{ item_var, str_var });
             const pair_var = try self.freshFromContent(.{ .structure = .{
@@ -17528,9 +17553,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 .ret = step_ret_var,
             } } }, env, expr_region);
 
-            if (did_err) {
-                try self.markErroneous(expr_var);
-            } else {
+            if (!did_err) {
                 const dispatcher_var = (try self.explicitTypeSuffixVar(expr_idx, expr_region, env)) orelse expr_var;
                 const arg_vars = [_]Var{ first_var, rest_var };
                 const constraint_fn_var = try self.mkInterpolationConstraint(
@@ -17557,7 +17580,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_method_call => |method_call| {
             does_fx = try self.checkExpr(method_call.receiver, env, child_expected) or does_fx;
             const receiver_var = ModuleEnv.varFrom(method_call.receiver);
-            var did_err = self.types.resolveVar(receiver_var).desc.content == .err;
+            var did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{method_call.receiver});
 
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
             var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
@@ -17570,12 +17593,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
                 const arg_var = ModuleEnv.varFrom(arg_expr_idx);
                 arg_vars[i] = arg_var;
-                did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
             }
+            did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs) or did_err;
 
-            if (did_err) {
-                try self.markErroneous(expr_var);
-            } else {
+            if (!did_err) {
                 const constraint_fn_var = try self.mkMethodCallConstraint(
                     receiver_var,
                     arg_vars,
@@ -17602,17 +17623,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_dispatch_call => |method_call| {
             does_fx = try self.checkExpr(method_call.receiver, env, child_expected) or does_fx;
-            var did_err = self.types.resolveVar(ModuleEnv.varFrom(method_call.receiver)).desc.content == .err;
+            _ = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{method_call.receiver});
 
-            for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
+            const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
+            for (arg_expr_idxs) |arg_expr_idx| {
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
-                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
             }
+            _ = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs);
 
-            if (did_err) {
-                try self.markErroneous(expr_var);
-            }
             if (try self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
                 self.markCurrentHoistObservableEffect();
                 does_fx = true;
@@ -17649,11 +17668,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             const lhs_var = ModuleEnv.varFrom(eq.lhs);
             arg_vars[0] = ModuleEnv.varFrom(eq.rhs);
-            if (self.types.resolveVar(lhs_var).desc.content == .err or
-                self.types.resolveVar(arg_vars[0]).desc.content == .err)
-            {
-                try self.markErroneous(expr_var);
-            } else {
+            if (!try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{ eq.lhs, eq.rhs })) {
                 const constraint_fn_var = try self.mkMethodCallConstraint(
                     lhs_var,
                     arg_vars,
@@ -17679,18 +17694,15 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
             defer arg_vars_alloc.free(arg_vars);
 
-            var did_err = false;
             for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
                 const arg_var = ModuleEnv.varFrom(arg_expr_idx);
                 arg_vars[i] = arg_var;
-                did_err = did_err or (self.types.resolveVar(arg_var).desc.content == .err);
             }
+            const did_err = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs);
 
-            if (did_err) {
-                try self.markErroneous(expr_var);
-            } else {
+            if (!did_err) {
                 const dispatcher_var = self.typeDispatchOwnerVar(method_call.type_dispatch_stmt);
                 const constraint_fn_var = try self.mkTypeMethodCallConstraint(
                     dispatcher_var,
@@ -17716,16 +17728,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_type_dispatch_call => |method_call| {
-            var did_err = false;
-            for (self.cir.store.sliceExpr(method_call.args)) |arg_expr_idx| {
+            const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
+            for (arg_expr_idxs) |arg_expr_idx| {
                 self.checking_call_arg = true;
                 does_fx = try self.checkExpr(arg_expr_idx, env, child_expected) or does_fx;
-                did_err = did_err or (self.types.resolveVar(ModuleEnv.varFrom(arg_expr_idx)).desc.content == .err);
             }
+            _ = try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs);
 
-            if (did_err) {
-                try self.markErroneous(expr_var);
-            }
             if (try self.varIsEffectfulFunction(method_call.constraint_fn_var)) {
                 self.markCurrentHoistObservableEffect();
                 does_fx = true;
@@ -17763,6 +17772,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             self.markCurrentHoistObservableEffect();
             does_fx = try self.checkIteratorForLoop(
                 ModuleEnv.nodeIdxFrom(expr_idx),
+                .{ .expr_idx = expr_idx, .expr_var = expr_var },
                 for_expr.patt,
                 for_expr.expr,
                 for_expr.body,
@@ -17928,6 +17938,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     if (mb_anno_vars == null) {
         if (try self.varContainsError(expr_var, &self.var_set)) {
             try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+            self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = true;
         }
     }
 
@@ -17992,6 +18003,37 @@ fn checkExprInCallPosition(
     defer self.checking_call_arg = saved_checking_call_arg;
     defer self.checking_immediate_callee = saved_checking_immediate_callee;
     return self.checkExpr(expr_idx, env, expected);
+}
+
+/// Retire a call-like expression before it introduces dispatch or call
+/// relations when one of its already-checked operands is an erroneous value.
+/// The child expression set is explicit checker output; operand identity comes
+/// only from that set, never from the operand's solved type shape.
+fn retireCallLikeExprWithErroneousOperands(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+    operand_exprs: []const CIR.Expr.Idx,
+) Allocator.Error!bool {
+    if (!self.callLikeOperandsContainErroneousValue(operand_exprs)) return false;
+
+    try self.retireCallLikeExpr(expr_idx, expr_var);
+    return true;
+}
+
+fn retireCallLikeExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
+    try self.markErroneous(expr_var);
+    if (!self.erroneous_value_exprs.contains(expr_idx)) {
+        try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+    }
+    self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = true;
+}
+
+fn callLikeOperandsContainErroneousValue(self: *const Self, operand_exprs: []const CIR.Expr.Idx) bool {
+    for (operand_exprs) |operand_expr| {
+        if (self.call_operand_type_error_exprs.items[nodeSlot(operand_expr)]) return true;
+    }
+    return false;
 }
 
 fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
@@ -19216,6 +19258,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 const for_expected = if (blocks_later_hoists) base_statement_expected else statement_expected;
                 does_fx = try self.checkIteratorForLoop(
                     ModuleEnv.nodeIdxFrom(stmt_idx),
+                    null,
                     for_stmt.patt,
                     for_stmt.expr,
                     for_stmt.body,
@@ -20272,15 +20315,15 @@ fn checkMatchExpr(
 
 /// Check the unary expr.
 /// Desugars `-a` to `a.negate() : a -> a`,
-fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryMinus, expected: Expected) Allocator.Error!bool {
+fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryMinus, expected: Expected) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const expr_var = @as(Var, ModuleEnv.varFrom(expr_idx));
     const child_expected = expected.forStatement();
 
     // Check the operand expression
     const does_fx = try self.checkExpr(unary.expr, env, child_expected);
+    if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{unary.expr})) return does_fx;
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -20302,15 +20345,15 @@ fn checkUnaryMinusExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region,
 
 /// Check the unary expr.
 /// Desugars `!a` to `a.not() : a -> a`,
-fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryNot, expected: Expected) Allocator.Error!bool {
+fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var, expr_region: Region, env: *Env, unary: CIR.Expr.UnaryNot, expected: Expected) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const expr_var = @as(Var, ModuleEnv.varFrom(expr_idx));
     const child_expected = expected.forStatement();
 
     // Check the operand expression
     const does_fx = try self.checkExpr(unary.expr, env, child_expected);
+    if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{unary.expr})) return does_fx;
 
     // Get the not method + ret var
     // Here, we assert that the arg and ret of `not` are same type
@@ -20334,6 +20377,7 @@ fn checkUnaryNotExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_region: Region, e
 fn checkBinopExpr(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
     expr_region: Region,
     env: *Env,
     binop: CIR.Expr.Binop,
@@ -20342,7 +20386,6 @@ fn checkBinopExpr(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const expr_var = ModuleEnv.varFrom(expr_idx);
     const lhs_var = @as(Var, ModuleEnv.varFrom(binop.lhs));
     const rhs_var = @as(Var, ModuleEnv.varFrom(binop.rhs));
     const child_expected = expected.forStatement();
@@ -20351,6 +20394,12 @@ fn checkBinopExpr(
     var does_fx = false;
     does_fx = try self.checkExpr(binop.lhs, env, child_expected) or does_fx;
     does_fx = try self.checkExpr(binop.rhs, env, child_expected) or does_fx;
+
+    if (binop.op != .@"and" and binop.op != .@"or" and
+        try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, &.{ binop.lhs, binop.rhs }))
+    {
+        return does_fx;
+    }
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .div_trunc => {
@@ -20994,9 +21043,15 @@ fn publishUnaryDispatchExpr(
     );
 }
 
+const IteratorLoopExpr = struct {
+    expr_idx: CIR.Expr.Idx,
+    expr_var: Var,
+};
+
 fn checkIteratorForLoop(
     self: *Self,
     loop_node: CIR.Node.Idx,
+    loop_expr: ?IteratorLoopExpr,
     pattern: CIR.Pattern.Idx,
     iterable: CIR.Expr.Idx,
     body: CIR.Expr.Idx,
@@ -21015,28 +21070,38 @@ fn checkIteratorForLoop(
     const iterable_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(iterable));
     const iterable_var: Var = ModuleEnv.varFrom(iterable);
 
+    const iterable_is_erroneous = if (loop_expr) |expr|
+        try self.retireCallLikeExprWithErroneousOperands(expr.expr_idx, expr.expr_var, &.{iterable})
+    else
+        self.callLikeOperandsContainErroneousValue(&.{iterable});
     const iterator_var = try self.mkIterVar(item_var, env, iterable_region);
     const iter_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("iter"));
-    const iter_fn_var = try self.mkSyntheticReceiverDispatchConstraint(
-        iterable_var,
-        &.{},
-        iterator_var,
-        iter_method,
-        env,
-        iterable_region,
-    );
+    const iter_fn_var = if (iterable_is_erroneous)
+        try self.mkRejectedSyntheticReceiverDispatchFn(iterable_var, &.{}, iterator_var, env, iterable_region)
+    else
+        try self.mkSyntheticReceiverDispatchConstraint(
+            iterable_var,
+            &.{},
+            iterator_var,
+            iter_method,
+            env,
+            iterable_region,
+        );
 
     const step = try self.mkIteratorStepContent(item_var, iterator_var, env);
     const step_var = try self.freshFromContent(step.content, env, loop_region);
     const next_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("next"));
-    const next_fn_var = try self.mkSyntheticReceiverDispatchConstraint(
-        iterator_var,
-        &.{},
-        step_var,
-        next_method,
-        env,
-        loop_region,
-    );
+    const next_fn_var = if (iterable_is_erroneous)
+        try self.mkRejectedSyntheticReceiverDispatchFn(iterator_var, &.{}, step_var, env, loop_region)
+    else
+        try self.mkSyntheticReceiverDispatchConstraint(
+            iterator_var,
+            &.{},
+            step_var,
+            next_method,
+            env,
+            loop_region,
+        );
 
     try self.cir.recordForLoopDispatchPlan(
         loop_node,
@@ -21107,6 +21172,41 @@ fn mkSyntheticReceiverDispatchConstraint(
     );
 }
 
+fn mkRejectedSyntheticReceiverDispatchFn(
+    self: *Self,
+    receiver_var: Var,
+    arg_vars: []const Var,
+    ret_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const fn_var = try self.mkReceiverDispatchFnVar(receiver_var, arg_vars, ret_var, env, region);
+    try self.markStaticDispatchFnRejected(fn_var);
+    return fn_var;
+}
+
+fn mkReceiverDispatchFnVar(
+    self: *Self,
+    receiver_var: Var,
+    arg_vars: []const Var,
+    ret_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    var all_args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
+    const all_args_alloc = all_args_sfa.get();
+    const all_args = try all_args_alloc.alloc(Var, arg_vars.len + 1);
+    defer all_args_alloc.free(all_args);
+    all_args[0] = receiver_var;
+    @memcpy(all_args[1..], arg_vars);
+
+    const args_range = try self.types.appendVars(all_args);
+    return self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
+        .args = args_range,
+        .ret = ret_var,
+    } } }, env, region);
+}
+
 fn mkReceiverDispatchConstraint(
     self: *Self,
     receiver_var: Var,
@@ -21117,18 +21217,7 @@ fn mkReceiverDispatchConstraint(
     region: Region,
     method_expr_idx: ?CIR.Expr.Idx,
 ) Allocator.Error!Var {
-    var all_args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-    const all_args_alloc = all_args_sfa.get();
-    const all_args = try all_args_alloc.alloc(Var, arg_vars.len + 1);
-    defer all_args_alloc.free(all_args);
-    all_args[0] = receiver_var;
-    @memcpy(all_args[1..], arg_vars);
-
-    const args_range = try self.types.appendVars(all_args);
-    const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
-        .args = args_range,
-        .ret = ret_var,
-    } } }, env, region);
+    const constraint_fn_var = try self.mkReceiverDispatchFnVar(receiver_var, arg_vars, ret_var, env, region);
 
     const constraint = StaticDispatchConstraint{
         .fn_name = method_name,

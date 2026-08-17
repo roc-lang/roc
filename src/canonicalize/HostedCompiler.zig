@@ -9,30 +9,12 @@ const base = @import("base");
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
 
-/// Whether a platform header's `hosted` section can name a declaration in a
-/// module of this kind.
-///
-/// A hosted entry resolves through an imported module environment and binds to
-/// a definition that import owns, so a package's own root module is never a
-/// hosted target. The platform module is the case that matters: its
-/// annotation-only declarations have no entry that could map them to a linker
-/// symbol, so they are declarations without a value rather than host
-/// procedures.
-fn kindDeclaresHostedFunctions(kind: ModuleEnv.ModuleKind) bool {
-    return switch (kind) {
-        .type_module, .module, .hosted => true,
-        .platform, .app, .default_app, .package, .malformed => false,
-    };
-}
-
 /// Replace ordinary e_anno_only expressions in a Type Module with e_hosted_lambda operations (in-place).
 /// Compiler-derived associated methods have their own CIR tag and are not host declarations.
 /// This transforms standalone annotations into hosted lambda operations that will be
 /// provided by the host application at runtime.
 /// Records the rewritten definitions as explicit output for later compiler stages.
 pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
-    if (!kindDeclaresHostedFunctions(env.module_kind)) return;
-
     const gpa = env.gpa;
     const hosted_defs_start = env.store.scratchDefTop();
 
@@ -141,4 +123,74 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!void {
     }
 
     env.hosted_defs = try env.store.defSpanFrom(hosted_defs_start);
+}
+
+/// Information about a hosted function for sorting and indexing
+pub const HostedFunctionInfo = struct {
+    symbol_name: base.Ident.Idx,
+    expr_idx: CIR.Expr.Idx,
+    name_text: []const u8, // For sorting
+};
+
+/// Collect all hosted functions from the module (transitively through imports)
+/// and sort them alphabetically by fully-qualified name (with `!` stripped).
+pub fn collectAndSortHostedFunctions(env: *ModuleEnv) Allocator.Error!std.ArrayList(HostedFunctionInfo) {
+    var hosted_fns = std.ArrayList(HostedFunctionInfo).empty;
+
+    // Use a hash set to deduplicate by symbol identifier (not string comparison)
+    var seen_symbols = std.AutoHashMap(base.Ident.Idx, void).init(env.gpa);
+    defer seen_symbols.deinit();
+
+    // Iterate through all defs to find e_hosted_lambda expressions
+    const all_defs = env.store.sliceDefs(env.all_defs);
+    for (all_defs) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const expr = env.store.getExpr(def.expr);
+
+        if (expr == .e_hosted_lambda) {
+            const hosted = expr.e_hosted_lambda;
+            const local_name = env.getIdent(hosted.symbol_name);
+
+            // Deduplicate based on symbol identifier
+            const gop = try seen_symbols.getOrPut(hosted.symbol_name);
+            if (gop.found_existing) {
+                continue; // Skip duplicate
+            }
+
+            // Build fully-qualified name: "ModuleName.functionName"
+            // Strip the .roc extension from module name (e.g., "Stdout.roc" -> "Stdout")
+            var module_name = env.module_name;
+
+            if (std.mem.endsWith(u8, module_name, ".roc")) {
+                module_name = module_name[0 .. module_name.len - 4];
+            }
+            const qualified_name = try std.fmt.allocPrint(env.gpa, "{s}.{s}", .{ module_name, local_name });
+            defer env.gpa.free(qualified_name);
+
+            // Strip the `!` suffix for sorting (e.g., "Stdout.line!" -> "Stdout.line")
+            const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                qualified_name[0 .. qualified_name.len - 1]
+            else
+                qualified_name;
+
+            // Allocate a copy for storage
+            const name_copy = try env.gpa.dupe(u8, stripped_name);
+
+            try hosted_fns.append(env.gpa, .{
+                .symbol_name = hosted.symbol_name,
+                .expr_idx = def.expr,
+                .name_text = name_copy,
+            });
+        }
+    }
+
+    // Sort alphabetically by stripped qualified name
+    const SortContext = struct {
+        pub fn lessThan(_: void, a: HostedFunctionInfo, b: HostedFunctionInfo) bool {
+            return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+        }
+    };
+    std.mem.sort(HostedFunctionInfo, hosted_fns.items, {}, SortContext.lessThan);
+
+    return hosted_fns;
 }

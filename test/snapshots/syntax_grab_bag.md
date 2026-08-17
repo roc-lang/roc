@@ -270,6 +270,8 @@ MISSING METHOD - syntax_grab_bag.md:101:3:101:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
+TYPE MISMATCH - syntax_grab_bag.md:175:26:175:27
+TYPE MISMATCH - syntax_grab_bag.md:175:34:175:40
 DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 MISSING METHOD - syntax_grab_bag.md:189:26:189:40
 MISSING METHOD - syntax_grab_bag.md:189:26:189:66
@@ -872,6 +874,36 @@ This argument has the type:
 But add_one needs the first argument to be:
 
     U64
+
+── ✗ type mismatch ─────────────────────────────────── syntax_grab_bag.md:175:26
+
+This expression is used in an unexpected way.
+
+Stdout.line!("Adding ${n} to ${number}")
+                       ^
+
+It has the type:
+
+    Dec
+
+But you are trying to use it as:
+
+    Str
+
+── ✗ type mismatch ─────────────────────────────────── syntax_grab_bag.md:175:34
+
+This expression is used in an unexpected way.
+
+Stdout.line!("Adding ${n} to ${number}")
+                               ^^^^^^
+
+It has the type:
+
+    Dec
+
+But you are trying to use it as:
+
+    Str
 
 ── ● declaration has no value ───────────────────────── syntax_grab_bag.md:201:1
 

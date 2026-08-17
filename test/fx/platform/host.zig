@@ -1313,6 +1313,33 @@ fn hostedHostRoundtripBoxed(boxed: ?[*]u8) callconv(.c) ?[*]u8 {
     return boxed;
 }
 
+/// The one boxed Roc value `store_seed!` is holding for `take_seed!`.
+/// Ownership moves in on the store and back out on the take, so the host never
+/// needs to know the value's type to keep its refcount balanced.
+var stored_seed: ?[*]u8 = null;
+
+fn hostedHostStoreSeed(boxed: ?[*]u8) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    if (stored_seed != null) {
+        ops.crash("host was given a second seed while still holding one");
+        unreachable;
+    }
+    stored_seed = boxed orelse {
+        ops.crash("host was given a null seed");
+        unreachable;
+    };
+}
+
+fn hostedHostTakeSeed() callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
+    const seed = stored_seed orelse {
+        ops.crash("host was asked for a seed it was never given");
+        unreachable;
+    };
+    stored_seed = null;
+    return seed;
+}
+
 fn hostedHostStoreBoxed(boxed: ?[*]u8) callconv(.c) void {
     const ops = g_roc_ops.?;
     if (stored_boxed_callable) |prev| {
@@ -1409,6 +1436,8 @@ comptime {
     @export(&hostedHostRoundtripBoxed, .{ .name = "roc_host_roundtrip_boxed", .visibility = .hidden });
     @export(&hostedHostBoxedTransition, .{ .name = "roc_host_boxed_transition", .visibility = .hidden });
     @export(&hostedHostStoreBoxed, .{ .name = "roc_host_store_boxed", .visibility = .hidden });
+    @export(&hostedHostStoreSeed, .{ .name = "roc_host_store_seed", .visibility = .hidden });
+    @export(&hostedHostTakeSeed, .{ .name = "roc_host_take_seed", .visibility = .hidden });
     @export(&hostedHostStoredBoxedCall, .{ .name = "roc_host_stored_boxed_call", .visibility = .hidden });
     @export(&hostedHostSumStrBytes, .{ .name = "roc_host_sum_str_bytes", .visibility = .hidden });
     @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });

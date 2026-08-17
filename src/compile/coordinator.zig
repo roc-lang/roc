@@ -492,7 +492,8 @@ pub const ModuleState = struct {
     module_role: ModuleEnv.ModuleRole = .user,
     /// Top-level names that package metadata requires as compile-time roots.
     explicit_root_ident_names: []const []const u8 = &.{},
-    validate_as_explicit_roots: bool = false,
+    /// Post-canonicalization validation this module receives.
+    validation: can.Can.Validation = .checking,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -3872,12 +3873,11 @@ pub const Coordinator = struct {
                 try can.BuiltinLowLevel.apply(env);
             } else if (self.enable_hosted_transform) {
                 // Only the platform package provides hosted functions, so only
-                // its modules are offered to the transform, which then applies
-                // its own module-kind rule. Regular package/module dependencies
-                // may legitimately contain annotation-only (unimplemented)
-                // declarations; turning those into hosted lambdas would
-                // incorrectly make the effectful-function-name check flag them
-                // as effects.
+                // its modules' annotation-only declarations become hosted
+                // lambdas. Regular package/module dependencies may legitimately
+                // contain annotation-only (unimplemented) declarations; turning
+                // those into hosted lambdas would incorrectly make the
+                // effectful-function-name check flag them as effects.
                 const is_platform_pkg = self.platform_root_package_name != null and
                     std.mem.eql(u8, result.package_name, self.platform_root_package_name.?);
                 if (is_platform_pkg) {
@@ -4683,7 +4683,7 @@ pub const Coordinator = struct {
                     std.debug.panic("compile.coordinator.tryUnblock missing cached AST for {s}", .{mod.name}),
                 .depth = mod.depth,
                 .imported_modules = imported_modules,
-                .validate_as_explicit_roots = mod.validate_as_explicit_roots,
+                .validation = mod.validation,
             },
         });
     }
@@ -5107,7 +5107,7 @@ pub const Coordinator = struct {
             task.source_dir,
             known_modules.items,
             task.imported_modules,
-            task.validate_as_explicit_roots,
+            task.validation,
         );
 
         const canonicalize_ns = readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);

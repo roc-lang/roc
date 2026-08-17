@@ -1407,14 +1407,9 @@ fn activeDeclEntryIsDefiningItem(self: *Self, binding: ActiveDeclBinding, ident:
     return self.isDefiningBoundVar(pattern_idx);
 }
 
-/// Whether an annotation-only declaration in this module names something a
-/// lookup can resolve to. It does in the kinds whose annotation-only
-/// declarations get an implementation from outside the module: a hosted module
-/// and the builtins. A platform module's own annotation-only declarations are
-/// not among them—the platform header's `hosted` section cannot name them—so
-/// they are declarations without a value and nothing may reference them.
 fn annoOnlyDeclsResolveAsValues(self: *const Self) bool {
     return self.env.module_kind == .hosted or
+        self.env.module_kind == .platform or
         self.env.module_role == .builtin;
 }
 
@@ -4777,6 +4772,26 @@ fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?I
     if (pattern == .as) return pattern.as.ident;
     return null;
 }
+
+/// Which post-canonicalization validation a module receives.
+pub const Validation = enum {
+    /// Roc's user-facing app/type-module validation: a headerless file must be
+    /// either a type module whose nominal type matches the file name, or a
+    /// default app with a valid `main!`.
+    checking,
+    /// Validation for a module whose compile-time roots are requested
+    /// explicitly rather than derived from an app entrypoint or a type module.
+    /// A headerless file that is neither of those becomes a plain module.
+    explicit_roots,
+
+    /// Run the validation this mode selects.
+    pub fn run(self: Validation, czer: *Self) std.mem.Allocator.Error!void {
+        switch (self) {
+            .checking => try czer.validateForChecking(),
+            .explicit_roots => try czer.validateForExplicitRoots(),
+        }
+    }
+};
 
 /// Finalize a module that will be published through explicit checked-artifact
 /// root requests instead of Roc's user-facing `roc check` app/type-module

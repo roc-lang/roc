@@ -86,7 +86,6 @@ pub fn run(
 
 const ProcedureModuleView = struct {
     key: checked.CheckedModuleArtifactKey,
-    module_identity: checked.ModuleIdentity,
     canonical_names: *const names.CanonicalNameStore,
     checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView,
@@ -95,7 +94,6 @@ const ProcedureModuleView = struct {
     entry_wrappers: *const checked.EntryWrapperTable,
     intrinsic_wrappers: *const checked.IntrinsicWrapperTable,
     hosted_procs: *const checked.HostedProcTable,
-    hosted_bindings: *const checked.HostedBindingTable,
     method_registry: *const static_dispatch.MethodRegistry,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     checked_procedure_templates: *const checked.CheckedProcedureTemplateTable,
@@ -562,7 +560,6 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
     const checked_module = modules.root.module;
     return .{
         .key = checked_module.key,
-        .module_identity = checked_module.module_identity,
         .canonical_names = &checked_module.canonical_names,
         .checked_types = checked_module.checked_types.view(),
         .checked_bodies = checked_module.checked_bodies.view(),
@@ -571,7 +568,6 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
         .entry_wrappers = &checked_module.entry_wrappers,
         .intrinsic_wrappers = &checked_module.intrinsic_wrappers,
         .hosted_procs = &checked_module.hosted_procs,
-        .hosted_bindings = &checked_module.hosted_bindings,
         .method_registry = &checked_module.method_registry,
         .static_dispatch_plans = &checked_module.static_dispatch_plans,
         .checked_procedure_templates = &checked_module.checked_procedure_templates,
@@ -589,7 +585,6 @@ fn rootProcedureModule(modules: Common.CheckedModules) ProcedureModuleView {
 fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModuleView {
     return .{
         .key = import.key,
-        .module_identity = import.module_identity,
         .canonical_names = import.canonical_names,
         .checked_types = import.checked_types,
         .checked_bodies = import.checked_bodies,
@@ -598,7 +593,6 @@ fn procedureModuleFromImport(import: checked.ImportedModuleView) ProcedureModule
         .entry_wrappers = import.entry_wrappers,
         .intrinsic_wrappers = import.intrinsic_wrappers,
         .hosted_procs = import.hosted_procs,
-        .hosted_bindings = import.hosted_bindings,
         .method_registry = import.method_registry,
         .static_dispatch_plans = import.static_dispatch_plans,
         .checked_procedure_templates = import.checked_procedure_templates,
@@ -686,15 +680,18 @@ const HostedCatalogEntry = struct {
     symbol_text: []const u8,
     dispatch_index: u32,
     order: []const u8,
-    module_key: checked.CheckedModuleArtifactKey,
+    module_key: [32]u8,
     def_idx: u32,
 };
 
+/// Which checked definition a hosted binding names.
 const HostedProcedureKey = struct {
-    checked_module_digest: [32]u8,
+    module_key: [32]u8,
     def_idx: u32,
 };
 
+/// The platform header's hosted bindings plus the names that read their
+/// external symbols.
 const HostedBindingView = struct {
     table: *const checked.HostedBindingTable,
     names: *const names.CanonicalNameStore,
@@ -3383,8 +3380,8 @@ const ProcedureBuilder = struct {
     ) ?MethodTargetLookup {
         const candidate_owner = methodOwnerInProcedureNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
         const candidate_method = candidate.canonical_names.lookupMethodName(method_text) orelse return null;
-        const target = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
-        return .{ .module = candidate, .target = target };
+        const found = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
+        return .{ .module = candidate, .target = found.requireTarget("boxy procedure lowering") };
     }
 
     fn typeDescForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxyTypeDescId {
@@ -4235,101 +4232,99 @@ const ProcedureBuilder = struct {
         return .{ .start = start, .len = @intCast(field_name_ids.items.len) };
     }
 
-    /// Build the hosted catalog: every host procedure this build may emit an
-    /// extern for, carrying the linker symbol and dispatch slot the host was
-    /// compiled against.
-    ///
-    /// When a platform is in scope, its checked hosted binding table is the
-    /// sole authority for that set. Each binding names one declared procedure
-    /// by checked identity and supplies its symbol and dispatch slot, so the
-    /// catalog is exactly the bindings, in binding order. A declaration no
-    /// binding names has no host symbol and so has no catalog entry; checking
-    /// reports that omission as an invalid hosted section.
     fn initHostedCatalog(self: *ProcedureBuilder) Allocator.Error!void {
         if (self.resolved_workers.items.len == 0) return;
 
-        var declared = std.ArrayList(HostedCatalogEntry).empty;
-        defer declared.deinit(self.allocator);
+        var entries = std.ArrayList(HostedCatalogEntry).empty;
+        defer entries.deinit(self.allocator);
 
-        try self.appendHostedCatalogFromModule(&declared, rootProcedureModule(self.modules));
+        try self.appendHostedCatalogFromModule(&entries, rootProcedureModule(self.modules));
         for (self.modules.imports, 0..) |imported, index| {
             if (self.importModuleAlreadyScanned(imported.key, index)) continue;
-            try self.appendHostedCatalogFromModule(&declared, procedureModuleFromImport(imported));
+            try self.appendHostedCatalogFromModule(&entries, procedureModuleFromImport(imported));
         }
         for (self.modules.root.relation_modules, 0..) |relation, index| {
             if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
-            try self.appendHostedCatalogFromModule(&declared, procedureModuleFromImport(relation));
+            try self.appendHostedCatalogFromModule(&entries, procedureModuleFromImport(relation));
         }
 
-        if (self.hostedBindingTable()) |bindings| {
+        if (self.hostedBindingView()) |binding_view| {
+            // The platform header's hosted section is what gives each hosted
+            // function its linker symbol and its host dispatch slot, so build
+            // the catalog from the bindings checking output for that section
+            // rather than from every hosted declaration in scope.
             var declared_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
             defer declared_by_target.deinit();
-            try declared_by_target.ensureTotalCapacity(@intCast(declared.items.len));
-            for (declared.items, 0..) |entry, index| {
+            try declared_by_target.ensureTotalCapacity(@intCast(entries.items.len));
+            for (entries.items, 0..) |entry, index| {
                 declared_by_target.putAssumeCapacityNoClobber(.{
-                    .checked_module_digest = entry.module_key.bytes,
+                    .module_key = entry.module_key,
                     .def_idx = entry.def_idx,
                 }, index);
             }
 
-            var entries = try std.ArrayList(HostedCatalogEntry).initCapacity(
-                self.allocator,
-                bindings.table.bindings.len,
-            );
-            errdefer entries.deinit(self.allocator);
-            for (bindings.table.bindings, 0..) |binding, dispatch_index| {
-                const declared_index = declared_by_target.get(.{
-                    .checked_module_digest = binding.target_checked_module.bytes,
+            var bound = std.ArrayList(HostedCatalogEntry).empty;
+            errdefer bound.deinit(self.allocator);
+            try bound.ensureTotalCapacity(self.allocator, binding_view.table.bindings.len);
+            for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
+                const entry_index = declared_by_target.get(.{
+                    .module_key = binding.target_checked_module.bytes,
                     .def_idx = @intFromEnum(binding.target_def),
-                }) orelse boxyLowerInvariant("platform hosted binding named a procedure no checked module declared");
-                var entry = declared.items[declared_index];
+                }) orelse boxyLowerInvariant("hosted section names a function with no hosted declaration in scope");
+                var entry = entries.items[entry_index];
                 entry.dispatch_index = @intCast(dispatch_index);
-                entry.symbol_text = bindings.names.externalSymbolNameText(binding.external_symbol_name);
-                entries.appendAssumeCapacity(entry);
+                entry.symbol_text = binding_view.names.externalSymbolNameText(binding.external_symbol_name);
+                bound.appendAssumeCapacity(entry);
             }
 
-            self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
+            // Bindings are walked in declaration order, so the catalog is
+            // already ordered by dispatch index.
+            self.hosted_catalog = try bound.toOwnedSlice(self.allocator);
             return;
         }
 
+        // Without a platform header there is no section to bind against, so
+        // every declaration in scope is its own dispatch slot in a stable order.
         const SortContext = struct {
             pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
                 return switch (std.mem.order(u8, a.order, b.order)) {
                     .lt => true,
                     .gt => false,
+                    // Two modules can declare the same order key at the same def
+                    // index, so the owning module breaks the remaining tie the
+                    // way Monotype and the default roc command both break it.
                     .eq => if (a.def_idx != b.def_idx)
                         a.def_idx < b.def_idx
                     else
-                        std.mem.order(u8, &a.module_key.bytes, &b.module_key.bytes) == .lt,
+                        std.mem.order(u8, &a.module_key, &b.module_key) == .lt,
                 };
             }
         };
-        std.mem.sort(HostedCatalogEntry, declared.items, {}, SortContext.lessThan);
+        std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
 
-        for (declared.items, 0..) |*entry, index| {
+        for (entries.items, 0..) |*entry, index| {
             entry.dispatch_index = @intCast(index);
         }
 
-        self.hosted_catalog = try declared.toOwnedSlice(self.allocator);
+        self.hosted_catalog = try entries.toOwnedSlice(self.allocator);
     }
 
-    /// The platform's checked hosted binding table, if a platform module is in
-    /// scope for this build.
-    fn hostedBindingTable(self: *ProcedureBuilder) ?HostedBindingView {
-        const root = rootProcedureModule(self.modules);
-        if (root.module_identity.kind == .platform) {
-            return .{ .table = root.hosted_bindings, .names = root.canonical_names };
+    /// The hosted bindings of the one platform module visible to this lowering.
+    fn hostedBindingView(self: *ProcedureBuilder) ?HostedBindingView {
+        if (self.modules.root.module.module_identity.kind == .platform) {
+            return .{
+                .table = &self.modules.root.module.hosted_bindings,
+                .names = &self.modules.root.module.canonical_names,
+            };
         }
         for (self.modules.imports) |imported| {
-            const view = procedureModuleFromImport(imported);
-            if (view.module_identity.kind == .platform) {
-                return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+            if (imported.module_identity.kind == .platform) {
+                return .{ .table = imported.hosted_bindings, .names = imported.canonical_names };
             }
         }
         for (self.modules.root.relation_modules) |relation| {
-            const view = procedureModuleFromImport(relation);
-            if (view.module_identity.kind == .platform) {
-                return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+            if (relation.module_identity.kind == .platform) {
+                return .{ .table = relation.hosted_bindings, .names = relation.canonical_names };
             }
         }
         return null;
@@ -4346,7 +4341,7 @@ const ProcedureBuilder = struct {
                 .symbol_text = module.canonical_names.externalSymbolNameText(hosted.external_symbol_name),
                 .dispatch_index = 0,
                 .order = hosted.orderKey(module.hosted_procs),
-                .module_key = module.key,
+                .module_key = module.key.bytes,
                 .def_idx = @intFromEnum(hosted.def_idx),
             });
         }

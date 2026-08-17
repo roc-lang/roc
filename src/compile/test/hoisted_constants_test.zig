@@ -15,6 +15,7 @@ const CoreCtx = @import("ctx").CoreCtx;
 const static_data_exports = @import("static_data");
 
 const HoistedConstantsTestError = std.mem.Allocator.Error ||
+    lir.CheckedPipeline.LowerResourceError ||
     Coordinator.AppDiscoveryError ||
     check.CheckedArtifact.CompileTimeFinalizer.Error ||
     eval.BuiltinModules.InitError ||

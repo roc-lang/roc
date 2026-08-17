@@ -1,11 +1,11 @@
 //! Regression tests for issue #10792.
 //!
-//! A hosted procedure exists only where the platform header's `hosted` section
-//! binds it to a linker symbol. An annotation-only declaration the section
-//! cannot name—one in the platform's own root module—is a declaration
-//! without a value, and one the section simply omits is an invalid hosted
-//! section. Both are reported to the author, and neither aborts the compiler
-//! when the platform also carries a compile-time root.
+//! A hosted declaration the platform header's `hosted` section does not name
+//! has no linker symbol and no dispatch slot. Checking reports it against the
+//! section it is missing from, including when the declaration is in the
+//! platform's own root module and when canonicalization rejected it outright,
+//! and a platform that also carries a compile-time root reports rather than
+//! aborting the compiler.
 
 const std = @import("std");
 const roc_target = @import("roc_target");
@@ -61,7 +61,7 @@ fn checkPlatformReports(files: []const SourceFile, expected_title: []const u8) C
     return false;
 }
 
-test "issue 10792: an annotation-only declaration in a platform root has no value" {
+test "issue 10792: an unnamed declaration in a platform root reports the hosted section" {
     try std.testing.expect(try checkPlatformReports(&.{.{
         .name = "main.roc",
         .source =
@@ -79,10 +79,10 @@ test "issue 10792: an annotation-only declaration in a platform root has no valu
         \\main_for_host! = |_| 0
         \\
         ,
-    }}, "Declaration Has No Value"));
+    }}, "Invalid Hosted Section"));
 }
 
-test "issue 10792: a platform root whose requires clause is malformed still checks" {
+test "issue 10792: a rejected declaration in a platform root names no hosted function" {
     try std.testing.expect(try checkPlatformReports(&.{.{
         .name = "main.roc",
         .source =
@@ -100,29 +100,7 @@ test "issue 10792: a platform root whose requires clause is malformed still chec
         \\a0 = {}
         \\
         ,
-    }}, "Declaration Has No Value"));
-}
-
-test "issue 10792: referencing a platform root's annotation-only declaration reports no value" {
-    try std.testing.expect(try checkPlatformReports(&.{.{
-        .name = "main.roc",
-        .source =
-        \\platform ""
-        \\    requires {} { main! : List(Str) => Try(_, [Exit(I8), ..]) }
-        \\    exposes []
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host! }
-        \\
-        \\never_hosted! : I64 => I64
-        \\
-        \\main_for_host! : List(Str) => I8
-        \\main_for_host! = |_| {
-        \\    _ = never_hosted!(1)
-        \\    0
-        \\}
-        \\
-        ,
-    }}, "Reference Has No Value"));
+    }}, "Invalid Hosted Section"));
 }
 
 test "issue 10792: a hosted declaration the platform header omits reports an invalid hosted section" {

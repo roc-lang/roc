@@ -1911,36 +1911,40 @@ fn findHostedBindingView(
     return null;
 }
 
-/// Replace the scanned hosted declarations with the platform's checked hosted
-/// bindings: one entry per binding, in binding order, carrying the binding's
-/// linker symbol and dispatch slot. A declaration no binding names has no host
-/// symbol and so has no entry; checking reports that omission as an invalid
-/// hosted section.
+/// Replace the scanned hosted declarations with the ones the platform header's
+/// hosted section binds.
+///
+/// The section is what gives each hosted function its linker symbol and its
+/// host dispatch slot, so it decides how many slots there are and which
+/// declaration occupies each one. A declaration the section never names has
+/// neither and gets no entry.
 fn applyHostedBindings(
     allocator: Allocator,
     entries: *std.ArrayList(HostedCacheEntry),
     binding_view: HostedBindingView,
 ) Allocator.Error!void {
-    var entries_by_target = std.AutoHashMap(HostedTargetKey, usize).init(allocator);
-    defer entries_by_target.deinit();
-    try entries_by_target.ensureTotalCapacity(@intCast(entries.items.len));
+    const bindings = binding_view.table.bindings;
+
+    var declared_by_target = std.AutoHashMap(HostedTargetKey, usize).init(allocator);
+    defer declared_by_target.deinit();
+    try declared_by_target.ensureTotalCapacity(@intCast(entries.items.len));
     for (entries.items, 0..) |entry, index| {
-        entries_by_target.putAssumeCapacityNoClobber(.{
+        declared_by_target.putAssumeCapacityNoClobber(.{
             .module_key = entry.module_key,
             .def_idx = entry.def_idx,
         }, index);
     }
 
-    const bindings = binding_view.table.bindings;
-    var bound = try std.ArrayList(HostedCacheEntry).initCapacity(allocator, bindings.len);
+    var bound = std.ArrayList(HostedCacheEntry).empty;
     errdefer bound.deinit(allocator);
+    try bound.ensureTotalCapacity(allocator, bindings.len);
     for (bindings, 0..) |binding, dispatch_index| {
-        const entry_index = entries_by_target.get(.{
+        const entry_index = declared_by_target.get(.{
             .module_key = binding.target_checked_module.bytes,
             .def_idx = @intFromEnum(binding.target_def),
         }) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("default roc command invariant violated: a checked hosted binding has no matching hosted procedure", .{});
+                std.debug.panic("default roc command invariant violated: the hosted section names a function with no hosted declaration in scope", .{});
             }
             unreachable;
         };
@@ -1950,6 +1954,8 @@ fn applyHostedBindings(
         bound.appendAssumeCapacity(entry);
     }
 
+    // Bindings are walked in declaration order, so the table is already
+    // ordered by dispatch index.
     entries.deinit(allocator);
     entries.* = bound;
 }
@@ -11984,16 +11990,7 @@ fn lowerCheckedSourceToLir(
     target_usize: base.target.TargetUsize,
     proc_debug_names: bool,
     timing: ?*lir.CheckedPipeline.Timing,
-) (Allocator.Error || error{CompilationFailed})!lir.CheckedPipeline.LoweredProgram {
-    // A hosted declaration the platform's `hosted` section never bound has no
-    // linker symbol and no dispatch slot, so there is nothing to emit for it and
-    // nothing for a host to link against. Checking reports that as an invalid
-    // hosted section, which every caller renders before lowering; stop here
-    // rather than lowering a host boundary that cannot link.
-    if (check.CheckedArtifact.hasUnboundHostedDeclarations(root_artifact, imported_artifacts, relation_artifacts)) {
-        return error.CompilationFailed;
-    }
-
+) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
         .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -12675,6 +12672,7 @@ fn runCompiledTestRoots(
         error.FileNotFound,
         error.FileTooBig,
         error.FtruncateFailed,
+        error.HostedFunctionNotBound,
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
@@ -12766,7 +12764,7 @@ fn lowerPlannedTestModule(
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
     timing: ?*lir.CheckedPipeline.Timing,
-) (Allocator.Error || error{CompilationFailed})!CliLoweredTestModule {
+) lir.CheckedPipeline.LowerResourceError!CliLoweredTestModule {
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, planned.artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, planned.artifact);
@@ -12830,7 +12828,7 @@ fn runCheckedArtifactTests(
     module_results: *std.ArrayList(CliModuleTestResult),
     timing: ?*lir.CheckedPipeline.Timing,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
-) (Allocator.Error || error{ CompilationFailed, NoHomeDirectory })!CliTestRunSummary {
+) (Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
     const artifact = planned.artifact;
     var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt, specialization_strategy, timing);
@@ -12974,6 +12972,7 @@ fn runLlvmLoweredTestModulesOnce(
         error.FileNotFound,
         error.FileTooBig,
         error.FtruncateFailed,
+        error.HostedFunctionNotBound,
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
@@ -13129,7 +13128,7 @@ fn runOptimizedTestPlan(
     total: *CliTestRunSummary,
     live_output: ?*CliOptimizedLiveTestOutput,
     timing: ?*lir.CheckedPipeline.Timing,
-) (ReportRenderError || error{ CompilationFailed, NoHomeDirectory })!void {
+) (ReportRenderError || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!void {
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .llvm_size, .llvm_speed => {},
@@ -13235,7 +13234,7 @@ const WatchChildOutputError = std.Io.File.MultiReader.UnendingError || std.Io.Ti
 const WatchCommandError = error{UnsupportedWatchMode} || WatchInputsPathError || WatchSpawnChildError || WatchCollectPathsError || WatchRefreshError || WatchReadInputsError || WatchChangeError || WatchChildOutputError || CliOutputWriteError;
 const ReportRenderError = Allocator.Error || CliOutputWriteError;
 const CheckFileWithBuildEnvPreservedError = compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || Allocator.Error || std.Io.Dir.RealPathFileAllocError || error{ ExpectedAppHeader, InvalidPackageName };
-const RocTestError = WatchCommandError || compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || WatchWriteInputsError || ReportRenderError || std.Io.Dir.RealPathFileAllocError || SourceRefResolveError || error{ CompilationFailed, TestsFailed, NoHomeDirectory };
+const RocTestError = lir.CheckedPipeline.HostedBindingError || WatchCommandError || compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || WatchWriteInputsError || ReportRenderError || std.Io.Dir.RealPathFileAllocError || SourceRefResolveError || error{ CompilationFailed, TestsFailed, NoHomeDirectory };
 const RocCheckError = WatchCommandError || CheckFileWithBuildEnvPreservedError || WatchWriteInputsError || ReportRenderError || CliError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || SourceRefResolveError || error{CheckFailed};
 
 const WatchEventSignal = struct {
@@ -14369,6 +14368,11 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .main_source_url = args.main_source_url,
     });
     defer build_env.deinit();
+
+    // `roc test` runs the file's top-level `expect`s and nothing else, so the
+    // file needs no entrypoint: a headerless file that is neither a type module
+    // nor a default app is tested as a plain module.
+    build_env.setRootValidation(.explicit_roots);
 
     var extra_buf: [2][]const u8 = undefined;
     const extra_paths = appendExtraWatchPaths(.{ .test_cmd = args }, &extra_buf);

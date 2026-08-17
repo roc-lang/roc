@@ -84,6 +84,7 @@ const rand = prng.random();
 
 const SnapshotError =
     Allocator.Error ||
+    lir.CheckedPipeline.LowerResourceError ||
     Error ||
     fmt.FormatAstError ||
     eval_mod.BuiltinModules.InitError ||
@@ -4698,6 +4699,7 @@ fn renderSnapshotReplTypeProblems(
         error.FileSystem,
         error.FileTooBig,
         error.FtruncateFailed,
+        error.HostedFunctionNotBound,
         error.InputOutput,
         error.Internal,
         error.InvalidDependency,
@@ -4935,6 +4937,7 @@ fn snapshotReplDefinitionStep(
             error.FileSystem,
             error.FileTooBig,
             error.FtruncateFailed,
+            error.HostedFunctionNotBound,
             error.InputOutput,
             error.Internal,
             error.InvalidDependency,
@@ -5092,6 +5095,7 @@ fn compileAndEvaluateSnapshotReplExpr(
             error.FileSystem,
             error.FileTooBig,
             error.FtruncateFailed,
+            error.HostedFunctionNotBound,
             error.InputOutput,
             error.Internal,
             error.InvalidDependency,
@@ -5271,6 +5275,7 @@ fn snapshotReplExpressionStep(
                             error.FileSystem,
                             error.FileTooBig,
                             error.FtruncateFailed,
+                            error.HostedFunctionNotBound,
                             error.InputOutput,
                             error.Internal,
                             error.InvalidDependency,
@@ -5435,6 +5440,7 @@ fn snapshotReplExpressionStep(
             error.FileSystem,
             error.FileTooBig,
             error.FtruncateFailed,
+            error.HostedFunctionNotBound,
             error.InputOutput,
             error.Internal,
             error.InvalidDependency,

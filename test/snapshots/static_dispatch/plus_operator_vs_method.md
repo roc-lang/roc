@@ -160,11 +160,7 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result1"))
-		(e-binop (op "add")
-			(e-lookup-local
-				(p-assign (ident "a")))
-			(e-lookup-local
-				(p-assign (ident "b"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "MyType") (local))))
 	(d-let
@@ -200,7 +196,7 @@ NO CHANGE
 	(defs
 		(patt (type "MyType"))
 		(patt (type "MyType"))
-		(patt (type "Error"))
+		(patt (type "MyType"))
 		(patt (type "MyType"))
 		(patt (type "MyType"))
 		(patt (type "MyType")))
@@ -210,7 +206,7 @@ NO CHANGE
 	(expressions
 		(expr (type "MyType"))
 		(expr (type "MyType"))
-		(expr (type "Error"))
+		(expr (type "MyType"))
 		(expr (type "MyType"))
 		(expr (type "MyType"))
 		(expr (type "MyType"))))
