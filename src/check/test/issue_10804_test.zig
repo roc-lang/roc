@@ -165,6 +165,23 @@ test "issue 10804: derived encoder_for reaches through a nested application of t
     try test_env.assertOneTypeError("Missing Method");
 }
 
+// A declaration that applies itself at a larger argument would need a
+// different codec shape at every level, so validation has nowhere to stop and
+// must reject it rather than descend forever.
+test "issue 10804: derived encoder_for rejects a declaration that grows its own argument" {
+    const source =
+        \\Nested(a) := [Flat(a), Deep(Nested(List(a)))].{
+        \\  encoder_for : _
+        \\}
+        \\out = Json.to_str(Nested.Flat("x"))
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Missing Method");
+}
+
 // A derived codec over a formal has nothing to say about that formal where the
 // type is still polymorphic; the obligation belongs to each concrete use, and
 // rejecting it here would reject working generic code.

@@ -30469,12 +30469,9 @@ fn satisfyImplicitParserConstraint(
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
     var walk = DerivedCodecWalk.init(self.gpa);
     defer walk.deinit();
-    // Everything below a dispatcher's own backing is inside it, so the walk
-    // enters that backing here and stays there for the rest of this constraint.
-    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, &walk, env, region)) |backing| blk: {
-        try walk.visited.put(self.types.resolveVar(dispatcher_var).var_, {});
-        break :blk backing;
-    } else dispatcher_var;
+    // A dispatcher that derives its own codec is validated against the shape
+    // that codec is generated from, not against the name in front of it.
+    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, &walk, env, region)) orelse dispatcher_var;
     switch (try self.validateDerivedParseVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk, .shape, failure_expr)) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .parser,
@@ -30553,12 +30550,9 @@ fn satisfyImplicitEncoderForConstraint(
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
     var walk = DerivedCodecWalk.init(self.gpa);
     defer walk.deinit();
-    // Everything below a dispatcher's own backing is inside it, so the walk
-    // enters that backing here and stays there for the rest of this constraint.
-    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, &walk, env, region)) |backing| blk: {
-        try walk.visited.put(self.types.resolveVar(dispatcher_var).var_, {});
-        break :blk backing;
-    } else dispatcher_var;
+    // A dispatcher that derives its own codec is validated against the shape
+    // that codec is generated from, not against the name in front of it.
+    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, &walk, env, region)) orelse dispatcher_var;
     switch (try self.validateDerivedEncodeVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk)) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .encoder,
@@ -30745,10 +30739,6 @@ fn generatedStructuralCodecBackingVar(
     const content = self.types.resolveVar(dispatcher_var).desc.content;
     if (content != .structure or content.structure != .nominal_type) return null;
     const nominal = content.structure.nominal_type;
-    // Builtin codecs are the format protocol itself, validated against the
-    // format's own methods rather than by walking a backing shape. Monotype
-    // draws the same line when it looks for a custom codec target.
-    if (nominal.originIsBuiltin()) return null;
     const original_env, _ = self.ownerEnvForOriginModule(
         nominal.origin_module,
         nominal.sourceDeclOptional(),
@@ -30762,10 +30752,15 @@ fn generatedStructuralCodecBackingVar(
         method_ident,
     ) orelse return null;
     if (!isGeneratedStructuralCodecMethodBinding(method, kind)) return null;
+    // Nothing is open or recorded yet at a dispatcher, so this is always a walk.
+    const backing_walk = try self.takeDerivedCodecBackingWalk(walk, nominal);
+    if (backing_walk != .walk) return null;
     // A declaration the checker already rejected has no shape to walk; the
     // nominal validation this falls back to reports that rejection.
     const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return null;
-    _ = try self.takeDerivedCodecBackingWalk(walk, nominal);
+    // The rest of this constraint is spent inside this backing, so the
+    // application stays open and the depth stays raised for the whole walk.
+    if (backing_walk.walk) |entry| try walk.open_apps.append(walk.gpa, entry);
     walk.nominal_backing_depth += 1;
     return backing_var;
 }
@@ -31789,6 +31784,15 @@ fn validateRenameFieldMethod(
 /// occurrence inside it; and it is what keeps `Wrap(Str)` and `Wrap(Data)`
 /// apart, since their obligations differ.
 ///
+/// Argument identity alone is not a termination argument, because a
+/// declaration may apply itself at a larger argument than it was given
+/// (`Nested(a) := [Deep(Nested(List(a)))]`) and mint a new argument at every
+/// level. `open_apps` is the stack of applications whose backings are open on
+/// the current path, and re-entering a declaration already on it is allowed
+/// only when every argument is a proper subterm of what the open application
+/// was given. Descending arguments cannot shrink forever, so the walk
+/// terminates, while `Wrap(Wrap(Data))` still reaches `Data`.
+///
 /// `nominal_backing_depth` counts how many of those backings the walk is
 /// currently inside. Within one, a component that is still a type variable is
 /// a formal standing for whatever an application substitutes, so its
@@ -31798,6 +31802,8 @@ const DerivedCodecWalk = struct {
     visited: std.AutoHashMap(Var, void),
     walked_apps: std.ArrayList(WalkedApp),
     walked_app_args: std.ArrayList(Var),
+    /// Indices into `walked_apps`, innermost last.
+    open_apps: std.ArrayList(u32),
     nominal_backing_depth: u32,
     gpa: std.mem.Allocator,
 
@@ -31812,6 +31818,7 @@ const DerivedCodecWalk = struct {
             .visited = std.AutoHashMap(Var, void).init(gpa),
             .walked_apps = .empty,
             .walked_app_args = .empty,
+            .open_apps = .empty,
             .nominal_backing_depth = 0,
             .gpa = gpa,
         };
@@ -31821,20 +31828,34 @@ const DerivedCodecWalk = struct {
         self.visited.deinit();
         self.walked_apps.deinit(self.gpa);
         self.walked_app_args.deinit(self.gpa);
+        self.open_apps.deinit(self.gpa);
     }
 
     fn recordApp(
         self: *DerivedCodecWalk,
         decl: types_mod.NominalDecl.Idx,
         args: []const Var,
-    ) Allocator.Error!void {
+    ) Allocator.Error!u32 {
         const args_start: u32 = @intCast(self.walked_app_args.items.len);
         try self.walked_app_args.appendSlice(self.gpa, args);
+        const index: u32 = @intCast(self.walked_apps.items.len);
         try self.walked_apps.append(self.gpa, .{
             .decl = decl,
             .args_start = args_start,
             .args_len = @intCast(args.len),
         });
+        return index;
+    }
+
+    /// The innermost open application of `decl`, if the path is inside one.
+    fn innermostOpenApp(self: *const DerivedCodecWalk, decl: types_mod.NominalDecl.Idx) ?WalkedApp {
+        var i = self.open_apps.items.len;
+        while (i > 0) {
+            i -= 1;
+            const app = self.walked_apps.items[self.open_apps.items[i]];
+            if (app.decl == decl) return app;
+        }
+        return null;
     }
 
     fn appArgs(self: *const DerivedCodecWalk, app: WalkedApp) []const Var {
@@ -31842,20 +31863,38 @@ const DerivedCodecWalk = struct {
     }
 };
 
-/// Whether this nominal application's derived-codec backing still needs
-/// walking, recording it before the answer is known so that a backing which
-/// reaches itself finds the application already accounted for by the frame
-/// above. Arguments are compared at their resolved roots, which is the
-/// identity instantiation shares between an application and the recursive
-/// occurrences it substitutes into. An application with no declaration entry
-/// has no backing to open either, so the caller reports it rather than
-/// descending.
+/// What the walk should do with a nominal application whose codec the compiler
+/// derives.
+const DerivedCodecBackingWalk = union(enum) {
+    /// A frame above or an earlier sibling already carries these obligations.
+    accounted_for,
+    /// The declaration applies itself at an argument that does not shrink, so
+    /// its derived codec would need a different shape at every level and can
+    /// never be monomorphized.
+    unbounded,
+    /// Walk the backing, keeping this entry in the walk's record on the path.
+    /// The entry is absent only for an application with no declaration, which
+    /// has no backing to open either, so the caller reports it instead.
+    walk: ?u32,
+};
+
+/// What this nominal application's derived-codec backing needs from the walk.
+/// The application is recorded before the answer is known, so a backing that
+/// reaches itself finds it already accounted for by the frame above. Arguments
+/// are compared at their resolved roots, which is the identity instantiation
+/// shares between an application and the recursive occurrences it substitutes
+/// into.
 fn takeDerivedCodecBackingWalk(
     self: *Self,
     walk: *DerivedCodecWalk,
     nominal: types_mod.NominalType,
-) Allocator.Error!bool {
-    const decl_idx = self.types.lookupNominalDecl(nominal) orelse return true;
+) Allocator.Error!DerivedCodecBackingWalk {
+    // Builtin codecs are the format protocol itself, validated against the
+    // format's own methods rather than by walking a backing shape. Monotype
+    // draws the same line when it looks for a custom codec target.
+    if (nominal.originIsBuiltin()) return .accounted_for;
+    const decl_idx = self.types.lookupNominalDecl(nominal) orelse return .{ .walk = null };
+
     // The argument list points into the types store, which resolution touches.
     const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
     defer self.gpa.free(args);
@@ -31863,18 +31902,98 @@ fn takeDerivedCodecBackingWalk(
 
     for (walk.walked_apps.items) |app| {
         if (app.decl != decl_idx or app.args_len != args.len) continue;
-        const recorded = walk.appArgs(app);
-        var same = true;
-        for (recorded, args) |recorded_arg, arg| {
-            if (self.types.resolveVar(recorded_arg).var_ != arg) {
-                same = false;
-                break;
-            }
-        }
-        if (same) return false;
+        if (self.derivedCodecAppArgsMatch(walk, app, args)) return .accounted_for;
     }
-    try walk.recordApp(decl_idx, args);
+
+    // A declaration reached from inside itself is only safe to open again when
+    // every argument is a proper subterm of what the open application was
+    // given: arguments that shrink at every level cannot do so forever, while
+    // a declaration that applies itself at a larger argument would not stop.
+    if (walk.innermostOpenApp(decl_idx)) |open_app| {
+        if (!try self.derivedCodecArgsDescend(walk.appArgs(open_app), args)) return .unbounded;
+    }
+
+    return .{ .walk = try walk.recordApp(decl_idx, args) };
+}
+
+fn derivedCodecAppArgsMatch(
+    self: *Self,
+    walk: *const DerivedCodecWalk,
+    app: DerivedCodecWalk.WalkedApp,
+    args: []const Var,
+) bool {
+    for (walk.appArgs(app), args) |recorded_arg, arg| {
+        if (self.types.resolveVar(recorded_arg).var_ != arg) return false;
+    }
     return true;
+}
+
+/// Whether `args` is strictly smaller than `open_args`: every argument sits
+/// inside the one the open application was given, and at least one sits
+/// strictly inside it.
+fn derivedCodecArgsDescend(
+    self: *Self,
+    open_args: []const Var,
+    args: []const Var,
+) Allocator.Error!bool {
+    if (open_args.len != args.len or args.len == 0) return false;
+    var strictly_smaller = false;
+    for (open_args, args) |open_arg, arg| {
+        const open_root = self.types.resolveVar(open_arg).var_;
+        if (open_root == arg) continue;
+        if (!try self.varOccursInside(arg, open_root)) return false;
+        strictly_smaller = true;
+    }
+    return strictly_smaller;
+}
+
+/// Whether `needle` occurs strictly inside `haystack`.
+fn varOccursInside(self: *Self, needle: Var, haystack: Var) Allocator.Error!bool {
+    var pending = std.ArrayList(Var).empty;
+    defer pending.deinit(self.gpa);
+    var seen = std.AutoHashMap(Var, void).init(self.gpa);
+    defer seen.deinit();
+
+    const needle_root = self.types.resolveVar(needle).var_;
+    try self.pushVarChildren(&pending, haystack);
+    while (pending.pop()) |candidate| {
+        const root = self.types.resolveVar(candidate).var_;
+        if (root == needle_root) return true;
+        if ((try seen.getOrPut(root)).found_existing) continue;
+        try self.pushVarChildren(&pending, root);
+    }
+    return false;
+}
+
+fn pushVarChildren(self: *Self, pending: *std.ArrayList(Var), var_: Var) Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    switch (resolved.desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+                try pending.append(self.gpa, record.ext);
+            },
+            .record_unbound => |field_range| {
+                const fields = self.types.getRecordFieldsSlice(field_range);
+                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+            },
+            .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| try pending.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                try pending.append(self.gpa, tag_union.ext);
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                try pending.append(self.gpa, func.ret);
+            },
+            .empty_record, .empty_tag_union => {},
+        },
+        .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
+        .flex, .rigid, .err, .field_presence => {},
+    }
 }
 
 fn validateDerivedParseVar(
@@ -32351,7 +32470,14 @@ fn validateDerivedParseNominal(
         },
     });
     if (result.isEstablished() and isGeneratedStructuralCodecMethodBinding(method_lookup, .parser)) {
-        if (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
+        const backing_walk = try self.takeDerivedCodecBackingWalk(walk, nominal);
+        if (backing_walk == .unbounded) return .unsupported;
+        if (backing_walk == .walk) {
+            const open_app = backing_walk.walk;
+            if (open_app) |entry| try walk.open_apps.append(walk.gpa, entry);
+            defer if (open_app != null) {
+                _ = walk.open_apps.pop();
+            };
             walk.nominal_backing_depth += 1;
             defer walk.nominal_backing_depth -= 1;
             const nested_calls_start = self.scratch_generated_codec_calls.items.len;
@@ -33005,7 +33131,14 @@ fn validateDerivedEncodeNominal(
         },
     });
     if (result.isEstablished() and isGeneratedStructuralCodecMethodBinding(method_lookup, .encoder)) {
-        if (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
+        const backing_walk = try self.takeDerivedCodecBackingWalk(walk, nominal);
+        if (backing_walk == .unbounded) return .unsupported;
+        if (backing_walk == .walk) {
+            const open_app = backing_walk.walk;
+            if (open_app) |entry| try walk.open_apps.append(walk.gpa, entry);
+            defer if (open_app != null) {
+                _ = walk.open_apps.pop();
+            };
             walk.nominal_backing_depth += 1;
             defer walk.nominal_backing_depth -= 1;
             const nested_calls_start = self.scratch_generated_codec_calls.items.len;
