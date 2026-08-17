@@ -184,11 +184,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.OutOfMemory;
     };
     defer gpa.free(hosted_indices);
-    var hosted_symbols = collectHostedSymbols(gpa, &platform_info) catch {
-        return error.OutOfMemory;
-    };
-    defer deinitHostedSymbols(gpa, &hosted_symbols);
-
     // 3. Collect platform module type information from checked artifacts.
     var collected_modules = std.ArrayList(CollectedModuleTypeInfo).empty;
     defer {
@@ -222,7 +217,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         if (mod.is_platform_sibling or mod.is_platform_main) {
             const artifact = mod.semantic.checked_artifact orelse continue;
             type_table.clearVarMap();
-            const collected = collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &hosted_symbols, &type_table) catch |err| switch (err) {
+            const collected = collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &type_table) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
             };
@@ -1064,6 +1059,9 @@ const HostedProcGlobalIndex = struct {
     artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
     def_idx: can.CIR.Def.Idx,
     index: usize,
+    /// The linker symbol the platform header's hosted section gave this
+    /// declaration, empty when no platform bound it.
+    symbol: []const u8,
 };
 
 fn checkedArtifactKeysEqual(
@@ -1122,13 +1120,15 @@ fn collectHostedProcGlobalIndices(
     var indices = std.ArrayList(HostedProcGlobalIndex).empty;
     errdefer indices.deinit(allocator);
 
-    if (platformHostedBindings(modules)) |bindings| {
-        try indices.ensureTotalCapacity(allocator, bindings.bindings.len);
-        for (bindings.bindings, 0..) |binding, dispatch_index| {
+    if (platformArtifact(modules)) |platform| {
+        const bindings = platform.hosted_bindings.bindings;
+        try indices.ensureTotalCapacity(allocator, bindings.len);
+        for (bindings, 0..) |binding, dispatch_index| {
             indices.appendAssumeCapacity(.{
                 .artifact_key = .{ .bytes = binding.target_checked_module.bytes },
                 .def_idx = binding.target_def,
                 .index = dispatch_index,
+                .symbol = platform.canonical_names.externalSymbolNameText(binding.external_symbol_name),
             });
         }
         return try indices.toOwnedSlice(allocator);
@@ -1176,38 +1176,39 @@ fn collectHostedProcGlobalIndices(
             .artifact_key = candidate.artifact_key,
             .def_idx = candidate.def_idx,
             .index = i,
+            .symbol = "",
         });
     }
 
     return try indices.toOwnedSlice(allocator);
 }
 
-/// The platform's hosted binding table, if a platform module is among these.
-fn platformHostedBindings(
+/// The platform module among these, whose hosted bindings name every host
+/// function and the linker symbol each one carries.
+fn platformArtifact(
     modules: []const BuildEnv.CompiledModuleInfo,
-) ?*const CheckedArtifact.HostedBindingTable {
+) ?*const CheckedArtifact.CheckedModuleArtifact {
     for (modules) |mod| {
         const artifact = mod.semantic.checked_artifact orelse continue;
         if (artifact.module_identity.kind != .platform) continue;
-        return &artifact.hosted_bindings;
+        return artifact;
     }
     return null;
 }
 
-fn hostedGlobalIndexForDef(
+/// The platform's binding for a hosted declaration, identified the way the
+/// binding table identifies it rather than by any name it goes under.
+fn hostedBindingForDef(
     indices: []const HostedProcGlobalIndex,
     artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
     def_idx: can.CIR.Def.Idx,
-) usize {
+) ?HostedProcGlobalIndex {
     for (indices) |index| {
         if (index.def_idx == def_idx and checkedArtifactKeysEqual(index.artifact_key, artifact_key)) {
-            return index.index;
+            return index;
         }
     }
-    if (builtin.mode == .Debug) {
-        std.debug.panic("glue invariant violated: hosted proc has no global index", .{});
-    }
-    unreachable;
+    return null;
 }
 
 fn stripTrailingBang(name: []const u8) []const u8 {
@@ -1219,44 +1220,6 @@ fn hostedKeyAlloc(allocator: Allocator, module_name: []const u8, local_name: []c
     const stripped = stripTrailingBang(local_name);
     if (module_name.len == 0) return try allocator.dupe(u8, stripped);
     return try std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, stripped });
-}
-
-fn deinitHostedSymbols(allocator: Allocator, hosted_symbols: *std.StringHashMap([]const u8)) void {
-    var it = hosted_symbols.iterator();
-    while (it.next()) |entry| {
-        allocator.free(entry.key_ptr.*);
-        allocator.free(entry.value_ptr.*);
-    }
-    hosted_symbols.deinit();
-}
-
-fn collectHostedSymbols(
-    allocator: Allocator,
-    platform_info: *const PlatformHeaderInfo,
-) Allocator.Error!std.StringHashMap([]const u8) {
-    var hosted_symbols = std.StringHashMap([]const u8).init(allocator);
-    errdefer deinitHostedSymbols(allocator, &hosted_symbols);
-
-    for (platform_info.hosted_entries) |entry| {
-        const key = try allocator.dupe(u8, entry.key);
-        const symbol = allocator.dupe(u8, entry.ffi_symbol) catch |err| {
-            allocator.free(key);
-            return err;
-        };
-        const gop = hosted_symbols.getOrPut(key) catch |err| {
-            allocator.free(key);
-            allocator.free(symbol);
-            return err;
-        };
-        if (gop.found_existing) {
-            allocator.free(key);
-            allocator.free(symbol);
-        } else {
-            gop.value_ptr.* = symbol;
-        }
-    }
-
-    return hosted_symbols;
 }
 
 fn selectGlueSpecRootProc(
@@ -4657,7 +4620,6 @@ fn collectModuleTypeInfo(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     module_name: []const u8,
     hosted_indices: []const HostedProcGlobalIndex,
-    hosted_symbols: *const std.StringHashMap([]const u8),
     type_table: *TypeTable,
 ) TypeTableError!?CollectedModuleTypeInfo {
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
@@ -4714,16 +4676,24 @@ fn collectModuleTypeInfo(
     for (artifact.top_level_values.entries) |entry| {
         const def_idx = entry.def;
 
-        _ = member_by_def.get(def_idx) orelse continue;
+        // A platform module's own hosted declaration is a plain top-level
+        // value rather than a member of an exposed type module, so it reaches
+        // the host boundary here without a member entry.
+        const is_member = member_by_def.get(def_idx) != null;
+        const hosted_proc_for_entry = hostedProcForDef(&artifact.hosted_procs, def_idx);
+        if (!is_member and hosted_proc_for_entry == null) continue;
         const source_name = artifact.canonical_names.exportNameText(entry.source_name);
-        const local_name = try moduleLocalMemberName(gpa, module_name, source_name);
+        const local_name = if (is_member)
+            try moduleLocalMemberName(gpa, module_name, source_name)
+        else
+            try gpa.dupe(u8, source_name);
         defer gpa.free(local_name);
 
         const checked_type = checkedTypeRootForScheme(artifact, entry.source_scheme);
         const type_str = try typeStringAlloc(gpa, artifact, checked_type);
         errdefer gpa.free(type_str);
 
-        if (hostedProcForDef(&artifact.hosted_procs, def_idx)) |hosted_proc| {
+        if (hosted_proc_for_entry) |hosted_proc| {
             // Extract record fields from function arg and return types.
             var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
             errdefer {
@@ -4754,15 +4724,15 @@ fn collectModuleTypeInfo(
                 ret_type_id = try type_table.insertUnit();
             }
 
-            const hosted_key = hosted_proc.orderKey(&artifact.hosted_procs);
-            const hosted_symbol = hosted_symbols.get(hosted_key) orelse
-                glueInvariant("hosted function '{s}' has no platform hosted symbol", .{hosted_key});
+            const bound = hostedBindingForDef(hosted_indices, artifact.key, def_idx) orelse
+                glueInvariant("hosted function '{s}' has no platform hosted symbol", .{hosted_proc.orderKey(&artifact.hosted_procs)});
+            const hosted_symbol = bound.symbol;
             const ffi_symbol = try gpa.dupe(u8, hosted_symbol);
             errdefer gpa.free(ffi_symbol);
             const name = try gpa.dupe(u8, local_name);
             errdefer gpa.free(name);
             try hosted_functions.append(gpa, .{
-                .index = hostedGlobalIndexForDef(hosted_indices, artifact.key, def_idx),
+                .index = bound.index,
                 .ffi_symbol = ffi_symbol,
                 .name = name,
                 .type_str = type_str,

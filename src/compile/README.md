@@ -178,7 +178,7 @@ At execution time, `RocOps.hosted_fns.fns` is a **positional array**—the inter
 hosted { "roc_stdout_line": Stdout.line!, "roc_stderr_line": Stderr.line! }
 ```
 
-gives `Stdout.line!` index 0 and `Stderr.line!` index 1, whatever modules they are declared in. `roc glue` emits the same numbering, so generated glue and a hand-written array agree.
+gives `Stdout.line!` index 0 and `Stderr.line!` index 1, whatever modules they are declared in. `roc glue` emits the same numbering, so generated glue and a hand-written array agree. A declaration in the platform module itself is named without a module, since a platform cannot import itself: `hosted { "roc_helper": helper! }`.
 
 Wrong order is silent (wrong function called), not loud—be deliberate, especially when reordering the `hosted` section.
 
