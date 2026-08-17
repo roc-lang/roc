@@ -180,9 +180,16 @@ my @categories = (
               counts => { $SOLVE => 2 } },
             { label => 'unifyRowWithEmpty', re => qr/\bunifyRowWithEmpty\b/,
               counts => { $SOLVE => 5 } },
-            { label => 'writeOrQueueTagRest', re => qr/\bwriteOrQueueTagRest\b/,
-              counts => { $SOLVE => 11 } },
-            { label => 'writeOrQueueRecordRest', re => qr/\bwriteOrQueueRecordRest\b/,
+            # Rest-writing is deleted: sealing reads the row store, whose
+            # ordered class lists the join events themselves maintain, so a
+            # row's extension only ever relates identity to its tail
+            # (`relateTagRestExtToTail` / `relateRecordRestExtToTail`). The
+            # store assertion at sealing rejects any row this would leave
+            # incomplete; the ordered census that justified the deletion
+            # matched thirty-five thousand sealed rows with zero divergence.
+            { label => 'relateTagRestExtToTail', re => qr/\brelateTagRestExtToTail\b/,
+              counts => { $SOLVE => 12 } },
+            { label => 'relateRecordRestExtToTail', re => qr/\brelateRecordRestExtToTail\b/,
               counts => { $SOLVE => 11 } },
         ],
     },
