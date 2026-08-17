@@ -2380,7 +2380,7 @@ const Builder = struct {
 
     fn initHostedCatalog(self: *Builder) Allocator.Error!void {
         var entries = std.ArrayList(HostedCatalogEntry).empty;
-        errdefer entries.deinit(self.allocator);
+        defer entries.deinit(self.allocator);
 
         try self.appendHostedCatalogFromView(&entries, moduleView(self.root_view));
         for (self.modules.imports, 0..) |imported, index| {
@@ -2393,57 +2393,62 @@ const Builder = struct {
         }
 
         if (self.hostedBindingView()) |binding_view| {
-            if (entries.items.len != binding_view.table.bindings.len) {
-                Common.invariantFmt(
-                    "platform hosted binding count {d} disagrees with hosted catalog size {d}",
-                    .{ binding_view.table.bindings.len, entries.items.len },
-                );
-            }
-
-            var entries_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
-            defer entries_by_target.deinit();
-            try entries_by_target.ensureTotalCapacity(@intCast(entries.items.len));
+            // The platform header's hosted section is the complete list of
+            // functions the host supplies, and it is what gives each one its
+            // external symbol and dispatch slot. Build the catalog from that
+            // list rather than from every hosted declaration in scope: a
+            // declaration the section leaves out has no symbol to call and no
+            // slot to occupy, and checking already reports it against the
+            // section it is missing from.
+            var declared_by_target = std.AutoHashMap(HostedProcedureKey, usize).init(self.allocator);
+            defer declared_by_target.deinit();
+            try declared_by_target.ensureTotalCapacity(@intCast(entries.items.len));
             for (entries.items, 0..) |entry, index| {
-                entries_by_target.putAssumeCapacityNoClobber(.{
+                declared_by_target.putAssumeCapacityNoClobber(.{
                     .checked_module_digest = entry.target_checked_module_digest,
                     .def_idx = entry.def_idx,
                 }, index);
             }
 
+            var bound = std.ArrayList(HostedCatalogEntry).empty;
+            errdefer bound.deinit(self.allocator);
+            try bound.ensureTotalCapacity(self.allocator, binding_view.table.bindings.len);
             for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
-                const entry_index = entries_by_target.get(.{
+                const entry_index = declared_by_target.get(.{
                     .checked_module_digest = binding.target_checked_module.bytes,
                     .def_idx = @intFromEnum(binding.target_def),
-                }) orelse Common.invariant("hosted function is missing from the checked hosted binding table");
-                entries.items[entry_index].dispatch_index = @intCast(dispatch_index);
-                entries.items[entry_index].external_symbol_name = try self.program.names.internExternalSymbolName(
+                }) orelse Common.invariant("hosted section names a function with no hosted declaration in scope");
+                var entry = entries.items[entry_index];
+                entry.dispatch_index = @intCast(dispatch_index);
+                entry.external_symbol_name = try self.program.names.internExternalSymbolName(
                     binding_view.names.externalSymbolNameText(binding.external_symbol_name),
                 );
+                bound.appendAssumeCapacity(entry);
             }
 
-            const DispatchSort = struct {
-                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
-                    return a.dispatch_index < b.dispatch_index;
-                }
-            };
-            std.mem.sort(HostedCatalogEntry, entries.items, {}, DispatchSort.lessThan);
-        } else {
-            const SortContext = struct {
-                pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
-                    return switch (std.mem.order(u8, a.order, b.order)) {
-                        .lt => true,
-                        .gt => false,
-                        .eq => if (a.def_idx != b.def_idx)
-                            a.def_idx < b.def_idx
-                        else
-                            std.mem.order(u8, &a.target_checked_module_digest, &b.target_checked_module_digest) == .lt,
-                    };
-                }
-            };
-            std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
-            for (entries.items, 0..) |*entry, index| {
-                entry.dispatch_index = @intCast(index);
+            // Bindings are walked in declaration order, so the catalog is
+            // already ordered by dispatch index.
+            self.hosted_catalog = try bound.toOwnedSlice(self.allocator);
+            return;
+        }
+
+        // Without a platform header there is no section to bind against, so
+        // every declaration in scope is its own dispatch slot in a stable order.
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCatalogEntry, b: HostedCatalogEntry) bool {
+                return switch (std.mem.order(u8, a.order, b.order)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => if (a.def_idx != b.def_idx)
+                        a.def_idx < b.def_idx
+                    else
+                        std.mem.order(u8, &a.target_checked_module_digest, &b.target_checked_module_digest) == .lt,
+                };
             }
+        };
+        std.mem.sort(HostedCatalogEntry, entries.items, {}, SortContext.lessThan);
+        for (entries.items, 0..) |*entry, index| {
+            entry.dispatch_index = @intCast(index);
         }
 
         self.hosted_catalog = try entries.toOwnedSlice(self.allocator);

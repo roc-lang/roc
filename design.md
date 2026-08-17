@@ -1243,6 +1243,29 @@ selected-name list; checked value, procedure, and compile-time-root construction
 use the value-binding list. Neither repeats name deduplication or chooses a
 definition based on its expression shape.
 
+A platform header's hosted section is the complete list of functions the host
+supplies, and it is what gives each one its linker symbol and its host dispatch
+slot. The hosted catalog is therefore built from the section's bindings rather
+than from a scan of every hosted declaration in scope, so the section decides
+how many dispatch slots exist and which declaration occupies each one; naming
+one declaration twice is two slots, and lowering never reconciles a catalog it
+scanned for itself against the bindings the section names.
+
+A hosted declaration the section leaves out has neither a symbol nor a slot, so
+there is nothing for a call to it to reach. Checking reports that declaration
+against the section it is missing from. A section entry names its target through
+an import, so no entry can reach a declaration written in the platform root
+itself; the root is checked against the section alongside the modules it owns,
+which is what reports such a declaration rather than leaving it to a stage with
+nothing to say. The checked-modules-to-LIR entrance
+refuses a program that still carries it, so lowering is never asked to emit a
+call with no host function behind it. Glue reads the same section to name each
+hosted function's symbol, so it stops on a platform checking rejected rather
+than reading a surface that section never described. A module whose own
+checking has not finished has no bindings yet, and compile-time finalization
+lowers exactly such a module, so that entrance reads nothing into their absence
+there.
+
 An annotation-only declaration that no implementation supersedes names no value
 at all, whatever its annotation says, and `e_anno_only` is the body-free state
 that records this. Two rewrites give such an annotation a body, and only these

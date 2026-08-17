@@ -32,6 +32,7 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
 
 /// Error set shared by LIR-lowering harness helpers and focused inspectors.
 pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
+    lir.CheckedPipeline.LowerResourceError ||
     std.Io.Dir.CreateDirPathError ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||

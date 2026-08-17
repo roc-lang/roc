@@ -4092,7 +4092,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
         switch (data.reason) {
             .function_not_in_section => try D.renderSliceInto(&.{
-                D.bytes("This platform's exposed modules declare a hosted function named"),
+                D.bytes("This platform declares a hosted function named"),
                 D.bytes(name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
                 D.bytes("but the platform header's"),
