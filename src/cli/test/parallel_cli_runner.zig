@@ -954,6 +954,13 @@ const invalid_llvm_debug_info_needles = [_]OutputNeedle{
 };
 
 const subcommand_cases = [_]CliCase{
+    // One descriptor template descends through the same generic nominal at more
+    // than one argument set: a backing shape is written once against its
+    // declaration's formals and reached once per instantiation, so each descent
+    // binds those formals its own way. This app's crypto digests are the shape
+    // that does it, and the hashes it prints prove each descent described its
+    // own arguments rather than an earlier descent's.
+    .{ .id = 0, .suite = .subcommands, .name = "boxy: one descriptor template binds a nominal backing formal per instantiation", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no", "--no-cache" }, .roc_file = "test/fx/app.roc", .stdin = "abc\n", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "Crypto hashes ok" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "CLI test cache roots are distinct", .body = .{ .custom = .cli_cache_roots_distinct } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check watch inputs reject absolute file imports", .body = .{ .custom = .watch_inputs_reject_absolute_import } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check --watch reruns when completed child snapshot is stale", .skip = .{ .windows = "watch refresh race test uses a POSIX wrapper script" }, .body = .{ .custom = .watch_completed_run_refresh_reruns } },
