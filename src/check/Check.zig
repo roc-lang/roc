@@ -28798,7 +28798,17 @@ fn closeUnquantifiedTagRowExts(self: *Self, env: *Env) std.mem.Allocator.Error!v
             keep_open.set(raw_root);
         }
         switch (resolved.desc.content) {
-            .flex, .rigid, .err, .field_presence => {},
+            // A variable's `where` constraints relate it to rows only the
+            // constraint method's signature reaches (eg `a.method : a -> [Ok]`
+            // holds the return row); instantiating the variable instantiates
+            // the whole constraint chain, so those rows are quantified too.
+            .flex, .rigid => {
+                const constraints_range = contentConstraintRange(resolved.desc.content) orelse unreachable;
+                for (self.types.sliceStaticDispatchConstraints(constraints_range)) |constraint| {
+                    try worklist.append(self.gpa, constraint.fn_var);
+                }
+            },
+            .err, .field_presence => {},
             .alias => |alias| {
                 var arg_span = alias.vars.nonempty;
                 arg_span.dropFirstElem();

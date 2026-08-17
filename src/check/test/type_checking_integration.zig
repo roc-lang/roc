@@ -5903,6 +5903,42 @@ test "check type - syntactic-value binding's implicitly opened row generalizes" 
     try checkTypesModule(source, .{ .pass = .{ .def = "go" } }, "U64 -> U64");
 }
 
+test "check type - where-method output row stays open through the keep-open probe" {
+    // A where-method's return row is part of the published scheme, but no
+    // structural edge from the def's annotation reaches it — only the
+    // constraint-signature edge on the rigid does. The post-solve row-closing
+    // sweep (closeUnquantifiedTagRowExts) must follow that edge; if this
+    // resolves closed, the sweep grounded a quantified row and every
+    // importer would instantiate a sealed obligation instead of widening it.
+    const source =
+        \\f : a -> Str where [a.method : a -> [Ok(Str)]]
+        \\f = |_| "x"
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try testing.expectEqual(0, try test_env.typeProblemCount());
+
+    const store = &test_env.module_env.types;
+    const defs_slice = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
+    try testing.expectEqual(@as(usize, 1), defs_slice.len);
+    const f_content = store.resolveVar(ModuleEnv.varFrom(defs_slice[0])).desc.content;
+    const f_func = switch (f_content.structure) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+        else => return error.TestUnexpectedResult,
+    };
+    const receiver_content = store.resolveVar(store.sliceVars(f_func.args)[0]).desc.content;
+    const constraints = store.sliceStaticDispatchConstraints(receiver_content.rigid.constraints);
+    try testing.expectEqual(@as(usize, 1), constraints.len);
+    const method_content = store.resolveVar(constraints[0].fn_var).desc.content;
+    const method_func = switch (method_content.structure) {
+        .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+        else => return error.TestUnexpectedResult,
+    };
+    const ret_content = store.resolveVar(method_func.ret).desc.content;
+    const ext_content = store.resolveVar(ret_content.structure.tag_union.ext).desc.content;
+    try testing.expect(ext_content == .flex);
+}
+
 test "check type - inner generalization boundary does not default an enclosing-scope literal" {
     // `classified`'s annotation gains a variable from polarity opening, so it
     // generalizes — pushing a boundary around its RHS inside the `|input|`

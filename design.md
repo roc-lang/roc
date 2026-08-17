@@ -4130,7 +4130,10 @@ an extension once checking settles — it would only reach the same empty
 default at Monotype sealing, while costing Monotype its structural
 specialization identity along the way. Rows reachable from a scheme root
 keep their openness: instantiation copies them fresh at each use, which is
-where output-position widening actually happens.
+where output-position widening actually happens. Reachability follows
+constraint-signature edges as well as structure — a `where` method's rows
+(e.g. its return row) belong to the scheme even though only the constrained
+variable's constraint list reaches them.
 
 Monotype adapts to the resulting rows in three places. A stored constant's
 ground representation can be narrower than a use-site request that widened
