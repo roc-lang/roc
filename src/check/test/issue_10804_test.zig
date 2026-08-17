@@ -144,6 +144,61 @@ test "issue 10804: a second application of the same declaration is still validat
     try test_env.assertOneTypeError("Missing Method");
 }
 
+// The walk stops at an application it has already accounted for, so it has to
+// tell two applications of one declaration apart even when one is inside the
+// other.
+test "issue 10804: derived encoder_for reaches through a nested application of the same declaration" {
+    const source =
+        \\Data := [Url(Str)]
+        \\Wrap(a) :: { x : a }.{
+        \\  encoder_for : _
+        \\}
+        \\Chart :: { p : Wrap(Wrap(Data)) }.{
+        \\  encoder_for : _
+        \\}
+        \\out = Json.to_str(Chart.{ p: { x: { x: Data.Url("u") } } })
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Missing Method");
+}
+
+// A derived codec over a formal has nothing to say about that formal where the
+// type is still polymorphic; the obligation belongs to each concrete use, and
+// rejecting it here would reject working generic code.
+test "issue 10804: a derived encoder_for over a formal checks where it is polymorphic" {
+    const source =
+        \\Wrap(a) :: { x : a }.{
+        \\  encoder_for : _
+        \\}
+        \\to_json = |w| Json.to_str(w)
+        \\out = to_json(Wrap.{ x: "s" })
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "issue 10804: an annotated polymorphic derived encoder_for checks" {
+    const source =
+        \\Wrap(a) :: { x : a }.{
+        \\  encoder_for : _
+        \\}
+        \\to_json : Wrap(a) -> Str
+        \\to_json = |w| Json.to_str(w)
+        \\out = to_json(Wrap.{ x: "s" })
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 // The marker that says "this codec is the compiler's own" lives in the module
 // that declared the type, so the walk reads it out of another module's env
 // whenever the shape crosses a boundary.

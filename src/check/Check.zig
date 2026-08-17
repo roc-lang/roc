@@ -30469,7 +30469,9 @@ fn satisfyImplicitParserConstraint(
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
     var walk = DerivedCodecWalk.init(self.gpa);
     defer walk.deinit();
-    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, env, region)) |backing| blk: {
+    // Everything below a dispatcher's own backing is inside it, so the walk
+    // enters that backing here and stays there for the rest of this constraint.
+    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, &walk, env, region)) |backing| blk: {
         try walk.visited.put(self.types.resolveVar(dispatcher_var).var_, {});
         break :blk backing;
     } else dispatcher_var;
@@ -30551,7 +30553,9 @@ fn satisfyImplicitEncoderForConstraint(
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
     var walk = DerivedCodecWalk.init(self.gpa);
     defer walk.deinit();
-    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, env, region)) |backing| blk: {
+    // Everything below a dispatcher's own backing is inside it, so the walk
+    // enters that backing here and stays there for the rest of this constraint.
+    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, &walk, env, region)) |backing| blk: {
         try walk.visited.put(self.types.resolveVar(dispatcher_var).var_, {});
         break :blk backing;
     } else dispatcher_var;
@@ -30726,12 +30730,15 @@ fn isGeneratedStructuralCodecMethodBinding(method: StaticDispatchMethodBinding, 
 
 /// The shape a derived codec's obligations belong to, or null when the
 /// dispatcher owns them itself. `method_ident` keys the method registry;
-/// `kind` is what the declaration asked the compiler to derive.
+/// `kind` is what the declaration asked the compiler to derive. The
+/// application is recorded on the walk, so a backing that reaches the
+/// dispatcher again finds it already accounted for.
 fn generatedStructuralCodecBackingVar(
     self: *Self,
     dispatcher_var: Var,
     method_ident: Ident.Idx,
     kind: CIR.DerivedMethodKind,
+    walk: *DerivedCodecWalk,
     env: *Env,
     region: Region,
 ) Allocator.Error!?Var {
@@ -30755,12 +30762,12 @@ fn generatedStructuralCodecBackingVar(
         method_ident,
     ) orelse return null;
     if (!isGeneratedStructuralCodecMethodBinding(method, kind)) return null;
-    return (try self.openNominalBackingForApp(nominal, env, region)) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("type checker invariant violated: generated structural codec nominal had no valid backing", .{});
-        }
-        unreachable;
-    };
+    // A declaration the checker already rejected has no shape to walk; the
+    // nominal validation this falls back to reports that rejection.
+    const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return null;
+    _ = try self.takeDerivedCodecBackingWalk(walk, nominal);
+    walk.nominal_backing_depth += 1;
+    return backing_var;
 }
 
 fn freshParseResultTryVar(
@@ -31771,29 +31778,98 @@ fn validateRenameFieldMethod(
 
 /// State for one derived-codec validation walk.
 ///
-/// `visited` holds the type vars already walked. `open_decls` holds the
-/// declarations whose backing shapes are open on the current path: a derived
-/// codec's obligations are its backing shape's obligations, and that shape is
-/// instantiated fresh at every use, so a recursive type meets its own
-/// declaration through vars the walk has never seen. Reaching a declaration
-/// that is already open means the frame above is discharging exactly these
-/// obligations, so the walk stops there.
+/// `visited` holds the structural type vars already walked. Nominal
+/// applications need their own record: a derived codec's obligations are its
+/// backing shape's obligations, and that shape is instantiated fresh at every
+/// use, so the same application arrives on vars the walk has never seen.
+/// `walked_apps` identifies an application by its declaration plus the exact
+/// argument vars it was given, which is the identity that matters twice over.
+/// It is what makes a recursive backing finite, because instantiating a
+/// declaration substitutes the caller's own argument vars into the recursive
+/// occurrence inside it; and it is what keeps `Wrap(Str)` and `Wrap(Data)`
+/// apart, since their obligations differ.
+///
+/// `nominal_backing_depth` counts how many of those backings the walk is
+/// currently inside. Within one, a component that is still a type variable is
+/// a formal standing for whatever an application substitutes, so its
+/// obligation belongs to that application and is discharged where the
+/// application is concrete.
 const DerivedCodecWalk = struct {
     visited: std.AutoHashMap(Var, void),
-    open_decls: std.AutoHashMap(types_mod.NominalDecl.Idx, void),
+    walked_apps: std.ArrayList(WalkedApp),
+    walked_app_args: std.ArrayList(Var),
+    nominal_backing_depth: u32,
+    gpa: std.mem.Allocator,
+
+    const WalkedApp = struct {
+        decl: types_mod.NominalDecl.Idx,
+        args_start: u32,
+        args_len: u32,
+    };
 
     fn init(gpa: std.mem.Allocator) DerivedCodecWalk {
         return .{
             .visited = std.AutoHashMap(Var, void).init(gpa),
-            .open_decls = std.AutoHashMap(types_mod.NominalDecl.Idx, void).init(gpa),
+            .walked_apps = .empty,
+            .walked_app_args = .empty,
+            .nominal_backing_depth = 0,
+            .gpa = gpa,
         };
     }
 
     fn deinit(self: *DerivedCodecWalk) void {
         self.visited.deinit();
-        self.open_decls.deinit();
+        self.walked_apps.deinit(self.gpa);
+        self.walked_app_args.deinit(self.gpa);
+    }
+
+    fn recordApp(
+        self: *DerivedCodecWalk,
+        decl: types_mod.NominalDecl.Idx,
+        args: []const Var,
+    ) Allocator.Error!void {
+        const args_start: u32 = @intCast(self.walked_app_args.items.len);
+        try self.walked_app_args.appendSlice(self.gpa, args);
+        try self.walked_apps.append(self.gpa, .{
+            .decl = decl,
+            .args_start = args_start,
+            .args_len = @intCast(args.len),
+        });
+    }
+
+    fn appArgs(self: *const DerivedCodecWalk, app: WalkedApp) []const Var {
+        return self.walked_app_args.items[app.args_start..][0..app.args_len];
     }
 };
+
+/// Whether this nominal application's derived-codec backing still needs
+/// walking, recording it before the answer is known so that a backing which
+/// reaches itself finds the application already accounted for by the frame
+/// above. Arguments are compared at their resolved roots, which is the
+/// identity instantiation shares between an application and the recursive
+/// occurrences it substitutes into.
+fn takeDerivedCodecBackingWalk(
+    self: *Self,
+    walk: *DerivedCodecWalk,
+    nominal: types_mod.NominalType,
+) Allocator.Error!bool {
+    const decl_idx = self.types.lookupNominalDecl(nominal) orelse return true;
+    const args = self.types.sliceNominalArgs(nominal);
+    for (walk.walked_apps.items) |app| {
+        if (app.decl != decl_idx or app.args_len != args.len) continue;
+        const recorded = walk.appArgs(app);
+        var same = true;
+        for (recorded, args) |recorded_arg, arg| {
+            if (self.types.resolveVar(recorded_arg).var_ != self.types.resolveVar(arg).var_) {
+                same = false;
+                break;
+            }
+        }
+        if (same) return false;
+    }
+    try walk.recordApp(decl_idx, args);
+    return true;
+}
 
 fn validateDerivedParseVar(
     self: *Self,
@@ -31860,7 +31936,13 @@ fn validateDerivedParseVar(
         },
         .alias => |alias| try self.validateDerivedParseVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk, context, failure_expr),
         .err => .ok,
-        .flex, .rigid, .field_presence => .unsupported,
+        // Inside a derived codec's backing shape a type variable is a formal
+        // standing for whatever an application substitutes, so the obligation
+        // on it belongs to that application and is discharged where the
+        // application is concrete. Anywhere else the shape gate has already
+        // decided such a variable, so reaching one here is unsupported.
+        .flex, .rigid => if (walk.nominal_backing_depth > 0) .ok else .unsupported,
+        .field_presence => .unsupported,
     };
 }
 
@@ -32263,15 +32345,9 @@ fn validateDerivedParseNominal(
         },
     });
     if (result.isEstablished() and isGeneratedStructuralCodecMethodBinding(method_lookup, .parser)) {
-        const nominal_root = self.types.resolveVar(nominal_var).var_;
-        const decl_idx = self.types.lookupNominalDecl(nominal);
-        const decl_is_open = if (decl_idx) |idx| walk.open_decls.contains(idx) else false;
-        if (!walk.visited.contains(nominal_root) and !decl_is_open) {
-            try walk.visited.put(nominal_root, {});
-            if (decl_idx) |idx| try walk.open_decls.put(idx, {});
-            defer if (decl_idx) |idx| {
-                _ = walk.open_decls.remove(idx);
-            };
+        if (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
+            walk.nominal_backing_depth += 1;
+            defer walk.nominal_backing_depth -= 1;
             const nested_calls_start = self.scratch_generated_codec_calls.items.len;
             defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(nested_calls_start);
             const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return .reported_error;
@@ -32284,7 +32360,7 @@ fn validateDerivedParseNominal(
                 env,
                 region,
                 walk,
-                context,
+                .shape,
                 failure_expr,
             )) {
                 .ok => try self.recordGeneratedCodecDerivationSnapshot(
@@ -32514,7 +32590,11 @@ fn validateDerivedEncodeVar(
         },
         .alias => |alias| try self.validateDerivedEncodeVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk),
         .err => .ok,
-        .flex, .rigid, .field_presence => .unsupported,
+        // See `validateDerivedParseVar`: a variable inside a derived codec's
+        // backing shape is a formal whose obligation belongs to the
+        // application that substitutes for it.
+        .flex, .rigid => if (walk.nominal_backing_depth > 0) .ok else .unsupported,
+        .field_presence => .unsupported,
     };
 }
 
@@ -32919,15 +32999,9 @@ fn validateDerivedEncodeNominal(
         },
     });
     if (result.isEstablished() and isGeneratedStructuralCodecMethodBinding(method_lookup, .encoder)) {
-        const nominal_root = self.types.resolveVar(nominal_var).var_;
-        const decl_idx = self.types.lookupNominalDecl(nominal);
-        const decl_is_open = if (decl_idx) |idx| walk.open_decls.contains(idx) else false;
-        if (!walk.visited.contains(nominal_root) and !decl_is_open) {
-            try walk.visited.put(nominal_root, {});
-            if (decl_idx) |idx| try walk.open_decls.put(idx, {});
-            defer if (decl_idx) |idx| {
-                _ = walk.open_decls.remove(idx);
-            };
+        if (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
+            walk.nominal_backing_depth += 1;
+            defer walk.nominal_backing_depth -= 1;
             const nested_calls_start = self.scratch_generated_codec_calls.items.len;
             defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(nested_calls_start);
             const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return .reported_error;
