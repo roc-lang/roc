@@ -144,6 +144,33 @@ test "issue 10804: a second application of the same declaration is still validat
     try test_env.assertOneTypeError("Missing Method");
 }
 
+// The marker that says "this codec is the compiler's own" lives in the module
+// that declared the type, so the walk reads it out of another module's env
+// whenever the shape crosses a boundary.
+test "issue 10804: an imported type's derived encoder_for still validates its components" {
+    const source_a =
+        \\Data := [Url(Str)]
+        \\Chart :: { data : Data }.{
+        \\  encoder_for : _
+        \\}
+        \\make : Str -> Chart
+        \\make = |url| { data: Data.Url(url) }
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertNoErrors();
+
+    const source_b =
+        \\import A
+        \\
+        \\out = Json.to_str(A.make("foo.json"))
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+
+    try test_env_b.assertOneTypeError("Missing Method");
+}
+
 // Control: the same shape, except the field's type declares its own derived
 // `encoder_for`. Component validation must accept this one.
 test "issue 10804: derived encoder_for accepts a field type that declares encoder_for" {
