@@ -292,6 +292,7 @@ pub const Tag = enum {
     diag_range_op_chained,
     diag_unnamed_field_cannot_have_default,
     diag_default_not_allowed_in_structural_record,
+    diag_default_not_allowed_on_local_type_decl,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.

@@ -338,7 +338,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "bad_literal"))
 		(e-nominal (nominal "BadLiteral")
-			(e-empty_record))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-apply (name "BadLiteral") (local)
 				(ty-lookup (name "Str") (builtin)))))

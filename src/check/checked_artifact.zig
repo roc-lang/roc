@@ -14470,7 +14470,10 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .match_ => |match| allocator.free(match.branches),
         .if_ => |if_| allocator.free(if_.branches),
         .call => |call| allocator.free(call.args),
-        .record => |record| allocator.free(record.fields),
+        .record => |record| {
+            allocator.free(record.fields);
+            allocator.free(record.unsets);
+        },
         .block => |block| allocator.free(block.statements),
         .tag => |tag| allocator.free(tag.args),
         .nominal => {},
@@ -16306,6 +16309,16 @@ const TemplateIteratorRefs = struct {
     /// Generalized nested-procedure construction sites, grouped per template.
     scope_site_spans: []artifact_serialize.Span = &.{},
     scope_sites: []CollectedScopeConstructionSite = &.{},
+    /// Refs collected from defaulted-field expressions (design.md "Defaulted
+    /// Fields"): value expressions no template body reaches, lowered
+    /// standalone at every omitting construction site. Each span indexes the
+    /// same pool as its per-template counterpart above; the evidence pass
+    /// resolves them like root edges (no enclosing template params).
+    default_plan_refs: artifact_serialize.Span = .{},
+    default_value_refs: artifact_serialize.Span = .{},
+    default_iterator_refs: artifact_serialize.Span = .{},
+    default_scheme_uses: artifact_serialize.Span = .{},
+    default_scope_sites: artifact_serialize.Span = .{},
 
     fn deinit(self: *TemplateIteratorRefs, allocator: Allocator) void {
         allocator.free(self.spans);
@@ -16556,6 +16569,44 @@ fn sealCheckedProcedureTemplateRefs(
         try scheme_use_scope_pool.appendSlice(allocator, collector.scheme_use_scopes.items);
     }
 
+    // Defaulted-field expressions (design.md "Defaulted Fields") are value
+    // expressions no template body reaches: each is lowered standalone at
+    // every construction site that omits its field. Collect their refs
+    // exactly like a template body so the evidence pass publishes site
+    // evidence for the calls and scheme instantiations inside them —
+    // without this, a default calling a generic procedure reaches lowering
+    // with no checked evidence vector for the callee's requirements.
+    var default_plan_refs: artifact_serialize.Span = .{};
+    var default_value_refs: artifact_serialize.Span = .{};
+    var default_iterator_refs: artifact_serialize.Span = .{};
+    var default_scheme_uses: artifact_serialize.Span = .{};
+    var default_scope_sites: artifact_serialize.Span = .{};
+    {
+        collector.clear();
+        for (checked_bodies.default_exprs.items) |default| {
+            try collector.collectExpr(default.checked_expr);
+        }
+        default_plan_refs = try artifact_serialize.appendSpan(artifact_serialize.Span, static_dispatch.StaticDispatchPlanId, &dispatch_ref_pool, allocator, collector.dispatch_refs.items);
+        default_value_refs = try artifact_serialize.appendSpan(artifact_serialize.Span, ResolvedValueRefId, &value_ref_pool, allocator, collector.value_refs.items);
+        default_iterator_refs = try artifact_serialize.appendSpan(artifact_serialize.Span, static_dispatch.IteratorForPlanId, &iterator_ref_pool, allocator, collector.iterator_refs.items);
+        default_scheme_uses = try artifact_serialize.appendSpan(artifact_serialize.Span, CollectedSchemeUseSite, &scheme_use_pool, allocator, collector.scheme_use_sites.items);
+        default_scope_sites = try artifact_serialize.appendSpan(artifact_serialize.Span, CollectedScopeConstructionSite, &scope_site_pool, allocator, collector.scope_sites.items);
+        // `dispatch_relation_kind_pool` stays parallel to the plan-ref pool.
+        for (collector.dispatch_refs.items) |plan_id| {
+            const plan = static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            var kind: DispatchRelationKind = .callable_result;
+            for (plan.argsSlice(static_dispatch_plans)) |operand| switch (operand) {
+                .generated_numeral, .generated_quote => kind = .conversion,
+                .checked_expr, .generated_interpolation_iter => {},
+            };
+            try dispatch_relation_kind_pool.append(allocator, kind);
+        }
+        try value_ref_scope_pool.appendSlice(allocator, collector.value_ref_scopes.items);
+        try dispatch_ref_scope_pool.appendSlice(allocator, collector.dispatch_ref_scopes.items);
+        try iterator_scope_pool.appendSlice(allocator, collector.iterator_ref_scopes.items);
+        try scheme_use_scope_pool.appendSlice(allocator, collector.scheme_use_scopes.items);
+    }
+
     resolved_value_refs.template_refs = try value_ref_pool.toOwnedSlice(allocator);
     static_dispatch_plans.template_refs = try dispatch_ref_pool.toOwnedSlice(allocator);
     templates.dispatch_ref_scopes = try allocator.dupe(DispatchScope, dispatch_ref_scope_pool.items);
@@ -16577,6 +16628,11 @@ fn sealCheckedProcedureTemplateRefs(
         .scheme_use_scopes = try scheme_use_scope_pool.toOwnedSlice(allocator),
         .scope_site_spans = scope_site_spans,
         .scope_sites = try scope_site_pool.toOwnedSlice(allocator),
+        .default_plan_refs = default_plan_refs,
+        .default_value_refs = default_value_refs,
+        .default_iterator_refs = default_iterator_refs,
+        .default_scheme_uses = default_scheme_uses,
+        .default_scope_sites = default_scope_sites,
     };
 }
 
@@ -16853,6 +16909,44 @@ const EvidencePass = struct {
             const scope_sites = self.template_iterator_refs.scope_sites[scope_site_span.start .. scope_site_span.start + scope_site_span.len];
             for (scope_sites) |site| {
                 try self.emitScopeConstructionEvidence(site, params.items);
+            }
+        }
+
+        // Defaulted-field expression roots (design.md "Defaulted Fields"),
+        // collected outside every template by the seal pass: resolve their
+        // plans and publish their use-site evidence with no enclosing
+        // template params. A default may constrain no declaration type
+        // parameter, so every obligation resolves concretely; a generalized
+        // local function inside the default still contributes its own scope
+        // chain segments.
+        {
+            const plan_span = self.template_iterator_refs.default_plan_refs;
+            for (self.plan_table.template_refs[plan_span.start .. plan_span.start + plan_span.len], 0..) |plan_id, i| {
+                const chain = try self.chainFor(self.template_iterator_refs.plan_scopes[plan_span.start + i], &.{});
+                try self.resolvePlan(plan_id, chain, false);
+            }
+
+            const iter_span = self.template_iterator_refs.default_iterator_refs;
+            for (self.template_iterator_refs.pool[iter_span.start .. iter_span.start + iter_span.len], 0..) |iter_plan_id, i| {
+                const chain = try self.chainFor(self.template_iterator_refs.iterator_scopes[iter_span.start + i], &.{});
+                try self.resolveIteratorPlan(iter_plan_id, chain, false);
+            }
+
+            const value_span = self.template_iterator_refs.default_value_refs;
+            for (self.resolved_value_refs.template_refs[value_span.start .. value_span.start + value_span.len], 0..) |ref_id, i| {
+                const chain = try self.chainFor(self.template_iterator_refs.value_ref_scopes[value_span.start + i], &.{});
+                try self.emitSiteEvidence(ref_id, chain);
+            }
+
+            const scheme_span = self.template_iterator_refs.default_scheme_uses;
+            for (self.template_iterator_refs.scheme_use_sites[scheme_span.start .. scheme_span.start + scheme_span.len], 0..) |site, i| {
+                const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_span.start + i], &.{});
+                try self.emitSchemeUseSiteEvidence(site.record_idx, @intFromEnum(site.checked_expr), chain);
+            }
+
+            const scope_span = self.template_iterator_refs.default_scope_sites;
+            for (self.template_iterator_refs.scope_sites[scope_span.start .. scope_span.start + scope_span.len]) |site| {
+                try self.emitScopeConstructionEvidence(site, &.{});
             }
         }
 
@@ -32363,6 +32457,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_range_op_chained,
             .diag_unnamed_field_cannot_have_default,
             .diag_default_not_allowed_in_structural_record,
+            .diag_default_not_allowed_on_local_type_decl,
             => {},
         }
     }
@@ -34210,6 +34305,34 @@ test "provided procedure remains a runtime root" {
         \\
         \\add_one_for_host : I64 -> I64
         \\add_one_for_host = |value| value + 1
+    ;
+
+    try expectProvidedExportKind(source, .{
+        .procedure_roots = 1,
+        .data_exports = 0,
+        .procedure_exports = 1,
+    });
+}
+
+test "published procedure body with an unset record field frees its checked copy" {
+    // The checked-body copier heap-allocates a record's unset-label slice
+    // (`copyUnsetFieldLabels`); publication must free it alongside the
+    // record's fields. std.testing.allocator fails this test on a leak.
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_hello": hello_for_host }
+        \\
+        \\MyRecord : { hello : Str, world ?: I64 }
+        \\
+        \\hello_for_host : I64 -> Str
+        \\hello_for_host = |_value| {
+        \\    rec : MyRecord
+        \\    rec = { hello: "hi", world: _ }
+        \\    rec.hello
+        \\}
     ;
 
     try expectProvidedExportKind(source, .{

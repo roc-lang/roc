@@ -4945,16 +4945,26 @@ Restrictions:
   a default at every construction site that omits the field, so an
   effectful default (`does_fx` after callee effects resolve) is rejected as
   `effectful_default_value` in `checkPendingDefaults`, which also types the
-  default against an instantiated copy of its field's type. Nominal
-  declarations are top-level, so a default canonicalizes in module
-  top-level scope and can never capture a local binding.
+  default against an instantiated copy of its field's type. A `??` default
+  is additionally legal only when the nominal declaration itself is at
+  module top level: a block-local `:=`/`::` declaration routes through the
+  same backing kernel, but its default would canonicalize in function
+  scope—capturing locals no other construction site can supply—and the
+  end-of-module cycle pass scans only top-level declarations, so
+  `canonicalizeBlockTypeDeclStatement` threads an explicit block-local flag
+  into the kernel and the default is rejected with "Default Not Allowed On
+  Local Type Declaration" (`default_not_allowed_on_local_type_decl`;
+  dropped, field degrades to required). Every SURVIVING default therefore
+  canonicalizes in module top-level scope and can never capture a local
+  binding.
 - Materialization CYCLES are rejected in two stages, split by what each
   stage can resolve:
   - CANONICALIZATION owns every NAME-RESOLVABLE cycle
     (src/canonicalize/DefaultCycles.zig, run at the end of
     `canonicalizeFile`): one Tarjan SCC pass over a graph whose nodes are
     the module's defaults and top-level defs, with REFERENCE edges
-    (lookups resolving to same-module defs, walked into their bodies) and
+    (lookups resolving to same-module defs, walked into their bodies—
+    except lambda bodies, per the function-value rule below) and
     OMISSION edges (a LOCAL nominal construction whose literal omits a
     declared defaulted field—syntactically explicit post the nominal-only
     restriction). Value references only point down the import DAG, so a
@@ -4964,15 +4974,32 @@ Restrictions:
     ONCE—on its first default in source order—and EVERY default in the
     SCC is dropped (fields degrade to required), so check and lowering
     never see a CAN-caught cycle. The walk is conservative by
-    reachability: an omission on a dead branch still counts. Dispatch
-    calls, calls through function parameters, and foreign lookups
-    terminate edges here by principle.
+    reachability: an omission on a dead branch still counts. The one
+    exception is FUNCTION VALUES: materializing a default that is (or
+    references) a lambda only creates the closure—the body is not
+    evaluated—so an `e_lambda`/`e_closure` reached as a value does not
+    walk its body (a closure's captured values ARE materialized, so
+    their reference edges remain), while a lambda in direct callee
+    position of a walked call is immediately invoked and its body does
+    walk. Bodies reached only through later application (defs referenced
+    as values then called, calls through parameters, dispatch) terminate
+    here and are the checker's residue. Dispatch calls, calls through
+    function parameters, and foreign lookups terminate edges here by
+    principle.
   - CHECK owns the residue only type checking can see: the extended
     `defaultMaterializationIsRecursive` walk descends every expression
     form and additionally follows same-module reference edges,
     DISPATCH-RESOLVED call targets, type-dispatch method bindings, and
     omitted defaulted fields on SOLVED rows (which also covers
-    foreign-omission edges). Dispatch targets join through SCHEME-USE
+    foreign-omission edges). It applies the same function-value rule as
+    CAN—a lambda or closure reached as a value walks its captures but
+    not its body—with one strict extension: invoked-ness follows
+    name-resolvable reference chains to the def body they name (calling
+    through a def reference evaluates that body at materialization), so
+    a cycle like `?? go({})` with `go = |_| Loop.{}.a` is caught here
+    even though CAN's value-edge rule accepts it; calls through
+    parameters and other non-name-resolvable callees remain closed only
+    by dispatch evidence. Dispatch targets join through SCHEME-USE
     EVIDENCE, not var equality alone: a dispatch fired inside an
     instantiated scheme carries the instantiation COPY's constraint var,
     never the var written at the body's dispatch site (generalization
@@ -5000,33 +5027,54 @@ Restrictions:
     check-only edge. This judgment still runs before `CheckedModule` is
     built, so postcheck lowering only receives acyclic defaults.
 - A default may constrain NO declaration type parameter: it must
-  type-check with ZERO residual dispatch constraints on the declaration's
-  type parameters. This is forced by two hard requirements—type
-  declarations NEVER carry written `where` clauses, and the compiler NEVER
-  infers such requirements onto a type—so a default that would require a
-  capability of a parameter (a literal's `from_numeral`/`from_quote`, a
-  constraint smuggled in through a referenced def's instantiated scheme, a
-  where-constrained helper call) has no place that requirement could live,
-  and is rejected at the declaration as
-  `default_constrains_type_parameter` ("Default Constrains A Type
-  Parameter", naming the field, the parameter, and the demanded method).
-  Judged in `checkPendingDefaults` (`checkDefaultParameterConstraints`)
-  immediately after the default unifies with an instantiated copy of its
-  field type, BEFORE the defaulting rounds could commit a still-flex
-  parameter copy. Detection consumes the check's explicit constraint data
-  in both forms it takes: a constraint that unified against a still-flex
-  parameter copy PARKS in that flex's constraint set (flex ~ flex merges
-  union constraints), and a constraint that met concrete structure DEFERS
-  into the env's list—so the judgment inspects the parameter copies the
-  instantiation minted for the declaration's rigids (snapshotted from the
-  instantiation's var map, which also names the parameter for the report),
-  then the deferred suffix recorded since this default's check began. The
-  default checks AT the instantiated field type (the expected type steers
-  interior numerals the way an annotated def's body checks at its
-  annotation, so `?? 1 + 2` on a `U8` field checks both numerals at U8).
-  The default EXPRESSION itself may still be parametric—`Pair(x) := {
-  items : List(x) ?? [] }` is legal and materializes per specialization;
-  unconstrained parametricity demands nothing of the parameter.
+  type-check while demanding NOTHING of the declaration's type
+  parameters. This is forced by two hard requirements—type declarations
+  NEVER carry written `where` clauses, and the compiler NEVER infers such
+  requirements onto a type—so a default that would require a capability
+  of a parameter has no place that requirement could live, and is
+  rejected at the declaration as `default_constrains_type_parameter`
+  ("Default Constrains A Type Parameter"). A default constrains a
+  parameter in either of two forms, both rejected: a residual DISPATCH
+  constraint (a literal's `from_numeral`/`from_quote`, a constraint
+  smuggled in through a referenced def's instantiated scheme, a
+  where-constrained helper call—the report names the field, the
+  parameter, and the demanded method), or a STRUCTURAL PIN—the default's
+  type unifies the parameter's instantiation copy with concrete
+  structure (`?? []` on `value : a` decides `a = List(elem)` for every
+  specialization; the report names the field and the parameter it
+  forces concrete). Judged in `checkPendingDefaults`
+  (`checkDefaultParameterConstraints`) immediately after the default
+  unifies with an instantiated copy of its field type, BEFORE the
+  defaulting rounds could commit a still-flex parameter copy. Detection
+  reads the parameter copies the instantiation minted for the
+  declaration's rigids (snapshotted from the instantiation's var map,
+  which also names the parameter for the report): a copy the default
+  demands nothing of is still flex after the check; parked constraints
+  on a flex copy convict by method name; a copy resolved to structure
+  (or an alias) convicts as a structural pin; `.err` copies are
+  already-reported errors and pass. The deferred-constraint half scans
+  the ENTIRE deferred list for entries rooted at a parameter copy—a
+  length watermark cannot attribute a suffix to one default's check
+  because the trailing constraint drain rebuilds the list from scratch
+  on every `checkExpr`, and the whole-list scan is exact because
+  parameter copies are fresh vars minted by the default's own
+  instantiation, so no pre-existing entry can share their root. The
+  default checks AT the instantiated field type (the expected type
+  steers interior numerals the way an annotated def's body checks at
+  its annotation, so `?? 1 + 2` on a `U8` field checks both numerals at
+  U8). The default EXPRESSION itself may still be parametric—`Pair(x)
+  := { items : List(x) ?? [] }` is legal and materializes per
+  specialization; unconstrained parametricity demands nothing of the
+  parameter.
+- A default rejected at finalize (effectful, parameter-constraining) is
+  recorded as EXPLICIT REJECTION EVIDENCE—never by poisoning its solved
+  var, which the unifier either suppresses (structure-typed or
+  constraint-carrying roots) or leaks into a shared callee's scheme.
+  `checkDefaultRestrictions` RETIRES every rejected default (including
+  field-type mismatches, whose standard recovery leaves the var `.err`)
+  by replacing the default expression and its omitting construction
+  sites with runtime errors before checked-artifact publication, so
+  postcheck materialization can never observe a rejected default.
 
 The CheckedModule preserves the kind: a defaulted field serializes as a
 required field CARRYING its default identity (`CheckedFieldDefault`), with
@@ -5046,12 +5094,71 @@ discard of the build-time source-node map), and that expression is the
 SINGLE source of value: every construction site that omits the field
 lowers it inline at the site's field monotype (`defaultedFieldValueAt` in
 src/postcheck/monotype/lower.zig; boxy's `lowerDefaultedRecordFieldInto`
-mirrors it through `lowerModuleExprInto`). There is no archived VALUE, no
-`field_default` compile-time root, and no cross-root ordering: the inlined
-expression evaluates as part of whatever body consumes it—a comptime
-root's own evaluation for top-level constants, a runtime body otherwise—
-so each specialization computes its own value, exactly as if the default
-had been written at the site.
+mirrors it through `lowerModuleExprInto`). Each materialization lowers
+the declaring module's checked default expression under its own FRESH
+`TypeInstantiationContext`: a default is its own instantiation, so two
+omission sites in one body may demand different specializations and must
+never share the consuming body's memoized checked-type nodes. Boxy
+materialization is likewise BINDER-ISOLATED: `lowerModuleExprInto` gives
+every materialization fresh binder and lambda state sized lazily for the
+declaring module's pattern-binder space—unconditionally, because boxy
+binder slots are write-once, so even a same-module default materialized
+twice in one procedure must not observe an earlier materialization's
+bindings—and the save/restore is stack-shaped so defaults that construct
+other defaulted nominals nest. The boxy representation plan covers
+default expressions the same way: when body analysis reaches a record
+construction (`.record` or `.empty_record`) carrying
+`record_omitted_defaults` entries, the planner analyzes each entry's
+archived default expression against its declaring module's view under
+the consuming site's worker—the same explicit artifact data
+(`record_omitted_defaults` → `defaultExpr`) and the same worker key
+lowering later uses for callable-use plans and type representations;
+declaring modules resolve by content identity, and an unresolvable
+origin is an invariant violation, never a fallback. There is no archived
+VALUE, no `field_default` compile-time root, and no cross-root ordering:
+the inlined expression evaluates as part of whatever body consumes it—a
+comptime root's own evaluation for top-level constants, a runtime body
+otherwise—so each specialization computes its own value, exactly as if
+the default had been written at the site.
+Default expressions carry their own CHECKED DISPATCH EVIDENCE: a
+default may call a generic (unannotated) procedure, and that call's
+callee requirements resolve to concrete targets when
+`checkPendingDefaults` checks the default at an instantiated copy of
+its field type (a default constrains no declaration parameter, so
+nothing is left for a caller to supply). Publication walks every
+archived default expression (`CheckedBodyStore.default_exprs`) as a
+ROOT outside every procedure template: `sealCheckedProcedureTemplateRefs`
+collects the defaults' value refs, dispatch plans, iterator plans,
+scheme-use sites, and nested-procedure construction sites exactly like
+a template body, and the evidence pass resolves them with no enclosing
+template params—chain-free like compile-time root edges, while a
+generalized local function inside a default still contributes its own
+scope chain. The resulting `site_evidence` entries are keyed by the
+default's checked expressions, so every omitting site's
+per-specialization lowering finds the same finished vector through the
+ordinary `siteEvidence` lookup—lowering consumes explicit checked
+evidence and never reconstructs it.
+
+Omission edges are EXPLICIT in every graph that orders defaults. One
+shared enumeration (src/canonicalize/default_omissions.zig) defines what
+a construction omits: a LOCAL nominal construction over a record-literal
+backing omits every declared defaulted field the literal neither
+supplies nor unsets; a record update (`{ ..base }`) omits nothing;
+non-record backings construct no fields. Three consumers agree on it:
+(1) `DefaultCycles`—the omission edges of the cycle graph; (2)
+`DependencyGraph`'s demand walk—a def constructing `Cfg.{}` that omits a
+defaulted field depends on everything that default's expression demands,
+so `evaluation_order` and the top-level demand relation carry the edge
+explicitly and comptime root scheduling never re-derives it; (3)
+`collectNameReferences` (check order)—the checker materializes the
+default at the construction site, so the default's referenced defs are
+check-order predecessors. Ordering invariant: `checkDefaultCycles` runs
+BEFORE any dependency graph is built; the demand walk follows omission
+edges into surviving defaults' expressions and terminates because the
+surviving omission relation is acyclic—a dropped default is never
+materialized and contributes no edge. Foreign constructions
+(`e_nominal_external`) contribute no local omission edges: the foreign
+module's defaults are that module's own compile-time roots.
 When the default literal uses a custom `from_numeral` or `from_quote`, the
 conversion gets an ORDINARY `numeral_conversion`/`quote_conversion` root
 in the declaring module: finalization still evaluates the raw conversion
@@ -5070,6 +5177,16 @@ reference the declaring module's own defs; the swapped context resolves
 them (pinned by run-test-eval). Checking's `does_fx` →
 `effectful_default_value` rejection is the LIVE purity judgment (see
 Restrictions above): only pure defaults reach materialization.
+A compile-time crash resolves its report site through the failing LIR
+statement's explicit `SourceLoc` stamp. The bare region renders against
+the finalized module's source only when the statement's source-file
+entry names that module; otherwise (a crash inside an inlined FOREIGN
+default) the report highlights the consuming compile-time root locally
+and names the declaring module with its resolved line/column
+(`ComptimeCrash.origin`). Both comptime engines carry this provenance—
+the interpreter via failed-statement locs, the dev backend via
+failure-region hooks that pass file/line/column alongside region
+offsets.
 
 Monotype default identity (`Type.FieldDefault`): the Monotype record
 field itself carries the `??` default identity—the declaring module's
@@ -5109,11 +5226,17 @@ default PER SPECIALIZATION: the generated parser body lowers the
 declaring module's checked default expression at the field's monotype
 (the parser is generated per record monotype, so this is naturally
 per-specialization). Parser generation runs after the instantiation
-graph freezes, so sealed expression lowering skips the graph cross-check
-there and relies on the produced-type verification
-(`constrainKnownType`'s phase rule). No leading-batch root ordering
-exists anymore—the former `pending_field_defaults` machinery existed
-only to finalize archived constants before parsers could restore them.
+graph freezes, so derived-codec parsers obey the Phase‑A/Phase‑B
+boundary for `??` defaults exactly as for method calls: while the
+specialization graph still accepts relations, codec preparation
+(`prepareDraftDeferredExprs`) lowers every reachable default expression
+at its inline field node and records the finished draft expression
+(`DraftPreparedFieldDefault`); frozen Phase‑B emission consumes exactly
+those prepared values and may not lower another checked expression
+(missing or duplicate demand is an invariant panic). No leading-batch
+root ordering exists anymore—the former `pending_field_defaults`
+machinery existed only to finalize archived constants before parsers
+could restore them.
 
 Optional-field lowering is COMPLETE (see Field Kinds above): an omitted
 optional field constructs the `#Missing` tag in the same

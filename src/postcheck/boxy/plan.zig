@@ -1448,6 +1448,55 @@ const Builder = struct {
         return self.moduleForId(.{ .bytes = checked_module.bytes });
     }
 
+    /// Analyze the archived default expressions the checker selected for
+    /// fields omitted at this record construction site (design.md "Defaulted
+    /// Fields"). Lowering materializes each default per specialization by
+    /// lowering the declaring module's checked expression inline in the
+    /// consuming worker, so the plan analyzes that same expression against
+    /// the declaring module's view under the consuming worker.
+    fn analyzeOmittedFieldDefaults(
+        self: *Builder,
+        view: ModuleView,
+        expr_id: checked.CheckedExprId,
+    ) Allocator.Error!void {
+        for (view.checked_bodies.record_omitted_defaults) |entry| {
+            if (entry.expr != expr_id) continue;
+            const declaring_view = self.moduleForFieldDefaultOrigin(view, entry.default);
+            const default_expr = declaring_view.checked_bodies.defaultExpr(entry.default.expr_node) orelse
+                boxyPlanInvariant("defaulted record field's expression was not archived");
+            try self.analyzeExprTypes(declaring_view, default_expr);
+        }
+    }
+
+    /// The declaring module's view for a field default's origin identity.
+    fn moduleForFieldDefaultOrigin(
+        self: *Builder,
+        view: ModuleView,
+        default: checked.CheckedFieldDefault,
+    ) ModuleView {
+        const origin = default.origin() orelse
+            boxyPlanInvariant("defaulted record field carried no declaring module identity");
+        const names = view.canonical_names orelse
+            boxyPlanInvariant("defaulted record field's consuming module had no canonical name store");
+        const origin_hash = names.moduleIdentityBytes(origin);
+        if (self.root_module) |root_module| {
+            if (std.mem.eql(u8, &root_module.module.module_identity.stable_hash, origin_hash)) {
+                return self.root_view;
+            }
+        }
+        for (self.imports) |imported| {
+            if (std.mem.eql(u8, &imported.module_identity.stable_hash, origin_hash)) {
+                return moduleViewFromImported(imported);
+            }
+        }
+        for (self.relation_modules) |relation| {
+            if (std.mem.eql(u8, &relation.module_identity.stable_hash, origin_hash)) {
+                return moduleViewFromImported(relation);
+            }
+        }
+        boxyPlanInvariant("defaulted record field's declaring module was absent from boxy planning");
+    }
+
     fn analyzeRoot(self: *Builder, root: checked.RootRequest) Allocator.Error!void {
         const host_type = typeRef(self.root_view, root.checked_type);
         const host_rep = try self.analyzeType(self.root_view, root.checked_type);
@@ -10059,7 +10108,6 @@ const Builder = struct {
             .str_segment,
             .bytes_literal,
             .empty_list,
-            .empty_record,
             .zero_argument_tag,
             .runtime_error,
             .crash,
@@ -10067,6 +10115,7 @@ const Builder = struct {
             .anno_only,
             .break_,
             => {},
+            .empty_record => try self.analyzeOmittedFieldDefaults(view, expr_id),
             .str_from_quote => |quote| try self.analyzeQuoteConversionTypes(view, expr_id, quote.plan),
             .lookup_local,
             .lookup_external,
@@ -10118,6 +10167,7 @@ const Builder = struct {
             .record => |record| {
                 if (record.ext) |ext| try self.analyzeExprTypes(view, ext);
                 for (record.fields) |field| try self.analyzeExprTypes(view, field.value);
+                try self.analyzeOmittedFieldDefaults(view, expr_id);
             },
             .block => |block| {
                 for (block.statements) |statement| try self.analyzeStatementTypes(view, statement);

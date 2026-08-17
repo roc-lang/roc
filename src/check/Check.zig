@@ -537,6 +537,16 @@ call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
 erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+/// Default expressions rejected by a finalize judgment (effectful,
+/// parameter-constraining) with the problem already reported. Explicit
+/// evidence for `checkDefaultRestrictions`: the residue walk skips them and
+/// the retirement sweep replaces them before the artifact boundary. A
+/// rejection is recorded here rather than by poisoning the default's var:
+/// unifying `.err` into a var that resolved to structure (or a
+/// constraint-carrying flex) is SUPPRESSED by the unifier, and marking the
+/// var's solved class erroneous directly would leak the poison into a
+/// shared monomorphic callee's scheme.
+rejected_default_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
 /// Every accepted explicit nominal constructor backing relation, for the
 /// settled-state re-decision in `recheckNominalConstructorBackings`.
 accepted_nominal_constructor_backings: std.ArrayListUnmanaged(AcceptedNominalConstructorBacking),
@@ -2401,6 +2411,7 @@ fn initAssumePrepared(
         .erroneous_value_exprs = .empty,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
         .erroneous_value_patterns = .empty,
+        .rejected_default_exprs = .empty,
         .accepted_nominal_constructor_backings = .empty,
         .hoist_frames = .empty,
         .hoist_expr_candidates = .empty,
@@ -2512,6 +2523,7 @@ pub fn deinit(self: *Self) void {
     self.erroneous_value_exprs.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
     self.erroneous_value_patterns.deinit(self.gpa);
+    self.rejected_default_exprs.deinit(self.gpa);
     self.accepted_nominal_constructor_backings.deinit(self.gpa);
     self.hoist_frames.deinit(self.gpa);
     self.hoist_expr_candidates.deinit(self.gpa);
@@ -22827,11 +22839,6 @@ fn defaultLiteralFieldKinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
 /// every construction site that omits the field, so it must be pure.
 fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.pending_default_checks.items) |pending| {
-        // Watermark the deferred-constraint accumulation so the
-        // parameter-constraint judgment below can attribute a deferred
-        // suffix to THIS default's check
-        // (see `checkDefaultParameterConstraints`).
-        const deferred_watermark = env.deferred_static_dispatch_constraints.items.items.len;
         // The default checks AT an instantiated copy of its field type,
         // exactly like an annotated def's body checks at its annotation:
         // the expected type steers interior numerals to the field's type
@@ -22868,20 +22875,21 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                 .region = self.getRegionAt(ModuleEnv.varFrom(pending.default_expr)),
                 .field_name = pending.field_name,
             } });
-            // Diagnostic recovery after the reported problem (the standard
-            // poisoning convention): the default's var becomes `.err`, so
-            // downstream judgments treat it as an already-reported error
-            // instead of a well-typed default. Unifying the poisoned var
-            // against the field type would be a no-op (err absorbs), so
-            // skip it.
-            try self.unifyWith(ModuleEnv.varFrom(pending.default_expr), .err, env);
+            // Diagnostic recovery after the reported problem: record the
+            // rejection explicitly (see `rejected_default_exprs`), so the
+            // residue walk skips this default and the retirement sweep in
+            // `checkDefaultRestrictions` replaces it before the artifact
+            // boundary. The default is not unified against the field type:
+            // it is already rejected, and the judgment below must not see
+            // its residue as the field's.
+            try self.rejected_default_exprs.put(self.gpa, pending.default_expr, {});
             continue;
         }
         _ = try self.unify(ModuleEnv.varFrom(pending.default_expr), expected_field_type, env);
         // Judged HERE, before the numeric-defaulting rounds could commit a
         // still-flex parameter copy: a default may constrain NO declaration
         // type parameter (design.md "Defaulted Fields").
-        try self.checkDefaultParameterConstraints(pending, params_top, deferred_watermark, env);
+        try self.checkDefaultParameterConstraints(pending, params_top, env);
     }
     // The list is kept for `checkDefaultRestrictions`, which runs after the
     // defaulting rounds and constraint validation settle the types.
@@ -22950,10 +22958,12 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     }
 
     for (self.pending_default_checks.items) |pending| {
-        // An erroring default already reported (effectful poisoning above, or
-        // a unify mismatch against its field type—both leave the var `.err`);
-        // walking it would cascade a second problem onto the same default.
-        if (self.types.resolveVar(ModuleEnv.varFrom(pending.default_expr)).desc.content == .err) continue;
+        // An erroring default already reported (an explicitly recorded
+        // effectful/parameter-constraint rejection, or a unify mismatch
+        // against its field type, which leaves the var `.err`); walking it
+        // would cascade a second problem onto the same default. It is
+        // retired below instead.
+        if (self.defaultWasRejected(pending)) continue;
         if (try self.defaultMaterializationIsRecursive(pending.default_expr, &evidence)) {
             try recursive_defaults.append(self.gpa, pending);
         }
@@ -22969,63 +22979,104 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     defer self.gpa.free(omitted_defaults);
 
     for (recursive_defaults.items) |pending| {
-        const region = self.cir.store.getExprRegion(pending.default_expr);
         _ = try self.problems.appendProblem(self.gpa, .{ .recursive_default_value = .{
-            .region = region,
+            .region = self.cir.store.getExprRegion(pending.default_expr),
             .field_name = pending.field_name,
         } });
+        try self.retireRejectedDefault(pending, omitted_defaults);
+    }
 
-        // The checked-module pipeline still builds an artifact after type
-        // errors so it can render diagnostics. Replace the rejected default
-        // before that boundary; otherwise post-check lowering tries to
-        // materialize the same default forever.
-        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-            .region = region,
-        } });
-
-        // A construction that omits this rejected default would otherwise
-        // restore the replacement runtime-error expression during postcheck
-        // or compile-time evaluation. Match the checker's exact omission
-        // identity and replace those construction sites without reporting a
-        // second problem.
-        for (omitted_defaults) |omitted| {
-            if (omitted.origin_module != self.cir.selfModuleIdentity()) continue;
-            if (omitted.default_expr_node != @intFromEnum(pending.default_expr)) continue;
-            if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
-            try self.replaceExprWithRuntimeError(omitted.expr, diagnostic_idx);
-            try self.erroneous_value_exprs.put(self.gpa, omitted.expr, {});
-        }
-
-        try self.replaceExprWithRuntimeError(pending.default_expr, diagnostic_idx);
-        try self.erroneous_value_exprs.put(self.gpa, pending.default_expr, {});
+    // A default rejected by an earlier judgment (effectful, parameter-
+    // constraining, or mismatched against its field type) already reported;
+    // retire it the same way, without a second problem. Its expression's
+    // solved types can conflict with a construction site's monotype, so
+    // leaving it materializable would trade the reported diagnostic for a
+    // postcheck lowering invariant violation.
+    for (self.pending_default_checks.items) |pending| {
+        if (!self.defaultWasRejected(pending)) continue;
+        try self.retireRejectedDefault(pending, omitted_defaults);
     }
 
     self.pending_default_checks.clearRetainingCapacity();
+    self.rejected_default_exprs.clearRetainingCapacity();
+}
+
+/// Whether this default was rejected by an earlier judgment with its
+/// problem already reported: an explicitly recorded rejection (effectful,
+/// parameter-constraining—see `rejected_default_exprs`), or a unify
+/// mismatch against its field type, whose standard recovery left the
+/// default's var `.err`.
+fn defaultWasRejected(self: *const Self, pending: PendingDefaultCheck) bool {
+    if (self.rejected_default_exprs.contains(pending.default_expr)) return true;
+    return self.types.resolveVar(ModuleEnv.varFrom(pending.default_expr)).desc.content == .err;
+}
+
+/// Error recovery for one rejected default (its problem is already
+/// reported): the checked-module pipeline still builds an artifact after
+/// type errors so it can render diagnostics, so the default expression must
+/// be replaced with a runtime error before that boundary—otherwise
+/// post-check lowering materializes the rejected default (forever for a
+/// cycle, against a conflicting monotype for a poisoned one). A
+/// construction that omits this default would likewise restore it during
+/// postcheck or compile-time evaluation, so match the checker's exact
+/// omission identity and replace those construction sites too, without
+/// reporting a second problem.
+fn retireRejectedDefault(
+    self: *Self,
+    pending: PendingDefaultCheck,
+    omitted_defaults: []const ModuleEnv.RecordOmittedDefault,
+) std.mem.Allocator.Error!void {
+    const region = self.cir.store.getExprRegion(pending.default_expr);
+    const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+        .region = region,
+    } });
+
+    for (omitted_defaults) |omitted| {
+        if (omitted.origin_module != self.cir.selfModuleIdentity()) continue;
+        if (omitted.default_expr_node != @intFromEnum(pending.default_expr)) continue;
+        if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
+        try self.replaceExprWithRuntimeError(omitted.expr, diagnostic_idx);
+        try self.erroneous_value_exprs.put(self.gpa, omitted.expr, {});
+    }
+
+    try self.replaceExprWithRuntimeError(pending.default_expr, diagnostic_idx);
+    try self.erroneous_value_exprs.put(self.gpa, pending.default_expr, {});
 }
 
 /// The parameter-constraint judgment (design.md "Defaulted Fields"): a
-/// default must type-check with ZERO residual dispatch constraints on the
-/// declaration's type parameters. Type declarations never carry written
-/// `where` clauses, and the compiler never infers such requirements onto a
-/// type—so a default that would require a capability of a parameter (a
-/// literal's `from_numeral`/`from_quote`, a constraint arriving through a
-/// referenced def's instantiated scheme, a where-constrained helper call)
-/// has no place to put that requirement and is rejected at the declaration.
+/// default must type-check while constraining the declaration's type
+/// parameters in NO way. Type declarations never carry written `where`
+/// clauses, and the compiler never infers such requirements onto a type—so
+/// a default that would require a capability of a parameter (a literal's
+/// `from_numeral`/`from_quote`, a constraint arriving through a referenced
+/// def's instantiated scheme, a where-constrained helper call) has no place
+/// to put that requirement, and a default that STRUCTURALLY pins a
+/// parameter copy (unifies it with concrete structure, e.g. `?? []` on
+/// `value : a`) would silently decide the parameter for every
+/// specialization. Both are rejected at the declaration.
 ///
-/// Detection consumes the check's explicit constraint data, in two forms:
-/// a constraint that unified against a still-flex parameter copy PARKS in
-/// that flex's `constraints` (flex ~ flex merges union constraints), and a
-/// constraint that met concrete structure DEFERS into the env's list—so the
-/// judgment inspects the parameter copies' parked constraints first, then
-/// the deferred suffix recorded since this default's check began. Both are
-/// judged before the numeric-defaulting rounds could commit a parameter
-/// copy. Unconstrained parametricity stays legal: `?? []` on `List(x)`
-/// parks nothing.
+/// Detection consumes the check's explicit constraint data, judged before
+/// the numeric-defaulting rounds could commit a parameter copy:
+///
+/// 1. A constraint that unified against a still-flex parameter copy PARKS
+///    in that flex's `constraints` (flex ~ flex merges union constraints).
+/// 2. A constraint that met concrete structure DEFERS into the env's list.
+///    `checkExpr`'s trailing drain settles concrete-rooted entries itself,
+///    so this scan is the backstop for any entry the drain retained; it
+///    scans the WHOLE list, which is exact—a parameter copy is a fresh var
+///    minted by THIS default's instantiation, so no pre-existing entry can
+///    share its root—where a length watermark could not index it, because
+///    that same drain rebuilds the list from scratch (settling
+///    pre-watermark entries in place).
+/// 3. A parameter copy that resolved to structure (or an alias) with no
+///    constraint evidence is the structural pin itself.
+///
+/// Unconstrained parametricity stays legal: `?? []` on `List(x)` parks
+/// nothing and leaves the parameter's copy flex.
 fn checkDefaultParameterConstraints(
     self: *Self,
     pending: PendingDefaultCheck,
     params_top: u32,
-    deferred_watermark: usize,
     env: *Env,
 ) std.mem.Allocator.Error!void {
     const params = self.scratch_default_param_vars.sliceFromStart(params_top);
@@ -23035,19 +23086,40 @@ fn checkDefaultParameterConstraints(
         switch (self.types.resolveVar(param.var_).desc.content) {
             .flex => |flex| if (flex.constraints.len() > 0) {
                 const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-                return self.rejectDefaultParameterConstraint(pending, param.name, constraints[0].fn_name, env);
+                return self.rejectDefaultParameterConstraint(pending, param.name, constraints[0].fn_name);
             },
             .rigid, .alias, .field_presence, .structure, .err => {},
         }
     }
 
-    const deferred = env.deferred_static_dispatch_constraints.items.items;
-    for (deferred[deferred_watermark..]) |entry| {
+    for (env.deferred_static_dispatch_constraints.items.items) |entry| {
         const entry_root = self.types.resolveVar(entry.var_).var_;
         for (params) |param| {
             if (self.types.resolveVar(param.var_).var_ != entry_root) continue;
             const constraints = self.types.sliceStaticDispatchConstraints(entry.constraints);
-            return self.rejectDefaultParameterConstraint(pending, param.name, constraints[0].fn_name, env);
+            // A deferred entry always carries at least one constraint (the
+            // same invariant `checkStaticDispatchConstraints` asserts); an
+            // empty one is a constraint-tracking compiler bug, and skipping
+            // it here keeps the indexing safe in release builds.
+            std.debug.assert(constraints.len > 0);
+            if (constraints.len == 0) continue;
+            return self.rejectDefaultParameterConstraint(pending, param.name, constraints[0].fn_name);
+        }
+    }
+
+    for (params) |param| {
+        switch (self.types.resolveVar(param.var_).desc.content) {
+            // The structural pin: the copy is fresh and started flex, so
+            // only the default's own check can have forced it to structure
+            // (or to an alias of one). Judged after the constraint evidence
+            // above so a constraint that met concrete structure keeps its
+            // method-named report.
+            .structure, .alias => return self.rejectDefaultParameterConstraint(pending, param.name, null),
+            // A copy the default demands nothing of stays flex (`?? []` on
+            // `List(x)`); `.err` is an already-reported mismatch (standard
+            // poison recovery); `.rigid`/`.field_presence` cannot occur for
+            // the instantiation copy of a rigid parameter.
+            .flex, .rigid, .field_presence, .err => {},
         }
     }
 }
@@ -23055,12 +23127,13 @@ fn checkDefaultParameterConstraints(
 /// Report one obligation rejection and poison the default (the standard
 /// diagnostic recovery, same as the effectful judgment above): downstream
 /// judgments and lowering treat the default as an already-reported error.
+/// `method_name` is the demanded method for a residual-dispatch rejection,
+/// or null for a structural pin (which demands no method).
 fn rejectDefaultParameterConstraint(
     self: *Self,
     pending: PendingDefaultCheck,
     type_param: base.Ident.Idx,
-    method_name: base.Ident.Idx,
-    env: *Env,
+    method_name: ?base.Ident.Idx,
 ) std.mem.Allocator.Error!void {
     _ = try self.problems.appendProblem(self.gpa, .{ .default_constrains_type_parameter = .{
         .region = self.cir.store.getExprRegion(pending.default_expr),
@@ -23068,7 +23141,10 @@ fn rejectDefaultParameterConstraint(
         .method_name = method_name,
         .type_param = type_param,
     } });
-    try self.unifyWith(ModuleEnv.varFrom(pending.default_expr), .err, env);
+    // Explicit rejection evidence (see `rejected_default_exprs`): the
+    // residue walk skips this default and the retirement sweep in
+    // `checkDefaultRestrictions` replaces it before the artifact boundary.
+    try self.rejected_default_exprs.put(self.gpa, pending.default_expr, {});
 }
 
 /// Prebuilt evidence indexes for one `checkDefaultRestrictions` run (built
@@ -23098,7 +23174,11 @@ const DefaultWalkEvidence = struct {
 
 /// Whether materializing `root` transitively reaches a construction omitting
 /// the field that carries `root` as its own default. The walk descends every
-/// expression form and follows the edges only type checking can resolve—
+/// expression form—except a lambda/closure body reached as a VALUE, which is
+/// not evaluated at materialization (canonicalization's DefaultCycles rule;
+/// bodies reached in INVOKED position still walk via the invoked-position
+/// drain in the loop below)—and follows the edges only type checking can
+/// resolve—
 /// same-module reference edges into def bodies (re-traversed by necessity: a
 /// mixed cycle needs its whole path, though purely name-resolvable cycles
 /// were already dropped by canonicalization's cycle pass), dispatch-resolved
@@ -23129,6 +23209,17 @@ fn defaultMaterializationIsRecursive(
     defer visited_seed_vars.deinit(self.gpa);
     var visited_instantiations: std.AutoHashMapUnmanaged(u32, void) = .empty;
     defer visited_instantiations.deinit(self.gpa);
+    // Expressions reached in INVOKED position (a call's direct callee, a
+    // dispatch-resolved target, a resolved method binding): their function
+    // body IS evaluated by the materialization that reaches the call, so a
+    // lambda/closure body walks here—unlike one reached as a value, which
+    // only creates the function value. Invoked-ness follows name-resolvable
+    // reference chains (calling through a def reference evaluates that
+    // def's body), with its own visited set so alias chains terminate.
+    var invoked_work: std.ArrayList(CIR.Expr.Idx) = .empty;
+    defer invoked_work.deinit(self.gpa);
+    var visited_invoked: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
+    defer visited_invoked.deinit(self.gpa);
 
     while (true) {
         // Drain dispatch seeds: a seed var identifies a constraint whose
@@ -23146,7 +23237,9 @@ fn defaultMaterializationIsRecursive(
                 if (seen_inst.found_existing) continue;
                 const instantiation = self.dispatch_target_instantiations.items[inst_index];
                 if (instantiation.target_env == self.cir) {
-                    try expr_work.append(self.gpa, self.cir.store.getDef(instantiation.target_binding.def_idx).expr);
+                    // A dispatch-resolved target is INVOKED by the walked
+                    // call, so its function body walks.
+                    try invoked_work.append(self.gpa, self.cir.store.getDef(instantiation.target_binding.def_idx).expr);
                 }
                 if (evidence.dispatch_scheme_uses.get(@intFromEnum(instantiation.constraint_fn_var))) |record_index| {
                     const record = self.cir.scheme_uses.items.items[record_index];
@@ -23155,6 +23248,40 @@ fn defaultMaterializationIsRecursive(
                         try seed_work.append(self.gpa, @enumFromInt(pair.fresh_var));
                     }
                 }
+            }
+        }
+        // Drain invoked positions: every invoked expression also walks as an
+        // ordinary value (captures, scheme-use seeding, operands) via
+        // `expr_work`; invoked-ness adds only the function-body edge, and
+        // follows name-resolvable references to the function they name.
+        while (invoked_work.pop()) |invoked_idx| {
+            const seen_invoked = try visited_invoked.getOrPut(self.gpa, invoked_idx);
+            if (seen_invoked.found_existing) continue;
+            try expr_work.append(self.gpa, invoked_idx);
+            switch (self.cir.store.getExpr(invoked_idx)) {
+                .e_lambda => |lambda| try expr_work.append(self.gpa, lambda.body),
+                .e_closure => |closure| {
+                    // `lambda_idx` always names an `e_lambda`
+                    // (CIR.Expr.Closure); the closure's captures walk via
+                    // the ordinary `.e_closure` arm below.
+                    try expr_work.append(self.gpa, closure.lambda_idx);
+                    const lambda = self.cir.store.getExpr(closure.lambda_idx);
+                    try expr_work.append(self.gpa, lambda.e_lambda.body);
+                },
+                .e_lookup_local => |lookup| {
+                    if (evidence.pattern_to_def_expr.get(lookup.pattern_idx)) |def_expr| {
+                        try invoked_work.append(self.gpa, def_expr);
+                    }
+                },
+                .e_lookup_associated_resolved => |lookup| {
+                    if (lookup.module_identity == self_module) {
+                        try invoked_work.append(self.gpa, self.cir.store.getDef(lookup.target_def_idx).expr);
+                    }
+                },
+                // Any other invoked expression (a call result, a parameter,
+                // a field access) is not name-resolvable to a function
+                // body; those edges are the dispatch evidence's to close.
+                else => {},
             }
         }
         const expr_idx = expr_work.pop() orelse break;
@@ -23199,13 +23326,15 @@ fn defaultMaterializationIsRecursive(
             },
             .e_type_dispatch_call => |call| {
                 if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
-                    try expr_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
+                    // A resolved method binding is INVOKED by this call.
+                    try invoked_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
                 }
                 try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
             },
             .e_type_method_call => |call| {
                 if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
-                    try expr_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
+                    // A resolved method binding is INVOKED by this call.
+                    try invoked_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
                 }
                 try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
             },
@@ -23254,12 +23383,25 @@ fn defaultMaterializationIsRecursive(
             .e_nominal => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
             .e_nominal_external => |nominal| try expr_work.append(self.gpa, nominal.backing_expr),
             .e_call => |call| {
-                try expr_work.append(self.gpa, call.func);
+                // The callee is INVOKED by this call: a lambda/closure
+                // callee's body walks (canonicalization's DefaultCycles
+                // rule for immediately-invoked lambdas), and a
+                // name-resolvable callee reference walks the body of the
+                // def it names—materializing this call evaluates it.
+                try invoked_work.append(self.gpa, call.func);
                 try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
             },
-            .e_lambda => |lambda| try expr_work.append(self.gpa, lambda.body),
+            // A lambda reached as a VALUE only creates the function value;
+            // its body is not evaluated at materialization, so the body is
+            // not walked (the same rule as canonicalization's DefaultCycles
+            // pass). The places a body IS evaluated—a call's callee, a
+            // dispatch-resolved target, a resolved method binding—walk it
+            // through the invoked-position drain above.
+            .e_lambda => {},
+            // A closure reached as a VALUE materializes only its captured
+            // values—creating the function value does not run its body—so
+            // the captures' reference edges walk and the body does not.
             .e_closure => |closure| {
-                try expr_work.append(self.gpa, closure.lambda_idx);
                 for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
                     const capture = self.cir.store.getCapture(capture_idx);
                     if (evidence.pattern_to_def_expr.get(capture.pattern_idx)) |def_expr| {

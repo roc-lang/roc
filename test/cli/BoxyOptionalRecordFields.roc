@@ -1,6 +1,28 @@
 BoxyOptionalRecordFields :: [].{}
 
+import BoxyDefaultsDep
+
 Config := { retries : U8 ?? 3, timeout : U8 ?? 10 }
+
+compute : U8 -> U8
+compute = |n| n * 3 + 1
+
+BlockConfig := { scaled : U64 ?? {
+	base = 2
+	base * 5
+} }
+
+CallConfig := { count : U8 ?? compute(4) }
+
+NestedInner := { m : U64 ?? {
+	seed = 3
+	seed + 4
+} }
+
+NestedOuter := { inner : NestedInner ?? {
+	x = NestedInner.{}
+	x
+}, n : U64 ?? 1 }
 
 pick : { value ?: a } -> Try(a, [MissingField])
 pick = |record| record.?value
@@ -41,4 +63,43 @@ expect {
 	outer = { inner: { value: 42 } }
 
 	outer.?inner.value == Ok(42)
+}
+
+# A block default with a pattern binding, materialized twice in one
+# procedure body: each materialization must get isolated binder state.
+expect {
+	first : BlockConfig
+	first = BlockConfig.{}
+
+	second : BlockConfig
+	second = BlockConfig.{}
+
+	first.scaled + second.scaled == 20
+}
+
+# A call default whose annotated callee needs a planned worker at the
+# construction site.
+expect {
+	config : CallConfig
+	config = CallConfig.{}
+
+	config.count == 13
+}
+
+# A foreign module's block default with a pattern binding: the default
+# lowers against the declaring module's stores and binder space.
+expect {
+	dep : BoxyDefaultsDep.BoxyDefaultsDep
+	dep = BoxyDefaultsDep.BoxyDefaultsDep.{}
+
+	dep.n == 10
+}
+
+# A default whose expression constructs another defaulted nominal: the
+# materializations nest, so binder isolation must stack.
+expect {
+	outer : NestedOuter
+	outer = NestedOuter.{}
+
+	outer.inner.m + outer.n == 8
 }

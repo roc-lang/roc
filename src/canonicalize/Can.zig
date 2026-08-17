@@ -2350,7 +2350,7 @@ fn registerTypeDecl(
 
         break :blk switch (type_decl.kind) {
             .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
-            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno, .top_level),
             .where_alias => wa_blk: {
                 const receiver = where_alias_receiver orelse unreachable; // set above for this kind
                 where_alias_clauses = try self.canonicalizeWhereAliasClauses(type_decl, final_header_idx, receiver);
@@ -4646,6 +4646,18 @@ pub fn canonicalizeFile(
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
 
+    // Reject name-resolvable default-materialization cycles: reference
+    // edges through same-module defs plus omission edges at local nominal
+    // constructions. Cyclic defaults report once per cycle and are dropped
+    // here, so check and lowering never see them; dispatch-mediated and
+    // foreign-omission cycles are the checker's residue (design.md
+    // "Defaulted Fields"). This MUST run before the dependency graph below:
+    // its demand walk follows omission edges into surviving defaults'
+    // expressions, and its termination relies on that omission relation
+    // being acyclic (a dropped default is never materialized, so it
+    // rightly contributes no dependency).
+    try DefaultCycles.checkDefaultCycles(self.env, self.env.gpa);
+
     // Compute dependency-based evaluation order using SCC analysis
     const DependencyGraph = @import("DependencyGraph.zig");
     var graph = try DependencyGraph.buildDependencyGraph(
@@ -4666,14 +4678,6 @@ pub fn canonicalizeFile(
     self.env.evaluation_order = eval_order_ptr;
 
     self.env.finalizeMethodTables();
-
-    // Reject name-resolvable default-materialization cycles: reference
-    // edges through same-module defs plus omission edges at local nominal
-    // constructions. Cyclic defaults report once per cycle and are dropped
-    // here, so check and lowering never see them; dispatch-mediated and
-    // foreign-omission cycles are the checker's residue (design.md
-    // "Defaulted Fields").
-    try DefaultCycles.checkDefaultCycles(self.env, self.env.gpa);
 
     // Assert that everything is in-sync
     self.env.debugAssertArraysInSync();
@@ -9485,7 +9489,10 @@ fn canonicalizeBlockTypeDeclStatement(
         defer self.restoreTypeAnnoOwnerPathStack(owner_path_stack_top);
         break :blk switch (type_decl.kind) {
             .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
-            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+            // Block statements are this function's only route, so this call
+            // site is the explicit "block-local" signal for the default
+            // restriction (see NominalDeclScope).
+            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno, .block_local),
             .where_alias => wa_blk: {
                 const receiver = where_alias_receiver orelse unreachable; // set above for this kind
                 where_alias_clauses = try self.canonicalizeWhereAliasClauses(type_decl, header_idx, receiver);
@@ -18078,6 +18085,14 @@ const TypeAnnoCtx = struct {
     /// is exactly this node; nested records (e.g. a field's type) never match,
     /// so the comparison is self-scoping with no need to clear on descent.
     nominal_backing_anno: ?AST.TypeAnno.Idx = null,
+    /// True when the nominal (or opaque) declaration being backed lives in a
+    /// block rather than at module top level. `??` defaults are rejected on
+    /// such declarations: a block-local default canonicalizes in function
+    /// scope (it could capture locals no other construction site can
+    /// supply), and the end-of-module default-cycle pass only scans
+    /// top-level declarations. Only meaningful when `nominal_backing_anno`
+    /// is set.
+    nominal_decl_is_block_local: bool = false,
 
     const TypeAnnoCtxType = enum(u2) {
         /// Regular type declarations - no new type vars can be introduced
@@ -18092,8 +18107,13 @@ const TypeAnnoCtx = struct {
         return .{ .type = typ, .found_underscore = false };
     }
 
-    pub fn initNominalBacking(backing_anno: AST.TypeAnno.Idx) TypeAnnoCtx {
-        return .{ .type = .type_decl_anno, .found_underscore = false, .nominal_backing_anno = backing_anno };
+    pub fn initNominalBacking(backing_anno: AST.TypeAnno.Idx, decl_scope: NominalDeclScope) TypeAnnoCtx {
+        return .{
+            .type = .type_decl_anno,
+            .found_underscore = false,
+            .nominal_backing_anno = backing_anno,
+            .nominal_decl_is_block_local = decl_scope == .block_local,
+        };
     }
 
     pub fn isTypeDeclAndHasUnderscore(self: TypeAnnoCtx) bool {
@@ -18115,12 +18135,19 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx_t
     return runTypeAnnoKernel(self, anno_idx, &ctx);
 }
 
+/// Where a nominal/opaque type declaration lives. Threaded explicitly into
+/// the backing-annotation canonicalization: `??` defaults are only legal on
+/// module top-level declarations, and `canonicalizeBlockTypeDeclStatement` is
+/// the sole block-statement route, so its call site is the authoritative
+/// source of this fact (no scope probing).
+const NominalDeclScope = enum { top_level, block_local };
+
 /// Canonicalize the top-level backing annotation of a nominal/opaque type
 /// declaration, allowing unnamed record fields (`_` / `_name`) directly inside
 /// that backing record. Used in place of `canonicalizeTypeAnno(.type_decl_anno)`
 /// for nominal/opaque declarations (aliases keep the plain entry point so they
 /// reject unnamed fields).
-fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!TypeAnno.Idx {
+fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, decl_scope: NominalDeclScope) std.mem.Allocator.Error!TypeAnno.Idx {
     // The backing record may be wrapped in parentheses (e.g. `Foo := ({ ... })`).
     // The kernel descends through parens and compares each record against the
     // backing AST index, so point the comparison at the unwrapped node it will
@@ -18133,7 +18160,7 @@ fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) std.m
             backing_anno = backing.parens.anno;
         } else break;
     }
-    var ctx = TypeAnnoCtx.initNominalBacking(backing_anno);
+    var ctx = TypeAnnoCtx.initNominalBacking(backing_anno, decl_scope);
     return runTypeAnnoKernel(self, anno_idx, &ctx);
 }
 
@@ -18974,6 +19001,21 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     // Fields"). The default is dropped and the field
                     // degrades to plain required.
                     try self.env.pushDiagnostic(Diagnostic{ .default_not_allowed_in_structural_record = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    } });
+                    ast_default_value = null;
+                } else if (ast_default_value != null and type_anno_ctx.nominal_decl_is_block_local) {
+                    // `state.is_nominal_backing` is true here (the previous
+                    // branch handled the structural case), so this default
+                    // sits directly on a BLOCK-LOCAL nominal declaration's
+                    // backing record. Defaults are only legal on module
+                    // top-level declarations: a block-local default would
+                    // canonicalize in function scope (capturing locals no
+                    // other construction site can supply), and the
+                    // end-of-module cycle pass only scans top-level
+                    // declarations. Same recovery as the structural case:
+                    // report, drop the default, field degrades to required.
+                    try self.env.pushDiagnostic(Diagnostic{ .default_not_allowed_on_local_type_decl = .{
                         .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
                     } });
                     ast_default_value = null;

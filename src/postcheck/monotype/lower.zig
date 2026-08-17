@@ -4130,6 +4130,7 @@ const Builder = struct {
         body_ctx.frozen_sealed_emission = source_ctx.frozen_sealed_emission;
         body_ctx.frozen_type_finals = source_ctx.frozen_type_finals;
         body_ctx.frozen_codec_calls = source_ctx.frozen_codec_calls;
+        body_ctx.frozen_field_defaults = source_ctx.frozen_field_defaults;
         defer body_ctx.deinit();
         if (lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
         const root_node = try body_ctx.instNode(template.checked_fn_root);
@@ -6674,6 +6675,9 @@ const Builder = struct {
             var frozen_codec_calls = try ctx.sealedPreparedCodecCallsForBoundary(boundary.expr, sealer);
             defer frozen_codec_calls.deinit(self.allocator);
             ctx.frozen_codec_calls = &frozen_codec_calls;
+            var frozen_field_defaults = try ctx.sealedPreparedFieldDefaultsForBoundary(boundary.expr, sealer);
+            defer frozen_field_defaults.deinit(self.allocator);
+            ctx.frozen_field_defaults = &frozen_field_defaults;
 
             const callable_ty = try sealer.sealNode(boundary.callable_node);
             const callable = self.functionShape(callable_ty, "deferred structural serialization callable was not a function");
@@ -6743,6 +6747,9 @@ const Builder = struct {
             var frozen_codec_calls = try ctx.sealedPreparedCodecCallsForBoundary(boundary.expr, sealer);
             defer frozen_codec_calls.deinit(self.allocator);
             ctx.frozen_codec_calls = &frozen_codec_calls;
+            var frozen_field_defaults = try ctx.sealedPreparedFieldDefaultsForBoundary(boundary.expr, sealer);
+            defer frozen_field_defaults.deinit(self.allocator);
+            ctx.frozen_field_defaults = &frozen_field_defaults;
 
             const callable = try graph.functionNodes(boundary.callable_node);
             var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
@@ -10790,6 +10797,51 @@ const FrozenPreparedCodecCalls = struct {
     }
 };
 
+/// One `??` field-default value pre-lowered while the specialization graph
+/// still accepted relations (design.md "Defaulted Fields"): the default is a
+/// checked expression, and checked-expression lowering is relation
+/// production, so it must happen in Phase A. Phase-B parser emission consumes
+/// the finished draft expression and may not lower another checked default.
+const DraftPreparedFieldDefault = struct {
+    boundary_expr: DraftExprId,
+    default: Type.FieldDefault,
+    field_node: NodeId,
+    value: DraftExprId,
+};
+
+const FrozenPreparedFieldDefault = struct {
+    default: Type.FieldDefault,
+    field_ty: Type.TypeId,
+    value: DraftExprId,
+    consumed: bool = false,
+};
+
+/// Frozen Phase-B lookup from a sealed defaulted-field demand to its
+/// pre-lowered value expression. Each prepared value is one draft expression
+/// tree, so each entry satisfies exactly one generated consumption.
+const FrozenPreparedFieldDefaults = struct {
+    entries: []FrozenPreparedFieldDefault,
+
+    fn take(
+        self: *FrozenPreparedFieldDefaults,
+        default: Type.FieldDefault,
+        field_ty: Type.TypeId,
+    ) ?DraftExprId {
+        for (self.entries) |*entry| {
+            if (entry.consumed) continue;
+            if (!std.meta.eql(entry.default, default)) continue;
+            if (entry.field_ty != field_ty) continue;
+            entry.consumed = true;
+            return entry.value;
+        }
+        return null;
+    }
+
+    fn deinit(self: *FrozenPreparedFieldDefaults, allocator: Allocator) void {
+        allocator.free(self.entries);
+    }
+};
+
 const DraftDeferredInspect = struct {
     view: ModuleView,
     method_scope: ModuleView,
@@ -11153,6 +11205,7 @@ const BodyDraftStore = struct {
     deferred_structural_serializations: std.ArrayList(DraftDeferredStructuralSerialization),
     deferred_callsite_intrinsics: std.ArrayList(DraftDeferredCallsiteIntrinsic),
     prepared_codec_calls: std.ArrayList(DraftPreparedCodecCall),
+    prepared_field_defaults: std.ArrayList(DraftPreparedFieldDefault),
     local_proc_contexts: std.ArrayList(LocalProcContext),
     deferred_inspects: std.ArrayList(DraftDeferredInspect),
     prepared_inspect_methods: std.ArrayList(DraftPreparedInspectMethod),
@@ -11232,6 +11285,7 @@ const BodyDraftStore = struct {
             .deferred_structural_serializations = .empty,
             .deferred_callsite_intrinsics = .empty,
             .prepared_codec_calls = .empty,
+            .prepared_field_defaults = .empty,
             .local_proc_contexts = .empty,
             .deferred_inspects = .empty,
             .prepared_inspect_methods = .empty,
@@ -11355,6 +11409,7 @@ const BodyDraftStore = struct {
         self.deferred_structural_serializations.deinit(self.allocator);
         self.deferred_callsite_intrinsics.deinit(self.allocator);
         self.prepared_codec_calls.deinit(self.allocator);
+        self.prepared_field_defaults.deinit(self.allocator);
         self.deferred_structural_eqs.deinit(self.allocator);
         self.deferred_const_uses.deinit(self.allocator);
         self.active_callable_eval_bindings.deinit(self.allocator);
@@ -13174,6 +13229,10 @@ const BodyContext = struct {
     /// Phase-B structural serialization may consume these sealed requests but
     /// may not instantiate or lower another checked callable.
     frozen_codec_calls: ?*const FrozenPreparedCodecCalls = null,
+    /// Exact `??` field-default values pre-lowered before the graph froze.
+    /// Phase-B structural parser emission consumes these finished draft
+    /// expressions; it may not lower another checked default expression.
+    frozen_field_defaults: ?*FrozenPreparedFieldDefaults = null,
     /// Exact checker-authored contract for the structural codec currently
     /// being prepared, plus the live constructor and shape cells it denotes.
     active_codec_contract: ?struct {
@@ -15086,6 +15145,7 @@ const BodyContext = struct {
         self.frozen_sealed_emission = parent.frozen_sealed_emission;
         self.frozen_type_finals = parent.frozen_type_finals;
         self.frozen_codec_calls = parent.frozen_codec_calls;
+        self.frozen_field_defaults = parent.frozen_field_defaults;
     }
 
     const CallableBodyDemandScope = struct {
@@ -19568,6 +19628,7 @@ const BodyContext = struct {
         body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
         body_ctx.frozen_type_finals = self.frozen_type_finals;
         body_ctx.frozen_codec_calls = self.frozen_codec_calls;
+        body_ctx.frozen_field_defaults = self.frozen_field_defaults;
         defer body_ctx.deinit();
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.builder.program.types, &self.builder.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
@@ -19624,6 +19685,7 @@ const BodyContext = struct {
         body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
         body_ctx.frozen_type_finals = self.frozen_type_finals;
         body_ctx.frozen_codec_calls = self.frozen_codec_calls;
+        body_ctx.frozen_field_defaults = self.frozen_field_defaults;
         defer body_ctx.deinit();
         const root_fn_key = view.types.rootKey(wrapper.checked_fn_root);
         body_ctx.owner_context_fn_key = root_fn_key;
@@ -32549,10 +32611,34 @@ const BodyContext = struct {
         expr_node: u32,
         field_ty: Type.TypeId,
     ) Allocator.Error!?DraftExprId {
+        return try self.defaultedFieldValueAtCell(origin_hash, expr_node, .{ .sealed = field_ty });
+    }
+
+    /// Cell-typed core of `defaultedFieldValueAt`: Phase-A codec preparation
+    /// materializes a default at a live graph-node cell, while construction
+    /// sites materialize at a sealed field monotype.
+    fn defaultedFieldValueAtCell(
+        self: *BodyContext,
+        origin_hash: *const [32]u8,
+        expr_node: u32,
+        field_cell: DraftTypeCell,
+    ) Allocator.Error!?DraftExprId {
         if (moduleViewIdentityMatches(self.view, origin_hash)) {
             const default_expr = self.view.bodies.defaultExpr(expr_node) orelse
                 Common.invariant("defaulted field's default expression was not archived");
-            return try self.lowerExprAtType(default_expr, field_ty);
+            // Each materialization is its own instantiation of the checked
+            // default expression: two construction sites in one body may
+            // demand different specializations, so they must not share the
+            // consuming body's memoized checked-type nodes (`instNode`
+            // caches by checked identity per context). Same mechanism as
+            // the foreign branch below, minus the module swap.
+            const previous_instantiation = self.instantiation;
+            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+            defer {
+                self.instantiation.deinit();
+                self.instantiation = previous_instantiation;
+            }
+            return try self.lowerExprAtTypeCell(default_expr, field_cell);
         }
         const declaring_view = self.builder.moduleForIdentityHash(origin_hash) orelse
             Common.invariant("defaulted field's declaring module was not present in the lowering input");
@@ -32587,7 +32673,7 @@ const BodyContext = struct {
             self.binders = previous_binders;
             self.typed_binders = previous_typed_binders;
         }
-        return try self.lowerExprAtType(default_expr, field_ty);
+        return try self.lowerExprAtTypeCell(default_expr, field_cell);
     }
 
     /// The explicit `??` identity carried by a field in `record_ty`.
@@ -40006,6 +40092,36 @@ const BodyContext = struct {
         return false;
     }
 
+    /// Phase-A relation production for one `??` field default reachable from
+    /// a deferred codec boundary's shape: lower the checked default
+    /// expression at the field's inline value node while the graph still
+    /// accepts relations, and record the finished draft expression for
+    /// Phase-B parser emission to consume (mirrors `prepareCustomCodecCall`).
+    fn prepareDefaultedFieldValue(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        default: Type.FieldDefault,
+        field_node: NodeId,
+    ) Allocator.Error!bool {
+        for (self.draft.prepared_field_defaults.items) |prepared| {
+            if (prepared.boundary_expr != boundary_expr) continue;
+            if (!std.meta.eql(prepared.default, default)) continue;
+            if (self.graph.sameClass(prepared.field_node, field_node)) return false;
+        }
+        const value = (try self.defaultedFieldValueAtCell(
+            self.builder.program.names.moduleIdentityBytes(default.module),
+            default.expr_node,
+            DraftTypeCell.fromGraphNode(field_node),
+        )) orelse Common.invariant("structural parser field default had no archived expression");
+        try self.draft.prepared_field_defaults.append(self.allocator, .{
+            .boundary_expr = boundary_expr,
+            .default = default,
+            .field_node = field_node,
+            .value = value,
+        });
+        return true;
+    }
+
     fn prepareStructuralCodecCallsAtNode(
         self: *BodyContext,
         boundary_expr: DraftExprId,
@@ -40117,6 +40233,24 @@ const BodyContext = struct {
             });
         }
         return try FrozenPreparedCodecCalls.init(self.allocator, try out.toOwnedSlice(self.allocator));
+    }
+
+    fn sealedPreparedFieldDefaultsForBoundary(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        sealer: *GraphTypeFinals,
+    ) Allocator.Error!FrozenPreparedFieldDefaults {
+        var out = std.ArrayList(FrozenPreparedFieldDefault).empty;
+        errdefer out.deinit(self.allocator);
+        for (self.draft.prepared_field_defaults.items) |prepared| {
+            if (prepared.boundary_expr != boundary_expr) continue;
+            try out.append(self.allocator, .{
+                .default = prepared.default,
+                .field_ty = try sealer.sealNode(prepared.field_node),
+                .value = prepared.value,
+            });
+        }
+        return .{ .entries = try out.toOwnedSlice(self.allocator) };
     }
 
     fn resolvedPreparedCodecCallsForBoundary(
@@ -42126,8 +42260,14 @@ const BodyContext = struct {
                         boundary_callable_node,
                     ) or added;
                 }
-                for (fields) |field|
+                for (fields) |field| {
+                    if (kind == .parser) {
+                        if (field.default) |default| {
+                            added = try self.prepareDefaultedFieldValue(boundary_expr, default, field.ty) or added;
+                        }
+                    }
                     added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, field.ty, boundary_callable_node, seen) or added;
+                }
             },
             .tag_union => {
                 if (kind == .encoder) {
@@ -42292,7 +42432,16 @@ const BodyContext = struct {
             Common.invariant("record finish field local type differed from defaulted field type");
         }
 
-        const default_field = (try self.defaultedFieldValueFromMonoDefault(default, field_ty)) orelse
+        // Materializing a default lowers a checked expression, which is
+        // relation production. Phase-B (frozen) emission therefore consumes
+        // the value prepared while the graph still accepted relations;
+        // Phase-A generation lowers it directly.
+        const default_field = if (self.frozen_sealed_emission) blk: {
+            const prepared = self.frozen_field_defaults orelse
+                Common.invariant("frozen parser emission had no prepared field-default table");
+            break :blk prepared.take(default, field_ty) orelse
+                Common.invariant("frozen parser emission demanded an unprepared defaulted-field value");
+        } else (try self.defaultedFieldValueFromMonoDefault(default, field_ty)) orelse
             Common.invariant("defaulted record parse finish had no archived default to materialize");
         const present_field = try self.localExpr(payload_local, payload_ty);
         const presence_word = recordPresenceWordIndex(field_index);

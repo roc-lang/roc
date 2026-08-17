@@ -197,6 +197,18 @@ pub const EffectfulFunctionName = struct {
 pub const ComptimeCrash = struct {
     message: ExtraStringIdx,
     region: base.Region,
+    /// Present when the crash happened in source inlined from another module
+    /// (e.g. a `??` field default materialized per specialization). `region`
+    /// then highlights this module's consuming compile-time root, and the
+    /// origin carries the declaring module's exact resolved location as
+    /// stamped on the failing LIR statement by the lowerer.
+    origin: ?Origin = null,
+
+    pub const Origin = struct {
+        module_name: ExtraStringIdx,
+        line: u32,
+        column: u32,
+    };
 };
 
 /// A numeric literal that a custom `from_numeral` implementation rejected
@@ -317,18 +329,24 @@ pub const EffectfulDefaultValue = struct {
     field_name: Ident.Idx,
 };
 
-/// A `??` default whose check left a residual dispatch constraint on one of
-/// the declaration's type parameters (a literal's `from_numeral`/`from_quote`,
-/// or a constraint arriving through a referenced def's instantiated scheme).
+/// A `??` default whose check constrained one of the declaration's type
+/// parameters—either a residual dispatch constraint (a literal's
+/// `from_numeral`/`from_quote`, or a constraint arriving through a referenced
+/// def's instantiated scheme), or a STRUCTURAL pin (the default's type forced
+/// the parameter's copy to concrete structure, e.g. `?? []` on `value : a`).
 /// Defaults may constrain NO type parameter: type declarations never carry
 /// written `where` clauses and the compiler never infers such requirements
 /// onto a type, so there is no place the constraint could live (design.md
 /// "Defaulted Fields"). The default EXPRESSION may still be polymorphic
-/// (e.g. `?? []`)—it just may not demand anything of a parameter.
+/// (e.g. `?? []` on `List(x)`)—it just may not demand anything of a
+/// parameter.
 pub const DefaultConstrainsTypeParameter = struct {
     region: base.Region,
     field_name: Ident.Idx,
-    method_name: Ident.Idx,
+    /// The demanded method for a residual-dispatch-constraint rejection;
+    /// null for a structural pin, which demands no method but forces the
+    /// parameter to a concrete type all the same.
+    method_name: ?Ident.Idx,
     type_param: Ident.Idx,
 };
 
