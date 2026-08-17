@@ -2191,10 +2191,6 @@ pub const InstGraph = struct {
         } else {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
             if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
-                var rest = std.ArrayList(InstTag).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_public.items);
-                try rest.appendSlice(self.allocator, only_private.items);
                 try self.relateTagRestExtToTail(flat_public.ext, new_ext, pending);
             } else {
                 try self.relateTagRestExtToTail(flat_public.ext, new_ext, pending);
@@ -2262,10 +2258,6 @@ pub const InstGraph = struct {
         } else {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
             if (self.find(flat_public.ext) == self.find(flat_private.ext)) {
-                var rest = std.ArrayList(InstField).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_public.items);
-                try rest.appendSlice(self.allocator, only_private.items);
                 try self.relateRecordRestExtToTail(flat_public.ext, new_ext, pending);
             } else {
                 try self.relateRecordRestExtToTail(flat_public.ext, new_ext, pending);
@@ -3689,10 +3681,6 @@ pub const InstGraph = struct {
         } else {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
-                var rest = std.ArrayList(InstTag).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_left.items);
-                try rest.appendSlice(self.allocator, only_right.items);
                 try self.relateTagRestExtToTail(flat_left.ext, new_ext, pending);
             } else {
                 try self.relateTagRestExtToTail(flat_left.ext, new_ext, pending);
@@ -3791,10 +3779,6 @@ pub const InstGraph = struct {
         } else {
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
-                var rest = std.ArrayList(InstField).empty;
-                defer rest.deinit(self.allocator);
-                try rest.appendSlice(self.allocator, only_left.items);
-                try rest.appendSlice(self.allocator, only_right.items);
                 try self.relateRecordRestExtToTail(flat_left.ext, new_ext, pending);
             } else {
                 try self.relateRecordRestExtToTail(flat_left.ext, new_ext, pending);
