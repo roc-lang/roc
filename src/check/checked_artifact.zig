@@ -30574,7 +30574,7 @@ fn viewDeclaresUnboundHostedProc(view: ImportedModuleView, bindings: *const Host
     for (view.hosted_procs.procs) |proc| {
         var bound = false;
         for (bindings.bindings) |binding| {
-            if (!std.mem.eql(u8, &binding.target_checked_module.bytes, &view.key.bytes)) continue;
+            if (!std.meta.eql(binding.target_checked_module.bytes, view.key.bytes)) continue;
             if (binding.target_def != proc.def_idx) continue;
             bound = true;
             break;
