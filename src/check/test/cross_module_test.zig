@@ -308,15 +308,15 @@ test "cross-module - defaulted record - textually identical local declaration do
 
 test "cross-module - defaulted record - foreign-helper dispatch cycle is check's residue" {
     // The cycle's connecting edges are invisible to canonicalization TWICE
-    // over: `call_go`'s body calls `Helper.go`—a FOREIGN def whose body CAN
+    // over: the default calls `Helper.go`—a FOREIGN def whose body CAN
     // cannot walk—and `go` dispatches on its parameter, resolved only by
     // constraint discharge back to B's own `make`, whose body omits `x`.
     // The checker's residue walk closes it through scheme-use evidence:
     // seeding at the walked lookup nodes joins the where-clause constraint's
     // per-use copies to the discharged instantiation that stamped the local
-    // target (design.md "Defaulted Fields"). (The default routes through a
-    // local wrapper because a type declaration canonicalizes in the forward
-    // pass, before imports are in scope for its default expression.)
+    // target (design.md "Defaulted Fields"). A default may name an imported
+    // item directly: qualified imports resolve through the parser-owned
+    // declaration index regardless of statement position.
     const source_helper =
         \\Helper := {}.{
         \\  go : c -> U8 where [c.make : c -> U8]
@@ -329,9 +329,7 @@ test "cross-module - defaulted record - foreign-helper dispatch cycle is check's
     const source_b =
         \\import Helper
         \\
-        \\call_go = |c| Helper.go(c)
-        \\
-        \\Cfg := { x : U8 ?? call_go(Cfg.{ x: 1 }) }.{
+        \\Cfg := { x : U8 ?? Helper.go(Cfg.{ x: 1 }) }.{
         \\    make = |_cfg| Cfg.{}.x
         \\}
     ;
