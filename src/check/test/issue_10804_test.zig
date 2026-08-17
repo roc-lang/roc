@@ -87,6 +87,63 @@ test "issue 10804: derived encoder_for reaches a field type nested two shapes de
     try test_env.assertOneTypeError("Missing Method");
 }
 
+// A derived codec's backing shape is instantiated fresh at every use, so a
+// recursive type reaches its own declaration through vars the walk has never
+// seen. Validation has to recognize the declaration itself, or these two
+// modules never finish checking.
+
+test "issue 10804: derived codecs terminate on a recursive type" {
+    const source =
+        \\Tree := [Leaf(Str), Node(List(Tree))].{
+        \\  encoder_for : _
+        \\  parser_for : _
+        \\}
+        \\out = Json.to_str(Tree.Node([Tree.Leaf("a")]))
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "issue 10804: derived codecs terminate on mutually recursive types" {
+    const source =
+        \\A := { b : List(B) }.{
+        \\  encoder_for : _
+        \\}
+        \\B := { a : List(A), name : Str }.{
+        \\  encoder_for : _
+        \\}
+        \\out = Json.to_str(A.{ b: [B.{ a: [], name: "x" }] })
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+// Two applications of one declaration are separate obligations: cutting the
+// walk at an open declaration must not let the second one skip validation.
+test "issue 10804: a second application of the same declaration is still validated" {
+    const source =
+        \\Data := [Url(Str)]
+        \\Wrap(a) :: { x : a }.{
+        \\  encoder_for : _
+        \\}
+        \\Chart :: { p : Wrap(Str), q : Wrap(Data) }.{
+        \\  encoder_for : _
+        \\}
+        \\out = Json.to_str(Chart.{ p: { x: "s" }, q: { x: Data.Url("u") } })
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Missing Method");
+}
+
 // Control: the same shape, except the field's type declares its own derived
 // `encoder_for`. Component validation must accept this one.
 test "issue 10804: derived encoder_for accepts a field type that declares encoder_for" {

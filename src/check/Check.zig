@@ -30006,13 +30006,13 @@ fn satisfyImplicitParserConstraint(
 
     const generated_calls_start = self.scratch_generated_codec_calls.items.len;
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
-    var visited = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited.deinit();
+    var walk = DerivedCodecWalk.init(self.gpa);
+    defer walk.deinit();
     const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, env, region)) |backing| blk: {
-        try visited.put(self.types.resolveVar(dispatcher_var).var_, {});
+        try walk.visited.put(self.types.resolveVar(dispatcher_var).var_, {});
         break :blk backing;
     } else dispatcher_var;
-    switch (try self.validateDerivedParseVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &visited, .shape, failure_expr)) {
+    switch (try self.validateDerivedParseVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk, .shape, failure_expr)) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .parser,
             constraint_fn_var,
@@ -30088,13 +30088,13 @@ fn satisfyImplicitEncoderForConstraint(
 
     const generated_calls_start = self.scratch_generated_codec_calls.items.len;
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
-    var visited = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited.deinit();
+    var walk = DerivedCodecWalk.init(self.gpa);
+    defer walk.deinit();
     const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, env, region)) |backing| blk: {
-        try visited.put(self.types.resolveVar(dispatcher_var).var_, {});
+        try walk.visited.put(self.types.resolveVar(dispatcher_var).var_, {});
         break :blk backing;
     } else dispatcher_var;
-    switch (try self.validateDerivedEncodeVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &visited)) {
+    switch (try self.validateDerivedEncodeVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk)) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .encoder,
             constraint_fn_var,
@@ -31294,6 +31294,32 @@ fn validateRenameFieldMethod(
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, null);
 }
 
+/// State for one derived-codec validation walk.
+///
+/// `visited` holds the type vars already walked. `open_decls` holds the
+/// declarations whose backing shapes are open on the current path: a derived
+/// codec's obligations are its backing shape's obligations, and that shape is
+/// instantiated fresh at every use, so a recursive type meets its own
+/// declaration through vars the walk has never seen. Reaching a declaration
+/// that is already open means the frame above is discharging exactly these
+/// obligations, so the walk stops there.
+const DerivedCodecWalk = struct {
+    visited: std.AutoHashMap(Var, void),
+    open_decls: std.AutoHashMap(types_mod.NominalDecl.Idx, void),
+
+    fn init(gpa: std.mem.Allocator) DerivedCodecWalk {
+        return .{
+            .visited = std.AutoHashMap(Var, void).init(gpa),
+            .open_decls = std.AutoHashMap(types_mod.NominalDecl.Idx, void).init(gpa),
+        };
+    }
+
+    fn deinit(self: *DerivedCodecWalk) void {
+        self.visited.deinit();
+        self.open_decls.deinit();
+    }
+};
+
 fn validateDerivedParseVar(
     self: *Self,
     var_: Var,
@@ -31303,33 +31329,33 @@ fn validateDerivedParseVar(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
     context: DerivedParseContext,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!DerivedParseValidation {
     const resolved = self.types.resolveVar(var_);
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region, visited, context, failure_expr),
+            .nominal_type => |nominal| try self.validateDerivedParseNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region, walk, context, failure_expr),
             .record => blk: {
-                if (visited.contains(resolved.var_)) break :blk .ok;
-                try visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedParseRecord(var_, encoding_var, state_var, err_var, constraint, env, region, visited, failure_expr);
+                if (walk.visited.contains(resolved.var_)) break :blk .ok;
+                try walk.visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedParseRecord(var_, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
             },
             .record_unbound => blk: {
-                if (visited.contains(resolved.var_)) break :blk .ok;
-                try visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedParseRecord(var_, encoding_var, state_var, err_var, constraint, env, region, visited, failure_expr);
+                if (walk.visited.contains(resolved.var_)) break :blk .ok;
+                try walk.visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedParseRecord(var_, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
             },
             .tag_union => |tag_union| blk: {
-                if (visited.contains(resolved.var_)) break :blk .ok;
-                try visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedParseTagUnion(var_, tag_union, encoding_var, state_var, err_var, constraint, env, region, visited, failure_expr);
+                if (walk.visited.contains(resolved.var_)) break :blk .ok;
+                try walk.visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedParseTagUnion(var_, tag_union, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
             },
             .tuple => |tuple| blk: {
-                if (visited.contains(resolved.var_)) break :blk .ok;
-                try visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedParseTuple(tuple, encoding_var, state_var, err_var, constraint, env, region, visited, failure_expr);
+                if (walk.visited.contains(resolved.var_)) break :blk .ok;
+                try walk.visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedParseTuple(tuple, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
             },
             .empty_record => blk: {
                 switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region, failure_expr)) {
@@ -31357,7 +31383,7 @@ fn validateDerivedParseVar(
             .empty_tag_union => .unsupported,
             .fn_pure, .fn_effectful, .fn_unbound => .unsupported,
         },
-        .alias => |alias| try self.validateDerivedParseVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited, context, failure_expr),
+        .alias => |alias| try self.validateDerivedParseVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk, context, failure_expr),
         .err => .ok,
         .flex, .rigid, .field_presence => .unsupported,
     };
@@ -31372,7 +31398,7 @@ fn validateDerivedParseRecord(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!DerivedParseValidation {
     switch (try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_start, err_var, constraint, env, region, failure_expr)) {
@@ -31420,7 +31446,7 @@ fn validateDerivedParseRecord(
 
     for (field_presences.items) |presence| {
         const field_var = presence.typeVar();
-        switch (try self.validateDerivedParseVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited, .record_field, failure_expr)) {
+        switch (try self.validateDerivedParseVar(field_var, encoding_var, state_var, err_var, constraint, env, region, walk, .record_field, failure_expr)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
@@ -31466,7 +31492,7 @@ fn validateDerivedParseTuple(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!DerivedParseValidation {
     switch (try self.validateDerivedParseTupleMethods(encoding_var, state_var, state_var, err_var, constraint, env, region, failure_expr)) {
@@ -31477,7 +31503,7 @@ fn validateDerivedParseTuple(
     const elems = try self.gpa.dupe(Var, self.types.sliceVars(tuple.elems));
     defer self.gpa.free(elems);
     for (elems) |elem_var| {
-        switch (try self.validateDerivedParseVar(elem_var, encoding_var, state_var, err_var, constraint, env, region, visited, .shape, failure_expr)) {
+        switch (try self.validateDerivedParseVar(elem_var, encoding_var, state_var, err_var, constraint, env, region, walk, .shape, failure_expr)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
@@ -31570,7 +31596,7 @@ fn validateDerivedParseTagUnion(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!DerivedParseValidation {
     switch (try self.derivedParseTagUnionHasAnyTag(tag_union)) {
@@ -31586,13 +31612,13 @@ fn validateDerivedParseTagUnion(
         const tag_args_range = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
         for (0..tag_args_range.count) |tag_arg_offset| {
             const tag_arg = self.types.getVarAt(tag_args_range, @intCast(tag_arg_offset));
-            switch (try self.validateDerivedParseVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, visited, .shape, failure_expr)) {
+            switch (try self.validateDerivedParseVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, walk, .shape, failure_expr)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
         }
     }
-    return try self.validateDerivedParseTagExt(tag_union.ext, encoding_var, state_var, err_var, constraint, env, region, visited, failure_expr);
+    return try self.validateDerivedParseTagExt(tag_union.ext, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr);
 }
 
 fn validateDerivedParseTagExt(
@@ -31604,13 +31630,13 @@ fn validateDerivedParseTagExt(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!DerivedParseValidation {
     return switch (self.types.resolveVar(ext_var).desc.content) {
         .structure => |structure| switch (structure) {
             .empty_tag_union => .ok,
-            .tag_union => |tag_union| try self.validateDerivedParseTagUnion(ext_var, tag_union, encoding_var, state_var, err_var, constraint, env, region, visited, failure_expr),
+            .tag_union => |tag_union| try self.validateDerivedParseTagUnion(ext_var, tag_union, encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr),
             .record,
             .record_unbound,
             .tuple,
@@ -31621,7 +31647,7 @@ fn validateDerivedParseTagExt(
             .empty_record,
             => .unsupported,
         },
-        .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited, failure_expr),
+        .alias => |alias| try self.validateDerivedParseTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk, failure_expr),
         .err => .ok,
         .flex => blk: {
             const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
@@ -31642,7 +31668,7 @@ fn validateDerivedParseNominal(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
     context: DerivedParseContext,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!DerivedParseValidation {
@@ -31660,10 +31686,10 @@ fn validateDerivedParseNominal(
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        return try self.validateDerivedParseVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, visited, .shape, failure_expr);
+        return try self.validateDerivedParseVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, walk, .shape, failure_expr);
     }
     if (self.nominalBoxPayloadVar(nominal)) |payload_var| {
-        return try self.validateDerivedParseVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, visited, .shape, failure_expr);
+        return try self.validateDerivedParseVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, walk, .shape, failure_expr);
     }
     if (self.nominalSetPayloadVar(nominal)) |payload_var| {
         if (!try self.varSupportsIsEq(payload_var)) return .unsupported;
@@ -31675,7 +31701,7 @@ fn validateDerivedParseNominal(
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        return try self.validateDerivedParseVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, visited, .shape, failure_expr);
+        return try self.validateDerivedParseVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, walk, .shape, failure_expr);
     }
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         if (!try self.varSupportsIsEq(args.key)) return .unsupported;
@@ -31710,7 +31736,7 @@ fn validateDerivedParseNominal(
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
-            switch (try self.validateDerivedParseVar(args.key, encoding_var, state_var, err_var, constraint, env, region, visited, .shape, failure_expr)) {
+            switch (try self.validateDerivedParseVar(args.key, encoding_var, state_var, err_var, constraint, env, region, walk, .shape, failure_expr)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
@@ -31719,19 +31745,19 @@ fn validateDerivedParseNominal(
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        return try self.validateDerivedParseVar(args.value, encoding_var, state_var, err_var, constraint, env, region, visited, .shape, failure_expr);
+        return try self.validateDerivedParseVar(args.value, encoding_var, state_var, err_var, constraint, env, region, walk, .shape, failure_expr);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
         if (try self.missingTryInfoFromNominal(nominal)) |info| {
             if (context != .record_field) return .unsupported;
-            return try self.validateDerivedParseVar(info.ok_var, encoding_var, state_var, err_var, constraint, env, region, visited, .shape, failure_expr);
+            return try self.validateDerivedParseVar(info.ok_var, encoding_var, state_var, err_var, constraint, env, region, walk, .shape, failure_expr);
         }
         const info = try self.nullTryInfoFromNominal(nominal) orelse return .unsupported;
         switch (try self.validateParseFormatMethod(encoding_var, state_var, state_var, .null, err_var, constraint, env, region, failure_expr)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        return try self.validateDerivedParseVar(info.ok_var, encoding_var, state_var, err_var, constraint, env, region, visited, .shape, failure_expr);
+        return try self.validateDerivedParseVar(info.ok_var, encoding_var, state_var, err_var, constraint, env, region, walk, .shape, failure_expr);
     }
 
     const original_env, _ = self.ownerEnvForOriginModule(
@@ -31763,8 +31789,14 @@ fn validateDerivedParseNominal(
     });
     if (!result.isProblem() and isGeneratedStructuralCodecMethodBinding(method_lookup, .parser)) {
         const nominal_root = self.types.resolveVar(nominal_var).var_;
-        if (!visited.contains(nominal_root)) {
-            try visited.put(nominal_root, {});
+        const decl_idx = self.types.lookupNominalDecl(nominal);
+        const decl_is_open = if (decl_idx) |idx| walk.open_decls.contains(idx) else false;
+        if (!walk.visited.contains(nominal_root) and !decl_is_open) {
+            try walk.visited.put(nominal_root, {});
+            if (decl_idx) |idx| try walk.open_decls.put(idx, {});
+            defer if (decl_idx) |idx| {
+                _ = walk.open_decls.remove(idx);
+            };
             const nested_calls_start = self.scratch_generated_codec_calls.items.len;
             defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(nested_calls_start);
             const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return .reported_error;
@@ -31776,7 +31808,7 @@ fn validateDerivedParseNominal(
                 constraint,
                 env,
                 region,
-                visited,
+                walk,
                 context,
                 failure_expr,
             )) {
@@ -31975,37 +32007,37 @@ fn validateDerivedEncodeVar(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
 ) Allocator.Error!DerivedParseValidation {
     const resolved = self.types.resolveVar(var_);
     return switch (resolved.desc.content) {
         .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| try self.validateDerivedEncodeNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region, visited),
+            .nominal_type => |nominal| try self.validateDerivedEncodeNominal(var_, nominal, encoding_var, state_var, err_var, constraint, env, region, walk),
             .record => |record| blk: {
-                if (visited.contains(resolved.var_)) break :blk .ok;
-                try visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedEncodeRecord(record.fields, encoding_var, state_var, err_var, constraint, env, region, visited);
+                if (walk.visited.contains(resolved.var_)) break :blk .ok;
+                try walk.visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedEncodeRecord(record.fields, encoding_var, state_var, err_var, constraint, env, region, walk);
             },
             .record_unbound => |fields| blk: {
-                if (visited.contains(resolved.var_)) break :blk .ok;
-                try visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedEncodeRecord(fields, encoding_var, state_var, err_var, constraint, env, region, visited);
+                if (walk.visited.contains(resolved.var_)) break :blk .ok;
+                try walk.visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedEncodeRecord(fields, encoding_var, state_var, err_var, constraint, env, region, walk);
             },
             .tag_union => |tag_union| blk: {
-                if (visited.contains(resolved.var_)) break :blk .ok;
-                try visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedEncodeTagUnion(tag_union, encoding_var, state_var, err_var, constraint, env, region, visited);
+                if (walk.visited.contains(resolved.var_)) break :blk .ok;
+                try walk.visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedEncodeTagUnion(tag_union, encoding_var, state_var, err_var, constraint, env, region, walk);
             },
             .tuple => |tuple| blk: {
-                if (visited.contains(resolved.var_)) break :blk .ok;
-                try visited.put(resolved.var_, {});
-                break :blk try self.validateDerivedEncodeTuple(tuple, encoding_var, state_var, err_var, constraint, env, region, visited);
+                if (walk.visited.contains(resolved.var_)) break :blk .ok;
+                try walk.visited.put(resolved.var_, {});
+                break :blk try self.validateDerivedEncodeTuple(tuple, encoding_var, state_var, err_var, constraint, env, region, walk);
             },
             .empty_record => try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, false),
             .empty_tag_union => .unsupported,
             .fn_pure, .fn_effectful, .fn_unbound => .unsupported,
         },
-        .alias => |alias| try self.validateDerivedEncodeVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
+        .alias => |alias| try self.validateDerivedEncodeVar(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk),
         .err => .ok,
         .flex, .rigid, .field_presence => .unsupported,
     };
@@ -32020,7 +32052,7 @@ fn validateDerivedEncodeRecord(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
 ) Allocator.Error!DerivedParseValidation {
     const has_fields = self.types.getRecordFieldsSlice(fields_range).len > 0;
     switch (try self.validateDerivedEncodeRecordMethods(encoding_var, state_var, err_var, constraint, env, region, has_fields)) {
@@ -32037,14 +32069,14 @@ fn validateDerivedEncodeRecord(
     while (i < vars_end) : (i += 1) {
         const field_var = self.scratch_record_field_vars.items.items[i];
         if (try self.missingTryInfoForVar(field_var)) |info| {
-            switch (try self.validateDerivedEncodeVar(info.ok_var, encoding_var, state_var, err_var, constraint, env, region, visited)) {
+            switch (try self.validateDerivedEncodeVar(info.ok_var, encoding_var, state_var, err_var, constraint, env, region, walk)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
             continue;
         }
 
-        switch (try self.validateDerivedEncodeVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited)) {
+        switch (try self.validateDerivedEncodeVar(field_var, encoding_var, state_var, err_var, constraint, env, region, walk)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
@@ -32061,7 +32093,7 @@ fn validateDerivedEncodeTuple(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
 ) Allocator.Error!DerivedParseValidation {
     switch (try self.validateDerivedEncodeTupleMethods(encoding_var, state_var, err_var, constraint, env, region)) {
         .ok => {},
@@ -32070,7 +32102,7 @@ fn validateDerivedEncodeTuple(
     const elems = try self.gpa.dupe(Var, self.types.sliceVars(tuple.elems));
     defer self.gpa.free(elems);
     for (elems) |elem_var| {
-        switch (try self.validateDerivedEncodeVar(elem_var, encoding_var, state_var, err_var, constraint, env, region, visited)) {
+        switch (try self.validateDerivedEncodeVar(elem_var, encoding_var, state_var, err_var, constraint, env, region, walk)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
@@ -32087,7 +32119,7 @@ fn validateDerivedEncodeTagUnion(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
 ) Allocator.Error!DerivedParseValidation {
     switch (try self.derivedParseTagUnionHasAnyTag(tag_union)) {
         .supported => {},
@@ -32098,7 +32130,7 @@ fn validateDerivedEncodeTagUnion(
         const tag_args_range = self.types.getTagAt(tag_union.tags, @intCast(tag_offset)).args;
         for (0..tag_args_range.count) |tag_arg_offset| {
             const tag_arg = self.types.getVarAt(tag_args_range, @intCast(tag_arg_offset));
-            switch (try self.validateDerivedEncodeVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, visited)) {
+            switch (try self.validateDerivedEncodeVar(tag_arg, encoding_var, state_var, err_var, constraint, env, region, walk)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
@@ -32110,7 +32142,7 @@ fn validateDerivedEncodeTagUnion(
         .unsupported, .reported_error => |result| return result,
     }
 
-    return try self.validateDerivedEncodeTagExt(tag_union.ext, encoding_var, state_var, err_var, constraint, env, region, visited);
+    return try self.validateDerivedEncodeTagExt(tag_union.ext, encoding_var, state_var, err_var, constraint, env, region, walk);
 }
 
 fn validateDerivedEncodeTagExt(
@@ -32122,12 +32154,12 @@ fn validateDerivedEncodeTagExt(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
 ) Allocator.Error!DerivedParseValidation {
     return switch (self.types.resolveVar(ext_var).desc.content) {
         .structure => |structure| switch (structure) {
             .empty_tag_union => .ok,
-            .tag_union => |tag_union| try self.validateDerivedEncodeTagUnion(tag_union, encoding_var, state_var, err_var, constraint, env, region, visited),
+            .tag_union => |tag_union| try self.validateDerivedEncodeTagUnion(tag_union, encoding_var, state_var, err_var, constraint, env, region, walk),
             .record,
             .record_unbound,
             .tuple,
@@ -32138,7 +32170,7 @@ fn validateDerivedEncodeTagExt(
             .empty_record,
             => .unsupported,
         },
-        .alias => |alias| try self.validateDerivedEncodeTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, visited),
+        .alias => |alias| try self.validateDerivedEncodeTagExt(self.types.getAliasBackingVar(alias), encoding_var, state_var, err_var, constraint, env, region, walk),
         .err => .ok,
         .flex => blk: {
             const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
@@ -32298,7 +32330,7 @@ fn validateDerivedEncodeNominal(
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
-    visited: *std.AutoHashMap(Var, void),
+    walk: *DerivedCodecWalk,
 ) Allocator.Error!DerivedParseValidation {
     if (self.nominalIsBuiltinBoolType(nominal)) {
         return try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .bool, err_var, constraint, env, region);
@@ -32317,7 +32349,7 @@ fn validateDerivedEncodeNominal(
     // template equals the instance here and is safe to unify directly.
     if (self.nominalDeclBackingTemplate(nominal)) |backing_var| {
         if (self.varResolvesToBuiltinScalarNominal(backing_var)) {
-            return try self.validateDerivedEncodeVar(backing_var, encoding_var, state_var, err_var, constraint, env, region, visited);
+            return try self.validateDerivedEncodeVar(backing_var, encoding_var, state_var, err_var, constraint, env, region, walk);
         }
     }
     if (self.nominalListPayloadVar(nominal)) |payload_var| {
@@ -32325,10 +32357,10 @@ fn validateDerivedEncodeNominal(
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        return try self.validateDerivedEncodeVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, visited);
+        return try self.validateDerivedEncodeVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, walk);
     }
     if (self.nominalBoxPayloadVar(nominal)) |payload_var| {
-        return try self.validateDerivedEncodeVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, visited);
+        return try self.validateDerivedEncodeVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, walk);
     }
     if (self.nominalSetPayloadVar(nominal)) |payload_var| {
         switch (try self.validateDerivedEncodeListMethods(encoding_var, state_var, err_var, constraint, env, region)) {
@@ -32339,7 +32371,7 @@ fn validateDerivedEncodeNominal(
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        return try self.validateDerivedEncodeVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, visited);
+        return try self.validateDerivedEncodeVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, walk);
     }
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         switch (try self.validateDerivedEncodeDictMethods(encoding_var, state_var, err_var, constraint, env, region)) {
@@ -32365,7 +32397,7 @@ fn validateDerivedEncodeNominal(
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
-            switch (try self.validateDerivedEncodeVar(args.key, encoding_var, state_var, err_var, constraint, env, region, visited)) {
+            switch (try self.validateDerivedEncodeVar(args.key, encoding_var, state_var, err_var, constraint, env, region, walk)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
@@ -32374,7 +32406,7 @@ fn validateDerivedEncodeNominal(
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        return try self.validateDerivedEncodeVar(args.value, encoding_var, state_var, err_var, constraint, env, region, visited);
+        return try self.validateDerivedEncodeVar(args.value, encoding_var, state_var, err_var, constraint, env, region, walk);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
         const info = try self.nullTryInfoFromNominal(nominal) orelse return .unsupported;
@@ -32382,7 +32414,7 @@ fn validateDerivedEncodeNominal(
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        return try self.validateDerivedEncodeVar(info.ok_var, encoding_var, state_var, err_var, constraint, env, region, visited);
+        return try self.validateDerivedEncodeVar(info.ok_var, encoding_var, state_var, err_var, constraint, env, region, walk);
     }
 
     const original_env, _ = self.ownerEnvForOriginModule(
@@ -32413,8 +32445,14 @@ fn validateDerivedEncodeNominal(
     });
     if (!result.isProblem() and isGeneratedStructuralCodecMethodBinding(method_lookup, .encoder)) {
         const nominal_root = self.types.resolveVar(nominal_var).var_;
-        if (!visited.contains(nominal_root)) {
-            try visited.put(nominal_root, {});
+        const decl_idx = self.types.lookupNominalDecl(nominal);
+        const decl_is_open = if (decl_idx) |idx| walk.open_decls.contains(idx) else false;
+        if (!walk.visited.contains(nominal_root) and !decl_is_open) {
+            try walk.visited.put(nominal_root, {});
+            if (decl_idx) |idx| try walk.open_decls.put(idx, {});
+            defer if (decl_idx) |idx| {
+                _ = walk.open_decls.remove(idx);
+            };
             const nested_calls_start = self.scratch_generated_codec_calls.items.len;
             defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(nested_calls_start);
             const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return .reported_error;
@@ -32426,7 +32464,7 @@ fn validateDerivedEncodeNominal(
                 constraint,
                 env,
                 region,
-                visited,
+                walk,
             )) {
                 .ok => try self.recordGeneratedCodecDerivationSnapshot(
                     .encoder,
