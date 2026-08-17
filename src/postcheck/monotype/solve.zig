@@ -407,9 +407,8 @@ pub const InstGraph = struct {
     types: *Type.Store,
     name_store: *const names.NameStore,
     diagnostics: ?*GraphDiagnostics,
-    /// Census-only; see `RowShadow`. Created with the graph when the shadow
-    /// environment switch is set, otherwise never allocated.
-    row_shadow: ?*RowShadow = null,
+    /// See `RowStore`.
+    row_store: RowStore,
     arena_impl: std.heap.ArenaAllocator,
     nodes: std.ArrayList(InstNode),
     versions: std.ArrayList(u32),
@@ -493,15 +492,11 @@ pub const InstGraph = struct {
         const graph = try allocator.create(InstGraph);
         graph.* = .{
             .allocator = allocator,
-            .row_shadow = if (rowShadowEnabled()) shadow: {
-                const shadow = try allocator.create(RowShadow);
-                shadow.* = .{
-                    .ids = collections.DenseMap(NodeId, u32).init(allocator),
-                    .parents = .empty,
-                    .sets = .empty,
-                };
-                break :shadow shadow;
-            } else null,
+            .row_store = .{
+                .ids = collections.DenseMap(NodeId, u32).init(allocator),
+                .parents = .empty,
+                .lists = .empty,
+            },
             .relation_state = .producing,
             .types = types,
             .name_store = name_store,
@@ -532,83 +527,70 @@ pub const InstGraph = struct {
         return graph;
     }
 
-    /// Census-only shadow of tag-row joining: a bare union-find over row
-    /// classes plus a per-class label-set union, fed by the same join events
-    /// the unifier processes and compared against every sealed row. Its
-    /// mismatch count measures whether rows need anything from the unifier
-    /// beyond the relation stream and set union — deliberately excluding the
-    /// shared-extension plumbing, so widening that travels through aliased
-    /// extensions shows up as a mismatch instead of being silently mirrored.
-    const RowShadow = struct {
+    /// The tag-row store: the authority for every joined row's sealed tag
+    /// list. A bare union-find over row classes whose per-class list is
+    /// rebuilt at each join exactly as the unifier rewrites the surviving
+    /// row — every left tag in left order, then the right-only tags in right
+    /// order — because the next join's flatten reads that merged list back as
+    /// its left side. Sealing reads the store for joined rows; the graph's
+    /// own flattening is the assertion that the two never disagree, measured
+    /// first as a census over the whole corpus and every battery with zero
+    /// mismatches, including the sequence order.
+    const RowStore = struct {
         ids: collections.DenseMap(NodeId, u32),
         parents: std.ArrayList(u32),
-        sets: std.ArrayList(std.AutoHashMap(u32, void)),
-        matches: u32 = 0,
-        mismatches: u32 = 0,
+        lists: std.ArrayList(std.ArrayList(InstTag)),
 
-        fn findClass(self: *RowShadow, raw: u32) u32 {
+        fn findClass(self: *RowStore, raw: u32) u32 {
             var id = raw;
             while (self.parents.items[id] != id) id = self.parents.items[id];
             return id;
         }
+
+        fn contains(list: *const std.ArrayList(InstTag), label: names.TagNameId) bool {
+            for (list.items) |existing| {
+                if (existing.name == label) return true;
+            }
+            return false;
+        }
     };
 
-    fn rowShadowEnabled() bool {
-        return std.c.getenv("ROC_ROW_SHADOW") != null;
-    }
-
-    fn rowShadowIdFor(self: *InstGraph, shadow: *RowShadow, root: NodeId, tags: []const InstTag) Allocator.Error!u32 {
-        if (shadow.ids.get(root)) |existing| {
-            const id = shadow.findClass(existing);
-            for (tags) |tag| try shadow.sets.items[id].put(@intFromEnum(tag.name), {});
-            return id;
-        }
-        const id: u32 = @intCast(shadow.parents.items.len);
-        try shadow.parents.append(self.allocator, id);
-        var set = std.AutoHashMap(u32, void).init(self.allocator);
-        for (tags) |tag| try set.put(@intFromEnum(tag.name), {});
-        try shadow.sets.append(self.allocator, set);
-        try shadow.ids.put(root, id);
+    fn rowStoreIdFor(self: *InstGraph, store: *RowStore, root: NodeId) Allocator.Error!u32 {
+        if (store.ids.get(root)) |existing| return store.findClass(existing);
+        const id: u32 = @intCast(store.parents.items.len);
+        try store.parents.append(self.allocator, id);
+        try store.lists.append(self.allocator, .empty);
+        try store.ids.put(root, id);
         return id;
     }
 
-    fn rowShadowJoin(self: *InstGraph, left: NodeId, right: NodeId, left_tags: []const InstTag, right_tags: []const InstTag) Allocator.Error!void {
-        const shadow = self.row_shadow orelse return;
-        const left_id = try self.rowShadowIdFor(shadow, self.find(left), left_tags);
-        const right_id = try self.rowShadowIdFor(shadow, self.find(right), right_tags);
-        if (left_id == right_id) return;
-        var moved = shadow.sets.items[right_id].keyIterator();
-        while (moved.next()) |label| try shadow.sets.items[left_id].put(label.*, {});
-        shadow.parents.items[right_id] = left_id;
+    fn rowStoreJoin(self: *InstGraph, left: NodeId, right: NodeId, left_tags: []const InstTag, right_tags: []const InstTag) Allocator.Error!void {
+        const store = &self.row_store;
+        const left_id = try self.rowStoreIdFor(store, self.find(left));
+        const right_id = try self.rowStoreIdFor(store, self.find(right));
+        var ordered = std.ArrayList(InstTag).empty;
+        errdefer ordered.deinit(self.allocator);
+        for (left_tags) |tag| try ordered.append(self.allocator, tag);
+        for (right_tags) |tag| {
+            if (!RowStore.contains(&ordered, tag.name)) {
+                try ordered.append(self.allocator, tag);
+            }
+        }
+        if (left_id != right_id) {
+            store.parents.items[right_id] = left_id;
+            store.lists.items[right_id].deinit(self.allocator);
+            store.lists.items[right_id] = .empty;
+        }
+        store.lists.items[left_id].deinit(self.allocator);
+        store.lists.items[left_id] = ordered;
     }
 
-    fn rowShadowCompareSealed(self: *InstGraph, root: NodeId, sealed_tags: []const InstTag) void {
-        const shadow = self.row_shadow orelse return;
-        const raw = shadow.ids.get(root) orelse return;
-        const id = shadow.findClass(raw);
-        const set = &shadow.sets.items[id];
-        var equal = set.count() == sealed_tags.len;
-        if (equal) {
-            for (sealed_tags) |tag| {
-                if (!set.contains(@intFromEnum(tag.name))) {
-                    equal = false;
-                    break;
-                }
-            }
-        }
-        if (equal) {
-            shadow.matches += 1;
-        } else {
-            shadow.mismatches += 1;
-            if (shadow.mismatches <= 5) {
-                std.debug.print("ROWSHADOW mismatch shadow_labels={d} sealed_labels={d}:", .{ set.count(), sealed_tags.len });
-                for (sealed_tags) |tag| {
-                    const present = set.contains(@intFromEnum(tag.name));
-                    std.debug.print(" {s}{s}", .{ self.tagLabelText(tag.name), if (present) "" else "!" });
-                }
-                std.debug.print("\n", .{});
-            }
-        }
+    /// The stored tag list for a joined row's class, or null for a row no
+    /// join ever touched, whose own flattened content is already its answer.
+    fn rowStoreTags(self: *InstGraph, root: NodeId) ?[]const InstTag {
+        const store = &self.row_store;
+        const raw = store.ids.get(root) orelse return null;
+        return store.lists.items[store.findClass(raw)].items;
     }
 
     pub fn setDiagnostics(self: *InstGraph, diagnostics: *GraphDiagnostics) void {
@@ -629,16 +611,10 @@ pub const InstGraph = struct {
 
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
-        if (self.row_shadow) |shadow| {
-            if (shadow.matches != 0 or shadow.mismatches != 0) {
-                std.debug.print("ROWSHADOW total matches={d} mismatches={d}\n", .{ shadow.matches, shadow.mismatches });
-            }
-            shadow.ids.deinit();
-            shadow.parents.deinit(allocator);
-            for (shadow.sets.items) |*set| set.deinit();
-            shadow.sets.deinit(allocator);
-            allocator.destroy(shadow);
-        }
+        self.row_store.ids.deinit();
+        self.row_store.parents.deinit(allocator);
+        for (self.row_store.lists.items) |*list| list.deinit(allocator);
+        self.row_store.lists.deinit(allocator);
         var views = self.node_snapshots.valueIterator();
         while (views.next()) |list| {
             list.deinit(allocator);
@@ -3518,7 +3494,7 @@ pub const InstGraph = struct {
         switch (kind) {
             .tag_union => {
                 const flat = try self.flattenTagRow(row);
-                try self.rowShadowJoin(row, empty, flat.tags, &.{});
+                try self.rowStoreJoin(row, empty, flat.tags, &.{});
                 if (flat.tags.len != 0) Common.invariant("instantiation unified a non-empty tag union with an empty tag union");
                 try self.unify(flat.ext, empty);
                 try self.setContent(row, .empty_tag_union);
@@ -3676,7 +3652,7 @@ pub const InstGraph = struct {
     fn unifyTagRows(self: *InstGraph, left: NodeId, right: NodeId, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
         const flat_left = try self.flattenTagRow(left);
         const flat_right = try self.flattenTagRow(right);
-        try self.rowShadowJoin(left, right, flat_left.tags, flat_right.tags);
+        try self.rowStoreJoin(left, right, flat_left.tags, flat_right.tags);
 
         var merged = std.ArrayList(InstTag).empty;
         defer merged.deinit(self.allocator);
@@ -4457,11 +4433,24 @@ pub const GraphTypeFinals = struct {
 
     fn sealTagRow(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.Span {
         const flat = try self.graph.flattenTagRow(node);
-        self.graph.rowShadowCompareSealed(node, flat.tags);
-        if (flat.tags.len == 0) return .empty();
-        const tags = try self.graph.allocator.alloc(Type.Tag, flat.tags.len);
+        const source = if (self.graph.rowStoreTags(node)) |stored| stored: {
+            // The graph's own flattening is the assertion on the store's
+            // answer: any divergence in membership or order means a tag
+            // reached this row outside the join stream the store follows.
+            if (stored.len != flat.tags.len) {
+                Common.invariant("sealed row disagreed with its row store class");
+            }
+            for (stored, flat.tags) |stored_tag, flat_tag| {
+                if (stored_tag.name != flat_tag.name) {
+                    Common.invariant("sealed row disagreed with its row store class");
+                }
+            }
+            break :stored stored;
+        } else flat.tags;
+        if (source.len == 0) return .empty();
+        const tags = try self.graph.allocator.alloc(Type.Tag, source.len);
         defer self.graph.allocator.free(tags);
-        for (flat.tags, 0..) |tag, index| {
+        for (source, 0..) |tag, index| {
             tags[index] = .{
                 .name = tag.name,
                 .checked_name = tag.checked_name,
