@@ -7,7 +7,6 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const collections = @import("collections");
 const build_options = @import("build_options");
-const libc_finder = @import("libc_finder.zig");
 const embedded_lld = @import("embedded_lld");
 const stack_probe = embedded_lld.stack_probe;
 const CodeSignature = @import("vendor_macho").CodeSignature;
@@ -520,28 +519,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                         // process's dynamic linker resolves them.
                         try args.append("-shared");
                     } else
-                    // Dynamic GNU linking - dynamic linker path is handled by caller
-                    // for cross-compilation. Only detect locally for native builds
+                    // Cross-compiling callers pass -dynamic-linker via extra_args.
                     if (config.extra_args.len == 0) {
-                        // Native build - try to detect dynamic linker
-                        if (libc_finder.findLibc(ctx)) |libc_info| {
-                            // We need to copy the path since args holds references
-                            try args.append("-dynamic-linker");
-                            try args.append(libc_info.dynamic_linker);
-                        } else |err| {
-                            // Fallback to hardcoded path based on architecture
-                            std.log.warn("Failed to detect libc: {}, using fallback", .{err});
-                            try args.append("-dynamic-linker");
-                            const fallback_ld = if (builtin.target.cpu.arch == .x86_64)
-                                "/lib64/ld-linux-x86-64.so.2"
-                            else if (builtin.target.cpu.arch == .aarch64)
-                                "/lib/ld-linux-aarch64.so.1"
-                            else
-                                "/lib/ld-linux.so.2";
-                            try args.append(fallback_ld);
-                        }
+                        try args.append("-dynamic-linker");
+                        try args.append(roc_target.glibcProgramInterpreter(target_arch) orelse
+                            return LinkError.LinkFailed);
                     }
-                    // Otherwise, dynamic linker is set via extra_args from caller
                 },
             }
 
@@ -1384,6 +1367,39 @@ test "macOS non-archive platform files are passed directly" {
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-all_load"));
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-force_load"));
     _ = findArg(args.items, object_path) orelse return error.MissingObjectFile;
+}
+
+test "native glibc executables name the canonical program interpreter" {
+    const cases = [_]struct { arch: std.Target.Cpu.Arch, interpreter: []const u8 }{
+        .{ .arch = .x86_64, .interpreter = "/lib64/ld-linux-x86-64.so.2" },
+        .{ .arch = .aarch64, .interpreter = "/lib/ld-linux-aarch64.so.1" },
+    };
+
+    for (cases) |case| {
+        var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+        defer arena_instance.deinit();
+
+        var io = Io.create(std.testing.io);
+        var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+        ctx.initIo();
+        defer ctx.deinit();
+
+        const config = LinkConfig{
+            .target_format = .elf,
+            .target_os = .linux,
+            .target_abi = .gnu,
+            .target_arch = case.arch,
+            .output_path = "test_output",
+            .object_files = &.{"libroc_interpreter_shim.a"},
+        };
+
+        const args = try buildLinkArgs(&ctx, config);
+
+        try std.testing.expectEqualStrings("ld.lld", args.items[0]);
+        const linker_idx = findArg(args.items, "-dynamic-linker") orelse return error.MissingDynamicLinker;
+        try std.testing.expect(linker_idx + 1 < args.items.len);
+        try std.testing.expectEqualStrings(case.interpreter, args.items[linker_idx + 1]);
+    }
 }
 
 test "BSD executables name their OS program interpreter" {
