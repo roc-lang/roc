@@ -3630,7 +3630,12 @@ pub const RecordField = struct {
         try tree.pushString(ast.resolve(self.name));
         const attrs2 = tree.beginNode();
         try tree.endNode(name, attrs2);
-        if (self.value == .unset) try tree.pushBoolPair("unset", true);
+        // No unset rendering here: only header paths (an app header's
+        // platform entry and package lists) call this method, and header
+        // record fields are always `name: value`—never unset. Expression
+        // records render their own field shape inline (the `.record` and
+        // `.record_builder` arms of Expr.pushToSExprTree), including the
+        // unset flag.
         const attrs = tree.beginNode();
 
         if (self.value == .supplied) {

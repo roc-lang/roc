@@ -22942,7 +22942,18 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
                 try entry.value_ptr.append(self.gpa, @intCast(record_index));
             },
             .dispatch_target => {
-                try evidence.dispatch_scheme_uses.put(self.gpa, record.slot_data, @intCast(record_index));
+                // Keyed by the discharged constraint's raw fn var, which is
+                // unique per constraint instantiation (see above). A clash
+                // would silently drop a dispatch chain link and let a real
+                // cycle through, so it must fail loudly, in release too.
+                const entry = try evidence.dispatch_scheme_uses.getOrPut(self.gpa, record.slot_data);
+                if (entry.found_existing) {
+                    std.debug.panic(
+                        "type checker invariant violated: two dispatch_target scheme-use records share constraint fn var {d}",
+                        .{record.slot_data},
+                    );
+                }
+                entry.value_ptr.* = @intCast(record_index);
             },
             // A shared use copies no vars (it shares the in-flight
             // definition's), so it has no fresh pairs to seed; the walk

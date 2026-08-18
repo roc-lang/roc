@@ -2117,6 +2117,66 @@ test "check type - record - default - call through def reference is CAN's cycle"
     }
 }
 
+test "check type - record - default - associated-value-mediated cycle is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Alias : Cfg
+        \\
+        \\Cfg := { x : U8 ?? Alias.fallback }.{
+        \\    fallback = Cfg.{}.x
+        \\}
+    ;
+    // The default references the associated value through a local ALIAS of
+    // the declaring type: `Alias.fallback` canonicalizes to
+    // `e_lookup_associated_local` (a direct `Cfg.fallback` resolves in
+    // scope and is CAN's cycle). Canonicalization CANNOT resolve the alias
+    // form to its target def — resolution follows transparent aliases
+    // through the type store (`resolveAssociatedLookup` in
+    // src/check/Check.zig), which only exists after checking — so the
+    // lookup is terminal in DefaultCycles and CAN accepts. The checker's
+    // residue walk owns the edge: checking rewrites the lookup to
+    // `e_lookup_associated_resolved`, and the walk's value arm follows the
+    // same-module target def into `fallback`'s body, whose `Cfg.{}` omits
+    // `x` and closes the cycle.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "check type - record - default - invoked associated-value cycle is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Alias : Cfg
+        \\
+        \\Cfg := { x : U8 ?? Alias.mk({}) }.{
+        \\    mk = |_| Cfg.{}.x
+        \\}
+    ;
+    // The invoked twin of the test above: the default CALLS the associated
+    // value through the alias, so only invoked-ness reaches the lambda's
+    // body (a lambda reached as a value does not walk its body). CAN still
+    // cannot resolve the aliased associated callee, so the checker's
+    // residue walk must follow the invoked resolved reference into `mk`'s
+    // body, where `Cfg.{}` omits `x` and closes the cycle.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
 test "check type - record - default - nested omitted defaults terminate" {
     const source =
         \\main! = |_| {}

@@ -4740,6 +4740,10 @@ fn runExprStatementKernel(
                 if (self.peek() == .CloseCurly) {
                     self.advance();
                 }
+                // Abandoning this record must also abandon its scratch fields;
+                // leaving them behind would let an ENCLOSING record's
+                // recordFieldSpanFrom sweep them up as phantom fields.
+                self.store.clearScratchRecordFieldsFrom(expr_record_state.scratch_top);
                 const expr = try self.store.addMalformed(AST.Expr.Idx, .expected_expr_record_field_name, .{ .start = expr_record_state.start, .end = self.pos });
                 expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
                 continue :expr_kernel .suffix;
