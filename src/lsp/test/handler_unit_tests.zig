@@ -111,6 +111,63 @@ fn responseWithId(allocator: std.mem.Allocator, responses: [][]u8, wanted_id: i6
     return error.MissingResponse;
 }
 
+test "didChange handler handles out-of-bounds float values without panicking" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file_uri = try tempFileUri(allocator, &tmp, "change_float.roc");
+    defer allocator.free(file_uri);
+
+    const change_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{s}","version":1e100}},"contentChanges":[{{"text":"x","range":{{"start":{{"line":1e100,"character":0}},"end":{{"line":1,"character":0}}}}}}]}}}}
+    , .{file_uri});
+    defer allocator.free(change_body);
+    const input = try requestInput(allocator, file_uri, "x = 1", change_body);
+    defer allocator.free(input);
+
+    var writer_buffer: [16384]u8 = undefined;
+    const run = try runUnitServer(allocator, input, &writer_buffer);
+    defer freeRun(allocator, run);
+}
+
+test "didChange handler handles valid float range indices correctly" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file_uri = try tempFileUri(allocator, &tmp, "change_valid_float.roc");
+    defer allocator.free(file_uri);
+
+    const change_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{s}","version":2.0}},"contentChanges":[{{"text":"x","range":{{"start":{{"line":0.0,"character":0.0}},"end":{{"line":0.0,"character":1.0}}}}}}]}}}}
+    , .{file_uri});
+    defer allocator.free(change_body);
+    const input = try requestInput(allocator, file_uri, "x = 1", change_body);
+    defer allocator.free(input);
+
+    var writer_buffer: [16384]u8 = undefined;
+    const run = try runUnitServer(allocator, input, &writer_buffer);
+    defer freeRun(allocator, run);
+}
+
+test "didOpen handler handles out-of-bounds float version without panicking" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file_uri = try tempFileUri(allocator, &tmp, "open_float.roc");
+    defer allocator.free(file_uri);
+
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1e100,"text":"x = 1"}}}}}}
+    , .{file_uri});
+    defer allocator.free(open_body);
+    const input = try requestInput(allocator, file_uri, "x = 1", open_body);
+    defer allocator.free(input);
+
+    var writer_buffer: [16384]u8 = undefined;
+    const run = try runUnitServer(allocator, input, &writer_buffer);
+    defer freeRun(allocator, run);
+}
+
 test "formatting handler formats simple expression with test syntax driver" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

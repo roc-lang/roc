@@ -23,7 +23,7 @@ pub fn handler(comptime ServerType: type) type {
             const version_value = text_doc.get("version") orelse std.json.Value{ .integer = 0 };
             const version: i64 = if (std.meta.activeTag(version_value) == .integer)
                 version_value.integer
-            else if (std.meta.activeTag(version_value) == .float)
+            else if (std.meta.activeTag(version_value) == .float and std.math.isFinite(version_value.float) and version_value.float >= @as(f64, @floatFromInt(std.math.minInt(i64))) and version_value.float < @as(f64, @floatFromInt(std.math.maxInt(i64))))
                 @intFromFloat(version_value.float)
             else
                 0;
@@ -46,7 +46,7 @@ pub fn handler(comptime ServerType: type) type {
                 var change = DocumentStore.ContentChange{ .text = text };
                 if (change_obj.get("range")) |range_value| {
                     change.range = parseRange(range_value) catch |err| {
-                        std.log.err("invalid range for {s}: {s}", .{ uri, @errorName(err) });
+                        std.log.warn("invalid range for {s}: {s}", .{ uri, @errorName(err) });
                         return;
                     };
                 }
@@ -66,7 +66,7 @@ pub fn handler(comptime ServerType: type) type {
 
             if (saw_full_change) {
                 if (parsed_changes.items.len != 1) {
-                    std.log.err("received invalid mix of full and incremental changes for {s}", .{uri});
+                    std.log.warn("received invalid mix of full and incremental changes for {s}", .{uri});
                     return;
                 }
                 try self.doc_store.upsert(uri, version, parsed_changes.items[0].text);
@@ -77,7 +77,7 @@ pub fn handler(comptime ServerType: type) type {
                     error.InvalidPosition,
                     error.InvalidRange,
                     error.NoChanges,
-                    => std.log.err("failed to apply incremental change for {s}: {s}", .{ uri, @errorName(err) }),
+                    => std.log.warn("failed to apply incremental change for {s}: {s}", .{ uri, @errorName(err) }),
                 };
             }
 
@@ -104,10 +104,14 @@ pub fn handler(comptime ServerType: type) type {
         fn parseIndex(obj: std.json.ObjectMap, field: []const u8) error{ MissingField, InvalidField }!usize {
             const value = obj.get(field) orelse return error.MissingField;
             if (std.meta.activeTag(value) == .integer) {
-                return if (value.integer < 0) error.InvalidField else @intCast(value.integer);
+                return std.math.cast(usize, value.integer) orelse error.InvalidField;
             }
             if (std.meta.activeTag(value) == .float) {
-                return if (value.float < 0) error.InvalidField else @intFromFloat(value.float);
+                const f = value.float;
+                if (!std.math.isFinite(f) or f < 0 or f >= @as(f64, @floatFromInt(std.math.maxInt(usize)))) {
+                    return error.InvalidField;
+                }
+                return @intFromFloat(f);
             }
             return error.InvalidField;
         }
