@@ -948,10 +948,12 @@ pub const InstGraph = struct {
             // tracks what the edges alone would decide, and any divergence
             // beyond a chain deepened past the cap without its own join event
             // prints here so wider corpora keep auditing the split.
-            if (self.iterator_fold.get(node)) |fold| {
-                const walk_forces = item.force_dynamic or item.depth > generated_iterator_mint_depth_limit;
-                if (fold.forced != walk_forces or (!walk_forces and fold.depth != item.depth)) {
-                    std.debug.print("iterator fold diverged: fold forced={} depth={d}, walk forced={} depth={d}, explicit={}\n", .{ fold.forced, fold.depth, walk_forces, item.depth, item.force_dynamic });
+            if (comptime std.debug.runtime_safety) {
+                if (self.iterator_fold.get(node)) |fold| {
+                    const walk_forces = item.force_dynamic or item.depth > generated_iterator_mint_depth_limit;
+                    if (fold.forced != walk_forces or (!walk_forces and fold.depth != item.depth)) {
+                        std.debug.print("iterator fold diverged: fold forced={} depth={d}, walk forced={} depth={d}, explicit={}\n", .{ fold.forced, fold.depth, walk_forces, item.depth, item.force_dynamic });
+                    }
                 }
             }
             if (item.force_dynamic or item.depth > generated_iterator_mint_depth_limit) {
