@@ -30471,10 +30471,9 @@ fn satisfyImplicitParserConstraint(
     defer walk.deinit();
     // Everything below a dispatcher's own backing is inside it, so the walk
     // enters that backing here and stays there for the rest of this constraint.
-    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, &walk, env, region)) |backing| blk: {
-        try walk.visited.put(self.types.resolveVar(dispatcher_var).var_, {});
-        break :blk backing;
-    } else dispatcher_var;
+    // A dispatcher that derives its own codec is validated against the shape
+    // that codec is generated from, not against the name in front of it.
+    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, &walk, env, region)) orelse dispatcher_var;
     switch (try self.validateDerivedParseVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk, .shape, failure_expr)) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .parser,
@@ -30555,10 +30554,9 @@ fn satisfyImplicitEncoderForConstraint(
     defer walk.deinit();
     // Everything below a dispatcher's own backing is inside it, so the walk
     // enters that backing here and stays there for the rest of this constraint.
-    const validation_var = if (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, &walk, env, region)) |backing| blk: {
-        try walk.visited.put(self.types.resolveVar(dispatcher_var).var_, {});
-        break :blk backing;
-    } else dispatcher_var;
+    // A dispatcher that derives its own codec is validated against the shape
+    // that codec is generated from, not against the name in front of it.
+    const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, &walk, env, region)) orelse dispatcher_var;
     switch (try self.validateDerivedEncodeVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk)) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
             .encoder,
@@ -30745,10 +30743,6 @@ fn generatedStructuralCodecBackingVar(
     const content = self.types.resolveVar(dispatcher_var).desc.content;
     if (content != .structure or content.structure != .nominal_type) return null;
     const nominal = content.structure.nominal_type;
-    // Builtin codecs are the format protocol itself, validated against the
-    // format's own methods rather than by walking a backing shape. Monotype
-    // draws the same line when it looks for a custom codec target.
-    if (nominal.originIsBuiltin()) return null;
     const original_env, _ = self.ownerEnvForOriginModule(
         nominal.origin_module,
         nominal.sourceDeclOptional(),
@@ -30762,10 +30756,11 @@ fn generatedStructuralCodecBackingVar(
         method_ident,
     ) orelse return null;
     if (!isGeneratedStructuralCodecMethodBinding(method, kind)) return null;
+    if (!try self.takeDerivedCodecBackingWalk(walk, nominal)) return null;
     // A declaration the checker already rejected has no shape to walk; the
     // nominal validation this falls back to reports that rejection.
     const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return null;
-    _ = try self.takeDerivedCodecBackingWalk(walk, nominal);
+    // The rest of this constraint is spent inside this backing.
     walk.nominal_backing_depth += 1;
     return backing_var;
 }
@@ -31855,6 +31850,10 @@ fn takeDerivedCodecBackingWalk(
     walk: *DerivedCodecWalk,
     nominal: types_mod.NominalType,
 ) Allocator.Error!bool {
+    // Builtin codecs are the format protocol itself, validated against the
+    // format's own methods rather than by walking a backing shape. Monotype
+    // draws the same line when it looks for a custom codec target.
+    if (nominal.originIsBuiltin()) return false;
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse return true;
     // The argument list points into the types store, which resolution touches.
     const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
