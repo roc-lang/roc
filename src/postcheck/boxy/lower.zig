@@ -11846,15 +11846,53 @@ const ProcBodyBuilder = struct {
         bindings: []LocalDescriptorEnvironmentBinding,
     };
 
+    /// One nominal backing formal bound to the argument rep a nominal supplied
+    /// for it, together with whatever that formal was bound to outside this
+    /// nominal so descending out of it restores the outer binding.
+    const DescriptorTemplateBinding = struct {
+        formal: Plan.TypeRepId,
+        outer: ?Plan.TypeRepId,
+    };
+
+    /// Identity of a substitution environment, interned as a link to the
+    /// environment it extends. Descents that bind the same formals to the same
+    /// arguments in the same order reach the same id and share descriptors.
+    const DescriptorTemplateEnvId = enum(u32) { empty = 0, _ };
+
+    const DescriptorTemplateEnvKey = struct {
+        parent: DescriptorTemplateEnvId,
+        formal: Plan.TypeRepId,
+        actual: Plan.TypeRepId,
+    };
+
+    /// A descriptor is only shared between positions that agree on both the
+    /// representation and the substitution environment it was emitted under:
+    /// one nominal's backing shape is reached once per argument instantiation.
+    const DescriptorTemplateDescKey = struct {
+        rep: Plan.TypeRepId,
+        env: DescriptorTemplateEnvId,
+    };
+
+    /// What a descent restores on the way back out.
+    const DescriptorTemplateScope = struct {
+        bindings_start: usize,
+        env: DescriptorTemplateEnvId,
+    };
+
     const DescriptorTemplateContext = struct {
-        ids: []?LIR.BoxyTypeDescId,
+        ids: std.AutoHashMap(DescriptorTemplateDescKey, LIR.BoxyTypeDescId),
+        env_ids: std.AutoHashMap(DescriptorTemplateEnvKey, DescriptorTemplateEnvId),
+        bindings: std.ArrayList(DescriptorTemplateBinding),
         forced_refs: []?LIR.LocalId,
         exact_reps: []?Plan.TypeRepId,
         exact_storage: bool,
+        env: DescriptorTemplateEnvId = .empty,
         excluded_local: ?LIR.LocalId = null,
 
-        fn deinit(self: DescriptorTemplateContext, allocator: Allocator) void {
-            allocator.free(self.ids);
+        fn deinit(self: *DescriptorTemplateContext, allocator: Allocator) void {
+            self.ids.deinit();
+            self.env_ids.deinit();
+            self.bindings.deinit(allocator);
             allocator.free(self.forced_refs);
             allocator.free(self.exact_reps);
         }
@@ -26753,16 +26791,15 @@ const ProcBodyBuilder = struct {
     }
 
     fn initDescriptorTemplateContext(self: *ProcBodyBuilder, exact_storage: bool) Allocator.Error!DescriptorTemplateContext {
-        const ids = try self.parent.allocator.alloc(?LIR.BoxyTypeDescId, self.parent.plan.representations.items.len);
-        errdefer self.parent.allocator.free(ids);
         const forced_refs = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.representations.items.len);
         errdefer self.parent.allocator.free(forced_refs);
         const exact_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, self.parent.plan.representations.items.len);
-        @memset(ids, null);
         @memset(forced_refs, null);
         @memset(exact_reps, null);
         return .{
-            .ids = ids,
+            .ids = std.AutoHashMap(DescriptorTemplateDescKey, LIR.BoxyTypeDescId).init(self.parent.allocator),
+            .env_ids = std.AutoHashMap(DescriptorTemplateEnvKey, DescriptorTemplateEnvId).init(self.parent.allocator),
+            .bindings = std.ArrayList(DescriptorTemplateBinding).empty,
             .forced_refs = forced_refs,
             .exact_reps = exact_reps,
             .exact_storage = exact_storage,
@@ -26788,24 +26825,65 @@ const ProcBodyBuilder = struct {
         return current;
     }
 
-    fn recordDescriptorTemplateExactReps(
+    /// Bind this representation's nominal backing formals to the arguments it
+    /// supplies, for the descriptors nested inside it.
+    ///
+    /// A backing shape is written once against its declaration's formals and
+    /// reached once per instantiation, so one template can descend through the
+    /// same nominal at two argument sets and each descent binds the formals its
+    /// own way. The bindings therefore last exactly as long as the descent that
+    /// made them, and the returned scope is what undoes them.
+    fn pushDescriptorTemplateExactReps(
         self: *const ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
         context: *DescriptorTemplateContext,
-    ) void {
-        if (!context.exact_storage) return;
+    ) Allocator.Error!DescriptorTemplateScope {
+        const scope = DescriptorTemplateScope{
+            .bindings_start = context.bindings.items.len,
+            .env = context.env,
+        };
+        if (!context.exact_storage) return scope;
 
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         for (self.parent.plan.nominalBackingArgSubstitutionSlice(rep.nominal_backing_arg_substitutions)) |substitution| {
+            if (substitution.formal_rep == substitution.actual_rep) continue;
             const slot = &context.exact_reps[@intFromEnum(substitution.formal_rep)];
             if (slot.*) |existing| {
-                if (existing != substitution.actual_rep) {
-                    boxyLowerInvariant("boxy exact descriptor template assigned one backing formal to two actual reps");
-                }
-            } else {
-                slot.* = substitution.actual_rep;
+                if (existing == substitution.actual_rep) continue;
             }
+            try context.bindings.append(self.parent.allocator, .{
+                .formal = substitution.formal_rep,
+                .outer = slot.*,
+            });
+            slot.* = substitution.actual_rep;
+
+            const key = DescriptorTemplateEnvKey{
+                .parent = context.env,
+                .formal = substitution.formal_rep,
+                .actual = substitution.actual_rep,
+            };
+            const entry = try context.env_ids.getOrPut(key);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @enumFromInt(@as(u32, @intCast(context.env_ids.count())));
+            }
+            context.env = entry.value_ptr.*;
         }
+        return scope;
+    }
+
+    /// Restore the bindings and environment a descent replaced.
+    fn popDescriptorTemplateExactReps(
+        context: *DescriptorTemplateContext,
+        scope: DescriptorTemplateScope,
+    ) void {
+        var index = context.bindings.items.len;
+        while (index > scope.bindings_start) {
+            index -= 1;
+            const binding = context.bindings.items[index];
+            context.exact_reps[@intFromEnum(binding.formal)] = binding.outer;
+        }
+        context.bindings.shrinkRetainingCapacity(scope.bindings_start);
+        context.env = scope.env;
     }
 
     fn descriptorTemplateRefForRep(
@@ -26854,11 +26932,13 @@ const ProcBodyBuilder = struct {
         context: *DescriptorTemplateContext,
     ) Allocator.Error!LIR.BoxyTypeDescId {
         const rep_index = @intFromEnum(rep_id);
-        self.recordDescriptorTemplateExactReps(rep_id, context);
-        if (context.ids[rep_index]) |existing| return existing;
+        const scope = try self.pushDescriptorTemplateExactReps(rep_id, context);
+        defer popDescriptorTemplateExactReps(context, scope);
+        const desc_key = DescriptorTemplateDescKey{ .rep = rep_id, .env = context.env };
+        if (context.ids.get(desc_key)) |existing| return existing;
 
         const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
-        context.ids[rep_index] = desc_id;
+        try context.ids.put(desc_key, desc_id);
         try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
             .payload_layout = .zst,
             .contains_refcounted = false,
