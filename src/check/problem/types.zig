@@ -193,22 +193,28 @@ pub const EffectfulFunctionName = struct {
 
 // comptime errors //
 
+/// Declaring-module provenance of a compile-time failure that happened in
+/// source inlined from another module (e.g. a `??` field default
+/// materialized per specialization). The carrying problem's `region` then
+/// highlights this module's consuming compile-time root, and the origin
+/// carries the declaring module's exact resolved location as stamped on the
+/// failing LIR statement by the lowerer. `module_name` is the declaring
+/// module's display name, or its package-qualified name when the bare name
+/// collides with the reporting module's.
+pub const ComptimeOrigin = struct {
+    module_name: ExtraStringIdx,
+    line: u32,
+    column: u32,
+};
+
 /// A crash that occurred during compile-time evaluation
 pub const ComptimeCrash = struct {
     message: ExtraStringIdx,
     region: base.Region,
-    /// Present when the crash happened in source inlined from another module
-    /// (e.g. a `??` field default materialized per specialization). `region`
-    /// then highlights this module's consuming compile-time root, and the
-    /// origin carries the declaring module's exact resolved location as
-    /// stamped on the failing LIR statement by the lowerer.
-    origin: ?Origin = null,
+    /// See `ComptimeOrigin`.
+    origin: ?ComptimeOrigin = null,
 
-    pub const Origin = struct {
-        module_name: ExtraStringIdx,
-        line: u32,
-        column: u32,
-    };
+    pub const Origin = ComptimeOrigin;
 };
 
 /// A numeric literal that a custom `from_numeral` implementation rejected
@@ -216,6 +222,12 @@ pub const ComptimeCrash = struct {
 pub const ComptimeInvalidNumeral = struct {
     message: ExtraStringIdx,
     region: base.Region,
+    /// See `ComptimeOrigin`. Structurally always null today: a numeral
+    /// conversion root lives in the module that declares the literal, so its
+    /// rejection is reported during that module's own finalization. Wired
+    /// through the shared resolution anyway so the report cannot silently
+    /// mis-render if that ever changes.
+    origin: ?ComptimeOrigin = null,
 };
 
 /// A string literal that a custom `from_quote` implementation rejected
@@ -223,12 +235,18 @@ pub const ComptimeInvalidNumeral = struct {
 pub const ComptimeInvalidQuote = struct {
     message: ExtraStringIdx,
     region: base.Region,
+    /// See `ComptimeOrigin` and the note on `ComptimeInvalidNumeral.origin`.
+    origin: ?ComptimeOrigin = null,
 };
 
 /// An expect that failed during compile-time evaluation
 pub const ComptimeExpectFailed = struct {
     message: ExtraStringIdx,
     region: base.Region,
+    /// See `ComptimeOrigin`. Reachable cross-module: an inline `expect`
+    /// inside a `??` field default fails while the consuming module's
+    /// compile-time root evaluates the inlined copy.
+    origin: ?ComptimeOrigin = null,
 };
 
 /// An error that occurred during compile-time evaluation

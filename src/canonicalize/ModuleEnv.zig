@@ -4803,6 +4803,17 @@ pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
 }
 
+/// The coordinator-assigned package-qualified module identifier (e.g.
+/// `pf.Utils`), unique across the build's packages. Module identity
+/// comparisons in diagnostics must use this rather than the bare module
+/// name, which can collide between packages. Environments constructed
+/// outside the coordinator (unit tests) have no qualified ident; they are
+/// single-module worlds, so the bare name is their qualified name.
+pub fn qualifiedModuleName(self: *const Self) []const u8 {
+    if (self.qualified_module_ident.isNone()) return self.module_name;
+    return self.getIdent(self.qualified_module_ident);
+}
+
 /// Builds a mapping from platform for-clause alias ident indices to the
 /// equivalent ident indices in the app module's store.
 ///

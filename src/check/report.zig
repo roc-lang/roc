@@ -90,6 +90,7 @@ const EffectfulExpect = problem_mod.EffectfulExpect;
 const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
 
 // Comptime errors
+const ComptimeOrigin = problem_mod.ComptimeOrigin;
 const ComptimeCrash = problem_mod.ComptimeCrash;
 const ComptimeInvalidNumeral = problem_mod.ComptimeInvalidNumeral;
 const ComptimeInvalidQuote = problem_mod.ComptimeInvalidQuote;
@@ -4577,6 +4578,20 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Format a compile-time failure's foreign origin (source inlined from
+    /// another module, e.g. a `??` field default materialized per
+    /// specialization) as `Module (line N, column M),` owned by the report.
+    /// Shared by every comptime problem kind that carries provenance.
+    fn comptimeOriginLocation(self: *Self, report: *Report, origin: ComptimeOrigin) Allocator.Error![]const u8 {
+        const location = try std.fmt.allocPrint(self.gpa, "{s} (line {d}, column {d}),", .{
+            self.problems.getExtraString(origin.module_name),
+            origin.line,
+            origin.column,
+        });
+        defer self.gpa.free(location);
+        return try report.addOwnedString(location);
+    }
+
     /// Build a report for compile-time crash
     fn buildComptimeInvalidNumeralReport(self: *Self, data: ComptimeInvalidNumeral) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Invalid Number", "The from_numeral implementation for this number literal's type rejected it.", .runtime_error);
@@ -4597,9 +4612,20 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        try D.renderSlice(&.{
-            D.bytes("It returned this error message:"),
-        }, self, &report);
+        if (data.origin) |origin| {
+            // The rejected literal was inlined from another module (see
+            // ComptimeOrigin); name its declaring module and exact location.
+            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            try D.renderSlice(&.{
+                D.bytes("The rejected literal is in the module"),
+                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                D.bytes("and the implementation returned this error message:"),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("It returned this error message:"),
+            }, self, &report);
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_message);
@@ -4626,9 +4652,20 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
 
-        try D.renderSlice(&.{
-            D.bytes("It returned this error message:"),
-        }, self, &report);
+        if (data.origin) |origin| {
+            // The rejected literal was inlined from another module (see
+            // ComptimeOrigin); name its declaring module and exact location.
+            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            try D.renderSlice(&.{
+                D.bytes("The rejected literal is in the module"),
+                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                D.bytes("and the implementation returned this error message:"),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("It returned this error message:"),
+            }, self, &report);
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_message);
@@ -4660,13 +4697,7 @@ pub const ReportBuilder = struct {
             // `??` field default materialized per specialization), so the
             // failing expression is not in this module's source; name its
             // declaring module and exact location instead.
-            const origin_location = try std.fmt.allocPrint(self.gpa, "{s} (line {d}, column {d}),", .{
-                self.problems.getExtraString(origin.module_name),
-                origin.line,
-                origin.column,
-            });
-            defer self.gpa.free(origin_location);
-            const owned_origin_location = try report.addOwnedString(origin_location);
+            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
             try D.renderSlice(&.{
                 D.bytes("The"),
                 D.bytes("crash").withAnnotation(.keyword),
@@ -4712,11 +4743,26 @@ pub const ReportBuilder = struct {
         );
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try D.renderSlice(&.{
-            D.bytes("The"),
-            D.bytes("expect").withAnnotation(.keyword),
-            D.bytes("failed with this message:"),
-        }, self, &report);
+        if (data.origin) |origin| {
+            // The expect was in source inlined from another module (e.g. a
+            // `??` field default materialized per specialization), so the
+            // failing statement is not in this module's source; name its
+            // declaring module and exact location instead.
+            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            try D.renderSlice(&.{
+                D.bytes("The"),
+                D.bytes("expect").withAnnotation(.keyword),
+                D.bytes("failed in the module"),
+                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                D.bytes("with this message:"),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("The"),
+                D.bytes("expect").withAnnotation(.keyword),
+                D.bytes("failed with this message:"),
+            }, self, &report);
+        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_message);

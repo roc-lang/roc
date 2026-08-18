@@ -19,6 +19,16 @@ NestedInner := { m : U64 ?? {
 	seed + 4
 } }
 
+# Lambdas inside defaults need checked nested-function sites published
+# under the module's default-expression root (no owning template).
+IifeConfig := { bumped : U8 ?? (|n| n + 1)(4) }
+
+LocalFnConfig := { doubled : U8 ?? {
+	double : U8 -> U8
+	double = |n| n * 2
+	double(6)
+} }
+
 NestedOuter := { inner : NestedInner ?? {
 	x = NestedInner.{}
 	x
@@ -102,4 +112,22 @@ expect {
 	outer = NestedOuter.{}
 
 	outer.inner.m + outer.n == 8
+}
+
+# An immediately-invoked lambda default: the lambda's nested-function
+# site is owned by the default-expression root, not any template.
+expect {
+	config : IifeConfig
+	config = IifeConfig.{}
+
+	config.bumped == 5
+}
+
+# A default binding a local function and calling it: the local lambda's
+# default-root site resolves per omitting construction site.
+expect {
+	config : LocalFnConfig
+	config = LocalFnConfig.{}
+
+	config.doubled == 12
 }

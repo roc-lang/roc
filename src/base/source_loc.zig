@@ -26,3 +26,17 @@ pub const SourceLoc = extern struct {
         return self.file != no_file;
     }
 };
+
+/// One entry of a program's source file table, addressed by `SourceLoc.file`.
+///
+/// `name` is the module's bare display name (what debug info and reports
+/// show); `qualified_name` is the coordinator's package-qualified module
+/// identifier (e.g. `pf.Utils`), which is unique across the build's packages.
+/// Identity comparisons ("does this location belong to that module?") must
+/// use `qualified_name`: two packages may both contain a module whose bare
+/// name is `Utils`, and matching by bare name would render one module's byte
+/// offsets against the other's source.
+pub const SourceFileEntry = struct {
+    name: []const u8,
+    qualified_name: []const u8,
+};

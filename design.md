@@ -4979,13 +4979,19 @@ Restrictions:
     references) a lambda only creates the closure—the body is not
     evaluated—so an `e_lambda`/`e_closure` reached as a value does not
     walk its body (a closure's captured values ARE materialized, so
-    their reference edges remain), while a lambda in direct callee
-    position of a walked call is immediately invoked and its body does
-    walk. Bodies reached only through later application (defs referenced
-    as values then called, calls through parameters, dispatch) terminate
-    here and are the checker's residue. Dispatch calls, calls through
-    function parameters, and foreign lookups terminate edges here by
-    principle.
+    their reference edges remain). An expression in DIRECT CALLEE
+    position of a walked call is INVOKED: a callee lambda/closure's
+    body walks, and a callee that is a name-resolvable reference (a
+    lookup naming a same-module top-level def) walks that def's body
+    with lambda bodies included—calling through a def reference
+    evaluates the body at materialization—and invoked-ness propagates
+    through reference chains (`go = helper`). Because one def may
+    legitimately be referenced both ways, each def carries TWO graph
+    nodes, value-flavored and invoked-flavored (the invoked flavor's
+    edges strictly superset the value flavor's), so an invoked use
+    never leaks body edges into a value use. Dispatch calls, calls
+    through function parameters, and foreign lookups terminate edges
+    here by principle and are the checker's residue.
   - CHECK owns the residue only type checking can see: the extended
     `defaultMaterializationIsRecursive` walk descends every expression
     form and additionally follows same-module reference edges,
@@ -4993,13 +4999,23 @@ Restrictions:
     omitted defaulted fields on SOLVED rows (which also covers
     foreign-omission edges). It applies the same function-value rule as
     CAN—a lambda or closure reached as a value walks its captures but
-    not its body—with one strict extension: invoked-ness follows
-    name-resolvable reference chains to the def body they name (calling
-    through a def reference evaluates that body at materialization), so
-    a cycle like `?? go({})` with `go = |_| Loop.{}.a` is caught here
-    even though CAN's value-edge rule accepts it; calls through
-    parameters and other non-name-resolvable callees remain closed only
-    by dispatch evidence. Dispatch targets join through SCHEME-USE
+    not its body; invoked-ness follows name-resolvable reference chains
+    to the def body they name (re-traversed by necessity: a mixed cycle
+    needs its whole path)—and additionally resolves reference edges
+    through default-expression-LOCAL bindings: a block statement
+    binding a pattern to an expression records that edge during the
+    walk, and an invoked lookup resolving to such a binding walks the
+    bound expression as invoked, so a cycle through a default-local
+    lambda is check's residue. What check ALONE closes is
+    DISPATCH-MEDIATED invocation and these local shapes:
+    `recursive_default_value` fires only when at least one edge of the
+    cycle needs solved types or walk-local binding state—a
+    dispatch-resolved call target (a call through a parameter like
+    `c.make()`), a type-dispatch method binding, an omission on a
+    solved/foreign row, or a default-local binding. A purely
+    name-resolvable invoked cycle through top-level defs is CAN's:
+    already reported as "Default Value Cycle" and dropped before check
+    runs. Dispatch targets join through SCHEME-USE
     EVIDENCE, not var equality alone: a dispatch fired inside an
     instantiated scheme carries the instantiation COPY's constraint var,
     never the var written at the body's dispatch site (generalization
@@ -5020,12 +5036,9 @@ Restrictions:
     parameter-dispatch cycle in
     src/check/test/type_checking_integration.zig ("dispatch-mediated
     cycle is check's residue") and the foreign-helper cycle in
-    src/check/test/cross_module_test.zig. It re-traverses name edges by
-    necessity—a mixed cycle needs its whole path—but purely
-    name-resolvable cycles were already dropped at CAN, so
-    `recursive_default_value` fires only for cycles involving a
-    check-only edge. This judgment still runs before `CheckedModule` is
-    built, so postcheck lowering only receives acyclic defaults.
+    src/check/test/cross_module_test.zig. This judgment still runs
+    before `CheckedModule` is built, so postcheck lowering only
+    receives acyclic defaults.
 - A default may constrain NO declaration type parameter: it must
   type-check while demanding NOTHING of the declaration's type
   parameters. This is forced by two hard requirements—type declarations
@@ -5137,7 +5150,18 @@ scope chain. The resulting `site_evidence` entries are keyed by the
 default's checked expressions, so every omitting site's
 per-specialization lowering finds the same finished vector through the
 ordinary `siteEvidence` lookup—lowering consumes explicit checked
-evidence and never reconstructs it.
+evidence and never reconstructs it. Defaults likewise carry their own
+CHECKED NESTED-FUNCTION SITES: the seal pass scans every archived
+default expression as a root, publishing each interior lambda/closure
+as a `NestedProcSite` owned by the module's `default_root` (a default
+belongs to no procedure template). Lowering resolves those sites only
+while materializing a default (the materialization context is
+explicit, mirroring its view/binder swaps—same-module materialization
+swaps in fresh binder state exactly like the foreign branch), and a
+default-root nested function instantiates no owner-template dispatch
+relations: the parameter-constraint judgment guarantees the default
+has no enclosing scheme, so its relations flow through the default
+evidence spans.
 
 Omission edges are EXPLICIT in every graph that orders defaults. One
 shared enumeration (src/canonicalize/default_omissions.zig) defines what
@@ -5177,16 +5201,30 @@ reference the declaring module's own defs; the swapped context resolves
 them (pinned by run-test-eval). Checking's `does_fx` →
 `effectful_default_value` rejection is the LIVE purity judgment (see
 Restrictions above): only pure defaults reach materialization.
-A compile-time crash resolves its report site through the failing LIR
-statement's explicit `SourceLoc` stamp. The bare region renders against
-the finalized module's source only when the statement's source-file
-entry names that module; otherwise (a crash inside an inlined FOREIGN
+A compile-time failure resolves its report site through the failing LIR
+statement's explicit `SourceLoc` stamp. The LIR source-file table entry
+carries BOTH the declaring module's display name and its
+package-qualified identity (the coordinator's `qualified_module_ident`,
+e.g. `pf.Utils`); the is-this-local comparison matches qualified
+identities, never bare names—two packages may both contain a `Utils`,
+and a bare-name match would render the foreign module's byte offsets
+against the finalized module's source. The failed region renders
+against the finalized module's source only when the qualified
+identities match; otherwise (a failure inside an inlined FOREIGN
 default) the report highlights the consuming compile-time root locally
-and names the declaring module with its resolved line/column
-(`ComptimeCrash.origin`). Both comptime engines carry this provenance—
-the interpreter via failed-statement locs, the dev backend via
-failure-region hooks that pass file/line/column alongside region
-offsets.
+and names the declaring module—display name, or qualified name when
+the bare names collide—with its resolved line/column (`ComptimeOrigin`).
+All four comptime problem kinds route through this one resolution:
+`comptime_crash`; `comptime_expect_failed` (reachable cross-module: an
+inline `expect` in a `??` default fails inside the consumer's root);
+and `comptime_invalid_numeral`/`comptime_invalid_quote` (structurally
+local—conversion roots live with their literal and each module
+finalizes its own roots—but wired through the same helper so a change
+cannot silently mis-render). Both comptime engines carry the
+provenance—the interpreter via failed-statement and per-expect
+statement locs, the dev backend via failure-region hooks emitted
+before each crash and each expect-failed call, passing
+file/line/column alongside region offsets.
 
 Monotype default identity (`Type.FieldDefault`): the Monotype record
 field itself carries the `??` default identity—the declaring module's

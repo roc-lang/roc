@@ -2040,21 +2040,24 @@ test "check type - record - default - immediately-invoked lambda cycle behind di
     );
 }
 
-test "check type - record - default - call through def reference closes the cycle" {
+test "check type - record - default - cycle through a default-local binding is check's residue" {
     const source =
         \\main! = |_| {}
         \\
-        \\Loop := { a : U8 ?? go({}) }
+        \\Loop := { a : U8 ?? { f = |_| Loop.{}.a
+        \\                      f({}) } }
         \\
-        \\go = |_| Loop.{}.a
+        \\x : Loop
+        \\x = Loop.{}
     ;
-    // The callee is a name-resolvable REFERENCE, but the call still
-    // evaluates `go`'s body at materialization, and that body's `Loop.{}`
-    // omits `a`: invoked-ness must follow the reference to the def's body,
-    // or materialization recurses forever. Contrast with the fn-VALUED
-    // default above (`?? make`), whose body stays unwalked. (CAN's
-    // DefaultCycles treats the callee reference as a value edge and accepts
-    // this module, so the cycle is the checker residue's to close.)
+    // The invoked callee resolves to a binding LOCAL to the default
+    // expression itself (a block statement), not to a top-level def:
+    // canonicalization's DefaultCycles pass does not map default-local
+    // binders, so the residue walk must record block-statement pattern
+    // bindings encountered during the walk and follow an invoked lookup
+    // into the bound lambda's body, where `Loop.{}` omits `a` and closes
+    // the cycle. Without the local-binding edge this materialization
+    // diverges at compile time instead of being rejected.
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
@@ -2064,6 +2067,54 @@ test "check type - record - default - call through def reference closes the cycl
         "recursive_default_value",
         @tagName(test_env.checker.problems.problems.items[0]),
     );
+}
+
+test "check type - record - default - acyclic default-local binding is accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { a : U8 ?? { f = |n| n + 1
+        \\                     f(4) } }
+        \\
+        \\x : Cfg
+        \\x = Cfg.{}
+    ;
+    // The rejected side's acyclic twin: the local binding's lambda body
+    // reaches no omitting construction, so following the invoked
+    // local-binding edge must not manufacture a cycle.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+}
+
+test "check type - record - default - call through def reference is CAN's cycle" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Loop := { a : U8 ?? go({}) }
+        \\
+        \\go = |_| Loop.{}.a
+    ;
+    // The callee is a name-resolvable REFERENCE, but the call still
+    // evaluates `go`'s body at materialization, and that body's `Loop.{}`
+    // omits `a`: invoked-ness follows the reference to the def's body. The
+    // whole path is name-resolvable, so canonicalization's DefaultCycles
+    // pass owns it (its invoked-flavored def nodes; positive pin in
+    // src/canonicalize/test/optional_field_test.zig): CAN reports the
+    // cycle and drops the default, so the checker's residue never sees it.
+    // The follow-on missing-field type error on `go`'s now-required `a` is
+    // expected—only the CAN error set is asserted here. The residue keeps
+    // owning invoked-ness where the invocation is dispatch-mediated (see
+    // the dispatch/IIFE tests above).
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{"Default Value Cycle"});
+    for (test_env.checker.problems.problems.items) |problem| {
+        try std.testing.expect(problem != .recursive_default_value);
+    }
 }
 
 test "check type - record - default - nested omitted defaults terminate" {

@@ -1156,6 +1156,152 @@ test "immediately-invoked lambda default cycle is still rejected" {
     try std.testing.expectEqual(@as(usize, 1), found);
 }
 
+test "call through a def reference closes the cycle" {
+    const allocator = std.testing.allocator;
+    // The callee is a name-resolvable REFERENCE, but the call still
+    // evaluates `go`'s body at materialization, and that body's `Loop.{}`
+    // omits `a`: invoked-ness must follow the reference into the def's
+    // body (invoked-flavored node), or materialization recurses forever.
+    // Contrast with the fn-VALUED default pin above (`?? make`), whose
+    // body stays unwalked.
+    const source =
+        \\Loop := { a : U8 ?? go({}) }
+        \\
+        \\go = |_| Loop.{}.a
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+
+    // The default is dropped: `a` degrades to plain required.
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const anno = env.store.getTypeAnno(statement.s_nominal_decl.anno);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), fields.len);
+    const field = env.store.getAnnoRecordField(fields[0]);
+    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), field.default_value);
+}
+
+test "invoked-ness propagates through a reference chain" {
+    const allocator = std.testing.allocator;
+    // `go` is just a reference to `helper`; calling `go` still evaluates
+    // `helper`'s body at materialization, so the invoked flavor follows the
+    // chain and the omission in `helper`'s body closes the cycle.
+    const source =
+        \\Loop := { a : U8 ?? go({}) }
+        \\
+        \\go = helper
+        \\
+        \\helper = |_| Loop.{}.a
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "same def as value stays legal while calling it is a cycle" {
+    const allocator = std.testing.allocator;
+    // One def, both flavors: `Cfg`'s default references `make` as a VALUE
+    // (only the closure materializes—legal, default kept), while `Bad`'s
+    // default CALLS it, so `make`'s body walks, its `Bad.{}` omits `b`,
+    // and that cycle reports once and drops only `b`'s default.
+    const source =
+        \\Cfg := { mk : (U8 -> Bad) ?? make }
+        \\Bad := { b : U8 ?? make(1).b }
+        \\
+        \\make = |_| Bad.{}
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+
+    // Cfg's value-referencing default survives; Bad's calling default drops.
+    const cfg_stmt = env.store.getStatement(env.store.statementAt(env.type_decls, 0));
+    if (cfg_stmt != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const cfg_anno = env.store.getTypeAnno(cfg_stmt.s_nominal_decl.anno);
+    if (cfg_anno != .record) return error.ExpectedRecordAnnotation;
+    const cfg_fields = env.store.sliceAnnoRecordFields(cfg_anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), cfg_fields.len);
+    try std.testing.expect(env.store.getAnnoRecordField(cfg_fields[0]).default_value != null);
+
+    const bad_stmt = env.store.getStatement(env.store.statementAt(env.type_decls, 1));
+    if (bad_stmt != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const bad_anno = env.store.getTypeAnno(bad_stmt.s_nominal_decl.anno);
+    if (bad_anno != .record) return error.ExpectedRecordAnnotation;
+    const bad_fields = env.store.sliceAnnoRecordFields(bad_anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), bad_fields.len);
+    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), env.store.getAnnoRecordField(bad_fields[0]).default_value);
+}
+
 test "immediately-invoked closure default cycle is still rejected" {
     const allocator = std.testing.allocator;
     // Same rule through the closure form: the inner lambda captures `k`, so

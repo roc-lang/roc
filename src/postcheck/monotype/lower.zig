@@ -5703,6 +5703,7 @@ const Builder = struct {
         expr_id: checked.CheckedExprId,
         context_fn_key: names.TypeDigest,
         local_proc_context_digest: ?names.TypeDigest,
+        in_default_expr: bool,
     ) Allocator.Error!Ast.NestedFn {
         const address = NestedSiteAddress.from(view.key, owner, expr_id);
         const site = if (self.nested_site_cache.get(address)) |cached|
@@ -5710,7 +5711,18 @@ const Builder = struct {
         else blk: {
             for (view.nested_proc_sites.sites) |candidate| {
                 if (candidate.checked_expr == null or candidate.checked_expr.? != expr_id) continue;
-                if (!names.procedureTemplateRefEql(candidate.owner_template, owner)) continue;
+                // A default-root site (a lambda/closure inside a defaulted-field
+                // expression) is matched only while materializing a default; it
+                // has no owning template, so the requesting context's owner
+                // does not participate. A template-owned site is matched only
+                // by its own template.
+                switch (candidate.owner) {
+                    .template => |site_owner| {
+                        if (in_default_expr) continue;
+                        if (!names.procedureTemplateRefEql(site_owner, owner)) continue;
+                    },
+                    .default_root => if (!in_default_expr) continue,
+                }
                 try self.nested_site_cache.put(address, candidate.site);
                 break :blk candidate.site;
             }
@@ -6031,10 +6043,23 @@ const Builder = struct {
         const root_node = try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
             try nested_ctx.graph.unify(root_node, try nested_ctx.lowerExprTypeNode(expr_id));
-            try nested_ctx.instantiateTemplateDispatchRelations(
-                nested_ctx.view.templates.get(nested_ctx.owner_template.template),
-                scope,
-            );
+            const raw_site = @intFromEnum(nested.site);
+            if (raw_site >= nested_ctx.view.nested_proc_sites.sites.len) {
+                Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
+            }
+            switch (nested_ctx.view.nested_proc_sites.sites[raw_site].owner) {
+                .template => try nested_ctx.instantiateTemplateDispatchRelations(
+                    nested_ctx.view.templates.get(nested_ctx.owner_template.template),
+                    scope,
+                ),
+                // A default-root site has no owning template, and by the
+                // parameter-constraint judgment (design.md "Defaulted
+                // Fields") a default is checked at its concrete field type:
+                // there is no enclosing scheme whose relations could apply.
+                // The default's own dispatch relations flow through its
+                // collected default-root evidence spans.
+                .default_root => {},
+            }
         }
         const request_contains_generated_private = try nested_ctx.graph.containsGeneratedPrivate(request_fn_node);
         if (request_contains_generated_private) {
@@ -11118,6 +11143,14 @@ const DraftStringLiteral = struct {
     len: u32,
 };
 
+/// Draft-side source file table entry: module display name plus the
+/// coordinator's package-qualified module identity (see
+/// `base.SourceFileEntry`).
+const DraftSourceFile = struct {
+    name: DraftSpan(u8),
+    qualified_name: DraftSpan(u8),
+};
+
 const DraftPackedListLiteral = struct {
     literal: DraftStringLiteralId,
     len: u32,
@@ -11248,7 +11281,7 @@ const BodyDraftStore = struct {
     runtime_schema_requests: std.ArrayList(DraftRuntimeSchemaRequest),
     comptime_sites: std.ArrayList(DraftComptimeSite),
     branch_regions: std.ArrayList(base.Region),
-    source_files: std.ArrayList(DraftSpan(u8)),
+    source_files: std.ArrayList(DraftSourceFile),
     source_file_ids: std.AutoHashMap(u32, u32),
     local_names: std.ArrayList(DraftSpan(u8)),
     source_text_bytes: std.ArrayList(u8),
@@ -11857,17 +11890,24 @@ const BodyDraftStore = struct {
         return .{ .start = start, .len = @intCast(text.len) };
     }
 
-    fn addSourceFile(self: *BodyDraftStore, name: []const u8) Allocator.Error!u32 {
+    fn addSourceFile(self: *BodyDraftStore, name: []const u8, qualified_name: []const u8) Allocator.Error!u32 {
         const id: u32 = @intCast(self.source_files.items.len);
         const text = try self.addSourceText(name);
-        try self.source_files.append(self.allocator, text);
+        const qualified_text = try self.addSourceText(qualified_name);
+        try self.source_files.append(self.allocator, .{
+            .name = text,
+            .qualified_name = qualified_text,
+        });
         return id;
     }
 
-    fn sourceFileIdFor(self: *BodyDraftStore, module_idx: u32, name: []const u8) Allocator.Error!u32 {
-        const gop = try self.source_file_ids.getOrPut(module_idx);
+    fn sourceFileIdFor(self: *BodyDraftStore, view: ModuleView) Allocator.Error!u32 {
+        const gop = try self.source_file_ids.getOrPut(view.module_identity.module_idx);
         if (!gop.found_existing) {
-            gop.value_ptr.* = try self.addSourceFile(name);
+            gop.value_ptr.* = try self.addSourceFile(
+                view.module_env.module_name,
+                view.module_env.qualifiedModuleName(),
+            );
         }
         return gop.value_ptr.*;
     }
@@ -11946,9 +11986,12 @@ const BodyDraftStore = struct {
         emit_defs: ?[]const bool,
         emit_nested_defs: ?[]const bool,
     ) Allocator.Error!void {
-        for (self.source_files.items, 0..) |span, index| {
+        for (self.source_files.items, 0..) |file, index| {
             if (!ids.retained(.source_files, index)) continue;
-            _ = try program.addSourceFile(self.sourceText(span));
+            _ = try program.addSourceFile(.{
+                .name = self.sourceText(file.name),
+                .qualified_name = self.sourceText(file.qualified_name),
+            });
         }
 
         for (self.string_literals.items, 0..) |literal, index| {
@@ -13162,6 +13205,14 @@ const BodyContext = struct {
     typed_binders: TypedBinders,
     local_proc_contexts: std.AutoHashMap(DraftLocalProcAddress, DraftLocalProcContextId),
     restored_local_proc_scope: ?RestoredLocalProcScope = null,
+    /// True while this context lowers a defaulted-field expression (design.md
+    /// "Defaulted Fields"). Checking publishes nested-function sites for
+    /// default expressions under the `.default_root` owner (they belong to no
+    /// procedure template), so site resolution must know it is inside a
+    /// default's inlined materialization rather than the consuming template's
+    /// own body. Set and restored by `defaultedFieldValueAtCell`; inherited by
+    /// child contexts created within the materialization.
+    in_default_expr: bool = false,
     /// This specialization's type solver, shared by every instantiation
     /// context created while lowering the same specialization.
     graph: *InstGraph,
@@ -13764,7 +13815,7 @@ const BodyContext = struct {
         var ctx = try initBodyState(allocator, builder, view, owner_template, graph, draft);
         errdefer ctx.deinit();
         ctx.method_scope = method_scope;
-        ctx.source_file_id = try draft.sourceFileIdFor(view.module_identity.module_idx, view.module_env.module_name);
+        ctx.source_file_id = try draft.sourceFileIdFor(view);
         return ctx;
     }
 
@@ -15221,6 +15272,7 @@ const BodyContext = struct {
         child.runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         child.function_entry_demand_guards = self.function_entry_demand_guards;
         child.restored_local_proc_scope = self.restored_local_proc_scope;
+        child.in_default_expr = self.in_default_expr;
         child.specialization_dispatch_crashes = self.specialization_dispatch_crashes;
         child.owns_specialization_dispatch_crashes = false;
         child.borrowed_specialization_dispatch_divergence = self.specializationDispatchDivergence();
@@ -27787,7 +27839,7 @@ const BodyContext = struct {
         );
         const previous_view = self.view;
         const previous_source_file_id = self.source_file_id;
-        const local_source_file_id = try self.draft.sourceFileIdFor(local_view.module_identity.module_idx, local_view.module_env.module_name);
+        const local_source_file_id = try self.draft.sourceFileIdFor(local_view);
         self.view = local_view;
         self.source_file_id = local_source_file_id;
         defer {
@@ -27819,6 +27871,7 @@ const BodyContext = struct {
             local.expr,
             context_fn_key,
             try self.localProcContextsDigest(),
+            self.in_default_expr,
         );
         const requested_evidence = if (local.dispatch_scope) |scope|
             try enterEvidenceScope(self.builder, context.evidence, scope, local.expr, evidence)
@@ -32634,7 +32687,25 @@ const BodyContext = struct {
             // the foreign branch below, minus the module swap.
             const previous_instantiation = self.instantiation;
             self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+            const previous_in_default_expr = self.in_default_expr;
+            self.in_default_expr = true;
+            // The default is a closed expression: it binds nothing from the
+            // consuming body, so it gets fresh binder state even in its own
+            // module (the same rule boxy's `lowerModuleExprInto` applies).
+            // Without this, a second materialization of the same default in
+            // one body would capture the first's (or the consuming body's)
+            // lexical binder entries into its local-procedure declaration
+            // contexts and trip the one-context-per-binder invariant.
+            const previous_binders = self.binders;
+            const previous_typed_binders = self.typed_binders;
+            self.binders = try BinderMap.init(self.allocator, self.view.bodies.patternBinderCount());
+            self.typed_binders = TypedBinders.init(self.allocator);
             defer {
+                self.binders.deinit();
+                self.typed_binders.deinit();
+                self.binders = previous_binders;
+                self.typed_binders = previous_typed_binders;
+                self.in_default_expr = previous_in_default_expr;
                 self.instantiation.deinit();
                 self.instantiation = previous_instantiation;
             }
@@ -32649,7 +32720,7 @@ const BodyContext = struct {
         const previous_source_file_id = self.source_file_id;
         const previous_instantiation = self.instantiation;
         self.view = declaring_view;
-        self.source_file_id = try self.draft.sourceFileIdFor(declaring_view.module_identity.module_idx, declaring_view.module_env.module_name);
+        self.source_file_id = try self.draft.sourceFileIdFor(declaring_view);
         // Checked-type lookups validate instantiation-context ownership, so
         // the foreign expression gets its own context, exactly like a
         // foreign nominal backing instantiation.
@@ -32667,7 +32738,10 @@ const BodyContext = struct {
         const previous_typed_binders = self.typed_binders;
         self.binders = try BinderMap.init(self.allocator, declaring_view.bodies.patternBinderCount());
         self.typed_binders = TypedBinders.init(self.allocator);
+        const previous_in_default_expr = self.in_default_expr;
+        self.in_default_expr = true;
         defer {
+            self.in_default_expr = previous_in_default_expr;
             self.binders.deinit();
             self.typed_binders.deinit();
             self.binders = previous_binders;
@@ -33985,6 +34059,7 @@ const BodyContext = struct {
             expr_id,
             self.current_fn_key,
             try self.localProcContextsDigest(),
+            self.in_default_expr,
         );
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
@@ -34115,6 +34190,7 @@ const BodyContext = struct {
             expr_id,
             self.current_fn_key,
             try self.localProcContextsDigest(),
+            self.in_default_expr,
         );
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
@@ -34150,9 +34226,12 @@ const BodyContext = struct {
             Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
         }
         const site = self.view.nested_proc_sites.sites[raw_site];
-        if (!names.procedureTemplateRefEql(site.owner_template, self.owner_template) or
-            site.checked_expr == null or site.checked_expr.? != expr_id)
-        {
+        const owner_matches = switch (site.owner) {
+            .template => |site_owner| !self.in_default_expr and
+                names.procedureTemplateRefEql(site_owner, self.owner_template),
+            .default_root => self.in_default_expr,
+        };
+        if (!owner_matches or site.checked_expr == null or site.checked_expr.? != expr_id) {
             Common.invariant("nested function site did not match its checked expression owner");
         }
 
@@ -35813,7 +35892,14 @@ const BodyContext = struct {
                     Common.invariant("stored nested function referenced an unknown checked site");
                 }
                 const site = owner_view.nested_proc_sites.sites[raw_site];
-                if (!names.procedureTemplateRefEql(site.owner_template, owner)) {
+                const site_owner = switch (site.owner) {
+                    .template => |template| template,
+                    // Stored nested functions name their owning template;
+                    // default-root sites are only reachable through live
+                    // default materialization, never through a stored value.
+                    .default_root => Common.invariant("stored nested function referenced a default-root checked site"),
+                };
+                if (!names.procedureTemplateRefEql(site_owner, owner)) {
                     Common.invariant("stored nested function site belonged to a different checked template");
                 }
                 break :blk switch (site.lexical_scope) {
@@ -48356,7 +48442,13 @@ const BodyContext = struct {
         var site: ?checked.NestedProcSite = null;
         for (view.nested_proc_sites.sites) |candidate| {
             if (candidate.checked_expr == null or candidate.checked_expr.? != expr) continue;
-            if (!names.procedureTemplateRefEql(candidate.owner_template, self.owner_template)) continue;
+            switch (candidate.owner) {
+                .template => |site_owner| {
+                    if (self.in_default_expr) continue;
+                    if (!names.procedureTemplateRefEql(site_owner, self.owner_template)) continue;
+                },
+                .default_root => if (!self.in_default_expr) continue,
+            }
             if (site != null) Common.invariant("restored local procedure matched multiple checked nested sites");
             site = candidate;
         }
@@ -50516,7 +50608,13 @@ fn templateForConstFnDef(fn_def: check.ConstStore.FnDef) names.ProcTemplate {
 fn checkedNestedSite(view: ModuleView, nested: anytype) checked.NestedProcSite {
     for (view.nested_proc_sites.sites) |site| {
         if (site.site != nested.site) continue;
-        if (!names.procedureTemplateRefEql(site.owner_template, nested.owner)) continue;
+        const site_owner = switch (site.owner) {
+            .template => |template| template,
+            // A stored nested function names its owning template; default-root
+            // sites are only reachable through live default materialization.
+            .default_root => continue,
+        };
+        if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
         return site;
     }
     Common.invariant("stored nested function referenced a missing checked nested site");
@@ -51689,7 +51787,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         .{ .padding = ty },
     });
     const site = try draft.addComptimeSite(.if_, base.Region.zero(), null, &.{base.Region.zero()});
-    const source_file = try draft.addSourceFile("module.roc");
+    const source_file = try draft.addSourceFile("module.roc", "test.module.roc");
     try draft.setLocalName(local, "value");
     const record_pat = try draft.addPat(.{ .ty = ty, .data = .{ .record = destruct_span } });
     const str_pat = try draft.addPat(.{ .ty = ty, .data = .{ .str_pattern = .{

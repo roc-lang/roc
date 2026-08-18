@@ -32,16 +32,26 @@ pub const Termination = enum {
     host_oom,
 };
 
+/// A failed inline `expect` observed during native compile-time evaluation,
+/// with the failing statement's checked region and resolved location (whose
+/// file entry names the declaring module) as emitted by the dev backend's
+/// failure-region hook immediately before the expect-failed call.
+pub const ExpectFailedEvent = struct {
+    message: []u8,
+    region: ?base.Region,
+    loc: ?base.SourceLoc,
+};
+
 /// Root-local host effects captured during native compile-time evaluation.
 pub const HostEvent = union(enum) {
     dbg: []u8,
-    expect_failed: []u8,
+    expect_failed: ExpectFailedEvent,
     crashed: []u8,
 
     pub fn bytes(self: HostEvent) []const u8 {
         return switch (self) {
             .dbg => |msg| msg,
-            .expect_failed => |msg| msg,
+            .expect_failed => |event| event.message,
             .crashed => |msg| msg,
         };
     }
@@ -226,12 +236,30 @@ fn clearHostState(self: *CompileTimeHost) void {
 }
 
 fn appendEvent(self: *CompileTimeHost, comptime tag: std.meta.Tag(HostEvent), bytes: []const u8) void {
+    const owned = self.dupeEventBytes(bytes);
     const host_allocator = self.host_arena.allocator();
-    const owned = host_allocator.dupe(u8, bytes) catch {
+    self.events.append(host_allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch {
         self.jump(.host_oom);
         unreachable;
     };
-    self.events.append(host_allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch {
+}
+
+fn appendExpectFailedEvent(self: *CompileTimeHost, bytes: []const u8, region: ?base.Region, loc: ?base.SourceLoc) void {
+    const owned = self.dupeEventBytes(bytes);
+    const host_allocator = self.host_arena.allocator();
+    self.events.append(host_allocator, .{ .expect_failed = .{
+        .message = owned,
+        .region = region,
+        .loc = loc,
+    } }) catch {
+        self.jump(.host_oom);
+        unreachable;
+    };
+}
+
+fn dupeEventBytes(self: *CompileTimeHost, bytes: []const u8) []u8 {
+    const host_allocator = self.host_arena.allocator();
+    return host_allocator.dupe(u8, bytes) catch {
         self.jump(.host_oom);
         unreachable;
     };
@@ -294,7 +322,15 @@ fn rocDbg(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
 
 fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    self.appendEvent(.expect_failed, bytes[0..len]);
+    // The dev backend emits a failure-region hook call immediately before an
+    // expect-failed call, exactly as for crashes. Consume that pending
+    // location into this event: evaluation continues after a failed expect,
+    // so leaving it set would misattribute a later crash to the expect.
+    const region = self.failed_region;
+    const loc = self.failed_loc;
+    self.failed_region = null;
+    self.failed_loc = null;
+    self.appendExpectFailedEvent(bytes[0..len], region, loc);
 }
 
 fn rocCrashed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {

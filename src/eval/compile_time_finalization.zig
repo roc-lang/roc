@@ -841,6 +841,7 @@ fn lowerEvalAndFinishRoots(
             problem_store,
             module,
             compile_time_root,
+            &lowered.lir_result.store,
             interpreter.getExpectFailures(),
         )) had_problem = true;
 
@@ -1462,7 +1463,7 @@ fn lowerDevEvalAndFinishRoots(
 
         try recordComptimeSiteHits(problem_store, coverage, module, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
 
-        if (try reportDevHostEvents(allocator, options.stderr, problem_store, module, job.compile_time_root, job.host.events.items)) {
+        if (try reportDevHostEvents(allocator, options.stderr, problem_store, module, job.compile_time_root, &lowered.lir_result.store, job.host.events.items)) {
             had_problem = true;
         }
 
@@ -1655,21 +1656,17 @@ fn devCrashedRootPayload(
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
     const message_idx = try store.putExtraString(message);
-    const failed_module_name: ?[]const u8 = if (failed_loc) |loc|
-        (if (loc.hasLocation()) lir_store.sourceFileName(loc.file) else null)
-    else
-        null;
-    const site = comptimeCrashSiteFrom(
+    const site = comptimeFailureSiteFromLoc(
         module,
+        lir_store,
         devRootSourceRegion(module, root),
         failed_region,
         failed_loc,
-        failed_module_name,
     );
     _ = try store.appendProblem(allocator, .{ .comptime_crash = .{
         .message = message_idx,
         .region = site.region,
-        .origin = try comptimeCrashOrigin(store, site),
+        .origin = try comptimeFailureOrigin(store, site),
     } });
     had_problem.* = true;
     return try failedRootPayload(module, root, message);
@@ -1681,10 +1678,11 @@ fn reportDevHostEvents(
     maybe_problem_store: ?*check.problem.Store,
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
+    lir_store: *const lir.LirStore,
     events: []const CompileTimeHost.HostEvent,
 ) FinalizeError!bool {
     var had_problem = false;
-    const region = module.checked_bodies.expr(root.expr).source_region;
+    const root_region = module.checked_bodies.expr(root.expr).source_region;
     for (events) |event| {
         switch (event) {
             .dbg => |msg| if (stderr) |writer| {
@@ -1692,11 +1690,19 @@ fn reportDevHostEvents(
                 defer allocator.free(line);
                 writer.writeAll(line);
             },
-            .expect_failed => |msg| if (maybe_problem_store) |store| {
-                const message_idx = try store.putExtraString(msg);
+            .expect_failed => |failure| if (maybe_problem_store) |store| {
+                const message_idx = try store.putExtraString(failure.message);
+                const site = comptimeFailureSiteFromLoc(
+                    module,
+                    lir_store,
+                    root_region,
+                    failure.region,
+                    failure.loc,
+                );
                 _ = try store.appendProblem(allocator, .{ .comptime_expect_failed = .{
                     .message = message_idx,
-                    .region = region,
+                    .region = site.region,
+                    .origin = try comptimeFailureOrigin(store, site),
                 } });
                 had_problem = true;
             },
@@ -1782,15 +1788,30 @@ fn finishLiteralConversionRootDetailed(
     const message = module.const_store.strBytes(message_str);
     if (problem_store) |store| {
         const message_idx = try store.putExtraString(message);
-        const region = module.checked_bodies.expr(root.expr).source_region;
+        // A rejected literal conversion is not a failed statement: the root
+        // evaluated successfully to `Err(...)`, so there is no failed LIR
+        // source stamp to resolve. The conversion root lives in the module
+        // that declares the literal (conversion roots are created while
+        // checking that module's own CIR, and each module finalizes its own
+        // roots), so the site resolution always degrades to the local case
+        // here: the literal's region in this module's source, no origin.
+        const site = comptimeFailureSiteFrom(
+            module,
+            module.checked_bodies.expr(root.expr).source_region,
+            null,
+            null,
+            null,
+        );
         switch (root.literalConversionKind() orelse finalizationInvariant("non literal-conversion root reported a conversion problem")) {
             .numeral => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
                 .message = message_idx,
-                .region = region,
+                .region = site.region,
+                .origin = try comptimeFailureOrigin(store, site),
             } }),
             .quote => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{
                 .message = message_idx,
-                .region = region,
+                .region = site.region,
+                .origin = try comptimeFailureOrigin(store, site),
             } }),
         }
         return .{
@@ -1850,16 +1871,25 @@ fn reportCompileTimeExpectFailures(
     maybe_problem_store: ?*check.problem.Store,
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
+    lir_store: *const lir.LirStore,
     failures: []const ExpectFailure,
 ) FinalizeError!bool {
     if (failures.len == 0) return false;
     const problem_store = maybe_problem_store orelse return false;
-    const region = module.checked_bodies.expr(root.expr).source_region;
+    const root_region = module.checked_bodies.expr(root.expr).source_region;
     for (failures) |failure| {
         const message_idx = try problem_store.putExtraString(failure.message);
+        const site = comptimeFailureSiteFromLoc(
+            module,
+            lir_store,
+            root_region,
+            failure.region,
+            failure.loc,
+        );
         _ = try problem_store.appendProblem(allocator, .{ .comptime_expect_failed = .{
             .message = message_idx,
-            .region = region,
+            .region = site.region,
+            .origin = try comptimeFailureOrigin(problem_store, site),
         } });
     }
     return true;
@@ -2055,7 +2085,7 @@ fn reportCompileTimeCrash(
     _ = try problem_store.appendProblem(allocator, .{ .comptime_crash = .{
         .message = message_idx,
         .region = site.region,
-        .origin = try comptimeCrashOrigin(problem_store, site),
+        .origin = try comptimeFailureOrigin(problem_store, site),
     } });
     return try failedRootPayload(module, root, message);
 }
@@ -2077,7 +2107,7 @@ fn failedRootPayload(
     };
 }
 
-const ComptimeCrashSite = struct {
+const ComptimeFailureSite = struct {
     /// A region in the finalized module's source: the failed statement when
     /// it belongs to this module, otherwise the consuming compile-time root.
     region: base.Region,
@@ -2091,50 +2121,79 @@ const ComptimeCrashSite = struct {
     },
 };
 
-/// Resolve a crash's report site from the failed LIR statement's explicit
-/// source stamp. The lowerer records each statement's declaring module in the
-/// LIR source-file table, so a failed region is only rendered against this
-/// module's source when it actually belongs to this module; a foreign region
-/// (source inlined across modules, e.g. a `??` field default materialized
-/// per specialization) is reported by its declaring module's name and
-/// resolved position, with the consuming root as the local region.
-fn comptimeCrashSiteFrom(
+/// Resolve a compile-time failure's report site from the failed LIR
+/// statement's explicit source stamp. The lowerer records each statement's
+/// declaring module in the LIR source-file table, so a failed region is only
+/// rendered against this module's source when it actually belongs to this
+/// module; a foreign region (source inlined across modules, e.g. a `??`
+/// field default materialized per specialization) is reported by its
+/// declaring module's name and resolved position, with the consuming root as
+/// the local region.
+///
+/// Module identity is the package-qualified name (`pf.Utils`), never the bare
+/// display name: two packages may both contain a `Utils`, and matching by
+/// bare name would render the foreign module's byte offsets against this
+/// module's source. The rendered origin stays human-readable: the bare
+/// display name, or the qualified name when the bare name coincides with the
+/// finalized module's and would not identify the declaring module.
+fn comptimeFailureSiteFrom(
     module: *const checked.CheckedModuleArtifact,
     root_region: base.Region,
     failed_region: ?base.Region,
     failed_loc: ?base.SourceLoc,
-    failed_module_name: ?[]const u8,
-) ComptimeCrashSite {
+    failed_file: ?base.SourceFileEntry,
+) ComptimeFailureSite {
     const loc = failed_loc orelse return .{ .region = root_region, .foreign = null };
-    const module_name = failed_module_name orelse return .{ .region = root_region, .foreign = null };
-    if (std.mem.eql(u8, module_name, module.moduleEnvConst().module_name)) {
+    const file = failed_file orelse return .{ .region = root_region, .foreign = null };
+    const env = module.moduleEnvConst();
+    if (std.mem.eql(u8, file.qualified_name, env.qualifiedModuleName())) {
         return .{ .region = failed_region orelse root_region, .foreign = null };
     }
+    const bare_name_collides = std.mem.eql(u8, file.name, env.module_name);
     return .{ .region = root_region, .foreign = .{
-        .module_name = module_name,
+        .module_name = if (bare_name_collides) file.qualified_name else file.name,
         .line = loc.line,
         .column = loc.column,
     } };
+}
+
+/// `comptimeFailureSiteFrom` with the failed statement's file entry resolved
+/// through the LIR store's source-file table.
+fn comptimeFailureSiteFromLoc(
+    module: *const checked.CheckedModuleArtifact,
+    lir_store: *const lir.LirStore,
+    root_region: base.Region,
+    failed_region: ?base.Region,
+    failed_loc: ?base.SourceLoc,
+) ComptimeFailureSite {
+    const failed_file: ?base.SourceFileEntry = if (failed_loc) |loc|
+        (if (loc.hasLocation()) .{
+            .name = lir_store.sourceFileName(loc.file),
+            .qualified_name = lir_store.sourceFileQualifiedName(loc.file),
+        } else null)
+    else
+        null;
+    return comptimeFailureSiteFrom(module, root_region, failed_region, failed_loc, failed_file);
 }
 
 fn compileTimeCrashSite(
     module: *const checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     interpreter: *const Interpreter,
-) ComptimeCrashSite {
-    return comptimeCrashSiteFrom(
+) ComptimeFailureSite {
+    return comptimeFailureSiteFrom(
         module,
         module.checked_bodies.expr(root.expr).source_region,
         interpreter.getFailedCheckedRegion(),
         interpreter.getFailedSourceLoc(),
-        interpreter.getFailedSourceFileName(),
+        interpreter.getFailedSourceFile(),
     );
 }
 
-fn comptimeCrashOrigin(
+fn comptimeFailureOrigin(
     problem_store: *check.problem.Store,
-    site: ComptimeCrashSite,
-) Allocator.Error!?check.problem.types.ComptimeCrash.Origin {
+    site: ComptimeFailureSite,
+) Allocator.Error!?check.problem.types.ComptimeOrigin {
     const foreign = site.foreign orelse return null;
     return .{
         .module_name = try problem_store.putExtraString(foreign.module_name),

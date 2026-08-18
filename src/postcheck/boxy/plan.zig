@@ -1863,7 +1863,14 @@ const Builder = struct {
                 const view = self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes });
                 var site_expr: ?checked.CheckedExprId = null;
                 for (view.nested_proc_sites.sites) |site| {
-                    if (site.site == nested.site and checked_names.procedureTemplateRefEql(site.owner_template, nested.owner)) {
+                    if (site.site != nested.site) continue;
+                    const site_owner = switch (site.owner) {
+                        .template => |template| template,
+                        // Stored nested functions name their owning template;
+                        // default-root sites never restore through a stored value.
+                        .default_root => continue,
+                    };
+                    if (checked_names.procedureTemplateRefEql(site_owner, nested.owner)) {
                         site_expr = site.checked_expr orelse
                             boxyPlanInvariant("stored nested function had no checked expression site");
                         break;
@@ -10054,7 +10061,11 @@ const Builder = struct {
     ) checked.CheckedExprId {
         for (view.nested_proc_sites.sites) |site| {
             if (site.site != nested.site) continue;
-            if (!checked_names.procedureTemplateRefEql(site.owner_template, nested.owner)) continue;
+            const site_owner = switch (site.owner) {
+                .template => |template| template,
+                .default_root => continue,
+            };
+            if (!checked_names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
             const expr_id = site.checked_expr orelse
                 boxyPlanInvariant("stored nested function had no checked expression site");
             const expr = view.checked_bodies.expr(expr_id);
@@ -12453,7 +12464,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
     var nested_sites = [_]checked.NestedProcSite{
         .{
             .site = @enumFromInt(fixtureTableIndex(0)),
-            .owner_template = template_ref,
+            .owner = .{ .template = template_ref },
             .lexical_scope = .root,
             .evidence_source = .inherited,
             .evidence = .{},

@@ -91,6 +91,7 @@ pub const EffectfulExpect = types.EffectfulExpect;
 pub const EffectfulFunctionName = types.EffectfulFunctionName;
 
 // Comptime errors
+pub const ComptimeOrigin = types.ComptimeOrigin;
 pub const ComptimeCrash = types.ComptimeCrash;
 pub const ComptimeInvalidNumeral = types.ComptimeInvalidNumeral;
 pub const ComptimeInvalidQuote = types.ComptimeInvalidQuote;

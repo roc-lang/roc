@@ -29,8 +29,27 @@
 //! aggregate walk before it. The one deliberate exception is function
 //! VALUES: materializing a default that is (or references) a lambda only
 //! creates the closure—the body is not evaluated—so a lambda reached as a
-//! value does not walk its body (its captures still do), while a lambda in
-//! direct callee position of a walked call (immediately invoked) does.
+//! value does not walk its body (its captures still do), while an
+//! expression in direct callee position of a walked call is INVOKED: a
+//! callee lambda/closure's body walks, and a callee that is a
+//! name-resolvable reference walks the named def's body with lambda bodies
+//! included (calling through a def reference evaluates that body at
+//! materialization), invoked-ness following reference chains. The same def
+//! referenced as a value keeps the value rule. This is the same rule the
+//! checker's residue walk applies (`invoked_work` in src/check/Check.zig);
+//! only its name-resolvable half lives here.
+//!
+//! Because one def can legitimately be referenced BOTH ways—as a value in
+//! one default and invoked in another—each def gets TWO graph nodes, a
+//! value-flavored one and an invoked-flavored one. Merging the flavors
+//! into one node would union their edges, so a def invoked anywhere would
+//! leak its body edges into every value reference (false cycles), while
+//! value-only edges would miss invoked cycles. With distinct nodes, an
+//! edge always encodes exactly "materializing/evaluating the source (in
+//! its flavor) materializes/evaluates the target (in its flavor)", so a
+//! graph cycle exists iff materialization evaluation can recur. The
+//! invoked flavor's edge set is a strict superset of the value flavor's
+//! (an invoked expression also materializes as a value first).
 
 const std = @import("std");
 const base = @import("base");
@@ -78,19 +97,27 @@ const Pass = struct {
     /// the field's anno node so the shared omission enumeration
     /// (`default_omissions.zig`) maps directly to graph nodes.
     default_node_by_field: std.AutoHashMapUnmanaged(CIR.TypeAnno.RecordField.Idx, u32) = .{},
-    /// Top-level binder pattern -> graph node id of the def.
+    /// Top-level binder pattern -> graph node id of the def's VALUE-flavored
+    /// node; the def's INVOKED-flavored node is that id + def count (see
+    /// `invokedNode`).
     pattern_to_node: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
-    /// Per-def walk roots, indexed by node id - defaults.len.
+    /// Per-def walk roots, indexed by value node id - defaults.len (the
+    /// invoked node id - defaults.len - def count indexes the same slot).
     def_exprs: std.ArrayListUnmanaged(Expr.Idx) = .empty,
     /// CSR adjacency: edges of node i are edges[edge_starts[i]..edge_starts[i+1]].
     edges: std.ArrayListUnmanaged(u32) = .empty,
     edge_starts: std.ArrayListUnmanaged(u32) = .empty,
-    /// Expression worklist for one node's walk.
+    /// Expression worklist for one node's walk (value positions).
     walk: std.ArrayListUnmanaged(Expr.Idx) = .empty,
+    /// Expression worklist for one node's walk (invoked positions: a call's
+    /// direct callee and whatever a reference chain from one names).
+    invoked_walk: std.ArrayListUnmanaged(Expr.Idx) = .empty,
     /// Dedup of edge targets within one node's walk (also guards re-walking).
     seen_targets: std.AutoHashMapUnmanaged(u32, void) = .{},
     /// Dedup of visited expressions within one node's walk.
     seen_exprs: std.AutoHashMapUnmanaged(Expr.Idx, void) = .{},
+    /// Dedup of invoked-position expressions within one node's walk.
+    seen_invoked: std.AutoHashMapUnmanaged(Expr.Idx, void) = .{},
 
     fn deinit(self: *Pass) void {
         self.defaults.deinit(self.gpa);
@@ -100,12 +127,22 @@ const Pass = struct {
         self.edges.deinit(self.gpa);
         self.edge_starts.deinit(self.gpa);
         self.walk.deinit(self.gpa);
+        self.invoked_walk.deinit(self.gpa);
         self.seen_targets.deinit(self.gpa);
         self.seen_exprs.deinit(self.gpa);
+        self.seen_invoked.deinit(self.gpa);
     }
 
+    /// Defaults, then every def's value-flavored node, then every def's
+    /// invoked-flavored node.
     fn nodeCount(self: *const Pass) u32 {
-        return @intCast(self.defaults.items.len + self.def_exprs.items.len);
+        return @intCast(self.defaults.items.len + 2 * self.def_exprs.items.len);
+    }
+
+    /// The invoked-flavored node of the def whose value-flavored node is
+    /// `value_node`.
+    fn invokedNode(self: *const Pass, value_node: u32) u32 {
+        return value_node + @as(u32, @intCast(self.def_exprs.items.len));
     }
 
     /// Every defaulted field of every nominal declaration's backing record
@@ -150,15 +187,26 @@ const Pass = struct {
 
     fn buildEdges(self: *Pass) Allocator.Error!void {
         const count = self.nodeCount();
+        const default_count = self.defaults.items.len;
+        const def_count = self.def_exprs.items.len;
         try self.edge_starts.ensureTotalCapacity(self.gpa, count + 1);
         var node: u32 = 0;
         while (node < count) : (node += 1) {
             self.edge_starts.appendAssumeCapacity(@intCast(self.edges.items.len));
-            const root = if (node < self.defaults.items.len)
-                self.defaults.items[node].default_expr
-            else
-                self.def_exprs.items[node - self.defaults.items.len];
-            try self.walkNode(root);
+            if (node < default_count) {
+                // A default materializes as a value.
+                try self.walkNode(self.defaults.items[node].default_expr, .value);
+            } else if (node < default_count + def_count) {
+                // Value flavor: the def referenced as a value.
+                try self.walkNode(self.def_exprs.items[node - default_count], .value);
+            } else {
+                // Invoked flavor: the def called through a reference. Built
+                // eagerly for every def—which invoked nodes are actually
+                // targeted is only known once every walk has run, and an
+                // untargeted invoked node has no incoming edge, so it can
+                // never pull a default into a cycle.
+                try self.walkNode(self.def_exprs.items[node - default_count - def_count], .invoked);
+            }
         }
         self.edge_starts.appendAssumeCapacity(@intCast(self.edges.items.len));
     }
@@ -169,17 +217,72 @@ const Pass = struct {
         try self.edges.append(self.gpa, target);
     }
 
+    const RootFlavor = enum { value, invoked };
+
     /// Structurally walk one node's expression, recording reference and
-    /// omission edges. Explicit worklist (zero-recursion policy); every
+    /// omission edges. Explicit worklists (zero-recursion policy); every
     /// expression form descends into all child expressions—edges that need
     /// type information (dispatch, parameter calls, foreign lookups,
     /// foreign constructions) terminate here by principle.
-    fn walkNode(self: *Pass, root: Expr.Idx) Allocator.Error!void {
+    ///
+    /// Two worklists mirror the checker's residue walk (`invoked_work` in
+    /// src/check/Check.zig): `walk` carries value positions, `invoked_walk`
+    /// carries invoked positions (a call's direct callee, and whatever a
+    /// name-resolvable reference chain from one names). An invoked
+    /// expression also walks as a value—invoked-ness only ADDS the
+    /// function-body edge (lambda/closure) or the invoked-flavored
+    /// reference edge (same-module reference). Any other invoked form (a
+    /// call result, a parameter, a field access) is not name-resolvable to
+    /// a function body; those edges are the checker's residue by principle.
+    fn walkNode(self: *Pass, root: Expr.Idx, root_flavor: RootFlavor) Allocator.Error!void {
         self.seen_targets.clearRetainingCapacity();
         self.seen_exprs.clearRetainingCapacity();
+        self.seen_invoked.clearRetainingCapacity();
         self.walk.clearRetainingCapacity();
-        try self.walk.append(self.gpa, root);
-        while (self.walk.pop()) |expr_idx| {
+        self.invoked_walk.clearRetainingCapacity();
+        switch (root_flavor) {
+            .value => try self.walk.append(self.gpa, root),
+            .invoked => try self.invoked_walk.append(self.gpa, root),
+        }
+        while (true) {
+            while (self.invoked_walk.pop()) |invoked_idx| {
+                const seen_inv = try self.seen_invoked.getOrPut(self.gpa, invoked_idx);
+                if (seen_inv.found_existing) continue;
+                // Every invoked expression also materializes as a value
+                // (captures, operands, value reference edges).
+                try self.walk.append(self.gpa, invoked_idx);
+                switch (self.env.store.getExpr(invoked_idx)) {
+                    // An invoked lambda/closure's body IS evaluated at
+                    // materialization, so it walks (a closure's captures
+                    // walk via the value `.e_closure` arm below).
+                    .e_lambda => |lambda| try self.walk.append(self.gpa, lambda.body),
+                    .e_closure => |closure| {
+                        // `lambda_idx` always names an `e_lambda` (see
+                        // CIR.Expr.Closure).
+                        const lambda = self.env.store.getExpr(closure.lambda_idx);
+                        try self.walk.append(self.gpa, lambda.e_lambda.body);
+                    },
+                    // A name-resolvable invoked reference: calling through
+                    // the reference evaluates the named def's body, so the
+                    // edge targets the def's INVOKED-flavored node (which
+                    // propagates invoked-ness through further chains).
+                    .e_lookup_local => |lookup| {
+                        if (self.pattern_to_node.get(lookup.pattern_idx)) |node| {
+                            try self.addEdge(self.invokedNode(node));
+                        }
+                    },
+                    .e_lookup_associated_resolved => |lookup| {
+                        if (lookup.module_identity == self.env.selfModuleIdentity()) {
+                            const def = self.env.store.getDef(lookup.target_def_idx);
+                            if (self.pattern_to_node.get(def.pattern)) |node| {
+                                try self.addEdge(self.invokedNode(node));
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+            const expr_idx = self.walk.pop() orelse break;
             const seen = try self.seen_exprs.getOrPut(self.gpa, expr_idx);
             if (seen.found_existing) continue;
             switch (self.env.store.getExpr(expr_idx)) {
@@ -230,22 +333,11 @@ const Pass = struct {
                 // handled in `.e_call` below.
                 .e_lambda => {},
                 .e_call => |call| {
-                    // A lambda/closure in DIRECT callee position is
-                    // immediately invoked: its body IS evaluated at
-                    // materialization, so walk it (a closure callee's
-                    // captures walk via the `.e_closure` arm). Every other
-                    // callee walks as a value.
-                    switch (self.env.store.getExpr(call.func)) {
-                        .e_lambda => |lambda| try self.walk.append(self.gpa, lambda.body),
-                        .e_closure => |closure| {
-                            try self.walk.append(self.gpa, call.func);
-                            // `lambda_idx` always names an `e_lambda` (see
-                            // CIR.Expr.Closure).
-                            const lambda = self.env.store.getExpr(closure.lambda_idx);
-                            try self.walk.append(self.gpa, lambda.e_lambda.body);
-                        },
-                        else => try self.walk.append(self.gpa, call.func),
-                    }
+                    // The DIRECT callee is INVOKED by this call: the
+                    // invoked drain above walks a lambda/closure callee's
+                    // body and follows a name-resolvable callee reference
+                    // into the named def's invoked-flavored node.
+                    try self.invoked_walk.append(self.gpa, call.func);
                     try self.appendSpan(call.args);
                 },
                 .e_if => |if_expr| {
