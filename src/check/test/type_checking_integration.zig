@@ -1898,6 +1898,70 @@ test "check type - record - default - structurally pinning function default reje
     try checkTypesModule(source, .fail_first, "Default Constrains A Type Parameter");
 }
 
+test "check type - record - default - parameter-aliasing default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Pair(a, b) := { pair : (List(a), List(b)) ?? (|x| (x, x))([]) }
+        \\
+        \\p : Pair(U8, Str)
+        \\p = Pair.{}
+    ;
+    // The parameter-aliasing arm of the judgment (formerly an empirical
+    // panic: postcheck "instantiation unified two different primitive
+    // types"): duplicating one `[]` into both tuple slots unifies the
+    // copies of `a` and `b` WITH EACH OTHER without pinning either, so
+    // every per-parameter rule passes (the merged root is still flex and
+    // unconstrained)—only the pairwise shared-root judgment can convict,
+    // naming both parameters.
+    try checkTypesModule(source, .fail_with,
+        \\**Default Constrains A Type Parameter**
+        \\The default value for the `pair` field forces the type parameters `a` and `b` to be the same type.
+        \\```roc
+        \\Pair(a, b) := { pair : (List(a), List(b)) ?? (|x| (x, x))([]) }
+        \\```
+        \\                                             ^^^^^^^^^^^^^^^^
+        \\
+        \\A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - block-local parameter-aliasing default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Pair(a, b) := { pair : (List(a), List(b)) ?? {
+        \\    same = []
+        \\    (same, same)
+        \\} }
+        \\
+        \\p : Pair(U8, Str)
+        \\p = Pair.{}
+    ;
+    // Same aliasing through a block-local binding: `same` is one list var
+    // used in both tuple slots, merging the copies of `a` and `b`.
+    try checkTypesModule(source, .fail_first, "Default Constrains A Type Parameter");
+}
+
+test "check type - record - default - independent parametric tuple default accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Pair(a, b) := { pair : (List(a), List(b)) ?? ([], []) }
+        \\
+        \\p : Pair(U8, Str)
+        \\p = Pair.{}
+    ;
+    // Two INDEPENDENT parametric literals demand nothing: each `[]` is its
+    // own list var, so both parameter copies stay flex and unmerged—
+    // unconstrained parametricity stays legal per slot.
+    try checkTypesModule(source, .{ .pass = .{ .def = "p" } },
+        \\Pair(U8, Str)
+    );
+}
+
 test "check type - record - default - indirect reference that never omits is accepted" {
     const source =
         \\main! = |_| {}

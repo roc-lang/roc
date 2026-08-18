@@ -7220,6 +7220,15 @@ const PendingRecordUpdate = struct {
 const DefaultParamVar = struct {
     name: Ident.Idx,
     var_: Var,
+    /// The declaration's own rigid var (the instantiation map's key). Vars
+    /// are minted in source order, so sorting the snapshot by this key makes
+    /// every conviction below name parameters deterministically—hash-map
+    /// iteration order must never pick which parameter a report names.
+    rigid_var: Var,
+
+    fn rigidVarLessThan(_: void, lhs: DefaultParamVar, rhs: DefaultParamVar) bool {
+        return @intFromEnum(lhs.rigid_var) < @intFromEnum(rhs.rigid_var);
+    }
 };
 
 const PendingDefaultCheck = struct {
@@ -22865,10 +22874,19 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                 .rigid => |rigid| try self.scratch_default_param_vars.append(.{
                     .name = rigid.name,
                     .var_ = entry.value_ptr.*,
+                    .rigid_var = entry.key_ptr.*,
                 }),
                 .flex, .alias, .field_presence, .structure, .err => {},
             }
         }
+        // Source order for the judgment's reports (see `DefaultParamVar`):
+        // the hash map iterated in var-hash order, not declaration order.
+        std.mem.sort(
+            DefaultParamVar,
+            self.scratch_default_param_vars.sliceFromStart(params_top),
+            {},
+            DefaultParamVar.rigidVarLessThan,
+        );
         const default_does_fx = try self.checkExpr(pending.default_expr, env, .{
             .expected_type = .{ .var_ = expected_field_type, .context = .none },
         });
@@ -23068,10 +23086,13 @@ fn retireRejectedDefault(
 /// a default that would require a capability of a parameter (a literal's
 /// `from_numeral`/`from_quote`, a constraint arriving through a referenced
 /// def's instantiated scheme, a where-constrained helper call) has no place
-/// to put that requirement, and a default that STRUCTURALLY pins a
+/// to put that requirement, a default that STRUCTURALLY pins a
 /// parameter copy (unifies it with concrete structure, e.g. `?? []` on
 /// `value : a`) would silently decide the parameter for every
-/// specialization. Both are rejected at the declaration.
+/// specialization, and a default that ALIASES two parameters (unifies
+/// their copies together without pinning either, e.g. `?? (|x| (x, x))([])`
+/// on `(List(a), List(b))`) would silently demand `a = b` of every
+/// specialization. All three are rejected at the declaration.
 ///
 /// Detection consumes the check's explicit constraint data, judged before
 /// the numeric-defaulting rounds could commit a parameter copy:
@@ -23088,6 +23109,12 @@ fn retireRejectedDefault(
 ///    pre-watermark entries in place).
 /// 3. A parameter copy that resolved to structure (or an alias) with no
 ///    constraint evidence is the structural pin itself.
+/// 4. Two DISTINCT parameter copies whose vars resolved to the same root
+///    are the parameter aliasing: the instantiation minted one fresh flex
+///    copy per rigid root (`var_map` is keyed by resolved roots), so only
+///    the default's own check can have merged them—each copy passes rules
+///    1-3 in isolation (the merged root is still flex and unconstrained),
+///    but the merge demands the parameters be equal.
 ///
 /// Unconstrained parametricity stays legal: `?? []` on `List(x)` parks
 /// nothing and leaves the parameter's copy flex.
@@ -23140,6 +23167,19 @@ fn checkDefaultParameterConstraints(
             .flex, .rigid, .field_presence, .err => {},
         }
     }
+
+    // The parameter aliasing: two distinct copies sharing one root. Each
+    // parameter's copy is individually flex and unconstrained here (rules
+    // 1-3 above passed), yet the default merged them, demanding the
+    // parameters be the same type in every specialization. Pairwise scan;
+    // a declaration's parameter count is tiny.
+    for (params, 0..) |param, i| {
+        const param_root = self.types.resolveVar(param.var_).var_;
+        for (params[i + 1 ..]) |other| {
+            if (self.types.resolveVar(other.var_).var_ != param_root) continue;
+            return self.rejectDefaultParameterAliasing(pending, param.name, other.name);
+        }
+    }
 }
 
 /// Report one obligation rejection and poison the default (the standard
@@ -23158,6 +23198,29 @@ fn rejectDefaultParameterConstraint(
         .field_name = pending.field_name,
         .method_name = method_name,
         .type_param = type_param,
+        .aliased_param = null,
+    } });
+    // Explicit rejection evidence (see `rejected_default_exprs`): the
+    // residue walk skips this default and the retirement sweep in
+    // `checkDefaultRestrictions` replaces it before the artifact boundary.
+    try self.rejected_default_exprs.put(self.gpa, pending.default_expr, {});
+}
+
+/// The parameter-aliasing arm of the same rejection: the default merged the
+/// copies of `type_param` and `aliased_param`, so the report names both.
+/// Recovery is identical to `rejectDefaultParameterConstraint`.
+fn rejectDefaultParameterAliasing(
+    self: *Self,
+    pending: PendingDefaultCheck,
+    type_param: base.Ident.Idx,
+    aliased_param: base.Ident.Idx,
+) std.mem.Allocator.Error!void {
+    _ = try self.problems.appendProblem(self.gpa, .{ .default_constrains_type_parameter = .{
+        .region = self.cir.store.getExprRegion(pending.default_expr),
+        .field_name = pending.field_name,
+        .method_name = null,
+        .type_param = type_param,
+        .aliased_param = aliased_param,
     } });
     // Explicit rejection evidence (see `rejected_default_exprs`): the
     // residue walk skips this default and the retirement sweep in
