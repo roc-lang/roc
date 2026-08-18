@@ -150,10 +150,10 @@ Sometimes code is easier to understand in a functional style, and other times it
 in an imperative style. Roc has support for both styles, even though its APIs are designed around immutable
 values and a functional style.
 
-### 
+### Expect
 
 To see both styles, let's write a function called `digits_to_num` which takes a list of digits and returns 
-the number they represent. When we're done, we'll be able to run `roc test` and see these ``s pass:
+the number they represent. When we're done, we'll be able to run `roc test` and see these `expect`s pass:
 
 ```ruby
 expect digits_to_num([1, 2, 3]) == 123
