@@ -131,3 +131,51 @@ expect {
 
 	config.doubled == 12
 }
+
+# An UNANNOTATED (generalized) local function whose body dispatches a
+# numeric literal: the literal's descriptor inside the generic worker
+# must come from the caller's evidence descriptor argument, not an
+# erased static template (which would encode the literal at the Dec
+# default and box the wrong payload).
+GenFnConfig := { v : U8 ?? {
+	plus = |n| n + 5
+	plus(6)
+} }
+
+# The same wiring class with a fractional literal at F32.
+FracFnConfig := { level : F32 ?? {
+	bump = |n| n + 0.5
+	bump(1.5)
+} }
+
+# One generalized default-local function instantiated at two different
+# numeric types inside a single default expression.
+TwoUseConfig := { ok : Bool ?? {
+	add5 = |n| n + 5
+	small : U8
+	small = add5(6)
+	large : U16
+	large = add5(600)
+	small == 11 and large == 605
+} }
+
+expect {
+	config : GenFnConfig
+	config = GenFnConfig.{}
+
+	config.v == 11
+}
+
+expect {
+	config : FracFnConfig
+	config = FracFnConfig.{}
+
+	config.level == 2.0
+}
+
+expect {
+	config : TwoUseConfig
+	config = TwoUseConfig.{}
+
+	config.ok
+}

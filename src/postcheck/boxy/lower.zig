@@ -34464,11 +34464,40 @@ const ProcBodyBuilder = struct {
             if (desc_ref.localOrNull()) |desc_local| {
                 try self.recordDescriptorLocalTemplate(
                     desc_local,
-                    try self.descriptorMaterializationForExactRep(rep_id),
+                    try self.boundaryDescriptorLocalTemplate(rep_id, desc_local),
                 );
             }
         }
         return local;
+    }
+
+    /// The initializer template for a fresh call-boundary descriptor local.
+    /// When this worker already holds the representation's descriptor
+    /// requirement in a bound local—a hidden descriptor argument carrying the
+    /// checker's dispatch evidence for the value's type—that explicit
+    /// descriptor is the value's runtime type and seeds the boundary local.
+    /// Only a representation whose requirement is unbound in this worker
+    /// falls back to its exact static template. Without this precedence a
+    /// value produced *into* the boundary local (a numeric literal in a
+    /// generic worker) would be described by an erased static template even
+    /// though the caller passed the concrete descriptor.
+    fn boundaryDescriptorLocalTemplate(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        desc_local: LIR.LocalId,
+    ) Allocator.Error!DescriptorMaterialization {
+        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
+        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+        if (rep.descriptor) |requirement| {
+            if (self.descriptorBindingIsBoundForRep(identity_rep)) {
+                if (self.descriptorLocalForRequirementAndRepOrNull(requirement, identity_rep)) |bound| {
+                    if (bound != desc_local) {
+                        return .{ .desc = .{ .local = bound } };
+                    }
+                }
+            }
+        }
+        return try self.descriptorMaterializationForExactRep(rep_id);
     }
 
     fn addFrameLocalForRuntimeRep(
