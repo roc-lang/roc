@@ -4295,7 +4295,13 @@ const ProcedureBuilder = struct {
                 return switch (std.mem.order(u8, a.order, b.order)) {
                     .lt => true,
                     .gt => false,
-                    .eq => a.def_idx < b.def_idx,
+                    // Two modules can declare the same order key at the same def
+                    // index, so the owning module breaks the remaining tie the
+                    // way Monotype and the default roc command both break it.
+                    .eq => if (a.def_idx != b.def_idx)
+                        a.def_idx < b.def_idx
+                    else
+                        std.mem.order(u8, &a.module_key, &b.module_key) == .lt,
                 };
             }
         };

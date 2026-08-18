@@ -291,11 +291,11 @@ fn runEchoView(
     std_io: std.Io,
 ) RunEchoError!u8 {
     // HostedFn array order matters: the interpreter calls
-    // `roc_ops.hosted_fns.fns[dispatch_index]`. Dispatch indices are sorted
-    // alphabetically by fully-qualified `Module.fn_name` (with trailing `!`
-    // stripped). The echo platform has only `Echo.line`, so order is
-    // trivially correct—but additions must respect alphabetical order or
-    // the wrong function will be called silently. See README "Host functions".
+    // `roc_ops.hosted_fns.fns[dispatch_index]`, and a dispatch index is the
+    // function's position in the platform header's `hosted` section. The echo
+    // platform's section lists only `Echo.line!`, so order is trivially
+    // correct—but additions must follow that section's order or the wrong
+    // function will be called silently. See README "Host functions".
     var hosted_fn_array = [_]HostedFn{echo_platform.echoLineHostedFn()};
     var echo_env: echo_platform.EchoEnv = .{ .std_io = std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);

@@ -149,7 +149,9 @@ pub const Constants = struct {
     /// 62: For-loop dispatch plans retain explicit iterator and step type variables.
     /// 63: ModuleEnv retains canonicalization-selected top-level and value-binding definitions.
     /// 64: Compile-time root selection rejects values containing callables.
-    pub const CACHE_VERSION = 64;
+    /// 65: A hosted entry written without a module resolves to the platform
+    ///     module's own declaration.
+    pub const CACHE_VERSION = 65;
 };
 
 /// Configuration for the Roc cache system.

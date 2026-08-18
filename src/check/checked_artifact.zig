@@ -16315,10 +16315,10 @@ fn sealCheckedProcedureTemplateRefs(
     resolved_value_refs: *ResolvedValueRefTable,
     template_iterator_refs: *TemplateIteratorRefs,
 ) Allocator.Error!void {
-    // Generalized local functions with dispatch obligations: entering one
-    // while collecting pushes an evidence scope. Declarations map to their
-    // pattern scheme; expression-position functions stored in a containing
-    // value map to the pristine scheme instantiated at that construction edge.
+    // Local functions with dispatch obligations: entering one while collecting
+    // pushes an evidence scope. Declarations map to their pattern scheme;
+    // expression-position functions stored in a containing value map to the
+    // pristine scheme instantiated at that construction edge.
     var local_schemes = std.AutoHashMap(u32, Var).init(allocator);
     defer local_schemes.deinit();
     var nested_function_uses = std.AutoHashMap(u32, u32).init(allocator);
@@ -20165,11 +20165,16 @@ pub const HostedBindingTable = struct {
         pub const deserialize = Serde.deserialize;
     };
 
+    /// `own_key` and `own_procs` describe the platform module being published,
+    /// so an entry written without a module name binds the declaration this
+    /// module makes rather than one an import makes.
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         imports: []const PublishImportArtifact,
+        own_key: CheckedModuleArtifactKey,
+        own_procs: *const HostedProcTable,
     ) Allocator.Error!HostedBindingTable {
         if (module.moduleEnvConst().module_kind != .platform) return .{};
 
@@ -20196,17 +20201,25 @@ pub const HostedBindingTable = struct {
 
         for (module.moduleEnvConst().hosted_entries.items.items) |entry| {
             if (entry.target_status != .resolved) continue;
-            const import_idx = entry.target_import orelse continue;
             const target_def = entry.target_def orelse continue;
-            const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
-            const import_index = hosted_targets.get(.{
-                .module_idx = resolved_module_idx,
-                .def = target_def,
-            }) orelse continue;
-            const imported = imports[import_index];
+
+            const target_module_key = if (entry.target_import) |import_idx| blk: {
+                const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
+                const import_index = hosted_targets.get(.{
+                    .module_idx = resolved_module_idx,
+                    .def = target_def,
+                }) orelse continue;
+                break :blk imports[import_index].key;
+            } else blk: {
+                // No import means the entry named this module's own
+                // declaration, which is a hosted procedure only if the hosted
+                // transform rewrote it.
+                if (hostedProcForDef(own_procs, target_def) == null) continue;
+                break :blk own_key;
+            };
 
             try bindings.append(allocator, .{
-                .target_checked_module = imported.key,
+                .target_checked_module = target_module_key,
                 .target_def = target_def,
                 .external_symbol_name = try names.internExternalSymbolName(module.moduleEnvConst().getString(entry.symbol)),
             });
@@ -32656,7 +32669,7 @@ pub fn publishFromTypedModule(
     );
     errdefer hosted_procs.deinit(allocator);
 
-    var hosted_bindings = try HostedBindingTable.fromModule(allocator, module, &canonical_names, inputs.imports);
+    var hosted_bindings = try HostedBindingTable.fromModule(allocator, module, &canonical_names, inputs.imports, artifact_key, &hosted_procs);
     errdefer hosted_bindings.deinit(allocator);
 
     var platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(
