@@ -16290,23 +16290,24 @@ fn sealCheckedProcedureTemplateRefs(
     {
         const types_store = module.typeStoreConst();
 
-        // Which declarations own a scheme is checking's statement, not a rank
-        // reading: checking records a scheme edge naming the declaration's root
-        // for every reference that instantiates it, including a monomorphic
-        // reference to an in-flight unannotated definition, whose root stays at
-        // its enclosing rank because the edge shares the definition's vars.
-        // Uses of such a declaration carry its evidence, so it owns a scope
-        // exactly as a rank-generalized one does.
-        var referenced_scheme_roots = std.AutoHashMap(Var, void).init(allocator);
-        defer referenced_scheme_roots.deinit();
+        // Every reference that instantiated a scheme is a record checking
+        // wrote, naming the exact scheme root it instantiated. A local
+        // definition named that way owns an evidence scope: its uses carry the
+        // evidence vector that scope schedules. Reading the records is what
+        // decides this, because the pattern var's rank answers a different
+        // question—whether let-generalization ran—and a definition whose body
+        // defers a dispatch to its caller is instantiated at its uses while
+        // that rank settles at `.outermost`.
+        var instantiated_scheme_roots = std.AutoHashMap(Var, void).init(allocator);
+        defer instantiated_scheme_roots.deinit();
         for (module.moduleEnvConst().scheme_uses.items.items) |record| {
-            const slot: ModuleEnv.SchemeUseRecord.Slot = @enumFromInt(record.slot_kind);
-            switch (slot) {
-                .value_use, .shared_value_use => {},
-                .nested_function_use, .dispatch_target => continue,
+            switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
+                .value_use, .shared_value_use => try instantiated_scheme_roots.put(
+                    @enumFromInt(record.scheme_root),
+                    {},
+                ),
+                .nested_function_use, .dispatch_target => {},
             }
-            const root = types_store.resolveVar(@enumFromInt(record.scheme_root)).var_;
-            try referenced_scheme_roots.put(root, {});
         }
 
         var raw_node: u32 = 0;
@@ -16319,8 +16320,8 @@ fn sealCheckedProcedureTemplateRefs(
             const expr_data = module.expr(decl.expr).data;
             if (expr_data != .e_lambda and expr_data != .e_closure) continue;
             const pattern_var = ModuleEnv.varFrom(decl.pattern);
-            const resolved = types_store.resolveVar(pattern_var);
-            if (resolved.desc.rank != .generalized and !referenced_scheme_roots.contains(resolved.var_)) continue;
+            const generalized = types_store.resolveVar(pattern_var).desc.rank == .generalized;
+            if (!generalized and !instantiated_scheme_roots.contains(pattern_var)) continue;
             const checked_expr = checked_bodies.exprIdForSource(decl.expr) orelse continue;
             try local_schemes.put(@intFromEnum(checked_expr), pattern_var);
         }

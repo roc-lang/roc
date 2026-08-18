@@ -870,4 +870,20 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "Ok(3)" },
     },
+    .{
+        // A local function returning a two-member lambda set is instantiated at
+        // its uses, so its declaration owns an evidence scope that carries the
+        // members' dispatch requirements. Checking records that instantiation
+        // whatever rank the definition's pattern var settles at.
+        .name = "regression: local function returning a two-member lambda set dispatches both members",
+        .source =
+        \\{
+        \\    pick = |flag| if flag { |x| x + 1.I64 } else { |x| x * 2.I64 }
+        \\    f = pick(True)
+        \\    g = pick(False)
+        \\    (f(10.I64), g(10.I64))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(11, 20)" },
+    },
 };
