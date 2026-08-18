@@ -85,9 +85,6 @@ pub const WasmOptimizeMode = enum {
     speed,
 };
 
-/// Default WASM initial memory: 64MB
-pub const DEFAULT_WASM_INITIAL_MEMORY: usize = 64 * 1024 * 1024;
-
 /// Default WASM stack size: 8MB
 pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -149,7 +146,8 @@ pub const LinkConfig = struct {
 
     /// Initial memory size for WASM targets (bytes). This is the amount of linear memory
     /// available to the WASM module at runtime. Must be a multiple of 64KB (WASM page size).
-    wasm_initial_memory: usize = DEFAULT_WASM_INITIAL_MEMORY,
+    /// Null lets wasm-ld size memory itself from the data segments plus the stack.
+    wasm_initial_memory: ?usize = null,
 
     /// Maximum memory size for WASM targets (bytes), when the runtime contract needs one.
     wasm_maximum_memory: ?usize = null,
@@ -693,10 +691,13 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append("--import-memory");
             }
 
-            // Set initial memory size (configurable, default 64MB)
-            // Must be a multiple of 64KB (WASM page size)
-            const initial_memory_str = std.fmt.allocPrint(ctx.arena, "--initial-memory={d}", .{config.wasm_initial_memory}) catch return LinkError.OutOfMemory;
-            try args.append(initial_memory_str);
+            // Set initial memory size when one was configured. Must be a
+            // multiple of 64KB (WASM page size). Without the flag wasm-ld
+            // sizes memory itself from the data segments plus the stack.
+            if (config.wasm_initial_memory) |initial_memory| {
+                const initial_memory_str = std.fmt.allocPrint(ctx.arena, "--initial-memory={d}", .{initial_memory}) catch return LinkError.OutOfMemory;
+                try args.append(initial_memory_str);
+            }
 
             if (config.wasm_maximum_memory) |maximum_memory| {
                 const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
@@ -1177,6 +1178,15 @@ fn findArg(args: []const []const u8, needle: []const u8) ?usize {
     return null;
 }
 
+/// Whether `args` contains an argument starting with `prefix`, for the linker
+/// options that are spelled as a single `--flag=value` argument.
+fn findArgWithPrefix(args: []const []const u8, prefix: []const u8) ?usize {
+    for (args, 0..) |arg, i| {
+        if (std.mem.startsWith(u8, arg, prefix)) return i;
+    }
+    return null;
+}
+
 /// Whether `args` contains `flag` immediately followed by `value`, for the
 /// linker options that are spelled as two separate arguments.
 fn hasArgPair(args: []const []const u8, flag: []const u8, value: []const u8) bool {
@@ -1228,6 +1238,41 @@ test "size wasm strips final target feature metadata" {
 
     const v1 = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .speed, .wasm_cpu_level = .v1 });
     try std.testing.expectEqual(@as(u8, 0), v1.simd128);
+}
+
+test "wasm initial memory reaches wasm-ld only when configured" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    // Unconfigured: no --initial-memory at all, so wasm-ld sizes memory
+    // itself from the data segments plus the stack.
+    const auto_config = LinkConfig{
+        .target_format = .wasm,
+        .target_os = .freestanding,
+        .target_arch = .wasm32,
+        .output_path = "test_output.wasm",
+        .object_files = &.{"app.o"},
+    };
+    const auto_args = try buildLinkArgs(&ctx, auto_config);
+    try std.testing.expectEqual(@as(?usize, null), findArgWithPrefix(auto_args.items, "--initial-memory="));
+
+    // Configured: the exact value reaches wasm-ld.
+    const sized_config = LinkConfig{
+        .target_format = .wasm,
+        .target_os = .freestanding,
+        .target_arch = .wasm32,
+        .output_path = "test_output.wasm",
+        .object_files = &.{"app.o"},
+        .wasm_initial_memory = 1114112,
+    };
+    const sized_args = try buildLinkArgs(&ctx, sized_config);
+    const idx = findArgWithPrefix(sized_args.items, "--initial-memory=") orelse return error.MissingInitialMemory;
+    try std.testing.expectEqualStrings("--initial-memory=1114112", sized_args.items[idx]);
 }
 
 test "force undefined symbols use target linker spelling" {
