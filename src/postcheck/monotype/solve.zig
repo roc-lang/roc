@@ -12,6 +12,7 @@ const std = @import("std");
 const check = @import("check");
 const base = @import("base");
 const collections = @import("collections");
+const closure = @import("../representation_closure.zig");
 
 const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
@@ -409,11 +410,13 @@ pub const InstGraph = struct {
     diagnostics: ?*GraphDiagnostics,
     /// See `RowStore`.
     row_store: RowStore,
-    /// Per generated-iterator-class fold of the representation decision,
-    /// seeded at creation and updated by the same join events the freeze
-    /// fixpoint reads, so the fixpoint can be compared against — and later
-    /// replaced by — an edge-driven fold (reunify.md section 10.3).
-    iterator_fold: collections.DenseMap(NodeId, IteratorFoldState),
+    /// The representation closure engine's per-graph instance: one slot per
+    /// generated iterator class plus leaf slots for the classes its shapes
+    /// compose over, fed at creation and by the graph's own unions, so the
+    /// engine's upward walk folds the chain decision the freeze fixpoint is
+    /// compared against (reunify.md section 10.3).
+    iterator_engine: closure.Engine,
+    engine_slots: collections.DenseMap(NodeId, closure.RepresentationSlotId),
     arena_impl: std.heap.ArenaAllocator,
     nodes: std.ArrayList(InstNode),
     versions: std.ArrayList(u32),
@@ -495,7 +498,8 @@ pub const InstGraph = struct {
         const graph = try allocator.create(InstGraph);
         graph.* = .{
             .allocator = allocator,
-            .iterator_fold = collections.DenseMap(NodeId, IteratorFoldState).init(allocator),
+            .iterator_engine = closure.Engine.init(allocator),
+            .engine_slots = collections.DenseMap(NodeId, closure.RepresentationSlotId).init(allocator),
             .row_store = .{
                 .ids = collections.DenseMap(NodeId, u32).init(allocator),
                 .parents = .empty,
@@ -541,30 +545,66 @@ pub const InstGraph = struct {
     /// own flattening is the assertion that the two never disagree, measured
     /// first as a census over the whole corpus and every battery with zero
     /// mismatches, including the sequence order.
-    const IteratorFoldState = struct {
-        depth: u8,
-        forced: bool,
-    };
-
-    /// Record a generated iterator's creation-time representation in the fold.
-    pub fn seedIteratorFold(self: *InstGraph, node: NodeId, depth: u8, forced: bool) Allocator.Error!void {
-        try self.iterator_fold.put(self.find(node), .{ .depth = depth, .forced = forced });
+    /// One engine slot per graph class the engine tracks: the class's own
+    /// iterator slot when it is a generated iterator, or a leaf slot created
+    /// the first time an iterator shape composes over the class.
+    fn engineSlotFor(self: *InstGraph, node: NodeId) Allocator.Error!closure.RepresentationSlotId {
+        const root = self.find(node);
+        if (self.engine_slots.get(root)) |existing| return existing;
+        const slot = try self.iterator_engine.createSlot(@enumFromInt(0), @enumFromInt(0), .{ .leaf = 0 });
+        try self.engine_slots.put(root, slot);
+        return slot;
     }
 
-    /// Combine two iterator classes' fold states onto the class that
-    /// survived their union. The surviving node keeps its own structural
-    /// depth — a join collapses instances, it does not deepen them — while
-    /// forcing is sticky from either side or from the join itself touching a
-    /// recursive value slot.
-    fn iteratorFoldAfterUnion(self: *InstGraph, left: NodeId, right: NodeId, force: bool) Allocator.Error!void {
-        const survivor = self.find(left);
-        const left_state = self.iterator_fold.get(survivor);
-        const right_state = if (self.find(right) != survivor) self.iterator_fold.get(self.find(right)) else null;
-        var state = left_state orelse right_state orelse IteratorFoldState{ .depth = 0, .forced = false };
-        const forced_either = (if (left_state) |l| l.forced else false) or
-            (if (right_state) |r| r.forced else false);
-        state.forced = forced_either or force;
-        try self.iterator_fold.put(survivor, state);
+    /// Record a generated iterator's creation-time representation with the
+    /// engine: leaf-or-iterator slots for the item, backing, and components
+    /// it composes over, then the iterator slot itself, whose descriptor
+    /// carries the mint the constructor wrote into the node's content.
+    pub fn seedIteratorFold(self: *InstGraph, node: NodeId) Allocator.Error!void {
+        const root = self.find(node);
+        const named = switch (self.content(root)) {
+            .named => |named| named,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("iterator representation seeding reached a non-named node"),
+        };
+        if (named.args.len == 0) Common.invariant("iterator representation seeding reached a node without an item argument");
+        const item_slot = try self.engineSlotFor(named.args[0]);
+        const backing_slot = if (named.backing) |backing|
+            try self.engineSlotFor(backing.node)
+        else
+            try self.iterator_engine.createSlot(@enumFromInt(0), @enumFromInt(0), .{ .leaf = 0 });
+        var component_slots = std.ArrayList(closure.RepresentationSlotId).empty;
+        defer component_slots.deinit(self.allocator);
+        for (named.args[1..]) |component| {
+            try component_slots.append(self.allocator, try self.engineSlotFor(component));
+        }
+        const span = try self.iterator_engine.recordComponents(component_slots.items);
+        const slot = try self.iterator_engine.createSlot(@enumFromInt(0), @enumFromInt(0), .{ .iterator = .{
+            .descriptor = .{
+                .kind = named.kind,
+                .def = named.def,
+                .builtin_owner = named.builtin_owner,
+                .minting = null,
+            },
+            .item = item_slot,
+            .backing = backing_slot,
+            .components = span,
+        } });
+        if (self.engine_slots.get(root)) |existing| {
+            self.iterator_engine.joinClasses(slot, existing);
+        }
+        try self.engine_slots.put(root, slot);
+    }
+
+    /// Mirror a graph union into the engine: when either class carries an
+    /// engine slot, the surviving class carries their joined state.
+    fn engineMirrorUnion(self: *InstGraph, winner: NodeId, loser: NodeId) Allocator.Error!void {
+        const winner_slot = self.engine_slots.get(winner);
+        const loser_slot = self.engine_slots.get(loser);
+        if (winner_slot) |w| {
+            if (loser_slot) |l| self.iterator_engine.joinClasses(w, l);
+        } else if (loser_slot) |l| {
+            try self.engine_slots.put(winner, l);
+        }
     }
 
     const RowStore = struct {
@@ -696,7 +736,8 @@ pub const InstGraph = struct {
 
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
-        self.iterator_fold.deinit();
+        self.iterator_engine.deinit();
+        self.engine_slots.deinit();
         self.row_store.ids.deinit();
         self.row_store.parents.deinit(allocator);
         for (self.row_store.lists.items) |*list| list.deinit(allocator);
@@ -949,10 +990,11 @@ pub const InstGraph = struct {
             // beyond a chain deepened past the cap without its own join event
             // prints here so wider corpora keep auditing the split.
             if (comptime std.debug.runtime_safety) {
-                if (self.iterator_fold.get(node)) |fold| {
+                if (self.engine_slots.get(node)) |slot| {
+                    const chain = self.iterator_engine.chainState(slot);
                     const walk_forces = item.force_dynamic or item.depth > generated_iterator_mint_depth_limit;
-                    if (fold.forced != walk_forces or (!walk_forces and fold.depth != item.depth)) {
-                        std.debug.print("iterator fold diverged: fold forced={} depth={d}, walk forced={} depth={d}, explicit={}\n", .{ fold.forced, fold.depth, walk_forces, item.depth, item.force_dynamic });
+                    if (chain.forced != walk_forces or (!walk_forces and chain.depth != item.depth)) {
+                        std.debug.print("iterator engine diverged: engine forced={} depth={d}, walk forced={} depth={d}, explicit={}\n", .{ chain.forced, chain.depth, walk_forces, item.depth, item.force_dynamic });
                     }
                 }
             }
@@ -2779,6 +2821,7 @@ pub const InstGraph = struct {
         self.class_member_tail.items[@intFromEnum(winner)] = self.class_member_tail.items[@intFromEnum(loser)];
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
+        try self.engineMirrorUnion(winner, loser);
         self.countDiagnostic("class_unions");
         self.invalidateActiveSnapshots(winner);
     }
@@ -3216,7 +3259,13 @@ pub const InstGraph = struct {
                                     joined_recursive_slot = true;
                                 }
                             }
-                            defer self.iteratorFoldAfterUnion(left, right, joined_recursive_slot) catch {};
+                            if (joined_recursive_slot) {
+                                if (self.engine_slots.get(self.find(left))) |slot| {
+                                    self.iterator_engine.forceClass(slot);
+                                } else if (self.engine_slots.get(self.find(right))) |slot| {
+                                    self.iterator_engine.forceClass(slot);
+                                }
+                            }
 
                             // A graph-owned producer still has the public-source
                             // provenance required to finalize a newly joined

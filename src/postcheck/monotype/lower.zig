@@ -20876,7 +20876,7 @@ const BodyContext = struct {
             .kind = kind,
             .mint_depth = mint_depth,
         }, Context.fill);
-        try self.graph.seedIteratorFold(minted, mint_depth, false);
+        try self.graph.seedIteratorFold(minted);
         return minted;
     }
 
@@ -20982,7 +20982,7 @@ const BodyContext = struct {
             .item_node = item_node,
             .public_source = public_source,
         }, Context.fill);
-        try self.graph.seedIteratorFold(forced, 0, true);
+        try self.graph.seedIteratorFold(forced);
         return forced;
     }
 

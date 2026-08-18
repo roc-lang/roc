@@ -604,6 +604,39 @@ pub const Engine = struct {
         };
     }
 
+    /// Join two classes' representation state without a rule or a logical
+    /// check: for a caller that already decided the two denote one class —
+    /// the instantiation graph mirroring its own unions — only the chain
+    /// fold applies. The left side survives.
+    pub fn joinClasses(self: *Engine, l: RepresentationSlotId, r: RepresentationSlotId) void {
+        const left = self.find(l);
+        const right = self.find(r);
+        if (left == right) return;
+        self.link(.left, left, right);
+    }
+
+    /// Force a class's representation dynamic from outside the composition
+    /// walk — the caller's own event, such as a join touching a recursive
+    /// value slot — and re-deepen everything composing over it.
+    pub fn forceClass(self: *Engine, id: RepresentationSlotId) void {
+        const root = self.find(id);
+        if (self.slotConst(root).forced) return;
+        self.slotMut(root).forced = true;
+        self.redeepenComposers(root);
+    }
+
+    /// The chain state the engine folded for a slot's class.
+    pub const ChainState = struct {
+        depth: u8,
+        forced: bool,
+    };
+
+    /// See `joinClasses` and the composer walk.
+    pub fn chainState(self: *Engine, id: RepresentationSlotId) ChainState {
+        const slot = self.slotConst(self.find(id));
+        return .{ .depth = slot.depth, .forced = slot.forced };
+    }
+
     fn link(
         self: *Engine,
         representative: policy.Representative,
