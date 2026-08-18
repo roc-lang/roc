@@ -20867,7 +20867,7 @@ const BodyContext = struct {
                 } };
             }
         };
-        return try self.graph.addRecursiveNode(Context{
+        const minted = try self.graph.addRecursiveNode(Context{
             .body = self,
             .public_source = public_source,
             .item_node = public_named.args[0],
@@ -20876,6 +20876,8 @@ const BodyContext = struct {
             .kind = kind,
             .mint_depth = mint_depth,
         }, Context.fill);
+        try self.graph.seedIteratorFold(minted, mint_depth, false);
+        return minted;
     }
 
     const max_minted_iterator_chain_depth: u8 = 16;
@@ -20975,11 +20977,13 @@ const BodyContext = struct {
                 } };
             }
         };
-        return try self.graph.addRecursiveNode(Context{
+        const forced = try self.graph.addRecursiveNode(Context{
             .body = self,
             .item_node = item_node,
             .public_source = public_source,
         }, Context.fill);
+        try self.graph.seedIteratorFold(forced, 0, true);
+        return forced;
     }
 
     fn generatedIteratorBackingNode(

@@ -409,6 +409,11 @@ pub const InstGraph = struct {
     diagnostics: ?*GraphDiagnostics,
     /// See `RowStore`.
     row_store: RowStore,
+    /// Per generated-iterator-class fold of the representation decision,
+    /// seeded at creation and updated by the same join events the freeze
+    /// fixpoint reads, so the fixpoint can be compared against — and later
+    /// replaced by — an edge-driven fold (reunify.md section 10.3).
+    iterator_fold: collections.DenseMap(NodeId, IteratorFoldState),
     arena_impl: std.heap.ArenaAllocator,
     nodes: std.ArrayList(InstNode),
     versions: std.ArrayList(u32),
@@ -490,6 +495,7 @@ pub const InstGraph = struct {
         const graph = try allocator.create(InstGraph);
         graph.* = .{
             .allocator = allocator,
+            .iterator_fold = collections.DenseMap(NodeId, IteratorFoldState).init(allocator),
             .row_store = .{
                 .ids = collections.DenseMap(NodeId, u32).init(allocator),
                 .parents = .empty,
@@ -535,6 +541,32 @@ pub const InstGraph = struct {
     /// own flattening is the assertion that the two never disagree, measured
     /// first as a census over the whole corpus and every battery with zero
     /// mismatches, including the sequence order.
+    const IteratorFoldState = struct {
+        depth: u8,
+        forced: bool,
+    };
+
+    /// Record a generated iterator's creation-time representation in the fold.
+    pub fn seedIteratorFold(self: *InstGraph, node: NodeId, depth: u8, forced: bool) Allocator.Error!void {
+        try self.iterator_fold.put(self.find(node), .{ .depth = depth, .forced = forced });
+    }
+
+    /// Combine two iterator classes' fold states onto the class that
+    /// survived their union. The surviving node keeps its own structural
+    /// depth — a join collapses instances, it does not deepen them — while
+    /// forcing is sticky from either side or from the join itself touching a
+    /// recursive value slot.
+    fn iteratorFoldAfterUnion(self: *InstGraph, left: NodeId, right: NodeId, force: bool) Allocator.Error!void {
+        const survivor = self.find(left);
+        const left_state = self.iterator_fold.get(survivor);
+        const right_state = if (self.find(right) != survivor) self.iterator_fold.get(self.find(right)) else null;
+        var state = left_state orelse right_state orelse IteratorFoldState{ .depth = 0, .forced = false };
+        const forced_either = (if (left_state) |l| l.forced else false) or
+            (if (right_state) |r| r.forced else false);
+        state.forced = forced_either or force;
+        try self.iterator_fold.put(survivor, state);
+    }
+
     const RowStore = struct {
         ids: collections.DenseMap(NodeId, u32),
         parents: std.ArrayList(u32),
@@ -664,6 +696,7 @@ pub const InstGraph = struct {
 
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
+        self.iterator_fold.deinit();
         self.row_store.ids.deinit();
         self.row_store.parents.deinit(allocator);
         for (self.row_store.lists.items) |*list| list.deinit(allocator);
@@ -909,13 +942,17 @@ pub const InstGraph = struct {
             named.def.generated = null;
             if (std.c.getenv("ROC_MINT_SHADOW") != null) {
                 const freeze_forces = item.force_dynamic or item.depth > generated_iterator_mint_depth_limit;
-                const creation_minted = named.def.iterator_representation == .minted;
-                if (freeze_forces and creation_minted) {
-                    std.debug.print("MINTSHADOW override-to-forced creation_depth={d} fixpoint_depth={d} explicit={}\n", .{ named.def.iterator_depth, item.depth, item.force_dynamic });
-                } else if (!freeze_forces and creation_minted and named.def.iterator_depth != item.depth) {
-                    std.debug.print("MINTSHADOW depth-differs creation={d} fixpoint={d}\n", .{ named.def.iterator_depth, item.depth });
+                const fold = self.iterator_fold.get(node);
+                const fold_forces = if (fold) |state| state.forced else false;
+                const fold_depth = if (fold) |state| state.depth else named.def.iterator_depth;
+                if (fold == null) {
+                    std.debug.print("MINTSHADOW unseeded freeze_forces={}\n", .{freeze_forces});
+                } else if (fold_forces != freeze_forces) {
+                    std.debug.print("MINTSHADOW force-differs fold={} freeze={} fixpoint_depth={d}\n", .{ fold_forces, freeze_forces, item.depth });
+                } else if (!freeze_forces and fold_depth != item.depth) {
+                    std.debug.print("MINTSHADOW depth-differs fold={d} fixpoint={d}\n", .{ fold_depth, item.depth });
                 } else {
-                    std.debug.print("MINTSHADOW agree minted={} depth={d}\n", .{ creation_minted, item.depth });
+                    std.debug.print("MINTSHADOW agree forced={} depth={d}\n", .{ freeze_forces, item.depth });
                 }
             }
             if (item.force_dynamic or item.depth > generated_iterator_mint_depth_limit) {
@@ -3170,12 +3207,15 @@ pub const InstGraph = struct {
                                 Common.invariant("minted iterator join found backing on only one side");
                             }
 
+                            var joined_recursive_slot = false;
                             for (self.recursive_argument_slots.items) |slot| {
                                 const slot_root = self.find(slot);
                                 if (slot_root == left or slot_root == right) {
                                     try self.forced_dynamic_iterator_roots.append(self.allocator, left);
+                                    joined_recursive_slot = true;
                                 }
                             }
+                            defer self.iteratorFoldAfterUnion(left, right, joined_recursive_slot) catch {};
 
                             // A graph-owned producer still has the public-source
                             // provenance required to finalize a newly joined
