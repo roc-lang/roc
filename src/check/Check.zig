@@ -23291,12 +23291,16 @@ fn defaultMaterializationIsRecursive(
     var visited_instantiations: std.AutoHashMapUnmanaged(u32, void) = .empty;
     defer visited_instantiations.deinit(self.gpa);
     // Expressions reached in INVOKED position (a call's direct callee, a
-    // dispatch-resolved target, a resolved method binding): their function
-    // body IS evaluated by the materialization that reaches the call, so a
-    // lambda/closure body walks here—unlike one reached as a value, which
-    // only creates the function value. Invoked-ness follows name-resolvable
-    // reference chains (calling through a def reference evaluates that
-    // def's body), with its own visited set so alias chains terminate.
+    // dispatch-resolved target, a resolved method binding, and—per the
+    // conservative argument rule, see `appendArgsInvoked`—every argument of
+    // a walked call): their function body IS evaluated by the
+    // materialization that reaches the call, so a lambda/closure body walks
+    // here—unlike one reached as a value, which only creates the function
+    // value. Invoked-ness follows name-resolvable reference chains (calling
+    // through a def reference evaluates that def's body) and the RESULT
+    // positions of function-producing forms (block final expression,
+    // if/match branch results), with its own visited set so chains
+    // terminate.
     var invoked_work: std.ArrayList(CIR.Expr.Idx) = .empty;
     defer invoked_work.deinit(self.gpa);
     var visited_invoked: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
@@ -23371,6 +23375,35 @@ fn defaultMaterializationIsRecursive(
                         try invoked_work.append(self.gpa, self.cir.store.getDef(lookup.target_def_idx).expr);
                     }
                 },
+                // An invoked expression that PRODUCES a function propagates
+                // invoked-ness into its RESULT positions: calling the
+                // produced function evaluates whichever final/branch
+                // expression built it. Statements, conditions, scrutinees,
+                // and guards are not result positions; they walk as values
+                // via the `expr_work` re-push above. An invoked block's
+                // statement BINDINGS are recorded here, ahead of the value
+                // walk: the invoked drain runs before `expr_work` pops the
+                // block, and the final expression's invoked lookups may
+                // consult them first.
+                .e_block => |block| {
+                    for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
+                        try self.recordDefaultWalkStmtBindings(stmt_idx, &local_pattern_to_expr);
+                    }
+                    try invoked_work.append(self.gpa, block.final_expr);
+                },
+                .e_if => |if_expr| {
+                    for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                        const branch = self.cir.store.getIfBranch(branch_idx);
+                        try invoked_work.append(self.gpa, branch.body);
+                    }
+                    try invoked_work.append(self.gpa, if_expr.final_else);
+                },
+                .e_match => |match_expr| {
+                    for (self.cir.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                        const branch = self.cir.store.getMatchBranch(branch_idx);
+                        try invoked_work.append(self.gpa, branch.value);
+                    }
+                },
                 // Any other invoked expression (a call result, a parameter,
                 // a field access) is not name-resolvable to a function
                 // body; those edges are the dispatch evidence's to close.
@@ -23417,27 +23450,27 @@ fn defaultMaterializationIsRecursive(
                 // (see the drain loop above).
                 try seed_work.append(self.gpa, call.constraint_fn_var);
                 try expr_work.append(self.gpa, call.receiver);
-                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
             },
             .e_type_dispatch_call => |call| {
                 if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
                     // A resolved method binding is INVOKED by this call.
                     try invoked_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
                 }
-                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
             },
             .e_type_method_call => |call| {
                 if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
                     // A resolved method binding is INVOKED by this call.
                     try invoked_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
                 }
-                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
             },
             .e_method_call => |call| {
                 // An unreplaced method call carries no stamped target (it is
                 // an already-diagnosed error form by finalize); walk operands.
                 try expr_work.append(self.gpa, call.receiver);
-                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
             },
             .e_empty_record => {
                 if (try self.appendOmittedDefaultDependencies(
@@ -23482,9 +23515,11 @@ fn defaultMaterializationIsRecursive(
                 // callee's body walks (canonicalization's DefaultCycles
                 // rule for immediately-invoked lambdas), and a
                 // name-resolvable callee reference walks the body of the
-                // def it names—materializing this call evaluates it.
+                // def it names—materializing this call evaluates it. Every
+                // ARGUMENT is conservatively invoked too (see
+                // `appendArgsInvoked`).
                 try invoked_work.append(self.gpa, call.func);
-                try expr_work.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args));
+                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
             },
             // A lambda reached as a VALUE only creates the function value;
             // its body is not evaluated at materialization, so the body is
@@ -23589,26 +23624,57 @@ fn defaultMaterializationIsRecursive(
     return false;
 }
 
+/// The CONSERVATIVE ARGUMENT RULE of the default-materialization residue
+/// walk (the same rule as canonicalization's DefaultCycles pass): every
+/// argument of a walked call is treated as invoked, because the callee may
+/// invoke a function-typed argument during materialization. Invoked-ness
+/// only ADDS function-body edges, so a non-function argument is unaffected
+/// (the invoked drain re-pushes it to the value walk), and a function
+/// argument the callee never actually calls still walks as invoked—a
+/// deliberate false positive, conservative by reachability, the same stance
+/// as omissions on dead branches. Arguments route ONLY through the invoked
+/// worklist; the drain's value re-push covers their value walk.
+fn appendArgsInvoked(
+    gpa: std.mem.Allocator,
+    invoked_work: *std.ArrayList(CIR.Expr.Idx),
+    args: []const CIR.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    for (args) |arg| try invoked_work.append(gpa, arg);
+}
+
+/// Record one statement's pattern->expression binding (the reference-edge
+/// source for walk-local lookups) without descending its expressions. Called
+/// by `appendDefaultWalkStmtExprs` (the value walk's block descent) and by
+/// the invoked drain's `.e_block` arm, which must record bindings BEFORE the
+/// block's final expression drains as invoked (the value walk has not popped
+/// the block yet at that point).
+fn recordDefaultWalkStmtBindings(
+    self: *Self,
+    stmt_idx: CIR.Statement.Idx,
+    local_pattern_to_expr: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
+) std.mem.Allocator.Error!void {
+    switch (self.cir.store.getStatement(stmt_idx)) {
+        .s_decl => |decl| try local_pattern_to_expr.put(self.gpa, decl.pattern, decl.expr),
+        .s_var => |var_stmt| try local_pattern_to_expr.put(self.gpa, var_stmt.pattern_idx, var_stmt.expr),
+        else => {},
+    }
+}
+
 /// Statement descent for the default-materialization residue walk. A
 /// statement that binds a pattern to an expression also records the edge in
-/// `local_pattern_to_expr`, so lookups resolving to walk-local binders follow
-/// reference edges exactly like top-level defs (see
-/// `defaultMaterializationIsRecursive`).
+/// `local_pattern_to_expr` (via `recordDefaultWalkStmtBindings`), so lookups
+/// resolving to walk-local binders follow reference edges exactly like
+/// top-level defs (see `defaultMaterializationIsRecursive`).
 fn appendDefaultWalkStmtExprs(
     self: *Self,
     stmt_idx: CIR.Statement.Idx,
     expr_work: *std.ArrayList(CIR.Expr.Idx),
     local_pattern_to_expr: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
 ) std.mem.Allocator.Error!void {
+    try self.recordDefaultWalkStmtBindings(stmt_idx, local_pattern_to_expr);
     switch (self.cir.store.getStatement(stmt_idx)) {
-        .s_decl => |decl| {
-            try local_pattern_to_expr.put(self.gpa, decl.pattern, decl.expr);
-            try expr_work.append(self.gpa, decl.expr);
-        },
-        .s_var => |var_stmt| {
-            try local_pattern_to_expr.put(self.gpa, var_stmt.pattern_idx, var_stmt.expr);
-            try expr_work.append(self.gpa, var_stmt.expr);
-        },
+        .s_decl => |decl| try expr_work.append(self.gpa, decl.expr),
+        .s_var => |var_stmt| try expr_work.append(self.gpa, var_stmt.expr),
         .s_reassign => |reassign| try expr_work.append(self.gpa, reassign.expr),
         .s_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
         .s_expr => |expr_stmt| try expr_work.append(self.gpa, expr_stmt.expr),

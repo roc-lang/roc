@@ -4985,34 +4985,56 @@ Restrictions:
     lookup naming a same-module top-level def) walks that def's body
     with lambda bodies included—calling through a def reference
     evaluates the body at materialization—and invoked-ness propagates
-    through reference chains (`go = helper`). Because one def may
-    legitimately be referenced both ways, each def carries TWO graph
-    nodes, value-flavored and invoked-flavored (the invoked flavor's
-    edges strictly superset the value flavor's), so an invoked use
-    never leaks body edges into a value use. Dispatch calls, calls
-    through function parameters, and foreign lookups terminate edges
-    here by principle and are the checker's residue.
+    through reference chains (`go = helper`). Invoked-ness also flows
+    through the RESULT positions of function-producing forms: an
+    invoked `e_block` propagates to its final expression, an invoked
+    `e_if` to every branch body and the final else, an invoked
+    `e_match` to every branch value (statements, conditions,
+    scrutinees, and guards are not result positions; they walk as
+    values)—so a called def whose body builds and returns a function
+    walks that function's body. And every ARGUMENT of a walked call is
+    conservatively INVOKED, for all call forms uniformly: the callee
+    may invoke a function-typed argument during materialization, and
+    invoked-ness only ADDS function-body edges, so a non-function
+    argument is unaffected (its referenced def bodies already walk as
+    values) while a function value passed to a callee that never calls
+    it still walks as invoked—a deliberate false positive, conservative
+    by reachability, the same stance as dead branches. Because one def
+    may legitimately be referenced both ways, each def carries TWO
+    graph nodes, value-flavored and invoked-flavored (the invoked
+    flavor's edges strictly superset the value flavor's), so an invoked
+    use never leaks body edges into a value use. Dispatch-call TARGETS
+    and foreign lookups terminate edges here by principle and are the
+    checker's residue; a plain call through a function PARAMETER needs
+    no edge of its own—the function value reached the parameter as an
+    argument of some walked call, where the argument rule already
+    walked it as invoked (`?? apply(make)` with `apply = |g| g({})` is
+    name-resolvable and CAN's).
   - CHECK owns the residue only type checking can see: the extended
     `defaultMaterializationIsRecursive` walk descends every expression
     form and additionally follows same-module reference edges,
     DISPATCH-RESOLVED call targets, type-dispatch method bindings, and
     omitted defaulted fields on SOLVED rows (which also covers
-    foreign-omission edges). It applies the same function-value rule as
+    foreign-omission edges). It applies the same invoked-ness rules as
     CAN—a lambda or closure reached as a value walks its captures but
     not its body; invoked-ness follows name-resolvable reference chains
     to the def body they name (re-traversed by necessity: a mixed cycle
-    needs its whole path)—and additionally resolves reference edges
-    through default-expression-LOCAL bindings: a block statement
-    binding a pattern to an expression records that edge during the
-    walk, and an invoked lookup resolving to such a binding walks the
-    bound expression as invoked, so a cycle through a default-local
-    lambda is check's residue. What check ALONE closes is
+    needs its whole path), flows through the result positions of
+    function-producing forms, and conservatively invokes every argument
+    of a walked call—and additionally resolves reference edges through
+    WALK-LOCAL bindings: a block statement binding a pattern to an
+    expression records that edge during the walk (whether the block is
+    the default expression's own or a walked def body's), and an
+    invoked lookup resolving to such a binding walks the bound
+    expression as invoked, so a cycle through a default-local lambda—or
+    through a def-body-local binding reached via an invoked block's
+    result position—is check's residue. What check ALONE closes is
     DISPATCH-MEDIATED invocation and these local shapes:
     `recursive_default_value` fires only when at least one edge of the
     cycle needs solved types or walk-local binding state—a
-    dispatch-resolved call target (a call through a parameter like
+    dispatch-resolved call target (a dispatch through a parameter like
     `c.make()`), a type-dispatch method binding, an omission on a
-    solved/foreign row, or a default-local binding. A purely
+    solved/foreign row, or a walk-local binding. A purely
     name-resolvable invoked cycle through top-level defs is CAN's:
     already reported as "Default Value Cycle" and dropped before check
     runs. Dispatch targets join through SCHEME-USE

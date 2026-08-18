@@ -1302,6 +1302,179 @@ test "same def as value stays legal while calling it is a cycle" {
     try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), env.store.getAnnoRecordField(bad_fields[0]).default_value);
 }
 
+test "block-produced closure default cycle is rejected" {
+    const allocator = std.testing.allocator;
+    // The called def's body is a BLOCK that PRODUCES a function: calling
+    // `f` evaluates the block's final closure, so invoked-ness must flow
+    // through the block's result position into the closure's body, where
+    // `X.{}` omits `a` and closes the cycle. Without result-position
+    // propagation the closure would only walk as a value and
+    // materialization would recurse forever.
+    const source =
+        \\X := { a : U8 ?? f({}) }
+        \\
+        \\f = {
+        \\    n = 1
+        \\    |_| X.{}.a + n
+        \\}
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "if-produced function default cycle is rejected" {
+    const allocator = std.testing.allocator;
+    // Result-position propagation through `if`: calling `f` evaluates one
+    // of the branch results, so EVERY branch body and the final else walk
+    // as invoked (conditions stay values). The then-branch's lambda body
+    // omits `a`, closing the cycle—conservative by reachability, the same
+    // stance as omissions on dead branches.
+    const source =
+        \\X := { a : U8 ?? f({}) }
+        \\
+        \\f = if 1 > 0 (|_| X.{}.a) else (|_| 0)
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "higher-order argument default cycle is rejected" {
+    const allocator = std.testing.allocator;
+    // The CONSERVATIVE ARGUMENT RULE: `apply` calls its parameter, an edge
+    // CAN cannot see—but the function VALUE reached the call as the
+    // argument `make`, and every argument of a walked call is treated as
+    // invoked. `make`'s body walks, its `X.{}` omits `a`, and the cycle is
+    // name-resolvable after all.
+    const source =
+        \\X := { a : U8 ?? apply(make) }
+        \\
+        \\apply = |g| g({})
+        \\
+        \\make = |_| X.{}.a
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "uncalled function-valued def reference stays accepted" {
+    const allocator = std.testing.allocator;
+    // The function-value rule survives the argument rule: `make_handler`
+    // is referenced as a plain VALUE (never a callee, never an argument of
+    // a call), so materializing `h`'s default only creates the function
+    // value—its body's omitting construction is no edge and both defaults
+    // survive.
+    const source =
+        \\X := { a : U8 ?? 0, h : ({} -> U8) ?? make_handler }
+        \\
+        \\make_handler = |_| X.{}.a
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    for (diagnostics) |diag| {
+        try std.testing.expect(diag != .record_default_reference_cycle);
+    }
+
+    // Both defaults survive.
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const anno = env.store.getTypeAnno(statement.s_nominal_decl.anno);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+    for (fields) |field_idx| {
+        const field = env.store.getAnnoRecordField(field_idx);
+        try std.testing.expect(field.default_value != null);
+    }
+}
+
 test "immediately-invoked closure default cycle is still rejected" {
     const allocator = std.testing.allocator;
     // Same rule through the closure form: the inner lambda captures `k`, so

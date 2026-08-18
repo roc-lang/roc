@@ -2181,6 +2181,64 @@ test "check type - record - default - call through def reference is CAN's cycle"
     }
 }
 
+test "check type - record - default - higher-order argument cycle is CAN's" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\X := { a : U8 ?? apply(make) }
+        \\
+        \\apply = |g| g({})
+        \\
+        \\make = |_| X.{}.a
+    ;
+    // `apply` calls its PARAMETER—an edge no walk can name-resolve—but the
+    // conservative argument rule treats every argument of a walked call as
+    // invoked, so `make`'s body walks in canonicalization's DefaultCycles
+    // pass and the whole cycle is name-resolvable: CAN reports it and drops
+    // the default before the checker's residue runs (positive pin in
+    // src/canonicalize/test/optional_field_test.zig). Only the CAN error
+    // set is asserted; follow-on type errors from the now-required field
+    // are expected.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{"Default Value Cycle"});
+    for (test_env.checker.problems.problems.items) |problem| {
+        try std.testing.expect(problem != .recursive_default_value);
+    }
+}
+
+test "check type - record - default - cycle through a def-body block binding is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Loop := { a : U8 ?? f({}) }
+        \\
+        \\f = {
+        \\    g = |_| Loop.{}.a
+        \\    g
+        \\}
+    ;
+    // Invoked-ness flows through the called def's block RESULT position,
+    // where the final expression is a lookup of a binding LOCAL to that
+    // def's body: canonicalization's DefaultCycles pass maps only top-level
+    // binders, so the invoked lookup of `g` is terminal there and CAN
+    // accepts. The residue walk owns it: the invoked `.e_block` arm records
+    // the block's statement bindings BEFORE its final expression drains (the
+    // value walk has not popped the block yet), so the invoked lookup
+    // resolves to `g`'s lambda, whose body's `Loop.{}` omits `a` and closes
+    // the cycle.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
 test "check type - record - default - associated-value-mediated cycle is check's residue" {
     const source =
         \\main! = |_| {}
