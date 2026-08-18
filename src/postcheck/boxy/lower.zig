@@ -132,6 +132,9 @@ const ResolvedWorkerBody = union(enum) {
     },
     intrinsic: checked.IntrinsicId,
     hosted: checked.HostedProc,
+    /// The declaration behind this worker has a type annotation and no
+    /// implementation, so reaching the worker crashes.
+    unimplemented: checked.UnimplementedDeclaration,
     generated_codec: Plan.GeneratedCodecSource,
     generated_field_iterator: Plan.GeneratedFieldIteratorSource,
     generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
@@ -324,6 +327,7 @@ fn topLevelProcedureBindingForExpr(
             .checked_body => |body| body,
             .intrinsic_wrapper,
             .entry_wrapper,
+            .unimplemented,
             => continue,
         };
         if (module.checked_bodies.body(body_id).root_expr == expr) {
@@ -368,6 +372,7 @@ fn resolveProcedureTemplate(
             .body_id = null,
             .root_expr = module.entry_wrappers.get(wrapper_id).body_expr,
         } },
+        .unimplemented => |declaration| .{ .unimplemented = declaration },
     };
 
     return .{
@@ -4685,6 +4690,7 @@ const ProcedureBuilder = struct {
             .checked_expr,
             .intrinsic,
             .hosted,
+            .unimplemented,
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
@@ -4747,6 +4753,7 @@ const ProcedureBuilder = struct {
             .checked_expr,
             .intrinsic,
             .hosted,
+            .unimplemented,
             .generated_codec,
             .generated_field_iterator,
             .generated_interpolation_step,
@@ -4886,6 +4893,7 @@ const ProcedureBuilder = struct {
     const WorkerBodySource = union(enum) {
         checked_expr: checked.CheckedExprId,
         hosted,
+        unimplemented,
         generated_codec: Plan.GeneratedCodecSource,
         generated_field_iterator: Plan.GeneratedFieldIteratorSource,
         generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
@@ -4917,6 +4925,7 @@ const ProcedureBuilder = struct {
             },
             .intrinsic => |intrinsic| try self.bodySourceForIntrinsic(resolved, proc, intrinsic),
             .hosted => try self.bodySourceForHosted(resolved, proc),
+            .unimplemented => try self.bodySourceForUnimplemented(proc),
             .generated_codec => |source| try self.bodySourceForGeneratedCodec(proc, source),
             .generated_field_iterator => |source| try self.bodySourceForGeneratedFieldIterator(proc, source),
             .generated_interpolation_step => |source| try self.bodySourceForGeneratedInterpolationStep(proc, source),
@@ -4971,6 +4980,21 @@ const ProcedureBuilder = struct {
             }
         }
         return .{ .generated_codec = source };
+    }
+
+    /// Bind the declared parameters of a procedure whose declaration has no
+    /// implementation. The body crashes, but the procedure still has to
+    /// present the declared ABI so direct calls keep passing their arguments
+    /// to a matching signature.
+    fn bodySourceForUnimplemented(
+        _: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+    ) Allocator.Error!WorkerBodySource {
+        const worker_args = proc.parent.layout_plan.workerLayoutSlice(proc.worker_layout.args);
+        for (worker_args) |arg_layout| {
+            _ = try proc.addArgLocal(arg_layout.layoutIdx());
+        }
+        return .unimplemented;
     }
 
     fn bodySourceForHosted(
@@ -5070,6 +5094,9 @@ const ProcedureBuilder = struct {
                 break :blk try proc.prependLambdaArgPatternBindings(body);
             },
             .hosted => try self.lowerHostedWorkerBodyInto(resolved, proc, ret_local, ret_stmt),
+            .unimplemented => try self.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.result.store.insertString(Common.unimplemented_declaration_crash) },
+            } }),
             .generated_codec => |source| try self.lowerGeneratedCodecWorkerInto(proc, source, ret_local, ret_stmt),
             .generated_field_iterator => |source| try self.lowerGeneratedFieldIteratorStepInto(proc, source, ret_local, ret_stmt),
             .generated_interpolation_step => |source| try self.lowerGeneratedInterpolationStepInto(proc, source, ret_local, ret_stmt),
@@ -14580,6 +14607,9 @@ const ProcBodyBuilder = struct {
         switch (template.state) {
             .reserved => boxyLowerInvariant("reserved checked const template reached runtime boxy lowering"),
             .eval_template => |eval| return try self.lowerConstEvalTemplateUseInto(target, checked_ty, requested_ty, eval, next),
+            .unimplemented => return try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(Common.unimplemented_declaration_crash) },
+            } }),
             .stored_const => {},
         }
         const stored = template.state.stored_const;
@@ -37819,7 +37849,7 @@ fn expectResolvedWorkerCheckedExpr(
 ) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     const body = switch (worker.body) {
         .checked_expr => |checked_body| checked_body,
-        .intrinsic, .hosted, .generated_codec, .generated_field_iterator, .generated_interpolation_step => return error.TestUnexpectedResult,
+        .intrinsic, .hosted, .unimplemented, .generated_codec, .generated_field_iterator, .generated_interpolation_step => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(expected_body, body.body_id);
     try std.testing.expectEqual(expected_root, body.root_expr);

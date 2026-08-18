@@ -1008,6 +1008,7 @@ pub const RootRequestTable = struct {
         top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
         callable_eval_templates: *const CallableEvalTemplateTable,
         hoisted_constants: *const HoistedConstTable,
+        const_templates: *const ConstTemplateTable,
         template_root_evidence: []const artifact_serialize.Span,
         explicit_roots: []const ExplicitRootRequestInput,
     ) Allocator.Error!RootRequestTable {
@@ -1145,6 +1146,7 @@ pub const RootRequestTable = struct {
             platform_required_bindings,
             callable_eval_templates,
             hoisted_constants,
+            const_templates,
         );
         verifyCompileTimeRequestsScheduled(compile_time_requests, compile_time_roots);
 
@@ -1246,6 +1248,7 @@ fn collectCompileTimeRootRequests(
     platform_required_bindings: *const PlatformRequiredBindingTable,
     callable_eval_templates: *const CallableEvalTemplateTable,
     hoisted_constants: *const HoistedConstTable,
+    const_templates: *const ConstTemplateTable,
 ) Allocator.Error![]RootRequest {
     var entries = std.ArrayList(CompileTimeRequestScheduleEntry).empty;
     defer entries.deinit(allocator);
@@ -1272,6 +1275,7 @@ fn collectCompileTimeRootRequests(
         platform_required_bindings,
         callable_eval_templates,
         hoisted_constants,
+        const_templates,
         entries.items,
     );
     defer scheduler.deinit();
@@ -1291,6 +1295,7 @@ const CompileTimeRequestScheduler = struct {
     platform_required_bindings: *const PlatformRequiredBindingTable,
     callable_eval_templates: *const CallableEvalTemplateTable,
     hoisted_constants: *const HoistedConstTable,
+    const_templates: *const ConstTemplateTable,
     entries: []const CompileTimeRequestScheduleEntry,
     field_default_roots: []const ComptimeRootId,
     root_to_request_index: []?usize,
@@ -1315,6 +1320,7 @@ const CompileTimeRequestScheduler = struct {
         platform_required_bindings: *const PlatformRequiredBindingTable,
         callable_eval_templates: *const CallableEvalTemplateTable,
         hoisted_constants: *const HoistedConstTable,
+        const_templates: *const ConstTemplateTable,
         entries: []const CompileTimeRequestScheduleEntry,
     ) Allocator.Error!CompileTimeRequestScheduler {
         const field_default_roots = try collectScheduledFieldDefaultRoots(allocator, compile_time_roots, entries);
@@ -1363,6 +1369,7 @@ const CompileTimeRequestScheduler = struct {
             .platform_required_bindings = platform_required_bindings,
             .callable_eval_templates = callable_eval_templates,
             .hoisted_constants = hoisted_constants,
+            .const_templates = const_templates,
             .entries = entries,
             .field_default_roots = field_default_roots,
             .root_to_request_index = root_to_request_index,
@@ -1564,6 +1571,9 @@ const CompileTimeRequestScheduler = struct {
         self: *CompileTimeRequestScheduler,
         const_use: ConstUseTemplate,
     ) Allocator.Error!void {
+        // A declaration with no implementation evaluates nothing, so it
+        // publishes no compile-time root and contributes no dependency edge.
+        if (self.constUseIsUnimplemented(const_use.const_ref)) return;
         const root_id = self.rootForConstRef(const_use.const_ref) orelse return;
         const own_hoisted_root = switch (const_use.const_ref.owner) {
             .hoisted_expr => true,
@@ -1571,6 +1581,11 @@ const CompileTimeRequestScheduler = struct {
         };
         if (root_id == self.current_root_id and own_hoisted_root) return;
         try self.addRootDependency(root_id);
+    }
+
+    fn constUseIsUnimplemented(self: *CompileTimeRequestScheduler, const_ref: ConstRef) bool {
+        if (!checkedArtifactKeyEql(const_ref.artifact, self.artifact_key)) return false;
+        return self.const_templates.get(const_ref).state == .unimplemented;
     }
 
     fn rootForConstRef(
@@ -2570,8 +2585,16 @@ fn entryWrapperForRoot(
     return wrapper;
 }
 
-fn topLevelExprIsAlreadyProcedure(expr: CIR.Expr) bool {
-    return expr == .e_lambda or expr == .e_closure or expr == .e_anno_only or expr == .e_hosted_lambda;
+fn topLevelExprIsAlreadyProcedure(module: TypedCIR.Module, def_idx: CIR.Def.Idx, expr: CIR.Expr) bool {
+    if (expr == .e_lambda or expr == .e_closure or expr == .e_hosted_lambda) return true;
+    if (expr != .e_anno_only) return false;
+    // A compiler-owned intrinsic is a procedure whatever it declares, because
+    // its body comes from the intrinsic wrapper rather than the declaration.
+    if (intrinsicForProcedureDef(module, def_idx) != null) return true;
+    // Every other annotation-only declaration is a procedure only when the
+    // type it declares is a function. Annotation-only values are published
+    // through the const path, which records the missing value the same way.
+    return sourceTypeIsFunction(module, module.defType(def_idx));
 }
 
 fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {
@@ -14573,11 +14596,24 @@ fn isStatementNodeTag(tag: CIR.Node.Tag) bool {
     return Ident.textStartsWith(@tagName(tag), "statement_");
 }
 
+/// A declaration that carries a type annotation and no implementation. The
+/// checker keeps the declared type intact so uses of the declaration still
+/// check against it, which is why this is published as an executable fact
+/// rather than an erroneous type: reaching the declaration crashes.
+pub const UnimplementedDeclaration = struct {
+    /// Source region of the declaration, used as the crash's location.
+    region: base.Region,
+};
+
 /// Public `CheckedProcedureBody` declaration.
 pub const CheckedProcedureBody = union(enum) {
     checked_body: CheckedBodyId,
     intrinsic_wrapper: canonical.IntrinsicWrapperId,
     entry_wrapper: canonical.EntryWrapperId,
+    /// This procedure was declared with a type annotation and never given an
+    /// implementation. It lowers to a crash body carrying the declared arity,
+    /// so every call site still links and arguments still evaluate.
+    unimplemented: UnimplementedDeclaration,
 };
 
 /// Public compiler-intrinsic identity published by canonicalization.
@@ -16399,7 +16435,9 @@ fn sealCheckedProcedureTemplateRefs(
                     true,
                 );
             },
-            .intrinsic_wrapper => {},
+            // Neither an intrinsic wrapper nor an unimplemented declaration
+            // has a checked body to collect plans from.
+            .intrinsic_wrapper, .unimplemented => {},
         }
 
         var seen_local_uses = collections.DenseMap(ResolvedValueRefId, void).init(allocator);
@@ -16935,7 +16973,7 @@ const EvidencePass = struct {
                 // Expression roots (REPL lines, eval snippets) have no pattern
                 // and no callers, so their obligations are chain-free.
             },
-            .checked_body, .intrinsic_wrapper => {},
+            .checked_body, .intrinsic_wrapper, .unimplemented => {},
         }
     }
 
@@ -18972,7 +19010,7 @@ pub const NestedProcSiteTable = struct {
             switch (template.body) {
                 .checked_body => |body_id| try builder.scanCheckedBody(body_id, template),
                 .entry_wrapper => |wrapper_id| try builder.scanEntryWrapper(entry_wrappers.get(wrapper_id), template),
-                .intrinsic_wrapper => {},
+                .intrinsic_wrapper, .unimplemented => {},
             }
             template.nested_proc_sites = .{
                 .start = start,
@@ -19258,7 +19296,7 @@ pub const CheckedProcedureTemplateTable = struct {
 
         for (value_binding_defs) |def_idx| {
             const def = module.def(def_idx);
-            if (!topLevelExprIsAlreadyProcedure(def.expr.data)) continue;
+            if (!topLevelExprIsAlreadyProcedure(module, def_idx, def.expr.data)) continue;
 
             const export_name = if (def.patternName()) |name|
                 try names.internExportIdent(module.identStoreConst(), name)
@@ -19319,7 +19357,9 @@ pub const CheckedProcedureTemplateTable = struct {
             const body: CheckedProcedureBody = if (intrinsic) |intrinsic_id| blk: {
                 const wrapper_id = try intrinsic_wrappers.append(allocator, template_ref, checked_fn_root, intrinsic_id);
                 break :blk .{ .intrinsic_wrapper = wrapper_id };
-            } else blk: {
+            } else if (def.expr.data == .e_anno_only) .{ .unimplemented = .{
+                .region = module.regionAt(ModuleEnv.nodeIdxFrom(def.expr.idx)),
+            } } else blk: {
                 const root_expr = checked_bodies.exprIdForSource(def.expr.idx) orelse {
                     if (builtin.mode == .Debug) {
                         std.debug.panic("checked artifact invariant violated: checked procedure body root expression was not published", .{});
@@ -23676,6 +23716,9 @@ pub const CompileTimeRootTable = struct {
             const def = module.def(def_idx);
             if (topLevelDefSourceIdent(def) == null) continue;
             if (procedure_templates.lookupByDef(def_idx) != null) continue;
+            // An annotation-only declaration has no value to evaluate; its
+            // const template already records that the value is missing.
+            if (def.expr.data == .e_anno_only) continue;
 
             const source_ty = module.defType(def_idx);
             if (sourceTypeIsFunction(module, source_ty)) {
@@ -25230,7 +25273,14 @@ pub const TopLevelValueTable = struct {
                     callable_template,
                 );
                 break :blk .{ .procedure_binding = binding };
-            } else .{ .const_ref = try const_templates.reserveTopLevel(
+            } else if (def.expr.data == .e_anno_only) .{ .const_ref = try const_templates.reserveUnimplementedTopLevel(
+                allocator,
+                artifact_key,
+                module.moduleIndex(),
+                checked_pattern,
+                source_scheme,
+                .{ .region = module.regionAt(ModuleEnv.nodeIdxFrom(def.expr.idx)) },
+            ) } else .{ .const_ref = try const_templates.reserveTopLevel(
                 allocator,
                 artifact_key,
                 module.moduleIndex(),
@@ -26703,7 +26753,10 @@ const PublicApiClosureDependencyCollector = struct {
                 try self.appendResolvedValueRefs(eval.resolved_value_refs);
                 try self.appendProcedureTemplateRef(eval.entry_template);
             },
-            .stored_const => {},
+            // A stored constant carries its value directly, and an
+            // unimplemented declaration has no value at all; neither pulls in
+            // further dependencies.
+            .stored_const, .unimplemented => {},
             .reserved => checkedArtifactInvariant("public API closure dependency reached unsealed const template", .{}),
         }
     }
@@ -27422,6 +27475,7 @@ const ImportedTemplateClosureBuilder = struct {
             .checked_body => |body| try self.appendCheckedBody(body),
             .intrinsic_wrapper,
             .entry_wrapper,
+            .unimplemented,
             => {},
         }
         try self.appendCheckedTypeRoot(template.checked_fn_root);
@@ -27700,7 +27754,7 @@ const ImportedTemplateClosureBuilder = struct {
                 const entry_template = self.checked_templates.get(eval.entry_template.template);
                 try self.appendTemplate(eval.entry_template, entry_template);
             },
-            .stored_const => {},
+            .stored_const, .unimplemented => {},
             .reserved => checkedArtifactInvariant("imported template closure reached unsealed const template", .{}),
         }
     }
@@ -28232,6 +28286,9 @@ pub const ConstTemplateState = union(enum) {
     reserved,
     eval_template: ConstEvalTemplate,
     stored_const: StoredConstTemplate,
+    /// This constant was declared with a type annotation and never given a
+    /// value. It lowers to a crash wherever the constant is used.
+    unimplemented: UnimplementedDeclaration,
 };
 
 /// Public `ConstTemplate` declaration.
@@ -28261,6 +28318,38 @@ pub const ConstTemplateTable = struct {
         pattern: CheckedPatternId,
         source_scheme: canonical.CanonicalTypeSchemeKey,
     ) Allocator.Error!ConstRef {
+        return self.appendTopLevel(allocator, artifact_key, module_idx, pattern, source_scheme, .reserved);
+    }
+
+    /// Record a top-level constant whose declaration never received a value.
+    pub fn reserveUnimplementedTopLevel(
+        self: *ConstTemplateTable,
+        allocator: Allocator,
+        artifact_key: CheckedModuleArtifactKey,
+        module_idx: u32,
+        pattern: CheckedPatternId,
+        source_scheme: canonical.CanonicalTypeSchemeKey,
+        declaration: UnimplementedDeclaration,
+    ) Allocator.Error!ConstRef {
+        return self.appendTopLevel(
+            allocator,
+            artifact_key,
+            module_idx,
+            pattern,
+            source_scheme,
+            .{ .unimplemented = declaration },
+        );
+    }
+
+    fn appendTopLevel(
+        self: *ConstTemplateTable,
+        allocator: Allocator,
+        artifact_key: CheckedModuleArtifactKey,
+        module_idx: u32,
+        pattern: CheckedPatternId,
+        source_scheme: canonical.CanonicalTypeSchemeKey,
+        state: ConstTemplateState,
+    ) Allocator.Error!ConstRef {
         const id: ConstTemplateId = @enumFromInt(@as(u32, @intCast(self.templates.items.len)));
         const owner: ConstOwner = .{ .top_level_binding = .{
             .module_idx = module_idx,
@@ -28270,7 +28359,7 @@ pub const ConstTemplateTable = struct {
             .id = id,
             .owner = owner,
             .source_scheme = source_scheme,
-            .state = .reserved,
+            .state = state,
         });
         return .{
             .artifact = artifact_key,
@@ -28319,6 +28408,7 @@ pub const ConstTemplateTable = struct {
         switch (record.state) {
             .reserved => record.state = .{ .eval_template = template },
             .eval_template, .stored_const => checkedArtifactInvariant("constant template was filled twice", .{}),
+            .unimplemented => checkedArtifactInvariant("constant template without a declared value was given an eval body", .{}),
         }
     }
 
@@ -28331,6 +28421,7 @@ pub const ConstTemplateTable = struct {
         switch (record.state) {
             .reserved, .eval_template => record.state = .{ .stored_const = template },
             .stored_const => checkedArtifactInvariant("constant template was filled twice", .{}),
+            .unimplemented => checkedArtifactInvariant("constant template without a declared value was given a stored value", .{}),
         }
     }
 
@@ -28354,7 +28445,9 @@ pub const ConstTemplateTable = struct {
         for (self.templates.items, 0..) |template, i| {
             std.debug.assert(@intFromEnum(template.id) == i);
             switch (template.state) {
-                .eval_template, .stored_const => {},
+                // A declaration with no implementation is sealed on
+                // publication; there is never a value to fill in later.
+                .eval_template, .stored_const, .unimplemented => {},
                 .reserved => std.debug.panic(
                     "checked artifact invariant violated: constant template {d} was not sealed before publication",
                     .{i},
@@ -29084,7 +29177,12 @@ pub const CheckedModuleArtifact = struct {
     // unit constant is archived for them.
     // Version 67 records a method whose declaration was rejected under its own
     // registry key with no target.
-    const serialized_layout_version: u32 = 67;
+    // Version 68 publishes declarations that carry a type annotation and no
+    // implementation as their own artifact state
+    // (`CheckedProcedureBody.unimplemented` and
+    // `ConstTemplateState.unimplemented`) instead of pointing at a body the
+    // declaration never had.
+    const serialized_layout_version: u32 = 68;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29933,7 +30031,7 @@ pub const CheckedModuleArtifact = struct {
                     }
                     break :blk wrapper.intrinsic;
                 },
-                .checked_body, .entry_wrapper => null,
+                .checked_body, .entry_wrapper, .unimplemented => null,
             };
 
             switch (procedure.runtime_target) {
@@ -30153,6 +30251,8 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(wrapper.template.proc_base == template.proc_base);
                     std.debug.assert(std.meta.eql(wrapper.template.artifact.bytes, self.key.bytes));
                 },
+                // An unimplemented declaration publishes no body to verify.
+                .unimplemented => {},
             }
 
             const nested_end = template.nested_proc_sites.start + template.nested_proc_sites.len;
@@ -30253,6 +30353,9 @@ pub const CheckedModuleArtifact = struct {
                     "checked artifact invariant violated: exported const template was not sealed",
                     .{},
                 ),
+                // An unimplemented declaration publishes no body or stored
+                // value, so there is nothing further to verify.
+                .unimplemented => {},
             }
             for (closure.const_templates) |const_ref| {
                 if (closureArtifactRefIsLocal(self, const_ref.artifact)) {
@@ -30451,7 +30554,7 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.assert(@intFromEnum(stored.node) < self.const_store.values.items.len);
                     std.debug.assert(@intFromEnum(stored.root_type) < self.const_store.type_store.types.items.len);
                 },
-                .eval_template, .reserved => {},
+                .eval_template, .reserved, .unimplemented => {},
             }
         }
         self.const_templates.verifySealed();
@@ -32770,6 +32873,7 @@ pub fn publishFromTypedModule(
         &top_level_procedure_bindings,
         &callable_eval_templates,
         &hoisted_constants,
+        &const_templates,
         template_root_evidence,
         inputs.explicit_roots,
     );
@@ -33461,6 +33565,7 @@ fn expectProvidedExportKind(
         &top_level_procedure_bindings,
         &callable_eval_templates,
         &hoisted_constants,
+        &const_templates,
         template_root_evidence,
         &.{},
     );
@@ -33528,10 +33633,11 @@ test "compile-time roots and top-level values store final checked output only" {
 }
 
 test "constant template states contain sealed value data but no runtime initializer concepts" {
-    try std.testing.expectEqual(@as(usize, 3), unionFieldCount(ConstTemplateState));
+    try std.testing.expectEqual(@as(usize, 4), unionFieldCount(ConstTemplateState));
     try std.testing.expect(@hasField(ConstTemplateState, "reserved"));
     try std.testing.expect(@hasField(ConstTemplateState, "eval_template"));
     try std.testing.expect(@hasField(ConstTemplateState, "stored_const"));
+    try std.testing.expect(@hasField(ConstTemplateState, "unimplemented"));
 
     try std.testing.expect(!@hasField(ConstTemplateState, "runtime_thunk"));
     try std.testing.expect(!@hasField(ConstTemplateState, "global_initializer"));
@@ -35225,8 +35331,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x93, 0x49, 0x87, 0xCE, 0xA2, 0x39, 0xBC, 0x97, 0x44, 0xB5, 0x16, 0x83, 0xD3, 0xE1, 0xDD, 0x19,
-        0x1F, 0x65, 0x6C, 0x8E, 0x35, 0xB8, 0xFC, 0x8A, 0xBF, 0x8D, 0xFE, 0xB4, 0xD0, 0xCB, 0xBC, 0xE3,
+        0x6C, 0x4D, 0x36, 0xCF, 0xA6, 0xAF, 0x27, 0xB3, 0x63, 0x43, 0x1E, 0xFC, 0xBE, 0x40, 0xB2, 0xBF,
+        0x23, 0xA3, 0x3B, 0xF0, 0x37, 0xCD, 0x6D, 0x5A, 0x45, 0xBC, 0xDD, 0xEB, 0x9D, 0x8F, 0x04, 0xDF,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

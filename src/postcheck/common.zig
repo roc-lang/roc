@@ -12,6 +12,12 @@ const LIR = lir_core.LIR;
 /// Resource failure while converting checked module data toward LIR.
 pub const LowerError = std.mem.Allocator.Error;
 
+/// Crash message for reaching a declaration that has a type annotation and no
+/// implementation. Checking reports this as a diagnostic and keeps the declared
+/// type, so the program still compiles and crashes only if the declaration is
+/// actually reached at runtime.
+pub const unimplemented_declaration_crash = "declaration has no implementation";
+
 /// Root module plus imported modules visible to post-check stages.
 pub const CheckedModules = struct {
     root: checked.LoweringModuleView,
