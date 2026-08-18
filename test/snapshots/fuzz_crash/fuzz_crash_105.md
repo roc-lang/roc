@@ -32,6 +32,8 @@ You cannot define a where clause inside a type declaration.
 A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Hint: where clauses can only go on function type annotations.
+
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_105.md:2:30
 
 The type variable b is not declared in this scope.
@@ -47,6 +49,8 @@ You cannot define a where clause inside a type declaration.
 
 A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
                            ^^^^^^^^^^^^^^^^
+
+Hint: where clauses can only go on function type annotations.
 
 ── ✗ undeclared type variable ─────────────────────────── fuzz_crash_105.md:2:46
 
