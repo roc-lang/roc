@@ -14,10 +14,13 @@
 //! Value references only point down the import DAG, so a path that returns
 //! to its origin default can never leave the declaring module: this pass is
 //! module-local without losing any name-resolvable cycle. Edges that only
-//! exist after type checking—method/dispatch calls, calls through function
-//! parameters, and FOREIGN nominal constructions' omissions—terminate here
-//! by principle and are the checker's residue
-//! (`defaultMaterializationIsRecursive` in src/check/Check.zig).
+//! exist after type checking—method/dispatch call targets and FOREIGN
+//! nominal constructions' omissions—terminate here by principle and are the
+//! checker's residue (`defaultMaterializationIsRecursive` in
+//! src/check/Check.zig). A plain call through a function PARAMETER needs no
+//! edge of its own: the function value reached the parameter as an argument
+//! of some walked call, where the conservative argument rule (below) already
+//! walked it as invoked.
 //!
 //! Detection is one Tarjan SCC run over a graph whose nodes are the module's
 //! defaults and top-level defs. Each cyclic SCC containing at least one
@@ -34,10 +37,17 @@
 //! callee lambda/closure's body walks, and a callee that is a
 //! name-resolvable reference walks the named def's body with lambda bodies
 //! included (calling through a def reference evaluates that body at
-//! materialization), invoked-ness following reference chains. The same def
-//! referenced as a value keeps the value rule. This is the same rule the
-//! checker's residue walk applies (`invoked_work` in src/check/Check.zig);
-//! only its name-resolvable half lives here.
+//! materialization), invoked-ness following reference chains. Invoked-ness
+//! also flows through the RESULT positions of function-producing forms (an
+//! invoked block's final expression, an invoked if's branch bodies and
+//! final else, an invoked match's branch values), and every ARGUMENT of a
+//! walked call is conservatively invoked (the callee may invoke a
+//! function-typed argument during materialization; a function argument the
+//! callee never calls still walks as invoked—conservative by reachability,
+//! the same stance as dead branches). The same def referenced as a value
+//! keeps the value rule. These are the same rules the checker's residue
+//! walk applies (`invoked_work` in src/check/Check.zig); only their
+//! name-resolvable half lives here.
 //!
 //! Because one def can legitimately be referenced BOTH ways—as a value in
 //! one default and invoked in another—each def gets TWO graph nodes, a
@@ -227,13 +237,17 @@ const Pass = struct {
     ///
     /// Two worklists mirror the checker's residue walk (`invoked_work` in
     /// src/check/Check.zig): `walk` carries value positions, `invoked_walk`
-    /// carries invoked positions (a call's direct callee, and whatever a
-    /// name-resolvable reference chain from one names). An invoked
-    /// expression also walks as a value—invoked-ness only ADDS the
-    /// function-body edge (lambda/closure) or the invoked-flavored
-    /// reference edge (same-module reference). Any other invoked form (a
-    /// call result, a parameter, a field access) is not name-resolvable to
-    /// a function body; those edges are the checker's residue by principle.
+    /// carries invoked positions (a call's direct callee, every argument of
+    /// a walked call—the conservative argument rule, see
+    /// `appendSpanInvoked`—and whatever a name-resolvable reference chain
+    /// from one names). An invoked expression also walks as a value—
+    /// invoked-ness only ADDS the function-body edge (lambda/closure), the
+    /// invoked-flavored reference edge (same-module reference), or the
+    /// result-position propagation of a function-producing form (block
+    /// final expression, if/match branch results). Any other invoked form
+    /// (a call result, a parameter, a field access) is not name-resolvable
+    /// to a function body; those edges are the checker's residue by
+    /// principle.
     fn walkNode(self: *Pass, root: Expr.Idx, root_flavor: RootFlavor) Allocator.Error!void {
         self.seen_targets.clearRetainingCapacity();
         self.seen_exprs.clearRetainingCapacity();
@@ -271,6 +285,27 @@ const Pass = struct {
                             try self.addEdge(self.invokedNode(node));
                         }
                     },
+                    // An invoked expression that PRODUCES a function
+                    // propagates invoked-ness into its RESULT positions:
+                    // calling the produced function evaluates whichever
+                    // final/branch expression built it. Statements,
+                    // conditions, scrutinees, and guards are not result
+                    // positions; they walk as values via the value re-push
+                    // above.
+                    .e_block => |block| try self.invoked_walk.append(self.gpa, block.final_expr),
+                    .e_if => |if_expr| {
+                        for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                            const branch = self.env.store.getIfBranch(branch_idx);
+                            try self.invoked_walk.append(self.gpa, branch.body);
+                        }
+                        try self.invoked_walk.append(self.gpa, if_expr.final_else);
+                    },
+                    .e_match => |match_expr| {
+                        for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                            const branch = self.env.store.getMatchBranch(branch_idx);
+                            try self.invoked_walk.append(self.gpa, branch.value);
+                        }
+                    },
                     else => {},
                 }
             }
@@ -295,10 +330,11 @@ const Pass = struct {
                 },
                 // A closure reached as a VALUE materializes only its
                 // captured values—creating the function value does not run
-                // its body; the body runs on a later application, which is
-                // beyond name resolution (calls through values/parameters
-                // are the checker's residue). Captures ARE evaluated at
-                // materialization, so their reference edges stay.
+                // its body; the body runs on a later application. A closure
+                // handed to a call (callee or argument) walks as invoked
+                // instead; one merely referenced as a value keeps its body
+                // unwalked. Captures ARE evaluated at materialization, so
+                // their reference edges stay.
                 .e_closure => |closure| {
                     for (self.env.store.sliceCaptures(closure.captures)) |capture_idx| {
                         const capture = self.env.store.getCapture(capture_idx);
@@ -309,17 +345,19 @@ const Pass = struct {
                 },
                 // A lambda reached as a VALUE only creates the function
                 // value; its body is not evaluated at materialization, so
-                // the body is not walked. The one place a body IS evaluated
-                // at materialization—an immediately-invoked lambda—is
-                // handled in `.e_call` below.
+                // the body is not walked. A lambda handed to a call—as its
+                // callee or as an argument—walks as invoked via `.e_call`
+                // below.
                 .e_lambda => {},
                 .e_call => |call| {
                     // The DIRECT callee is INVOKED by this call: the
                     // invoked drain above walks a lambda/closure callee's
                     // body and follows a name-resolvable callee reference
-                    // into the named def's invoked-flavored node.
+                    // into the named def's invoked-flavored node. Every
+                    // ARGUMENT is conservatively INVOKED too (see
+                    // `appendSpanInvoked`).
                     try self.invoked_walk.append(self.gpa, call.func);
-                    try self.appendSpan(call.args);
+                    try self.appendSpanInvoked(call.args);
                 },
                 .e_if => |if_expr| {
                     for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
@@ -348,16 +386,20 @@ const Pass = struct {
                 },
                 .e_field_access => |access| try self.walk.append(self.gpa, access.receiver),
                 .e_tuple_access => |access| try self.walk.append(self.gpa, access.tuple),
+                // Dispatch-form calls: the TARGET is the checker's residue
+                // (resolution needs solved types), but the argument rule is
+                // uniform across every call form—each argument walks as
+                // invoked. Receivers are operands, not arguments.
                 .e_method_call => |call| {
                     try self.walk.append(self.gpa, call.receiver);
-                    try self.appendSpan(call.args);
+                    try self.appendSpanInvoked(call.args);
                 },
                 .e_dispatch_call => |call| {
                     try self.walk.append(self.gpa, call.receiver);
-                    try self.appendSpan(call.args);
+                    try self.appendSpanInvoked(call.args);
                 },
-                .e_type_method_call => |call| try self.appendSpan(call.args),
-                .e_type_dispatch_call => |call| try self.appendSpan(call.args),
+                .e_type_method_call => |call| try self.appendSpanInvoked(call.args),
+                .e_type_dispatch_call => |call| try self.appendSpanInvoked(call.args),
                 .e_interpolation => |interpolation| {
                     try self.walk.append(self.gpa, interpolation.first);
                     try self.appendSpan(interpolation.parts);
@@ -444,6 +486,21 @@ const Pass = struct {
     fn appendSpan(self: *Pass, span: Expr.Span) Allocator.Error!void {
         for (self.env.store.sliceExpr(span)) |child| {
             try self.walk.append(self.gpa, child);
+        }
+    }
+
+    /// The CONSERVATIVE ARGUMENT RULE: every argument of a walked call is
+    /// treated as invoked, because the callee may invoke a function-typed
+    /// argument during materialization. Invoked-ness only ADDS function-body
+    /// edges, so a non-function argument is unaffected (the invoked drain
+    /// re-pushes it to the value walk), and a function argument the callee
+    /// never actually calls still walks as invoked—a deliberate false
+    /// positive, conservative by reachability, the same stance as omissions
+    /// on dead branches. Arguments route ONLY through the invoked worklist;
+    /// the drain's value re-push covers their value walk.
+    fn appendSpanInvoked(self: *Pass, span: Expr.Span) Allocator.Error!void {
+        for (self.env.store.sliceExpr(span)) |child| {
+            try self.invoked_walk.append(self.gpa, child);
         }
     }
 
