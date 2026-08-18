@@ -23220,6 +23220,16 @@ fn defaultMaterializationIsRecursive(
     defer invoked_work.deinit(self.gpa);
     var visited_invoked: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
     defer visited_invoked.deinit(self.gpa);
+    // Local pattern bindings encountered during THIS walk: a block statement
+    // binding a pattern to an expression records the edge, so a lookup that
+    // resolves to a default-expression-local binder follows the same
+    // reference rules as a top-level def (`pattern_to_def_expr` covers only
+    // top-level defs). A block is always walked before any expression inside
+    // it, and a local lookup is only reachable from inside its binding block,
+    // so every consulted binding has been recorded by the time its lookup
+    // pops.
+    var local_pattern_to_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty;
+    defer local_pattern_to_expr.deinit(self.gpa);
 
     while (true) {
         // Drain dispatch seeds: a seed var identifies a constraint whose
@@ -23269,8 +23279,10 @@ fn defaultMaterializationIsRecursive(
                     try expr_work.append(self.gpa, lambda.e_lambda.body);
                 },
                 .e_lookup_local => |lookup| {
-                    if (evidence.pattern_to_def_expr.get(lookup.pattern_idx)) |def_expr| {
-                        try invoked_work.append(self.gpa, def_expr);
+                    if (evidence.pattern_to_def_expr.get(lookup.pattern_idx) orelse
+                        local_pattern_to_expr.get(lookup.pattern_idx)) |bound_expr|
+                    {
+                        try invoked_work.append(self.gpa, bound_expr);
                     }
                 },
                 .e_lookup_associated_resolved => |lookup| {
@@ -23305,8 +23317,10 @@ fn defaultMaterializationIsRecursive(
         const expr = self.cir.store.getExpr(expr_idx);
         switch (expr) {
             .e_lookup_local => |lookup| {
-                if (evidence.pattern_to_def_expr.get(lookup.pattern_idx)) |def_expr| {
-                    try expr_work.append(self.gpa, def_expr);
+                if (evidence.pattern_to_def_expr.get(lookup.pattern_idx) orelse
+                    local_pattern_to_expr.get(lookup.pattern_idx)) |bound_expr|
+                {
+                    try expr_work.append(self.gpa, bound_expr);
                 }
             },
             .e_lookup_associated_resolved => |lookup| {
@@ -23404,8 +23418,10 @@ fn defaultMaterializationIsRecursive(
             .e_closure => |closure| {
                 for (self.cir.store.sliceCaptures(closure.captures)) |capture_idx| {
                     const capture = self.cir.store.getCapture(capture_idx);
-                    if (evidence.pattern_to_def_expr.get(capture.pattern_idx)) |def_expr| {
-                        try expr_work.append(self.gpa, def_expr);
+                    if (evidence.pattern_to_def_expr.get(capture.pattern_idx) orelse
+                        local_pattern_to_expr.get(capture.pattern_idx)) |bound_expr|
+                    {
+                        try expr_work.append(self.gpa, bound_expr);
                     }
                 }
             },
@@ -23427,7 +23443,7 @@ fn defaultMaterializationIsRecursive(
             },
             .e_block => |block| {
                 for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
-                    try self.appendDefaultWalkStmtExprs(stmt_idx, &expr_work);
+                    try self.appendDefaultWalkStmtExprs(stmt_idx, &expr_work, &local_pattern_to_expr);
                 }
                 try expr_work.append(self.gpa, block.final_expr);
             },
@@ -23492,15 +23508,26 @@ fn defaultMaterializationIsRecursive(
     return false;
 }
 
-/// Statement descent for the default-materialization residue walk.
+/// Statement descent for the default-materialization residue walk. A
+/// statement that binds a pattern to an expression also records the edge in
+/// `local_pattern_to_expr`, so lookups resolving to walk-local binders follow
+/// reference edges exactly like top-level defs (see
+/// `defaultMaterializationIsRecursive`).
 fn appendDefaultWalkStmtExprs(
     self: *Self,
     stmt_idx: CIR.Statement.Idx,
     expr_work: *std.ArrayList(CIR.Expr.Idx),
+    local_pattern_to_expr: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
 ) std.mem.Allocator.Error!void {
     switch (self.cir.store.getStatement(stmt_idx)) {
-        .s_decl => |decl| try expr_work.append(self.gpa, decl.expr),
-        .s_var => |var_stmt| try expr_work.append(self.gpa, var_stmt.expr),
+        .s_decl => |decl| {
+            try local_pattern_to_expr.put(self.gpa, decl.pattern, decl.expr);
+            try expr_work.append(self.gpa, decl.expr);
+        },
+        .s_var => |var_stmt| {
+            try local_pattern_to_expr.put(self.gpa, var_stmt.pattern_idx, var_stmt.expr);
+            try expr_work.append(self.gpa, var_stmt.expr);
+        },
         .s_reassign => |reassign| try expr_work.append(self.gpa, reassign.expr),
         .s_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
         .s_expr => |expr_stmt| try expr_work.append(self.gpa, expr_stmt.expr),

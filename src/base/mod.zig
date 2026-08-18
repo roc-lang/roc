@@ -18,6 +18,7 @@ comptime {
 
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const SourceLoc = @import("source_loc.zig").SourceLoc;
+pub const SourceFileEntry = @import("source_loc.zig").SourceFileEntry;
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
 pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;

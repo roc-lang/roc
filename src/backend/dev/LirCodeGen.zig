@@ -23528,6 +23528,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitRocExpectFailed(self: *Self) Allocator.Error!void {
+            // Stamp the failing statement's region/location before the call,
+            // exactly as for crashes, so compile-time expect failures resolve
+            // their declaring module (the host consumes the pending location
+            // per expect event; see CompileTimeHost.rocExpectFailed).
+            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             try self.emitRocStaticMessageCall(@offsetOf(RocOps, "roc_expect_failed"), "expect failed");
         }
 

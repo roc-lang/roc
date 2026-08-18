@@ -162,7 +162,7 @@ pub fn run(
     var lowerer = try Lowerer.init(allocator, target_usize, &owned, options);
     errdefer lowerer.deinit();
 
-    try lowerer.result.store.setSourceFiles(owned.lifted.sourceFileNames());
+    try lowerer.result.store.setSourceFiles(owned.lifted.sourceFiles());
     try lowerer.lowerInlineScopes();
     try lowerer.lower();
     try lowerer.bindRoots();
@@ -9653,14 +9653,23 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
     var string_literals = try cloneStringLiterals(allocator, program.stringLiteralsView());
     errdefer deinitStringLiterals(allocator, &string_literals);
 
-    var source_files: std.ArrayList([]const u8) = .empty;
+    var source_files: std.ArrayList(base.SourceFileEntry) = .empty;
     errdefer {
-        for (source_files.items) |file| allocator.free(file);
+        for (source_files.items) |file| {
+            allocator.free(file.name);
+            allocator.free(file.qualified_name);
+        }
         source_files.deinit(allocator);
     }
-    try source_files.ensureTotalCapacityPrecise(allocator, program.sourceFileNames().len);
-    for (program.sourceFileNames()) |file| {
-        source_files.appendAssumeCapacity(try allocator.dupe(u8, file));
+    try source_files.ensureTotalCapacityPrecise(allocator, program.sourceFiles().len);
+    for (program.sourceFiles()) |file| {
+        const name = try allocator.dupe(u8, file.name);
+        errdefer allocator.free(name);
+        const qualified_name = try allocator.dupe(u8, file.qualified_name);
+        source_files.appendAssumeCapacity(.{
+            .name = name,
+            .qualified_name = qualified_name,
+        });
     }
 
     var const_fn_evidence = try clonedLiftedProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence", allocator, view.const_fn_evidence);
@@ -9702,7 +9711,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
         .runtime_schema_requests = try clonedLiftedProgramList(Lifted.RuntimeSchemaRequest, "runtime_schema_requests", allocator, view.runtime_schema_requests),
         .static_data_values = try clonedLiftedProgramList(Lifted.StaticDataValue, "static_data_values", allocator, view.static_data_values),
         .comptime_sites = Lifted.ProgramList(Lifted.ComptimeSite, "comptime_sites").fromArrayList(try cloneComptimeSites(allocator, view.comptime_sites)),
-        .source_files = Lifted.ProgramList([]const u8, "source_files").fromArrayList(source_files),
+        .source_files = Lifted.ProgramList(base.SourceFileEntry, "source_files").fromArrayList(source_files),
         .expr_locs = try clonedLiftedProgramList(base.SourceLoc, "expr_locs", allocator, view.expr_locs),
         .expr_regions = try clonedLiftedProgramList(base.Region, "expr_regions", allocator, view.expr_regions),
         .stmt_locs = try clonedLiftedProgramList(base.SourceLoc, "stmt_locs", allocator, view.stmt_locs),

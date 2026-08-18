@@ -1062,7 +1062,7 @@ pub const ProgramView = struct {
     runtime_schema_requests: []const RuntimeSchemaRequest,
     static_data_values: []const StaticDataValue,
     comptime_sites: []const ComptimeSite,
-    source_files: []const []const u8,
+    source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
     expr_regions: []const base.Region,
     stmt_locs: []const base.SourceLoc,
@@ -1245,9 +1245,9 @@ pub const ProgramBuilder = struct {
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
-    /// Source file table for `SourceLoc.file` indices (module display names,
-    /// owned by this program).
-    source_files: ProgramList([]const u8, "source_files"),
+    /// Source file table for `SourceLoc.file` indices (module display and
+    /// package-qualified names, owned by this program).
+    source_files: ProgramList(base.SourceFileEntry, "source_files"),
     /// Source location per expression, parallel to `exprs`.
     expr_locs: ProgramList(base.SourceLoc, "expr_locs"),
     /// Checked source region per expression, parallel to `exprs`.
@@ -1322,7 +1322,10 @@ pub const ProgramBuilder = struct {
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
-        for (self.source_files.unsafeRawItemsForView()) |file| self.allocator.free(file);
+        for (self.source_files.unsafeRawItemsForView()) |file| {
+            self.allocator.free(file.name);
+            self.allocator.free(file.qualified_name);
+        }
         self.source_files.deinit(self.allocator);
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
@@ -1604,13 +1607,19 @@ pub const ProgramBuilder = struct {
         return self.proc_debug_names.get(symbol);
     }
 
-    /// Register a source file (module display name) and return its index for
-    /// `SourceLoc.file`. Callers deduplicate; this always appends.
-    pub fn addSourceFile(self: *ProgramBuilder, name: []const u8) std.mem.Allocator.Error!u32 {
+    /// Register a source file (module display name plus package-qualified
+    /// module identity) and return its index for `SourceLoc.file`. Callers
+    /// deduplicate; this always appends.
+    pub fn addSourceFile(self: *ProgramBuilder, file: base.SourceFileEntry) std.mem.Allocator.Error!u32 {
         const id: u32 = @intCast(self.source_files.len());
-        const owned = try self.allocator.dupe(u8, name);
-        errdefer self.allocator.free(owned);
-        try self.source_files.append(self.allocator, owned);
+        const owned_name = try self.allocator.dupe(u8, file.name);
+        errdefer self.allocator.free(owned_name);
+        const owned_qualified = try self.allocator.dupe(u8, file.qualified_name);
+        errdefer self.allocator.free(owned_qualified);
+        try self.source_files.append(self.allocator, .{
+            .name = owned_name,
+            .qualified_name = owned_qualified,
+        });
         return id;
     }
 

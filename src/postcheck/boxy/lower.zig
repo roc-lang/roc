@@ -483,7 +483,6 @@ fn resolveNestedExprWorker(
     const site = nestedProcSiteForExpr(module, expr_ref.expr) orelse {
         boxyLowerInvariant("nested callable worker source had no nested procedure site");
     };
-    const template = module.checked_procedure_templates.get(site.owner_template.template);
     const expr = module.checked_bodies.expr(expr_ref.expr);
     const root_expr = if (expr.data == .lambda)
         expr_ref.expr
@@ -491,12 +490,20 @@ fn resolveNestedExprWorker(
         expr.data.closure.lambda
     else
         boxyLowerInvariant("nested callable worker source did not point at a lambda or closure");
+    // A default-root site (a lambda inside a defaulted-field expression,
+    // design.md "Defaulted Fields") belongs to no checked procedure template;
+    // its worker resolves with no template identity, exactly like the
+    // template-optional consumers expect.
+    const template_ref: ?names.ProcedureTemplateRef = switch (site.owner) {
+        .template => |template| template,
+        .default_root => null,
+    };
     return .{
         .worker = worker,
         .module_key = module.key,
         .module = module,
-        .template_ref = site.owner_template,
-        .template = template,
+        .template_ref = template_ref,
+        .template = if (template_ref) |ref| module.checked_procedure_templates.get(ref.template) else null,
         .body = .{ .checked_expr = .{
             .body_id = null,
             .root_expr = root_expr,
@@ -517,7 +524,11 @@ fn checkedLambdaExprForNestedFn(
 ) checked.CheckedExprId {
     for (module.nested_proc_sites.sites) |site| {
         if (site.site != nested.site) continue;
-        if (!names.procedureTemplateRefEql(site.owner_template, nested.owner)) continue;
+        const site_owner = switch (site.owner) {
+            .template => |template| template,
+            .default_root => continue,
+        };
+        if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
         const expr_id = site.checked_expr orelse
             boxyLowerInvariant("stored nested function had no checked expression site");
         const expr = module.checked_bodies.expr(expr_id);
@@ -17134,7 +17145,12 @@ const ProcBodyBuilder = struct {
                 });
                 var site_expr: ?checked.CheckedExprId = null;
                 for (module.nested_proc_sites.sites) |site| {
-                    if (site.site == nested.site and names.procedureTemplateRefEql(site.owner_template, nested.owner)) {
+                    if (site.site != nested.site) continue;
+                    const site_owner = switch (site.owner) {
+                        .template => |template| template,
+                        .default_root => continue,
+                    };
+                    if (names.procedureTemplateRefEql(site_owner, nested.owner)) {
                         site_expr = site.checked_expr orelse
                             boxyLowerInvariant("stored nested function had no checked expression site");
                         break;
@@ -38116,7 +38132,7 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
     var nested_sites = [_]checked.NestedProcSite{
         .{
             .site = @enumFromInt(fixtureTableIndex(0)),
-            .owner_template = template_ref,
+            .owner = .{ .template = template_ref },
             .lexical_scope = .root,
             .evidence_source = .inherited,
             .evidence = .{},

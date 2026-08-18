@@ -194,6 +194,51 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "4" },
     },
     .{
+        .name = "defaulted record field: immediately-invoked lambda default materializes",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { a : U8 ?? (|n| n + 1)(4) }
+        \\
+        \\x : Cfg
+        \\x = Cfg.{}
+        \\
+        \\main = x.a
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "defaulted record field: default calling a local block binding materializes",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { a : U8 ?? { f = |n| n + 1
+        \\                     f(4) } }
+        \\
+        \\x : Cfg
+        \\x = Cfg.{}
+        \\
+        \\main = x.a
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "defaulted record field: local-binding default materializes at two sites in one body",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { a : U8 ?? { f = |n| n + 1
+        \\                     f(4) } }
+        \\
+        \\use : U8
+        \\use = {
+        \\    x = Cfg.{}
+        \\    y = Cfg.{}
+        \\    x.a + y.a
+        \\}
+        \\
+        \\main = use
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
         .name = "optional record field: supplied at construction and .? hits",
         .source_kind = .module,
         .source =

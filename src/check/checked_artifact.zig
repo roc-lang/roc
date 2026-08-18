@@ -19054,10 +19054,22 @@ pub const NestedProcPathComponent = union(enum) {
     desugar: u32,
 };
 
+/// Root that lexically owns a nested procedure site. Almost every site sits
+/// inside a checked procedure template's body (or an entry wrapper's generated
+/// body, which borrows its template's identity). Defaulted-field expressions
+/// (design.md "Defaulted Fields") are the exception: they belong to no
+/// template — each is lowered standalone at every construction site that omits
+/// its field — so their nested-function sites are owned by the declaring
+/// module's default-expression root set.
+pub const NestedProcSiteOwner = union(enum) {
+    template: canonical.ProcedureTemplateRef,
+    default_root,
+};
+
 /// Public `NestedProcSite` declaration.
 pub const NestedProcSite = struct {
     site: canonical.NestedProcSiteId,
-    owner_template: canonical.ProcedureTemplateRef,
+    owner: NestedProcSiteOwner,
     /// Exact generalized-local scope lexically owning this site, or the
     /// template root when the site is outside every generalized local.
     lexical_scope: DispatchScope,
@@ -19129,6 +19141,21 @@ pub const NestedProcSiteTable = struct {
                 .start = start,
                 .len = @intCast(builder.template_refs.items.len - start),
             };
+        }
+
+        // Defaulted-field expressions (design.md "Defaulted Fields") are value
+        // expressions no template body reaches: each is lowered standalone at
+        // every construction site that omits its field. Scan each archived
+        // default as its own root — the same walk a template body gets — so a
+        // lambda/closure inside a default reaches lowering with a checked
+        // nested-function site. The default's ROOT expression is not
+        // suppressed: unlike a template body (whose root lambda IS the
+        // procedure), a default's root lambda is an ordinary nested function
+        // value.
+        for (checked_bodies.default_exprs.items) |default| {
+            builder.path.clearRetainingCapacity();
+            builder.current_scope = .root;
+            try builder.scanExpr(default.checked_expr, .default_root, false);
         }
 
         const sites = try builder.sites.toOwnedSlice(allocator);
@@ -19757,7 +19784,7 @@ const NestedProcSiteBuilder = struct {
         const body = self.checked_bodies.body(body_id);
         self.path.clearRetainingCapacity();
         self.current_scope = .root;
-        try self.scanExpr(body.root_expr, body.owner_template, true);
+        try self.scanExpr(body.root_expr, .{ .template = body.owner_template }, true);
     }
 
     fn scanEntryWrapper(
@@ -19767,12 +19794,12 @@ const NestedProcSiteBuilder = struct {
     ) Allocator.Error!void {
         self.path.clearRetainingCapacity();
         self.current_scope = .root;
-        try self.scanExpr(wrapper.body_expr, wrapper.template, false);
+        try self.scanExpr(wrapper.body_expr, .{ .template = wrapper.template }, false);
     }
 
     fn addSite(
         self: *NestedProcSiteBuilder,
-        owner: canonical.ProcedureTemplateRef,
+        owner: NestedProcSiteOwner,
         kind: NestedProcKind,
         checked_expr: ?CheckedExprId,
         checked_pattern: ?CheckedPatternId,
@@ -19800,7 +19827,7 @@ const NestedProcSiteBuilder = struct {
 
         try self.sites.append(self.allocator, .{
             .site = site,
-            .owner_template = owner,
+            .owner = owner,
             .lexical_scope = self.current_scope,
             .evidence_source = evidence_source,
             .evidence = evidence,
@@ -19810,13 +19837,19 @@ const NestedProcSiteBuilder = struct {
             .checked_expr = checked_expr,
             .checked_pattern = checked_pattern,
         });
-        try self.template_refs.append(self.allocator, site);
+        // `template_refs` is the per-template site pool (each template holds a
+        // span into it); default-root sites belong to no template and are
+        // reached through the module-level table instead.
+        switch (owner) {
+            .template => try self.template_refs.append(self.allocator, site),
+            .default_root => {},
+        }
     }
 
     fn scanExpr(
         self: *NestedProcSiteBuilder,
         expr_id: CheckedExprId,
-        owner: canonical.ProcedureTemplateRef,
+        owner: NestedProcSiteOwner,
         suppress_current_site: bool,
     ) Allocator.Error!void {
         try self.path.append(self.allocator, .{ .expr = expr_id });
@@ -19951,7 +19984,7 @@ const NestedProcSiteBuilder = struct {
     fn scanStaticDispatchPlanArgs(
         self: *NestedProcSiteBuilder,
         plan_id: static_dispatch.StaticDispatchPlanId,
-        owner: canonical.ProcedureTemplateRef,
+        owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         const raw = @intFromEnum(plan_id);
         if (raw >= self.static_dispatch_plans.plans.len) {
@@ -19968,7 +20001,7 @@ const NestedProcSiteBuilder = struct {
     fn scanGeneratedInterpolationIter(
         self: *NestedProcSiteBuilder,
         expr_id: CheckedExprId,
-        owner: canonical.ProcedureTemplateRef,
+        owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         const expr = self.checked_bodies.expr(expr_id);
         if (expr.data != .interpolation) {
@@ -19984,7 +20017,7 @@ const NestedProcSiteBuilder = struct {
     fn scanPattern(
         self: *NestedProcSiteBuilder,
         pattern_id: CheckedPatternId,
-        owner: canonical.ProcedureTemplateRef,
+        owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         try self.path.append(self.allocator, .{ .pattern = pattern_id });
         defer self.path.items.len -= 1;
@@ -20030,7 +20063,7 @@ const NestedProcSiteBuilder = struct {
     fn scanStatement(
         self: *NestedProcSiteBuilder,
         statement_id: CheckedStatementId,
-        owner: canonical.ProcedureTemplateRef,
+        owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         try self.path.append(self.allocator, .{ .statement = statement_id });
         defer self.path.items.len -= 1;
@@ -20095,7 +20128,7 @@ const NestedProcSiteBuilder = struct {
     fn scanAttachedLocalProcedures(
         self: *NestedProcSiteBuilder,
         statement_id: CheckedStatementId,
-        owner: canonical.ProcedureTemplateRef,
+        owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
         for (self.method_registry.entries) |entry| {
             const target = entry.target orelse continue;
@@ -29254,7 +29287,12 @@ pub const CheckedModuleArtifact = struct {
     // per specialization from the archived checked expression, and a
     // default's literal conversion is an ordinary conversion root
     // (design.md "Defaulted Fields").
-    const serialized_layout_version: u32 = 71;
+    // Version 72 publishes nested-procedure sites for lambdas/closures inside
+    // defaulted-field expressions under a `.default_root` owner
+    // (`NestedProcSiteOwner`): default expressions belong to no procedure
+    // template, so their sites carry the module's default-expression root set
+    // as owner (design.md "Defaulted Fields").
+    const serialized_layout_version: u32 = 72;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -30330,9 +30368,15 @@ pub const CheckedModuleArtifact = struct {
             for (self.nested_proc_sites.template_refs[template.nested_proc_sites.start..nested_end]) |site_id| {
                 std.debug.assert(@intFromEnum(site_id) < self.nested_proc_sites.sites.len);
                 const site = self.nested_proc_sites.sites[@intFromEnum(site_id)];
-                std.debug.assert(site.owner_template.template == template.template_id);
-                std.debug.assert(site.owner_template.proc_base == template.proc_base);
-                std.debug.assert(std.meta.eql(site.owner_template.artifact.bytes, self.key.bytes));
+                switch (site.owner) {
+                    .template => |owner_template| {
+                        std.debug.assert(owner_template.template == template.template_id);
+                        std.debug.assert(owner_template.proc_base == template.proc_base);
+                        std.debug.assert(std.meta.eql(owner_template.artifact.bytes, self.key.bytes));
+                    },
+                    // A template's span never references a default-root site.
+                    .default_root => unreachable,
+                }
             }
         }
 
@@ -30340,7 +30384,12 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@intFromEnum(site.site) == i);
             std.debug.assert(site.path_len > 0);
             std.debug.assert(site.path_start + site.path_len <= self.nested_proc_sites.path_components.len);
-            std.debug.assert(@intFromEnum(site.owner_template.template) < self.checked_procedure_templates.templates.len);
+            switch (site.owner) {
+                .template => |owner_template| std.debug.assert(@intFromEnum(owner_template.template) < self.checked_procedure_templates.templates.len),
+                // A default-root site always names its checked lambda/closure
+                // expression (defaults are archived checked expressions).
+                .default_root => std.debug.assert(site.checked_expr != null),
+            }
             switch (site.lexical_scope) {
                 .root => {},
                 .generalized => |scope| std.debug.assert(@intFromEnum(scope) < self.checked_procedure_templates.dispatch_scopes.len),
@@ -35412,8 +35461,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x28, 0x23, 0x9E, 0xE8, 0x05, 0x2C, 0xA6, 0x03, 0x16, 0x47, 0xEC, 0xAA, 0x87, 0x31, 0xA6, 0x08,
-        0x5A, 0xA1, 0xC4, 0xCE, 0x41, 0x80, 0xF9, 0x44, 0x8C, 0x58, 0xC9, 0xE8, 0xFD, 0x90, 0xA8, 0xFF,
+        0xAC, 0xBC, 0xE1, 0x88, 0x67, 0x13, 0x98, 0x99, 0x25, 0x28, 0xF3, 0x47, 0x59, 0xEB, 0x39, 0xEB,
+        0x97, 0x8D, 0x2A, 0x39, 0xBE, 0xA6, 0x7A, 0xFE, 0xE3, 0x0D, 0x41, 0xF5, 0xD0, 0xA0, 0xD6, 0xE9,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

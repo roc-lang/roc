@@ -495,7 +495,7 @@ pub const Program = struct {
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
     /// Source file table for `SourceLoc.file` indices (copied from the lifted
     /// program; owned by this program).
-    source_files: ProgramList([]const u8, "source_files"),
+    source_files: ProgramList(base.SourceFileEntry, "source_files"),
     /// Source location per expression, parallel to `exprs`.
     expr_locs: ProgramList(base.SourceLoc, "expr_locs"),
     /// Checked source region per expression, parallel to `exprs`.
@@ -569,7 +569,10 @@ pub const Program = struct {
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
-        for (self.source_files.unsafeRawItemsForView()) |file| self.allocator.free(file);
+        for (self.source_files.unsafeRawItemsForView()) |file| {
+            self.allocator.free(file.name);
+            self.allocator.free(file.qualified_name);
+        }
         self.source_files.deinit(self.allocator);
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
@@ -849,7 +852,7 @@ pub const Program = struct {
         return self.runtime_schema_requests.len();
     }
 
-    pub fn sourceFileNames(self: *const Program) []const []const u8 {
+    pub fn sourceFiles(self: *const Program) []const base.SourceFileEntry {
         return self.source_files.unsafeRawItemsForView();
     }
 
