@@ -941,9 +941,10 @@ pub const InstGraph = struct {
             };
             named.def.generated = null;
             // The value walk stays the authority: depth is a global property
-            // of the value graph — a component class joined after creation
-            // deepens every chain built over it, with no local event at the
-            // parents — so the edge fold cannot state it. The fold still
+            // of the value-reachable component chains — a component class
+            // joined after creation deepens every chain built over it, with
+            // no local event at the parents — so the edge fold cannot state
+            // it. The fold still
             // tracks what the edges alone would decide, and any divergence
             // beyond a chain deepened past the cap without its own join event
             // prints here so wider corpora keep auditing the split.
