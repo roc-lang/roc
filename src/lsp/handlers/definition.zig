@@ -60,7 +60,10 @@ pub fn handler(comptime ServerType: type) type {
                 try self.sendError(id, .invalid_params, "line must be an integer");
                 return;
             }
-            const line: u32 = @intCast(line_value.integer);
+            const line: u32 = std.math.cast(u32, line_value.integer) orelse {
+                try self.sendError(id, .invalid_params, "line must be a non-negative integer");
+                return;
+            };
 
             const character_value = position_obj.get("character") orelse {
                 try self.sendError(id, .invalid_params, "missing character");
@@ -70,7 +73,10 @@ pub fn handler(comptime ServerType: type) type {
                 try self.sendError(id, .invalid_params, "character must be an integer");
                 return;
             }
-            const character: u32 = @intCast(character_value.integer);
+            const character: u32 = std.math.cast(u32, character_value.integer) orelse {
+                try self.sendError(id, .invalid_params, "character must be a non-negative integer");
+                return;
+            };
 
             // Get the document text from the store
             const doc = self.doc_store.get(uri);
