@@ -935,17 +935,20 @@ pub const InstGraph = struct {
 
     /// Decide every graph-owned iterator representation after relation
     /// production has supplied its complete component graph, but before any
-    /// durable Monotype is sealed. The exact memoized graph walk follows values
-    /// only: function bodies and named backings cannot store an iterator value
-    /// and therefore do not contribute depth. A value cycle selects the finite
-    /// forced-dynamic fixed point.
+    /// durable Monotype is sealed. The representation engine's incrementally
+    /// maintained chain state is the authority: composition edges follow
+    /// values only — function bodies and named backings cannot store an
+    /// iterator value and therefore do not contribute depth — and a value
+    /// cycle selects the finite forced-dynamic fixed point. Debug builds
+    /// recompute the decision with an exact memoized value walk and print
+    /// any divergence.
     pub fn finalizeGeneratedIteratorRepresentations(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
 
         const Pending = struct {
             node: NodeId,
             depth: u8,
-            force_dynamic: bool,
+            forced: bool,
         };
         var pending = std.ArrayList(Pending).empty;
         defer pending.deinit(self.allocator);
@@ -966,11 +969,24 @@ pub const InstGraph = struct {
             };
             if (named.generated_iterator == null) continue;
 
-            const depth = try self.generatedIteratorDepth(node, &depths, &active);
+            const slot = self.engine_slots.get(node) orelse
+                Common.invariant("generated iterator lacked a representation slot");
+            const chain = self.iterator_engine.chainState(slot);
+            // The value walk audits the engine's incremental chain state: it
+            // recomputes depth as a global property of the value-reachable
+            // component chains and any disagreement prints here so wider
+            // corpora keep checking the transfer.
+            if (comptime std.debug.runtime_safety) {
+                const depth = try self.generatedIteratorDepth(node, &depths, &active);
+                const walk_forces = self.iteratorRootRequiresForcedDynamic(node) or depth > generated_iterator_mint_depth_limit;
+                if (chain.forced != walk_forces or (!walk_forces and chain.depth != depth)) {
+                    std.debug.print("iterator engine diverged: engine forced={} depth={d}, walk forced={} depth={d}\n", .{ chain.forced, chain.depth, walk_forces, depth });
+                }
+            }
             try pending.append(self.allocator, .{
                 .node = node,
-                .depth = depth,
-                .force_dynamic = self.iteratorRootRequiresForcedDynamic(node),
+                .depth = chain.depth,
+                .forced = chain.forced,
             });
         }
 
@@ -981,24 +997,7 @@ pub const InstGraph = struct {
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator representation target stopped being named"),
             };
             named.def.generated = null;
-            // The value walk stays the authority: depth is a global property
-            // of the value-reachable component chains — a component class
-            // joined after creation deepens every chain built over it, with
-            // no local event at the parents — so the edge fold cannot state
-            // it. The fold still
-            // tracks what the edges alone would decide, and any divergence
-            // beyond a chain deepened past the cap without its own join event
-            // prints here so wider corpora keep auditing the split.
-            if (comptime std.debug.runtime_safety) {
-                if (self.engine_slots.get(node)) |slot| {
-                    const chain = self.iterator_engine.chainState(slot);
-                    const walk_forces = item.force_dynamic or item.depth > generated_iterator_mint_depth_limit;
-                    if (chain.forced != walk_forces or (!walk_forces and chain.depth != item.depth)) {
-                        std.debug.print("iterator engine diverged: engine forced={} depth={d}, walk forced={} depth={d}, explicit={}\n", .{ chain.forced, chain.depth, walk_forces, item.depth, item.force_dynamic });
-                    }
-                }
-            }
-            if (item.force_dynamic or item.depth > generated_iterator_mint_depth_limit) {
+            if (item.forced or item.depth > generated_iterator_mint_depth_limit) {
                 if (named.args.len == 0) {
                     Common.invariant("generated iterator representation had no item argument");
                 }
@@ -6478,6 +6477,8 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
             .module = module_identity,
             .type_name = type_name,
             .iterator_kind = .single,
+            .iterator_representation = .minted,
+            .iterator_depth = 1,
         },
         .kind = .@"opaque",
         .builtin_owner = .iter,
@@ -6507,6 +6508,8 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
             .module = module_identity,
             .type_name = type_name,
             .iterator_kind = .concat,
+            .iterator_representation = .minted,
+            .iterator_depth = 2,
         },
         .kind = .@"opaque",
         .builtin_owner = .iter,
@@ -6521,6 +6524,8 @@ test "generated iterator depth visits wide graphs without a size cutoff" {
             .public_source = public_source,
         },
     } });
+    try graph.seedIteratorFold(source);
+    try graph.seedIteratorFold(adapter);
 
     try graph.finalizeGeneratedIteratorRepresentations();
 
@@ -6608,6 +6613,8 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
             .public_source = public_source,
         },
     } });
+
+    try graph.seedIteratorFold(owned);
 
     // This order is significant: the finished type is the left side of the
     // recursive join, but only the graph-owned side can author the final
