@@ -150,10 +150,10 @@ Sometimes code is easier to understand in a functional style, and other times it
 in an imperative style. Roc has support for both styles, even though its APIs are designed around immutable
 values and a functional style.
 
-### Expect
+### 
 
 To see both styles, let's write a function called `digits_to_num` which takes a list of digits and returns 
-the number they represent. When we're done, we'll be able to run `roc test` and see these `expect`s pass:
+the number they represent. When we're done, we'll be able to run `roc test` and see these ``s pass:
 
 ```ruby
 expect digits_to_num([1, 2, 3]) == 123
@@ -306,8 +306,6 @@ We mentioned `expect` earlier - if you put these at the top level of your file, 
 
 You can also put them in blocks, in which case they will work essentially like a `crash` when you're doing `roc test` or
 a debug build of `roc`, but when you do `roc --opt=speed`, they will be skipped.
-
-> Note: `--opt=speed` does not discard `expect`s yet but it could be implemented at any moment.
 
 ```ruby
 digits_to_num = |digits| {
