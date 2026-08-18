@@ -120,6 +120,8 @@ pub const IteratorShape = struct {
     components: ComponentSpan = .{},
 };
 
+const max_minted_chain_depth: u8 = 16;
+
 /// The shape a slot represents. This is the engine's own compact model of the
 /// representation forms that join; it is not a store type from another stage.
 pub const SlotShape = union(enum) {
@@ -147,6 +149,14 @@ const Slot = struct {
     producer: ProducerAtom,
     shape: SlotShape,
     parent: RepresentationSlotId,
+    /// Minted chain depth for iterator slots: the producer's structural depth
+    /// at creation, re-deepened upward when a composed class joins a deeper
+    /// one. Zero for every non-iterator shape.
+    depth: u8 = 0,
+    /// Whether this iterator slot's representation is forced dynamic: set at
+    /// creation for the forced tier, and set by the upward walk when a
+    /// composition cycle or the chain cap is reached.
+    forced: bool = false,
 };
 
 const PairId = struct {
@@ -182,6 +192,11 @@ pub const Engine = struct {
     allocator: Allocator,
     slots: std.ArrayList(Slot),
     components: std.ArrayList(RepresentationSlotId),
+    /// For each slot, the iterator slots whose shapes compose over it — the
+    /// upward edges the depth walk climbs when a composed class joins a
+    /// deeper one. Registered at creation from the iterator shape's item,
+    /// backing, and component slots.
+    composers: std.AutoHashMapUnmanaged(RepresentationSlotId, std.ArrayList(RepresentationSlotId)),
     active: std.AutoHashMapUnmanaged(PairId, void),
     derived: std.AutoHashMapUnmanaged(DerivedId, void),
 
@@ -190,6 +205,7 @@ pub const Engine = struct {
             .allocator = allocator,
             .slots = .empty,
             .components = .empty,
+            .composers = .empty,
             .active = .empty,
             .derived = .empty,
         };
@@ -198,6 +214,9 @@ pub const Engine = struct {
     pub fn deinit(self: *Engine) void {
         self.slots.deinit(self.allocator);
         self.components.deinit(self.allocator);
+        var composer_lists = self.composers.valueIterator();
+        while (composer_lists.next()) |list| list.deinit(self.allocator);
+        self.composers.deinit(self.allocator);
         self.active.deinit(self.allocator);
         self.derived.deinit(self.allocator);
     }
@@ -223,13 +242,33 @@ pub const Engine = struct {
         shape: SlotShape,
     ) Allocator.Error!RepresentationSlotId {
         const id: RepresentationSlotId = @enumFromInt(@as(u32, @intCast(self.slots.items.len)));
+        var depth: u8 = 0;
+        var forced = false;
+        if (shape == .iterator) {
+            const iter = shape.iterator;
+            forced = iter.descriptor.def.iterator_representation == .forced_dynamic;
+            depth = if (forced) 0 else iter.descriptor.def.iterator_depth;
+            try self.registerComposer(iter.item, id);
+            try self.registerComposer(iter.backing, id);
+            for (0..iter.components.len) |index| {
+                try self.registerComposer(self.components.items[iter.components.start + index], id);
+            }
+        }
         try self.slots.append(self.allocator, .{
             .logical = logical,
             .producer = producer,
             .shape = shape,
             .parent = id,
+            .depth = depth,
+            .forced = forced,
         });
         return id;
+    }
+
+    fn registerComposer(self: *Engine, component: RepresentationSlotId, composer: RepresentationSlotId) Allocator.Error!void {
+        const entry = try self.composers.getOrPut(self.allocator, self.find(component));
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, composer);
     }
 
     /// Read a slot's current shape (following the union-find root). Read-only.
@@ -576,7 +615,69 @@ pub const Engine = struct {
             .right => r,
         };
         const loser = if (winner == l) r else l;
+        const winner_depth = self.slotConst(winner).depth;
+        const winner_forced = self.slotConst(winner).forced;
+        const loser_depth = self.slotConst(loser).depth;
+        const loser_forced = self.slotConst(loser).forced;
+        // The joined class's chain state: forcing is sticky from either side,
+        // and the class's depth is the deeper member's, because a composer
+        // over the class now composes over everything in it.
+        const joined_depth = @max(winner_depth, loser_depth);
+        const joined_forced = winner_forced or loser_forced;
+        const deepened = joined_depth > winner_depth or joined_forced != winner_forced;
         self.slotMut(loser).parent = winner;
+        self.slotMut(winner).depth = joined_depth;
+        self.slotMut(winner).forced = joined_forced;
+        // Move the loser's composer back-links onto the surviving class so the
+        // upward walk keeps seeing every chain built over either side.
+        if (self.composers.fetchRemove(loser)) |moved| {
+            var list = moved.value;
+            defer list.deinit(self.allocator);
+            for (list.items) |composer| {
+                self.registerComposer(winner, composer) catch {};
+            }
+        }
+        if (deepened) self.redeepenComposers(winner);
+    }
+
+    /// Climb the composer links from a class whose depth or forcing changed,
+    /// recomputing each composing iterator's chain depth as one more than its
+    /// deepest composed class. A composer reached while it is already being
+    /// recomputed closes a composition cycle, which forces its class, exactly
+    /// as the freeze walk forces a value cycle.
+    fn redeepenComposers(self: *Engine, changed: RepresentationSlotId) void {
+        const changed_root = self.find(changed);
+        const list = self.composers.getPtr(changed_root) orelse return;
+        const changed_depth = self.slotConst(changed_root).depth;
+        const changed_forced = self.slotConst(changed_root).forced;
+        for (list.items) |raw_composer| {
+            const composer = self.find(raw_composer);
+            if (composer == changed_root) {
+                // A class composing over itself is a composition cycle.
+                if (!self.slotConst(composer).forced) {
+                    self.slotMut(composer).forced = true;
+                    self.redeepenComposers(composer);
+                }
+                continue;
+            }
+            const composer_slot = self.slotMut(composer);
+            const wanted: u8 = if (changed_depth >= max_minted_chain_depth)
+                changed_depth
+            else
+                changed_depth + 1;
+            _ = changed_forced;
+            var composer_changed = false;
+            if (wanted > composer_slot.depth) {
+                composer_slot.depth = wanted;
+                // The chain cap forces the composer's class, exactly as the
+                // freeze walk forces a chain deepened past the cap.
+                if (wanted > max_minted_chain_depth and !composer_slot.forced) {
+                    composer_slot.forced = true;
+                }
+                composer_changed = true;
+            }
+            if (composer_changed) self.redeepenComposers(composer);
+        }
     }
 
     fn derivedId(
