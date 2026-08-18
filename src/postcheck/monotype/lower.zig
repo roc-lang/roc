@@ -32135,6 +32135,7 @@ const BodyContext = struct {
                     .empty_record => {
                         break :blk try self.lowerRecordConstructorAtNode(checked_expr, .{
                             .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                            .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
                             .ext = @as(?checked.CheckedExprId, null),
                         }, expected_node);
                     },
@@ -33438,6 +33439,20 @@ const BodyContext = struct {
             } } });
         }
 
+        // The closed constructor never lists unset fields explicitly — an
+        // unset optional slot is constructed by the omitted-optional arm
+        // below — but every unset label must still name an OPTIONAL field in
+        // the row, the same validation the update arm above applies. Without
+        // it, an unset of a defaulted field would silently take the
+        // defaulted arm and materialize the default, diverging from boxy
+        // lowering (which panics on the same input).
+        for (record.unsets) |label| {
+            const name = try self.builder.recordFieldName(self.view, label);
+            if (self.monotypeFieldKindTag(self.builder.recordField(ty, name)) != .optional) {
+                Common.invariant("record constructor unset field was not optional after checking");
+            }
+        }
+
         const target_fields = switch (self.builder.shapeContent(ty)) {
             .record => |fields| fields,
             .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record expression had a non-record monotype"),
@@ -33637,6 +33652,18 @@ const BodyContext = struct {
                 .base = base_expr,
                 .fields = try self.addFieldExprSpan(fields),
             } });
+        }
+
+        // Same unset validation as the closed constructor in
+        // `lowerRecordExpr` (and the graph update arm above): an unset label
+        // must name an OPTIONAL field in the row; the omitted-optional arm
+        // below then constructs its Missing slot. Without this, an unset of
+        // a defaulted field would silently materialize the default.
+        for (record.unsets) |label| {
+            const name = try self.builder.recordFieldName(self.view, label);
+            if ((try self.graph.recordConstructionFieldKind(record_node, name)) != .optional) {
+                Common.invariant("record graph constructor unset field was not optional after checking");
+            }
         }
 
         const target_fields = (try self.graph.recordConstructionNodes(record_node)).fields;

@@ -271,14 +271,6 @@ const Pass = struct {
                             try self.addEdge(self.invokedNode(node));
                         }
                     },
-                    .e_lookup_associated_resolved => |lookup| {
-                        if (lookup.module_identity == self.env.selfModuleIdentity()) {
-                            const def = self.env.store.getDef(lookup.target_def_idx);
-                            if (self.pattern_to_node.get(def.pattern)) |node| {
-                                try self.addEdge(self.invokedNode(node));
-                            }
-                        }
-                    },
                     else => {},
                 }
             }
@@ -289,17 +281,6 @@ const Pass = struct {
                 .e_lookup_local => |lookup| {
                     if (self.pattern_to_node.get(lookup.pattern_idx)) |node| {
                         try self.addEdge(node);
-                    }
-                },
-                .e_lookup_associated_resolved => |lookup| {
-                    // Resolved associated items name their target def
-                    // directly; a same-module target is an ordinary
-                    // reference edge.
-                    if (lookup.module_identity == self.env.selfModuleIdentity()) {
-                        const def = self.env.store.getDef(lookup.target_def_idx);
-                        if (self.pattern_to_node.get(def.pattern)) |node| {
-                            try self.addEdge(node);
-                        }
                     }
                 },
                 .e_nominal => |nominal| {
@@ -416,6 +397,22 @@ const Pass = struct {
                     try self.walk.append(self.gpa, for_expr.expr);
                     try self.walk.append(self.gpa, for_expr.body);
                 },
+                // Associated-value lookups terminate here by principle:
+                // resolving `Type.item` to its target def requires following
+                // transparent aliases through the TYPE store (see
+                // `resolveAssociatedLookup` in src/check/Check.zig), which
+                // only exists after type checking. Checking replaces these
+                // with `e_lookup_associated_resolved`, and the checker's
+                // residue walk owns associated-value-mediated cycles: it
+                // follows the resolved form's same-module target def in both
+                // its value walk and its invoked drain
+                // (`defaultMaterializationIsRecursive` in
+                // src/check/Check.zig, the `.e_lookup_associated_resolved`
+                // arms). `e_lookup_associated_resolved` never exists at
+                // canonicalization time, so it carries no arm here.
+                .e_lookup_associated_local,
+                .e_lookup_associated,
+                .e_lookup_associated_resolved,
                 .e_break,
                 .e_num,
                 .e_frac_f32,
@@ -436,8 +433,6 @@ const Pass = struct {
                 .e_derived_method,
                 .e_hosted_lambda,
                 .e_lookup_external,
-                .e_lookup_associated_local,
-                .e_lookup_associated,
                 .e_lookup_required,
                 .e_crash,
                 .e_runtime_error,

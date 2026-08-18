@@ -286,6 +286,130 @@ test "emit expression with lexicographic records sorts every nesting level" {
     try testing.expectEqualStrings("{ inner: { a: 1, b: 2 }, z: 0 }", emitter.getOutput());
 }
 
+test "emit record with extension writes the extension first" {
+    // The parser only accepts `..ext` immediately after `{`, so the emitter
+    // must write the extension BEFORE the fields and unsets (matching fmt's
+    // `{ ..base, f: 1 }` ordering) for its output to re-parse.
+    const module_env = try createTestEnv(test_allocator, "{ ..base_rec, f: 1, o: _ }");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const one = try addIntExpr(module_env, 1);
+    const f = try module_env.insertIdent(base.Ident.for_text("f"));
+    const o = try module_env.insertIdent(base.Ident.for_text("o"));
+    const ext = try addLocalLookup(module_env, "base_rec");
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+
+    // Extension alone.
+    const empty_record = try module_env.addExpr(.{ .e_record = .{
+        .fields = .{ .span = base.DataSpan.empty() },
+        .unsets = .{ .span = base.DataSpan.empty() },
+        .ext = ext,
+    } }, base.Region.zero());
+    try emitter.emitExpr(empty_record);
+    try testing.expectEqualStrings("{ ..base_rec }", emitter.getOutput());
+
+    // Extension plus a supplied field.
+    const fields_start = module_env.store.scratch.?.record_fields.top();
+    const f_field = try module_env.addRecordField(.{ .name = f, .value = one }, base.Region.zero());
+    try module_env.store.addScratch("record_fields", f_field);
+    const fields = try module_env.store.recordFieldSpanFrom(fields_start);
+    const field_record = try module_env.addExpr(.{ .e_record = .{
+        .fields = fields,
+        .unsets = .{ .span = base.DataSpan.empty() },
+        .ext = ext,
+    } }, base.Region.zero());
+    emitter.reset();
+    try emitter.emitExpr(field_record);
+    try testing.expectEqualStrings("{ ..base_rec, f: 1 }", emitter.getOutput());
+
+    // Extension plus an unset field.
+    const unsets_start = module_env.store.scratch.?.record_unset_fields.top();
+    const o_unset = try module_env.addUnsetField(.{ .name = o }, base.Region.zero());
+    try module_env.store.scratch.?.record_unset_fields.append(o_unset);
+    const unsets = try module_env.store.unsetFieldSpanFrom(unsets_start);
+    const unset_record = try module_env.addExpr(.{ .e_record = .{
+        .fields = .{ .span = base.DataSpan.empty() },
+        .unsets = unsets,
+        .ext = ext,
+    } }, base.Region.zero());
+    emitter.reset();
+    try emitter.emitExpr(unset_record);
+    try testing.expectEqualStrings("{ ..base_rec, o: _ }", emitter.getOutput());
+
+    // Extension plus both.
+    const both_record = try module_env.addExpr(.{ .e_record = .{
+        .fields = fields,
+        .unsets = unsets,
+        .ext = ext,
+    } }, base.Region.zero());
+    emitter.reset();
+    try emitter.emitExpr(both_record);
+    try testing.expectEqualStrings("{ ..base_rec, f: 1, o: _ }", emitter.getOutput());
+}
+
+test "emit lexicographic records merge unset and supplied fields into one sorted order" {
+    // `defaultLiteralSource` (src/bump/extract.zig) relies on lexicographic
+    // mode giving source-equivalent literals ONE canonical text: unsets must
+    // merge into the name-sorted field sequence, so two CIR orderings of the
+    // same field set render identically.
+    const module_env = try createTestEnv(test_allocator, "{ a: _, b: 2, c: _ }");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    const two = try addIntExpr(module_env, 2);
+    const a = try module_env.insertIdent(base.Ident.for_text("a"));
+    const b = try module_env.insertIdent(base.Ident.for_text("b"));
+    const c = try module_env.insertIdent(base.Ident.for_text("c"));
+
+    const fields_start = module_env.store.scratch.?.record_fields.top();
+    const b_field = try module_env.addRecordField(.{ .name = b, .value = two }, base.Region.zero());
+    try module_env.store.addScratch("record_fields", b_field);
+    const fields = try module_env.store.recordFieldSpanFrom(fields_start);
+
+    // First CIR ordering: unsets [a, c].
+    const first_unsets_start = module_env.store.scratch.?.record_unset_fields.top();
+    const a_unset = try module_env.addUnsetField(.{ .name = a }, base.Region.zero());
+    try module_env.store.scratch.?.record_unset_fields.append(a_unset);
+    const c_unset = try module_env.addUnsetField(.{ .name = c }, base.Region.zero());
+    try module_env.store.scratch.?.record_unset_fields.append(c_unset);
+    const first_unsets = try module_env.store.unsetFieldSpanFrom(first_unsets_start);
+    const first_record = try module_env.addExpr(.{ .e_record = .{
+        .fields = fields,
+        .unsets = first_unsets,
+        .ext = null,
+    } }, base.Region.zero());
+
+    // Second CIR ordering of the same field set: unsets [c, a].
+    const second_unsets_start = module_env.store.scratch.?.record_unset_fields.top();
+    const c_unset_again = try module_env.addUnsetField(.{ .name = c }, base.Region.zero());
+    try module_env.store.scratch.?.record_unset_fields.append(c_unset_again);
+    const a_unset_again = try module_env.addUnsetField(.{ .name = a }, base.Region.zero());
+    try module_env.store.scratch.?.record_unset_fields.append(a_unset_again);
+    const second_unsets = try module_env.store.unsetFieldSpanFrom(second_unsets_start);
+    const second_record = try module_env.addExpr(.{ .e_record = .{
+        .fields = fields,
+        .unsets = second_unsets,
+        .ext = null,
+    } }, base.Region.zero());
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+
+    try emitter.emitExprWithLexicographicRecords(first_record);
+    try testing.expectEqualStrings("{ a: _, b: 2, c: _ }", emitter.getOutput());
+
+    emitter.reset();
+    try emitter.emitExprWithLexicographicRecords(second_record);
+    try testing.expectEqualStrings("{ a: _, b: 2, c: _ }", emitter.getOutput());
+
+    // Source order keeps supplied fields first, then unsets in CIR order
+    // (CIR does not preserve the source interleaving).
+    emitter.reset();
+    try emitter.emitExpr(second_record);
+    try testing.expectEqualStrings("{ b: 2, c: _, a: _ }", emitter.getOutput());
+}
+
 test "emit optional field access path" {
     const module_env = try createTestEnv(test_allocator, "record.?outer.?inner");
     defer destroyTestEnv(test_allocator, module_env);

@@ -192,38 +192,70 @@ fn pushPatternList(
     }
 }
 
-fn recordFieldIdxLessThan(module_env: *const ModuleEnv, lhs_idx: CIR.RecordField.Idx, rhs_idx: CIR.RecordField.Idx) bool {
-    const lhs = module_env.store.getRecordField(lhs_idx);
-    const rhs = module_env.store.getRecordField(rhs_idx);
-    return module_env.getIdentStoreConst().idxTextLessThan(lhs.name, rhs.name);
+/// One record item to render: a supplied field (`name: value`) or an unset
+/// field (`name: _`).
+const RecordItem = union(enum) {
+    field: CIR.RecordField.Idx,
+    unset: CIR.UnsetField.Idx,
+};
+
+fn recordItemName(module_env: *const ModuleEnv, item: RecordItem) base.Ident.Idx {
+    return switch (item) {
+        .field => |idx| module_env.store.getRecordField(idx).name,
+        .unset => |idx| module_env.store.getUnsetField(idx).name,
+    };
 }
 
-fn pushRecordFields(
+fn recordItemLessThan(module_env: *const ModuleEnv, lhs: RecordItem, rhs: RecordItem) bool {
+    return module_env.getIdentStoreConst().idxTextLessThan(
+        recordItemName(module_env, lhs),
+        recordItemName(module_env, rhs),
+    );
+}
+
+fn pushRecordFieldsAndUnsets(
     self: *Self,
     frames: *std.ArrayList(EmitFrame),
     allocator: std.mem.Allocator,
     fields: []const CIR.RecordField.Idx,
+    unsets: []const CIR.UnsetField.Idx,
 ) EmitError!void {
-    var mb_sorted_fields: ?[]CIR.RecordField.Idx = null;
-    defer if (mb_sorted_fields) |sorted_fields| allocator.free(sorted_fields);
+    const total = fields.len + unsets.len;
+    if (total == 0) return;
 
-    const ordered_fields: []const CIR.RecordField.Idx = switch (self.record_field_order) {
-        .source => fields,
-        .lexicographic => ordered: {
-            const sorted_fields = try allocator.dupe(CIR.RecordField.Idx, fields);
-            mb_sorted_fields = sorted_fields;
-            std.mem.sort(CIR.RecordField.Idx, sorted_fields, self.module_env, recordFieldIdxLessThan);
-            break :ordered sorted_fields;
-        },
-    };
+    const items = try allocator.alloc(RecordItem, total);
+    defer allocator.free(items);
+    for (fields, items[0..fields.len]) |field_idx, *item| item.* = .{ .field = field_idx };
+    for (unsets, items[fields.len..]) |unset_idx, *item| item.* = .{ .unset = unset_idx };
 
-    var i = ordered_fields.len;
+    switch (self.record_field_order) {
+        // CIR stores supplied fields and unset fields in separate spans, so
+        // the source interleaving of unsets among fields is not preserved:
+        // source order renders all supplied fields (in CIR order) and then
+        // all unsets (in CIR order).
+        .source => {},
+        // Supplied fields and unsets merge into a single name-sorted
+        // sequence, so any CIR ordering of the same field set renders one
+        // canonical text.
+        .lexicographic => std.mem.sort(RecordItem, items, self.module_env, recordItemLessThan),
+    }
+
+    var i = items.len;
     while (i > 0) {
         i -= 1;
-        const field = self.module_env.store.getRecordField(ordered_fields[i]);
-        try frames.append(allocator, .{ .expr = field.value });
-        try frames.append(allocator, .{ .write = ": " });
-        try frames.append(allocator, .{ .write = self.module_env.getIdent(field.name) });
+        switch (items[i]) {
+            .field => |field_idx| {
+                const field = self.module_env.store.getRecordField(field_idx);
+                try frames.append(allocator, .{ .expr = field.value });
+                try frames.append(allocator, .{ .write = ": " });
+                try frames.append(allocator, .{ .write = self.module_env.getIdent(field.name) });
+            },
+            .unset => |unset_idx| {
+                const unset = self.module_env.store.getUnsetField(unset_idx);
+                try frames.append(allocator, .{ .write = ": _" });
+                try frames.append(allocator, .{ .write = self.module_env.getIdent(unset.name) });
+            },
+        }
         if (i > 0) try frames.append(allocator, .{ .write = ", " });
     }
 }
@@ -654,20 +686,16 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = " }" });
             const fields = self.module_env.store.sliceRecordFields(record.fields);
             const unsets = self.module_env.store.sliceUnsetFields(record.unsets);
+            try self.pushRecordFieldsAndUnsets(frames, allocator, fields, unsets);
             if (record.ext) |ext_idx| {
+                // The extension must render FIRST (frames pop last-pushed
+                // first): the parser only accepts `..ext` immediately after
+                // `{`, so `{ ..base, f: 1 }` re-parses while
+                // `{ f: 1, ..base }` does not. This matches fmt's ordering.
+                if (fields.len > 0 or unsets.len > 0) try frames.append(allocator, .{ .write = ", " });
                 try frames.append(allocator, .{ .expr = ext_idx });
                 try frames.append(allocator, .{ .write = ".." });
-                if (fields.len > 0 or unsets.len > 0) try frames.append(allocator, .{ .write = ", " });
             }
-            var unset_i = unsets.len;
-            while (unset_i > 0) {
-                unset_i -= 1;
-                const unset = self.module_env.store.getUnsetField(unsets[unset_i]);
-                try frames.append(allocator, .{ .write = ": _" });
-                try frames.append(allocator, .{ .write = self.module_env.getIdent(unset.name) });
-                if (unset_i > 0 or fields.len > 0) try frames.append(allocator, .{ .write = ", " });
-            }
-            try self.pushRecordFields(frames, allocator, fields);
         },
         .e_empty_record => try self.write("{}"),
         .e_block => |block| {
