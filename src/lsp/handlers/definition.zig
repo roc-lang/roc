@@ -124,6 +124,8 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             if (def_result) |result| {
+                defer result.deinit(self.allocator);
+
                 // Build the Location response
                 const LocationResponse = struct {
                     uri: []const u8,

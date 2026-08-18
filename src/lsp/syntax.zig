@@ -981,6 +981,10 @@ pub const SyntaxChecker = struct {
     pub const DefinitionResult = struct {
         uri: []const u8,
         range: LspRange,
+
+        pub fn deinit(self: DefinitionResult, allocator: std.mem.Allocator) void {
+            allocator.free(self.uri);
+        }
     };
 
     /// Returns true when a byte can be part of a Roc identifier token used for
@@ -1117,6 +1121,7 @@ pub const SyntaxChecker = struct {
             const def_loc_opt = self.findDefinitionAtOffset(module_env, target_offset, uri, &def_oom);
             if (def_oom) |e| return e;
             if (def_loc_opt) |def_loc| {
+                defer def_loc.deinit(self.allocator);
                 if (std.mem.eql(u8, def_loc.uri, uri)) {
                     if (pos.positionToOffset(module_env, def_loc.range.start_line, def_loc.range.start_col)) |def_offset| {
                         if (cir_queries.findPatternAtOffset(module_env, def_offset)) |pattern_idx| {
@@ -1559,8 +1564,12 @@ pub const SyntaxChecker = struct {
                 if (self.findTypeAnnoAtOffset(module_env, annotation.anno, target_offset, oom)) |result| {
                     // If URI is empty, it's a local type - use current file
                     if (result.uri.len == 0) {
+                        const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                            oom.* = err;
+                            return null;
+                        };
                         return DefinitionResult{
-                            .uri = current_uri,
+                            .uri = uri_copy,
                             .range = result.range,
                         };
                     }
@@ -1612,8 +1621,12 @@ pub const SyntaxChecker = struct {
                 if (self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset, oom)) |result| {
                     // If URI is empty, it's a local type - use current file
                     if (result.uri.len == 0) {
+                        const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                            oom.* = err;
+                            return null;
+                        };
                         return DefinitionResult{
-                            .uri = current_uri,
+                            .uri = uri_copy,
                             .range = result.range,
                         };
                     }
@@ -1660,8 +1673,12 @@ pub const SyntaxChecker = struct {
                 const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(lookup.pattern_idx));
                 const def_region = module_env.store.getRegionAt(pattern_node_idx);
                 const range = cir_queries.regionToRange(module_env, def_region) orelse return null;
+                const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                    oom.* = err;
+                    return null;
+                };
                 return DefinitionResult{
-                    .uri = current_uri,
+                    .uri = uri_copy,
                     .range = range,
                 };
             }
@@ -1990,8 +2007,12 @@ pub const SyntaxChecker = struct {
                     if (maybe_type_anno) |type_anno_idx| {
                         if (self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset, oom)) |result| {
                             if (result.uri.len == 0) {
+                                const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                                    oom.* = err;
+                                    return null;
+                                };
                                 return DefinitionResult{
-                                    .uri = current_uri,
+                                    .uri = uri_copy,
                                     .range = result.range,
                                 };
                             }
