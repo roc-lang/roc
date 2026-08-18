@@ -153,6 +153,10 @@ const Slot = struct {
     /// at creation, re-deepened upward when a composed class joins a deeper
     /// one. Zero for every non-iterator shape.
     depth: u8 = 0,
+    /// Whether this slot's composition edges are dead: an iterator that lost
+    /// a class join to another iterator no longer composes over anything,
+    /// exactly as the graph's redirect discards the loser's content.
+    composition_dead: bool = false,
     /// Whether this iterator slot's representation is forced dynamic: set at
     /// creation for the forced tier, and set by the upward walk when a
     /// composition cycle or the chain cap is reached.
@@ -612,6 +616,31 @@ pub const Engine = struct {
         const left = self.find(l);
         const right = self.find(r);
         if (left == right) return;
+        const left_is_iterator = self.slotConst(left).shape == .iterator;
+        const right_is_iterator = self.slotConst(right).shape == .iterator;
+        if (left_is_iterator and right_is_iterator) {
+            // The surviving class's representation is the survivor's own: the
+            // graph's redirect discards the loser's content, so the loser's
+            // own composing role dies with it and the class keeps the
+            // winner's chain state. Links where the loser is the composed
+            // class migrate with the class as on any other join.
+            self.slotMut(right).composition_dead = true;
+            self.slotMut(right).parent = left;
+            if (self.composers.fetchRemove(right)) |moved| {
+                var list = moved.value;
+                defer list.deinit(self.allocator);
+                for (list.items) |composer| {
+                    self.registerComposer(left, composer) catch {};
+                }
+            }
+            return;
+        }
+        if (right_is_iterator and !left_is_iterator) {
+            // The class's representation is the iterator side's; keep its slot
+            // as the class root so its shape and state stand.
+            self.link(.right, left, right);
+            return;
+        }
         self.link(.left, left, right);
     }
 
@@ -621,6 +650,7 @@ pub const Engine = struct {
     pub fn forceClass(self: *Engine, id: RepresentationSlotId) void {
         const root = self.find(id);
         if (self.slotConst(root).forced) return;
+        if (std.c.getenv("ROC_ENGINE_TRACE") != null) std.debug.print("ENGINETRACE recursive-slot forces\n", .{});
         self.slotMut(root).forced = true;
         self.redeepenComposers(root);
     }
@@ -657,7 +687,11 @@ pub const Engine = struct {
         // over the class now composes over everything in it.
         const joined_depth = @max(winner_depth, loser_depth);
         const joined_forced = winner_forced or loser_forced;
-        const deepened = joined_depth > winner_depth or joined_forced != winner_forced;
+        // Composers migrated from either side must re-deepen whenever the
+        // class is deeper or more forced than the side they composed over,
+        // so the walk fires when either member's state changed.
+        const deepened = joined_depth > winner_depth or joined_depth > loser_depth or
+            joined_forced != winner_forced or joined_forced != loser_forced;
         self.slotMut(loser).parent = winner;
         self.slotMut(winner).depth = joined_depth;
         self.slotMut(winner).forced = joined_forced;
@@ -684,10 +718,14 @@ pub const Engine = struct {
         const changed_depth = self.slotConst(changed_root).depth;
         const changed_forced = self.slotConst(changed_root).forced;
         for (list.items) |raw_composer| {
+            // A composer whose own composing role died with a class join no
+            // longer defines any class's chain.
+            if (self.slotConst(raw_composer).composition_dead) continue;
             const composer = self.find(raw_composer);
             if (composer == changed_root) {
                 // A class composing over itself is a composition cycle.
                 if (!self.slotConst(composer).forced) {
+                    if (std.c.getenv("ROC_ENGINE_TRACE") != null) std.debug.print("ENGINETRACE self-composition forces\n", .{});
                     self.slotMut(composer).forced = true;
                     self.redeepenComposers(composer);
                 }
@@ -705,6 +743,7 @@ pub const Engine = struct {
                 // The chain cap forces the composer's class, exactly as the
                 // freeze walk forces a chain deepened past the cap.
                 if (wanted > max_minted_chain_depth and !composer_slot.forced) {
+                    if (std.c.getenv("ROC_ENGINE_TRACE") != null) std.debug.print("ENGINETRACE cap forces at depth={d}\n", .{wanted});
                     composer_slot.forced = true;
                 }
                 composer_changed = true;
