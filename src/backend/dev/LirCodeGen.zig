@@ -1905,6 +1905,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const ls = self.layout_store;
                     const list_abi = builtinInternalListAbi(ls, "dev.list_with_capacity.builtin_list_abi", ll.ret_layout);
 
+                    // Zero-width elements need no storage, so a reservation
+                    // allocates nothing and the result stays the empty list.
+                    if (list_abi.elem_size_align.size == 0) {
+                        return self.emitZstList(null);
+                    }
+
                     // Allocate stack space for result (RocList = 24 bytes)
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
 
@@ -2505,6 +2511,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const list_a_off = try self.ensureOnStack(list_a_loc, roc_list_size);
                     const list_b_off = try self.ensureOnStack(list_b_loc, roc_list_size);
+
+                    // Zero-sized elements have no bytes to concatenate, so the
+                    // result carries only the summed length and owns no
+                    // allocation: null data pointer and a stored capacity of zero.
+                    if (list_abi.elem_size_align.size == 0) {
+                        const zst_result_offset = self.codegen.allocStackSlot(roc_str_size);
+                        const zst_len_reg = try self.allocTempGeneral();
+                        const zst_rhs_len_reg = try self.allocTempGeneral();
+                        const zst_zero_reg = try self.allocTempGeneral();
+                        try self.emitLoad(.w64, zst_len_reg, frame_ptr, list_a_off + 8);
+                        try self.emitLoad(.w64, zst_rhs_len_reg, frame_ptr, list_b_off + 8);
+                        try self.emitAddRegs(.w64, zst_len_reg, zst_len_reg, zst_rhs_len_reg);
+                        try self.codegen.emitLoadImm(zst_zero_reg, 0);
+                        try self.emitStore(.w64, frame_ptr, zst_result_offset, zst_zero_reg);
+                        try self.emitStore(.w64, frame_ptr, zst_result_offset + 8, zst_len_reg);
+                        try self.emitStore(.w64, frame_ptr, zst_result_offset + 16, zst_zero_reg);
+                        self.codegen.freeGeneral(zst_zero_reg);
+                        self.codegen.freeGeneral(zst_rhs_len_reg);
+                        self.codegen.freeGeneral(zst_len_reg);
+                        return .{ .list_stack = .{ .struct_offset = zst_result_offset, .data_offset = 0, .num_elements = 0 } };
+                    }
+
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
@@ -2800,6 +2828,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_abi = builtinInternalListAbi(ls, "dev.list_prepend.builtin_list_abi", ll.ret_layout);
 
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+
+                    // A zero-width element has no bytes to place at the front,
+                    // so prepending one only bumps the length.
+                    if (list_abi.elem_size_align.size == 0) {
+                        return self.emitZstListOneLonger(list_off);
+                    }
+
                     const elem_off = try self.ensureOnStack(elem_loc, list_abi.elem_size_align.size);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
                     const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
@@ -4284,6 +4319,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_abi = builtinInternalListAbi(ls, "dev.list_swap.builtin_list_abi", ll.ret_layout);
 
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+
+                    // Zero-width elements are indistinguishable, so swapping two
+                    // of them leaves the list exactly as it was.
+                    if (list_abi.elem_size_align.size == 0) {
+                        return self.emitZstListWithSameLen(list_off);
+                    }
+
                     const index_1_off = try self.ensureOnStack(index_1_loc, 8);
                     const index_2_off = try self.ensureOnStack(index_2_loc, 8);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
@@ -8377,6 +8419,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(n_reg);
             self.codegen.freeGeneral(len_reg);
 
+            // Zero-width elements have no bytes to slice, so the result is a
+            // length computed from the window alone.
+            if (list_abi.elem_size_align.size == 0) {
+                return self.emitZstSublist(list_off, start_slot, len_slot);
+            }
+
             // Call roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
             // alignment, element_width, start, len, elements_refcounted, roc_ops)
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
@@ -8462,6 +8510,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const record_off = try self.ensureOnStack(record_loc, record_size);
 
+            // Zero-width elements have no bytes to slice, so the result is a
+            // length computed from the window alone.
+            if (list_abi.elem_size_align.size == 0) {
+                return self.emitZstSublist(list_off, record_off + start_field_off, record_off + len_field_off);
+            }
+
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             if (op == .list_sublist_borrowed) {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -8522,6 +8576,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
             const index_off = try self.ensureOnStack(index_loc, 8);
+
+            // Zero-width elements have no bytes to move, so dropping one only
+            // shortens the length, and only when the index is in bounds.
+            if (list_abi.elem_size_align.size == 0) {
+                return self.emitZstDropAt(list_off, index_off);
+            }
+
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -8911,6 +8972,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const list_abi = builtinInternalListAbi(ls, "dev.callListReserveOp.builtin_list_abi", ll.ret_layout);
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+
+            // Zero-width elements need no storage, so there is nothing to
+            // reserve and the list passes through unchanged.
+            if (list_abi.elem_size_align.size == 0) {
+                return self.emitZstListWithSameLen(list_off);
+            }
+
             const spare_off = try self.ensureOnStack(spare_loc, 8);
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
@@ -8961,6 +9029,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const list_abi = builtinInternalListAbi(ls, "dev.callListReleaseExcessCapOp.builtin_list_abi", ll.ret_layout);
 
             const list_off = try self.ensureOnStack(list_loc, roc_list_size);
+
+            // A zero-width list holds no allocation, so it has no excess to
+            // release and passes through unchanged.
+            if (list_abi.elem_size_align.size == 0) {
+                return self.emitZstListWithSameLen(list_off);
+            }
+
             const result_offset = self.codegen.allocStackSlot(roc_str_size);
             if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -15804,17 +15879,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const elem_size: u32 = list_abi.elem_size_align.size;
             const num_elems: u32 = @intCast(elems.len);
             const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);
-            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            try builder.addImmArg(@intCast(total_data_bytes));
-            try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-            try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
-            try builder.addRegArg(roc_ops_reg);
-            try self.callBuiltinWithAdapter(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
+            if (elem_size == 0) {
+                // Zero-sized elements occupy no storage, so the list owns no
+                // allocation and its data pointer stays null.
+                const null_reg = try self.allocTempGeneral();
+                try self.codegen.emitLoadImm(null_reg, 0);
+                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, null_reg);
+                self.codegen.freeGeneral(null_reg);
+            } else {
+                const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                try builder.addImmArg(@intCast(total_data_bytes));
+                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
+                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
+                try builder.addRegArg(roc_ops_reg);
+                try self.callBuiltinWithAdapter(&builder, @intFromPtr(&allocateWithRefcountC), .allocate_with_refcount);
 
-            try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+            }
 
             for (0..elems.len) |i| {
                 const elem_id = GuardedList.at(elems, i);
@@ -15843,9 +15927,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const len_reg = try self.allocTempGeneral();
             const cap_reg = try self.allocTempGeneral();
 
+            // A list of zero-sized elements holds no allocation, so its stored
+            // capacity is zero however many elements it carries.
+            const encoded_capacity: u64 = if (elem_size == 0) 0 else @as(u64, num_elems) << 1;
+
             try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
             try self.codegen.emitLoadImm(len_reg, @intCast(num_elems));
-            try self.codegen.emitLoadImm(cap_reg, @intCast(@as(u64, num_elems) << 1));
+            try self.codegen.emitLoadImm(cap_reg, @intCast(encoded_capacity));
 
             try self.emitStore(.w64, frame_ptr, list_struct_offset, ptr_reg);
             try self.emitStore(.w64, frame_ptr, list_struct_offset + 8, len_reg);
@@ -18037,6 +18125,88 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Allocate a short-lived general register used only during instruction selection.
         /// Semantic values are materialized to `local_locations`; exhausting this pool
         /// therefore indicates an internal lifetime bug rather than source-level pressure.
+        /// Emit the canonical value for a list of zero-width elements: such a
+        /// list owns no allocation, so its data pointer is null and its stored
+        /// capacity is zero, and it carries nothing but a length. `len_reg` is
+        /// null for a length of zero.
+        fn emitZstList(self: *Self, len_reg: ?GeneralReg) Allocator.Error!ValueLocation {
+            const slot = self.codegen.allocStackSlot(roc_str_size);
+            const zero_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(zero_reg, 0);
+            try self.emitStore(.w64, frame_ptr, slot, zero_reg);
+            try self.emitStore(.w64, frame_ptr, slot + 8, len_reg orelse zero_reg);
+            try self.emitStore(.w64, frame_ptr, slot + 16, zero_reg);
+            self.codegen.freeGeneral(zero_reg);
+            return .{ .list_stack = .{ .struct_offset = slot, .data_offset = 0, .num_elements = 0 } };
+        }
+
+        /// Emit the canonical zero-width list one element longer than the list
+        /// value at `list_off`.
+        fn emitZstListOneLonger(self: *Self, list_off: i32) Allocator.Error!ValueLocation {
+            const len_reg = try self.allocTempGeneral();
+            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + 8);
+            try self.emitAddImm(len_reg, len_reg, 1);
+            const result = try self.emitZstList(len_reg);
+            self.codegen.freeGeneral(len_reg);
+            return result;
+        }
+
+        /// Emit the zero-width result of a sublist-shaped op. The surviving
+        /// length is `min(len, size -| start)`, built from saturating
+        /// subtraction alone because `min(x, y)` is `y -| (y -| x)`.
+        fn emitZstSublist(self: *Self, list_off: i32, start_at: i32, len_at: i32) Allocator.Error!ValueLocation {
+            const avail_reg = try self.allocTempGeneral();
+            const start_reg = try self.allocTempGeneral();
+            const want_reg = try self.allocTempGeneral();
+            const tmp_reg = try self.allocTempGeneral();
+            try self.emitLoad(.w64, avail_reg, frame_ptr, list_off + 8);
+            try self.emitLoad(.w64, start_reg, frame_ptr, start_at);
+            try self.emitLoad(.w64, want_reg, frame_ptr, len_at);
+            try self.emitSaturatingSub(avail_reg, avail_reg, start_reg);
+            try self.emitSaturatingSub(tmp_reg, avail_reg, want_reg);
+            try self.emitSaturatingSub(avail_reg, avail_reg, tmp_reg);
+            self.codegen.freeGeneral(tmp_reg);
+            self.codegen.freeGeneral(want_reg);
+            self.codegen.freeGeneral(start_reg);
+            const result = try self.emitZstList(avail_reg);
+            self.codegen.freeGeneral(avail_reg);
+            return result;
+        }
+
+        /// Emit the zero-width result of dropping the element at `index_at`:
+        /// one shorter when the index is in bounds, unchanged when it is not.
+        fn emitZstDropAt(self: *Self, list_off: i32, index_at: i32) Allocator.Error!ValueLocation {
+            const size_reg = try self.allocTempGeneral();
+            const index_reg = try self.allocTempGeneral();
+            const one_reg = try self.allocTempGeneral();
+            const flag_reg = try self.allocTempGeneral();
+            try self.emitLoad(.w64, size_reg, frame_ptr, list_off + 8);
+            try self.emitLoad(.w64, index_reg, frame_ptr, index_at);
+            try self.codegen.emitLoadImm(one_reg, 1);
+            // flag = min(size -| index, 1): one when the index is in bounds.
+            // Each destination stays distinct from the subtrahend, because
+            // emitSaturatingSub computes into its destination in place.
+            try self.emitSaturatingSub(flag_reg, size_reg, index_reg);
+            try self.emitSaturatingSub(index_reg, one_reg, flag_reg);
+            try self.emitSaturatingSub(flag_reg, one_reg, index_reg);
+            try self.emitSaturatingSub(size_reg, size_reg, flag_reg);
+            self.codegen.freeGeneral(flag_reg);
+            self.codegen.freeGeneral(one_reg);
+            self.codegen.freeGeneral(index_reg);
+            const result = try self.emitZstList(size_reg);
+            self.codegen.freeGeneral(size_reg);
+            return result;
+        }
+
+        /// Emit the canonical zero-width list carrying the length held in the
+        /// list value at `list_off`, unchanged.
+        fn emitZstListWithSameLen(self: *Self, list_off: i32) Allocator.Error!ValueLocation {
+            const len_reg = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(len_reg);
+            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + 8);
+            return self.emitZstList(len_reg);
+        }
+
         fn allocTempGeneral(self: *Self) Allocator.Error!GeneralReg {
             return self.codegen.allocGeneral() orelse std.debug.panic(
                 "LirCodeGen invariant violated: bounded instruction selection exhausted the general-register pool",

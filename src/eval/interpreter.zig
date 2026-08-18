@@ -6282,11 +6282,10 @@ pub const Interpreter = struct {
             .list_capacity => blk: {
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 const val = try self.alloc(ll.ret_layout);
-                // Canonical zero-width lists carry no allocation, so their
-                // stored capacity is zero even when they hold elements; every
-                // held element is trivially within capacity.
-                const capacity = @max(rl.getCapacity(), rl.len());
-                val.write(u64, @intCast(capacity));
+                // A list of zero-width elements never allocates, so its stored
+                // capacity is zero however many elements it holds. Report the
+                // stored capacity as it is.
+                val.write(u64, @intCast(rl.getCapacity()));
                 break :blk val;
             },
             .list_slack_unique => blk: {
