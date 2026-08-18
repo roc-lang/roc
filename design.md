@@ -7994,6 +7994,15 @@ representation, lowering follows the planned representation path through that
 value's descriptor before consulting descriptor-environment bindings; an
 environment may contain bindings for other live values with the same generic
 representation and is not evidence that those values are interchangeable.
+A fresh call-boundary descriptor local seeds from the enclosing worker's
+bound descriptor requirement for the value's representation when one
+exists—a hidden descriptor argument carrying the checker's dispatch
+evidence; only a representation with no bound requirement seeds from its
+exact static template. This ordering is what makes "consumes that exact
+value's descriptor" sound for values produced INTO the boundary local,
+such as numeric literals in a generic worker: the literal encodes itself
+against the caller's evidence descriptor rather than an erased template's
+Dec default.
 
 An applied-tag worker argument pattern is irrefutable only when its planned
 checked representation contains exactly one tag variant with that checked tag
