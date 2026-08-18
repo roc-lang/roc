@@ -54,7 +54,6 @@ const unbundle = @import("unbundle");
 
 comptime {
     if (builtin.is_test) {
-        _ = @import("libc_finder.zig");
         _ = @import("test_shared_memory_system.zig");
     }
 }

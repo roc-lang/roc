@@ -200,10 +200,8 @@ pub fn machoArchName(arch: std.Target.Cpu.Arch) MachoArchError![]const u8 {
 }
 
 /// Dynamic-linker (`ld.so`) soname filenames, one authority for the bare
-/// filenames used both by `RocTarget.getDynamicLinkerPath` (which prefixes them
-/// with a known absolute directory) and by `cli/libc_finder.zig` (which probes
-/// the real filesystem for them). Only the filenames live here; absolute search
-/// directories stay with the code that owns them.
+/// filenames that `glibcProgramInterpreter` and `RocTarget.getDynamicLinkerPath`
+/// prefix with the ABI-defined absolute directory.
 pub const ld_so = struct {
     /// glibc ld.so soname for x86_64.
     pub const glibc_x86_64 = "ld-linux-x86-64.so.2";
@@ -211,17 +209,26 @@ pub const ld_so = struct {
     pub const glibc_aarch64 = "ld-linux-aarch64.so.1";
     /// glibc ld.so soname for 32-bit hard-float ARM.
     pub const glibc_arm = "ld-linux-armhf.so.3";
-    /// glibc ld.so soname for 32-bit x86.
-    pub const glibc_x86 = "ld-linux.so.2";
-    /// musl ld.so soname for x86_64.
-    pub const musl_x86_64 = "ld-musl-x86_64.so.1";
-    /// musl ld.so soname for aarch64.
-    pub const musl_aarch64 = "ld-musl-aarch64.so.1";
-    /// musl ld.so soname for 32-bit ARM.
-    pub const musl_arm = "ld-musl-arm.so.1";
-    /// musl ld.so soname for 32-bit x86.
-    pub const musl_x86 = "ld-musl-i386.so.1";
 };
+
+/// The absolute path a Linux kernel uses as the program interpreter of a
+/// glibc-target executable.
+///
+/// The glibc ABI defines one canonical path per architecture. Every glibc
+/// distro provides it: most store the real file there, and Debian-family
+/// distros provide it as a `libc6` compatibility symlink to their multiarch
+/// copy. The path is a constant of the target ABI, not a property of the
+/// build machine, so writing any other path (such as the multiarch one)
+/// produces an executable that fails with `ENOENT` on other distros. Returns
+/// null for an architecture without a known canonical path.
+pub fn glibcProgramInterpreter(arch: std.Target.Cpu.Arch) ?[]const u8 {
+    return switch (classifyCpuArch(arch)) {
+        .x86_64 => "/lib64/" ++ ld_so.glibc_x86_64,
+        .aarch64 => "/lib/" ++ ld_so.glibc_aarch64,
+        .arm => "/lib/" ++ ld_so.glibc_arm,
+        .aarch64_be, .wasm32, .other => null,
+    };
+}
 
 /// The absolute path a BSD kernel uses as an executable's program interpreter.
 ///
@@ -875,14 +882,17 @@ pub const RocTarget = enum {
     /// Get the dynamic linker path for this target
     pub fn getDynamicLinkerPath(self: RocTarget) error{ StaticLinkingTarget, WindowsTarget, NoKnownLinkerPath, WebAssemblyTarget }![]const u8 {
         return switch (self) {
-            // x64 glibc targets
-            .x64glibc, .x64linux, .x64v1glibc, .x64v1linux => "/lib64/" ++ ld_so.glibc_x86_64,
-
-            // arm64 glibc targets
-            .arm64glibc, .arm64linux, .arm64v1glibc, .arm64v1linux => "/lib/" ++ ld_so.glibc_aarch64,
-
-            // arm32 glibc targets
-            .arm32linux => "/lib/" ++ ld_so.glibc_arm,
+            // glibc targets
+            .x64glibc,
+            .x64linux,
+            .x64v1glibc,
+            .x64v1linux,
+            .arm64glibc,
+            .arm64linux,
+            .arm64v1glibc,
+            .arm64v1linux,
+            .arm32linux,
+            => glibcProgramInterpreter(self.toCpuArch()) orelse return error.NoKnownLinkerPath,
 
             // Static linking targets don't need dynamic linker
             .x64musl, .arm64musl, .arm32musl, .x64v1musl, .arm64v1musl => return error.StaticLinkingTarget,
