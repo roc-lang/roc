@@ -5047,15 +5047,19 @@ Restrictions:
   of a parameter has no place that requirement could live, and is
   rejected at the declaration as `default_constrains_type_parameter`
   ("Default Constrains A Type Parameter"). A default constrains a
-  parameter in either of two forms, both rejected: a residual DISPATCH
+  parameter in any of three forms, all rejected: a residual DISPATCH
   constraint (a literal's `from_numeral`/`from_quote`, a constraint
   smuggled in through a referenced def's instantiated scheme, a
   where-constrained helper call—the report names the field, the
-  parameter, and the demanded method), or a STRUCTURAL PIN—the default's
+  parameter, and the demanded method), a STRUCTURAL PIN—the default's
   type unifies the parameter's instantiation copy with concrete
   structure (`?? []` on `value : a` decides `a = List(elem)` for every
   specialization; the report names the field and the parameter it
-  forces concrete). Judged in `checkPendingDefaults`
+  forces concrete)—or a PARAMETER ALIASING—the default unifies two
+  parameters' instantiation copies with each other without pinning
+  either (`?? (|x| (x, x))([])` on `(List(a), List(b))` decides
+  `a = b` for every specialization; the report names the field and
+  both parameters). Judged in `checkPendingDefaults`
   (`checkDefaultParameterConstraints`) immediately after the default
   unifies with an instantiated copy of its field type, BEFORE the
   defaulting rounds could commit a still-flex parameter copy. Detection
@@ -5064,8 +5068,13 @@ Restrictions:
   which also names the parameter for the report): a copy the default
   demands nothing of is still flex after the check; parked constraints
   on a flex copy convict by method name; a copy resolved to structure
-  (or an alias) convicts as a structural pin; `.err` copies are
-  already-reported errors and pass. The deferred-constraint half scans
+  (or an alias) convicts as a structural pin; two DISTINCT copies
+  resolved to the same root convict as a parameter aliasing (each copy
+  is individually flex and unconstrained, so only the pairwise judgment
+  sees the merge—the instantiation minted one fresh copy per rigid
+  root, so a shared root can only be the default's doing); `.err`
+  copies are already-reported errors and pass. The deferred-constraint
+  half scans
   the ENTIRE deferred list for entries rooted at a parameter copy—a
   length watermark cannot attribute a suffix to one default's check
   because the trailing constraint drain rebuilds the list from scratch

@@ -362,10 +362,16 @@ pub const DefaultConstrainsTypeParameter = struct {
     region: base.Region,
     field_name: Ident.Idx,
     /// The demanded method for a residual-dispatch-constraint rejection;
-    /// null for a structural pin, which demands no method but forces the
-    /// parameter to a concrete type all the same.
+    /// null for a structural pin (which demands no method but forces the
+    /// parameter to a concrete type all the same) and for a parameter
+    /// aliasing (which pins no structure but merges two parameters).
     method_name: ?Ident.Idx,
     type_param: Ident.Idx,
+    /// The second parameter of a parameter-aliasing rejection: the default
+    /// forces `type_param` and `aliased_param` to be the same type. Null for
+    /// the dispatch-constraint and structural-pin forms, which convict a
+    /// single parameter.
+    aliased_param: ?Ident.Idx,
 };
 
 /// A record field default whose literal construction transitively omits the

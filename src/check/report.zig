@@ -3196,6 +3196,16 @@ pub const ReportBuilder = struct {
                 D.ident(method_name).withAnnotation(.inline_code),
                 D.bytes("method."),
             }, self, &report, &report.headline);
+        } else if (data.aliased_param) |aliased_param| {
+            try D.renderSliceInto(&.{
+                D.bytes("The default value for the"),
+                D.ident(data.field_name).withAnnotation(.inline_code),
+                D.bytes("field forces the type parameters"),
+                D.ident(data.type_param).withAnnotation(.inline_code),
+                D.bytes("and"),
+                D.ident(aliased_param).withAnnotation(.inline_code),
+                D.bytes("to be the same type."),
+            }, self, &report, &report.headline);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("The default value for the"),
