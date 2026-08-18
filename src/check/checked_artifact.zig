@@ -350,6 +350,7 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
     for (identity.explicit_roots) |root| {
         hashExplicitRootRequestInput(&hasher, root);
     }
+    hashByteSlice(&hasher, @tagName(identity.validation));
     return hasher.finalResult();
 }
 
@@ -442,12 +443,19 @@ pub const CheckingContextIdentity = struct {
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
+    /// How the module's compile-time roots were established. An app root
+    /// checked without its entrypoint contract reports no problem for a
+    /// platform requirement it does not supply, so two compilations of the
+    /// same source that disagree here produce different checked output and
+    /// must not share a cache entry.
+    validation: can.Can.Validation = .checking,
 
     pub const Serialized = extern struct {
         imports: SerializedSlice(ImportIdentity) = .{},
         explicit_roots: SerializedSlice(ExplicitRootRequestInput) = .{},
         platform_requirement_context: artifact_serialize.SerializedOptional(PlatformRequirementContextKey) = .{},
         platform_app_relation: artifact_serialize.SerializedOptional(PlatformAppRelationKey) = .{},
+        validation: artifact_serialize.SerializedScalar(can.Can.Validation) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckingContextIdentity, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -460,6 +468,7 @@ pub const CheckingContextIdentity = struct {
         platform_requirement_context: ?PlatformRequirementContextKey,
         platform_app_relation: ?PlatformAppRelationKey,
         explicit_roots: []const ExplicitRootRequestInput,
+        validation: can.Can.Validation,
     ) Allocator.Error!CheckingContextIdentity {
         const module_env = module.moduleEnvConst();
         const imported_names = module_env.imports.imports.items.items;
@@ -485,6 +494,7 @@ pub const CheckingContextIdentity = struct {
             .platform_requirement_context = platform_requirement_context,
             .platform_app_relation = platform_app_relation,
             .explicit_roots = roots,
+            .validation = validation,
         };
     }
 
@@ -672,6 +682,7 @@ pub const PublishInputs = struct {
     hoisted_roots: []const hoist_roots.SelectedHoistedRoot = &.{},
     compile_time_finalizer: CompileTimeFinalizer,
     problem_store: ?*problem.Store = null,
+    validation: can.Can.Validation = .checking,
 };
 
 /// Public `CompileTimeFinalizer` declaration.
@@ -8653,7 +8664,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module, &.{}, null, null, &.{});
+    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module, &.{}, null, null, &.{}, .checking);
     defer checking_context_identity.deinit(allocator);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
@@ -29195,7 +29206,10 @@ pub const CheckedModuleArtifact = struct {
     // (`CheckedProcedureBody.unimplemented` and
     // `ConstTemplateState.unimplemented`) instead of pointing at a body the
     // declaration never had.
-    const serialized_layout_version: u32 = 68;
+    // Version 69 records in the checking-context identity how a module's
+    // compile-time roots were established, so an app root checked without its
+    // entrypoint contract cannot share a cache entry with one checked under it.
+    const serialized_layout_version: u32 = 69;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -32463,6 +32477,7 @@ pub const CheckedModuleKeyInputs = struct {
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
+    validation: can.Can.Validation = .checking,
 };
 
 /// Compute the checked module cache identity for a checked typed module and the
@@ -32498,6 +32513,7 @@ pub fn checkedModuleKeyFromTypedModule(
         inputs.platform_requirement_context,
         inputs.platform_app_relation,
         inputs.explicit_roots,
+        inputs.validation,
     );
     defer checking_context_identity.deinit(allocator);
 
@@ -32554,6 +32570,7 @@ pub fn publishFromTypedModule(
         inputs.platform_requirement_context,
         if (inputs.platform_app_relation) |relation| relation.key else null,
         inputs.explicit_roots,
+        inputs.validation,
     );
     errdefer checking_context_identity.deinit(allocator);
 
@@ -35344,8 +35361,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x6C, 0x4D, 0x36, 0xCF, 0xA6, 0xAF, 0x27, 0xB3, 0x63, 0x43, 0x1E, 0xFC, 0xBE, 0x40, 0xB2, 0xBF,
-        0x23, 0xA3, 0x3B, 0xF0, 0x37, 0xCD, 0x6D, 0x5A, 0x45, 0xBC, 0xDD, 0xEB, 0x9D, 0x8F, 0x04, 0xDF,
+        0xF7, 0x81, 0xEC, 0xFE, 0xB4, 0x4E, 0xEE, 0xD7, 0x62, 0xAE, 0xC1, 0x92, 0xBB, 0x16, 0xAF, 0xAB,
+        0x31, 0xB7, 0x4F, 0xF9, 0xB6, 0x87, 0x92, 0x31, 0xC2, 0x1D, 0xCF, 0x7E, 0xF5, 0x43, 0x05, 0x89,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

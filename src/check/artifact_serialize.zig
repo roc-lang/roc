@@ -266,6 +266,45 @@ pub fn validateSerialized(comptime T: type, self: *const T, backing_len: u64) er
     try collections.validateSerializedRelocations(T, self, backing_len);
 }
 
+/// Serialized form of a POD `T` stored inline. No relocatable pointer: the
+/// value lives in the header itself. `T` must be extern-compatible, which for
+/// an enum means an explicit fixed-width backing integer, and its all-zero bit
+/// pattern must be one of its values so the default below is a real one.
+pub fn SerializedScalar(comptime T: type) type {
+    comptime assertRelocatablePod(T);
+    comptime assertPortableSerialized(T);
+    comptime assertSerializedDefaultsDefined(T);
+    comptime assertZeroIsValid(T);
+    return extern struct {
+        value: T = std.mem.zeroes(T),
+
+        const Self = @This();
+
+        pub fn serialize(self: *Self, source: *const T, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
+            _ = gpa;
+            _ = writer;
+            self.value = source.*;
+        }
+
+        pub fn deserialize(self: *const Self, base: usize) T {
+            _ = base;
+            return self.value;
+        }
+    };
+}
+
+/// Reject a `SerializedScalar` element whose all-zero bit pattern is not one of
+/// its values, which would make the marker's default an invalid value.
+fn assertZeroIsValid(comptime T: type) void {
+    comptime {
+        if (@typeInfo(T) != .@"enum") return;
+        for (@typeInfo(T).@"enum".fields) |field| {
+            if (field.value == 0) return;
+        }
+        @compileError("SerializedScalar element '" ++ @typeName(T) ++ "' has no value with tag 0, so its zeroed default would be invalid.");
+    }
+}
+
 /// Relocatable serialized form of an `?T` of POD `T`. Encodes presence as a
 /// 0- or 1-element `SerializedSlice` (the payload lives in the separate buffer
 /// region, so `T` need not be extern-compatible, unlike an inline optional

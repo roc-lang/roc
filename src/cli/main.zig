@@ -14369,12 +14369,17 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .track_watch_inputs = args.watch_inputs_file != null,
         .root_source_url = args.root_source_url,
         .main_source_url = args.main_source_url,
+        // `roc test` never links a program, so it publishes no executable
+        // artifacts: the app/platform entrypoint pairing is not part of what
+        // running the root file's `expect`s needs.
+        .post_check_publication_mode = .none,
     });
     defer build_env.deinit();
 
     // `roc test` runs the file's top-level `expect`s and nothing else, so the
     // file needs no entrypoint: a headerless file that is neither a type module
-    // nor a default app is tested as a plain module.
+    // nor a default app is tested as a plain module, and an app is tested
+    // whether or not it supplies the definitions its platform requires.
     build_env.setRootValidation(.explicit_roots);
 
     var extra_buf: [2][]const u8 = undefined;

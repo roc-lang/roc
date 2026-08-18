@@ -2128,6 +2128,7 @@ pub const Coordinator = struct {
                 .imports = platform_import_artifacts,
                 .explicit_roots = explicit_roots,
                 .platform_app_relation = relation_key,
+                .validation = platform_root.mod.validation,
             },
         );
         if (self.tryLoadCachedRepublishedRoot(platform_root.pkg, platform_root.mod, republished_key)) {
@@ -2315,6 +2316,7 @@ pub const Coordinator = struct {
                 .explicit_roots = explicit_roots,
                 .platform_requirement_context = publication_with_state.platform_requirement_context,
                 .platform_app_relation = if (publication_with_state.platform_app_relation) |relation| relation.key else null,
+                .validation = mod.validation,
             })) |republished_key| {
                 if (self.tryLoadCachedRepublishedRoot(pkg, mod, republished_key)) {
                     self.releaseDeferredPublication(mod);
@@ -2997,6 +2999,7 @@ pub const Coordinator = struct {
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
+        validation: can.Can.Validation,
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
         var typed = try CheckedModules.initForRootModule(self.gpa, env, imported_envs);
         defer typed.modules.deinit();
@@ -3009,6 +3012,7 @@ pub const Coordinator = struct {
                 .imports = imported_artifacts,
                 .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
+                .validation = validation,
             },
         );
     }
@@ -3102,7 +3106,7 @@ pub const Coordinator = struct {
 
         const current_env = mod.moduleEnv() orelse return false;
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
-        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots) catch {
+        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots, mod.validation) catch {
             manager.stats.recordMiss();
             return false;
         };
@@ -4082,6 +4086,7 @@ pub const Coordinator = struct {
                 .available_artifacts = available_artifacts,
                 .platform_requirements = platform_surface,
                 .explicit_roots = explicit_roots,
+                .validation = mod.validation,
                 .defer_publication = self.moduleDefersPublication(mod),
             },
         });
@@ -5202,6 +5207,7 @@ pub const Coordinator = struct {
             if (task.platform_requirements) |surface| surface.checkerInput() else null,
             if (task.platform_requirements) |surface| surface.context else null,
             task.explicit_roots,
+            task.validation,
             ctfe_options,
             task.defer_publication,
         );

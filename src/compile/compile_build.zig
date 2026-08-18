@@ -776,12 +776,10 @@ pub const BuildEnv = struct {
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
 
-        const is_executable = header_info.kind == .app or header_info.kind == .default_app;
-        // Allow all module types: app, module, type_module, package, platform
-        // Package and platform modules can also be tested
-        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module and header_info.kind != .package and header_info.kind != .platform) {
-            return error.UnsupportedHeader;
-        }
+        // Every header kind names a module this build can root at: apps and
+        // default apps produce programs, and the rest are compiled for their own
+        // definitions and `expect`s. A file whose header parsed into none of them
+        // already failed in `parseHeaderDeps`.
 
         // Create package entry keyed by stable package identity. Real roots use
         // their canonical path; URL-launched roots use their bundle URL because

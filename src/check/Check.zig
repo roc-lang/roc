@@ -326,6 +326,10 @@ current_expect_effect_slot: ?ExpectEffectSlotId,
 top_level_ptrns: std.ArrayListUnmanaged(?DefProcessed),
 /// Read-only platform requirement surface used only when checking an app root.
 platform_requirements: ?PlatformRequirementInput,
+/// How this module's compile-time roots are established, which decides
+/// whether an app root's entrypoint contract with its platform is enforced
+/// here. See `can.Can.Validation`.
+validation: can.Can.Validation = .checking,
 /// App defs constrained by platform requirements before their bodies are checked.
 platform_required_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, PlatformRequiredDef),
 /// One row per platform requirement that resolved to an exported app def, in
@@ -10949,6 +10953,11 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
         defer if (identity_vars_owned) self.gpa.free(instantiated.identity_vars);
 
         const def_idx = self.exposedAppDefByIdent(required_ident) orelse {
+            // Without the entrypoint contract, an unsupplied requirement is
+            // simply unbound: the requirements that the app does supply still
+            // constrain those definitions.
+            if (self.validation == .explicit_roots) continue;
+
             const top_level_def = self.topLevelDefByIdent(required_ident);
             const app_region = if (top_level_def) |def_idx|
                 self.defPatternRegion(def_idx)

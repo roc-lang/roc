@@ -1418,6 +1418,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
+        .validation = validation_mode,
     });
     defer czer.deinit();
 
@@ -1428,16 +1429,10 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         return err;
     };
 
-    switch (validation_mode) {
-        .checking => czer.validateForChecking() catch |err| {
-            logDebug("compileSource: validateForChecking failed: {}\n", .{err});
-            return err;
-        },
-        .explicit_roots => czer.validateForExplicitRoots() catch |err| {
-            logDebug("compileSource: validateForExplicitRoots failed: {}\n", .{err});
-            return err;
-        },
-    }
+    czer.runValidation() catch |err| {
+        logDebug("compileSource: validation failed: {}\n", .{err});
+        return err;
+    };
     logDebug("compileSource: Canonicalization complete\n", .{});
 
     // Copy the modified AST back into the main result to ensure state consistency
