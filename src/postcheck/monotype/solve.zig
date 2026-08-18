@@ -940,19 +940,17 @@ pub const InstGraph = struct {
                 .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator representation target stopped being named"),
             };
             named.def.generated = null;
-            if (std.c.getenv("ROC_MINT_SHADOW") != null) {
-                const freeze_forces = item.force_dynamic or item.depth > generated_iterator_mint_depth_limit;
-                const fold = self.iterator_fold.get(node);
-                const fold_forces = if (fold) |state| state.forced else false;
-                const fold_depth = if (fold) |state| state.depth else named.def.iterator_depth;
-                if (fold == null) {
-                    std.debug.print("MINTSHADOW unseeded freeze_forces={}\n", .{freeze_forces});
-                } else if (fold_forces != freeze_forces) {
-                    std.debug.print("MINTSHADOW force-differs fold={} freeze={} fixpoint_depth={d}\n", .{ fold_forces, freeze_forces, item.depth });
-                } else if (!freeze_forces and fold_depth != item.depth) {
-                    std.debug.print("MINTSHADOW depth-differs fold={d} fixpoint={d}\n", .{ fold_depth, item.depth });
-                } else {
-                    std.debug.print("MINTSHADOW agree forced={} depth={d}\n", .{ freeze_forces, item.depth });
+            // The value walk stays the authority: depth is a global property
+            // of the value graph — a component class joined after creation
+            // deepens every chain built over it, with no local event at the
+            // parents — so the edge fold cannot state it. The fold still
+            // tracks what the edges alone would decide, and any divergence
+            // beyond a chain deepened past the cap without its own join event
+            // prints here so wider corpora keep auditing the split.
+            if (self.iterator_fold.get(node)) |fold| {
+                const walk_forces = item.force_dynamic or item.depth > generated_iterator_mint_depth_limit;
+                if (fold.forced != walk_forces or (!walk_forces and fold.depth != item.depth)) {
+                    std.debug.print("iterator fold diverged: fold forced={} depth={d}, walk forced={} depth={d}, explicit={}\n", .{ fold.forced, fold.depth, walk_forces, item.depth, item.force_dynamic });
                 }
             }
             if (item.force_dynamic or item.depth > generated_iterator_mint_depth_limit) {
