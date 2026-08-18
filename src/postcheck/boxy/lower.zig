@@ -11777,6 +11777,7 @@ const ProcBodyBuilder = struct {
     descriptor_locals: []?LIR.LocalId,
     descriptor_local_reps: []?Plan.TypeRepId,
     descriptor_bound: []bool,
+    descriptor_evidence_bound: []bool,
     descriptor_slots: []?LIR.LocalId,
     descriptor_slot_reps: []?Plan.TypeRepId,
     descriptor_rep_bindings: std.ArrayList(DescriptorRepBinding),
@@ -11914,6 +11915,17 @@ const ProcBodyBuilder = struct {
         rep: Plan.TypeRepId,
         local: LIR.LocalId,
         bound: bool,
+        /// True only when the boundness was established by binding the
+        /// requirement to evidence (`markDescriptorRequirementBoundForRep`):
+        /// an entry hidden descriptor argument/capture, a prologue-rebuilt
+        /// argument root, or a snapshot-scoped call/pattern-boundary bind
+        /// whose initializer is prepended above every observer. A local
+        /// marked bound by a mid-body descriptor write
+        /// (`markDescriptorLocalBound`) does NOT set this: lowering visits
+        /// statements in reverse execution order, so such a mark can be
+        /// visible while lowering an earlier-executing statement even though
+        /// the write has not happened yet at that point at runtime.
+        evidence_bound: bool,
     };
 
     const LocalDescriptorEnvironmentBinding = struct {
@@ -11997,6 +12009,7 @@ const ProcBodyBuilder = struct {
         locals: []?LIR.LocalId,
         local_reps: []?Plan.TypeRepId,
         bound: []bool,
+        evidence_bound: []bool,
         slots: []?LIR.LocalId,
         slot_reps: []?Plan.TypeRepId,
         rep_bindings: []DescriptorRepBinding,
@@ -12006,6 +12019,7 @@ const ProcBodyBuilder = struct {
             allocator.free(self.locals);
             allocator.free(self.local_reps);
             allocator.free(self.bound);
+            allocator.free(self.evidence_bound);
             allocator.free(self.slots);
             allocator.free(self.slot_reps);
             allocator.free(self.rep_bindings);
@@ -12082,6 +12096,7 @@ const ProcBodyBuilder = struct {
             .descriptor_locals = &.{},
             .descriptor_local_reps = &.{},
             .descriptor_bound = &.{},
+            .descriptor_evidence_bound = &.{},
             .descriptor_slots = &.{},
             .descriptor_slot_reps = &.{},
             .descriptor_rep_bindings = .empty,
@@ -12127,6 +12142,7 @@ const ProcBodyBuilder = struct {
         self.parent.allocator.free(self.dictionary_locals);
         self.parent.allocator.free(self.descriptor_slot_reps);
         self.parent.allocator.free(self.descriptor_slots);
+        self.parent.allocator.free(self.descriptor_evidence_bound);
         self.parent.allocator.free(self.descriptor_bound);
         self.parent.allocator.free(self.descriptor_local_reps);
         self.parent.allocator.free(self.descriptor_locals);
@@ -31962,12 +31978,14 @@ const ProcBodyBuilder = struct {
             self.descriptor_local_reps[desc_index] == null or
             self.descriptor_local_reps[desc_index].? == identity_rep)
         {
-            const preserves_bound = self.descriptor_locals[desc_index] == local and
-                self.descriptor_local_reps[desc_index] == identity_rep and
-                self.descriptor_bound[desc_index];
+            const preserves = self.descriptor_locals[desc_index] == local and
+                self.descriptor_local_reps[desc_index] == identity_rep;
+            const preserves_bound = preserves and self.descriptor_bound[desc_index];
+            const preserves_evidence = preserves and self.descriptor_evidence_bound[desc_index];
             self.descriptor_locals[desc_index] = local;
             self.descriptor_local_reps[desc_index] = identity_rep;
             self.descriptor_bound[desc_index] = preserves_bound;
+            self.descriptor_evidence_bound[desc_index] = preserves_evidence;
             return;
         }
 
@@ -31978,6 +31996,7 @@ const ProcBodyBuilder = struct {
                 .rep = identity_rep,
                 .local = local,
                 .bound = existing.local == local and existing.bound,
+                .evidence_bound = existing.local == local and existing.evidence_bound,
             };
             return;
         }
@@ -31986,6 +32005,7 @@ const ProcBodyBuilder = struct {
             .rep = identity_rep,
             .local = local,
             .bound = false,
+            .evidence_bound = false,
         });
     }
 
@@ -31998,10 +32018,12 @@ const ProcBodyBuilder = struct {
         const desc_index = @intFromEnum(desc);
         if (desc_index < self.descriptor_local_reps.len and self.descriptor_local_reps[desc_index] == identity_rep) {
             self.descriptor_bound[desc_index] = true;
+            self.descriptor_evidence_bound[desc_index] = true;
             return;
         }
         if (self.descriptorRepBindingIndex(desc, identity_rep)) |index| {
             self.descriptor_rep_bindings.items[index].bound = true;
+            self.descriptor_rep_bindings.items[index].evidence_bound = true;
             return;
         }
         boxyLowerInvariant("boxy descriptor bound marker had no representation-local binding");
@@ -34518,14 +34540,22 @@ const ProcBodyBuilder = struct {
 
     /// The initializer template for a fresh call-boundary descriptor local.
     /// When this worker already holds the representation's descriptor
-    /// requirement in a bound local—a hidden descriptor argument carrying the
-    /// checker's dispatch evidence for the value's type—that explicit
-    /// descriptor is the value's runtime type and seeds the boundary local.
-    /// Only a representation whose requirement is unbound in this worker
-    /// falls back to its exact static template. Without this precedence a
-    /// value produced *into* the boundary local (a numeric literal in a
-    /// generic worker) would be described by an erased static template even
-    /// though the caller passed the concrete descriptor.
+    /// requirement in an evidence-bound local—a hidden descriptor argument
+    /// (or prologue-rebuilt argument root) carrying the checker's dispatch
+    /// evidence for the value's type—that explicit descriptor is the value's
+    /// runtime type and seeds the boundary local. Only a representation whose
+    /// requirement holds no evidence in this worker falls back to its exact
+    /// static template. Without this precedence a value produced *into* the
+    /// boundary local (a numeric literal in a generic worker) would be
+    /// described by an erased static template even though the caller passed
+    /// the concrete descriptor.
+    ///
+    /// The evidence-bound query (not plain boundness) is load-bearing: a
+    /// binding whose local was merely marked bound by a mid-body descriptor
+    /// write (a call output or set-local transfer in a LATER-executing
+    /// statement, still visible here because lowering runs in reverse
+    /// execution order) must not seed this template—the copy it would emit
+    /// executes before that write and would read an uninitialized descriptor.
     fn boundaryDescriptorLocalTemplate(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
@@ -34534,7 +34564,7 @@ const ProcBodyBuilder = struct {
         const identity_rep = self.parent.descriptorIdentityRep(rep_id);
         const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
         if (rep.descriptor) |requirement| {
-            if (self.descriptorBindingIsBoundForRep(identity_rep)) {
+            if (self.descriptorBindingIsEvidenceBoundForRep(identity_rep)) {
                 if (self.descriptorLocalForRequirementAndRepOrNull(requirement, identity_rep)) |bound| {
                     if (bound != desc_local) {
                         return .{ .desc = .{ .local = bound } };
@@ -34647,12 +34677,15 @@ const ProcBodyBuilder = struct {
         errdefer self.parent.allocator.free(self.descriptor_local_reps);
         self.descriptor_bound = try self.parent.allocator.alloc(bool, self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_bound);
+        self.descriptor_evidence_bound = try self.parent.allocator.alloc(bool, self.parent.plan.descriptors.items.len);
+        errdefer self.parent.allocator.free(self.descriptor_evidence_bound);
         self.descriptor_slots = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_slots);
         self.descriptor_slot_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, self.parent.plan.descriptors.items.len);
         @memset(self.descriptor_locals, null);
         @memset(self.descriptor_local_reps, null);
         @memset(self.descriptor_bound, false);
+        @memset(self.descriptor_evidence_bound, false);
         @memset(self.descriptor_slots, null);
         @memset(self.descriptor_slot_reps, null);
     }
@@ -34729,6 +34762,32 @@ const ProcBodyBuilder = struct {
         return false;
     }
 
+    /// Like `descriptorBindingIsBoundForRep`, but true only when the binding
+    /// was bound as *evidence* (`markDescriptorRequirementBoundForRep`) rather
+    /// than by a mid-body descriptor write (`markDescriptorLocalBound`).
+    /// Evidence binds are either established in the worker prologue or inside
+    /// a descriptor-binding snapshot window whose initializer is prepended
+    /// above everything lowered while the bind is visible, so an evidence
+    /// binding's local is always initialized at runtime before any code that
+    /// observed the bind executes. Write marks carry no such ordering
+    /// guarantee: lowering visits statements in reverse execution order, so a
+    /// write mark from a later-executing statement stays visible while
+    /// earlier-executing statements are lowered.
+    fn descriptorBindingIsEvidenceBoundForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        const identity_rep = self.descriptorStorageRep(rep_id);
+        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+        const desc = rep.descriptor orelse return true;
+        const desc_index = @intFromEnum(desc);
+        if (desc_index < self.descriptor_evidence_bound.len and self.descriptor_evidence_bound[desc_index]) {
+            if (desc_index >= self.descriptor_local_reps.len) return false;
+            if (self.descriptor_local_reps[desc_index] == identity_rep) return true;
+        }
+        for (self.descriptor_rep_bindings.items) |binding| {
+            if (binding.desc == desc and binding.rep == identity_rep) return binding.evidence_bound;
+        }
+        return false;
+    }
+
     fn dictionaryLocalForRequirementOrNull(
         self: *const ProcBodyBuilder,
         dict: Plan.DictionaryRequirementId,
@@ -34752,6 +34811,8 @@ const ProcBodyBuilder = struct {
         errdefer self.parent.allocator.free(local_reps);
         const bound = try self.parent.allocator.dupe(bool, self.descriptor_bound);
         errdefer self.parent.allocator.free(bound);
+        const evidence_bound = try self.parent.allocator.dupe(bool, self.descriptor_evidence_bound);
+        errdefer self.parent.allocator.free(evidence_bound);
         const slots = try self.parent.allocator.dupe(?LIR.LocalId, self.descriptor_slots);
         errdefer self.parent.allocator.free(slots);
         const slot_reps = try self.parent.allocator.dupe(?Plan.TypeRepId, self.descriptor_slot_reps);
@@ -34761,6 +34822,7 @@ const ProcBodyBuilder = struct {
             .locals = locals,
             .local_reps = local_reps,
             .bound = bound,
+            .evidence_bound = evidence_bound,
             .slots = slots,
             .slot_reps = slot_reps,
             .rep_bindings = rep_bindings,
@@ -34772,6 +34834,7 @@ const ProcBodyBuilder = struct {
         if (snapshot.locals.len != self.descriptor_locals.len or
             snapshot.local_reps.len != self.descriptor_local_reps.len or
             snapshot.bound.len != self.descriptor_bound.len or
+            snapshot.evidence_bound.len != self.descriptor_evidence_bound.len or
             snapshot.slots.len != self.descriptor_slots.len or
             snapshot.slot_reps.len != self.descriptor_slot_reps.len)
         {
@@ -34780,6 +34843,7 @@ const ProcBodyBuilder = struct {
         @memcpy(self.descriptor_locals, snapshot.locals);
         @memcpy(self.descriptor_local_reps, snapshot.local_reps);
         @memcpy(self.descriptor_bound, snapshot.bound);
+        @memcpy(self.descriptor_evidence_bound, snapshot.evidence_bound);
         @memcpy(self.descriptor_slots, snapshot.slots);
         @memcpy(self.descriptor_slot_reps, snapshot.slot_reps);
         self.descriptor_rep_bindings.items.len = snapshot.rep_bindings.len;

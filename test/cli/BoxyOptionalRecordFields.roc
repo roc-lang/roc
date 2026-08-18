@@ -179,3 +179,24 @@ expect {
 
 	config.ok
 }
+
+# A generalized list helper whose worker receives its argument descriptor
+# as a prologue-REBUILT root (a fresh slot materialized from per-field
+# overrides at frame entry) rather than a read-only hidden argument: the
+# call-boundary descriptor seeds must accept that evidence-bound local
+# even though it is not a read-only descriptor input.
+ListFnConfig := { total : U64 ?? {
+	f = |lst| {
+		early = List.len(lst)
+		tail = List.drop_first(lst, 1)
+		early + List.len(tail)
+	}
+	f([10, 20, 30])
+} }
+
+expect {
+	config : ListFnConfig
+	config = ListFnConfig.{}
+
+	config.total == 5
+}

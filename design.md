@@ -8047,14 +8047,25 @@ value's descriptor before consulting descriptor-environment bindings; an
 environment may contain bindings for other live values with the same generic
 representation and is not evidence that those values are interchangeable.
 A fresh call-boundary descriptor local seeds from the enclosing worker's
-bound descriptor requirement for the value's representation when one
-exists—a hidden descriptor argument carrying the checker's dispatch
-evidence; only a representation with no bound requirement seeds from its
-exact static template. This ordering is what makes "consumes that exact
-value's descriptor" sound for values produced INTO the boundary local,
-such as numeric literals in a generic worker: the literal encodes itself
-against the caller's evidence descriptor rather than an erased template's
-Dec default.
+EVIDENCE-bound descriptor requirement for the value's representation when
+one exists—a hidden descriptor argument or prologue-rebuilt argument root
+carrying the checker's dispatch evidence; only a representation whose
+requirement holds no evidence seeds from its exact static template. This
+ordering is what makes "consumes that exact value's descriptor" sound for
+values produced INTO the boundary local, such as numeric literals in a
+generic worker: the literal encodes itself against the caller's evidence
+descriptor rather than an erased template's Dec default. Evidence-bound is
+narrower than bound: a binding whose local was merely marked bound by a
+mid-body descriptor write (a call's output descriptor or a set-local
+descriptor transfer) never seeds a boundary local. Lowering visits
+statements in reverse execution order, so such a write mark—made while
+lowering a later-executing statement outside any binding-snapshot
+window—remains visible while earlier-executing statements are lowered,
+and a seed taken from it would copy the descriptor before the write
+executes. Evidence binds carry the needed ordering guarantee by
+construction: they are established in the worker prologue or inside a
+descriptor-binding snapshot window whose initializer is prepended above
+everything lowered while the bind is visible.
 
 An applied-tag worker argument pattern is irrefutable only when its planned
 checked representation contains exactly one tag variant with that checked tag
