@@ -30469,10 +30469,9 @@ fn satisfyImplicitParserConstraint(
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
     var walk = DerivedCodecWalk.init(self.gpa);
     defer walk.deinit();
-    // Everything below a dispatcher's own backing is inside it, so the walk
-    // enters that backing here and stays there for the rest of this constraint.
     // A dispatcher that derives its own codec is validated against the shape
-    // that codec is generated from, not against the name in front of it.
+    // that codec is generated from, not against the name in front of it, and
+    // everything below is inside that shape for the rest of this constraint.
     const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.parser_for, .parser, &walk, env, region)) orelse dispatcher_var;
     switch (try self.validateDerivedParseVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk, .shape, failure_expr)) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
@@ -30552,10 +30551,9 @@ fn satisfyImplicitEncoderForConstraint(
     defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(generated_calls_start);
     var walk = DerivedCodecWalk.init(self.gpa);
     defer walk.deinit();
-    // Everything below a dispatcher's own backing is inside it, so the walk
-    // enters that backing here and stays there for the rest of this constraint.
     // A dispatcher that derives its own codec is validated against the shape
-    // that codec is generated from, not against the name in front of it.
+    // that codec is generated from, not against the name in front of it, and
+    // everything below is inside that shape for the rest of this constraint.
     const validation_var = (try self.generatedStructuralCodecBackingVar(dispatcher_var, self.cir.idents.encoder_for, .encoder, &walk, env, region)) orelse dispatcher_var;
     switch (try self.validateDerivedEncodeVar(validation_var, encoding_var, state_var, err_var, constraint, env, region, &walk)) {
         .ok => try self.recordGeneratedCodecDerivationSnapshot(
