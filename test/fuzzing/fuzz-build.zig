@@ -122,6 +122,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         },
     ) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM during generated app checked-to-LIR lowering"),
+        error.HostedFunctionNotBound => @panic("generated app declared a hosted function its platform header did not bind"),
     };
     defer lowered.deinit();
 }

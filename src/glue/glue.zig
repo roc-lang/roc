@@ -166,7 +166,14 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         _ = try build_env.renderDiagnostics(stderr, args.report_config);
         return error.CompilationFailed;
     };
-    _ = try build_env.renderDiagnostics(stderr, args.report_config);
+    // Glue emits the platform's declared checked surface: its requires,
+    // provides, and hosted sections and the types they name. A platform that
+    // checking rejected has no such surface to emit—a hosted declaration its
+    // header left out of the hosted section has no linker symbol for glue to
+    // name—so stop on the diagnostics rendered here rather than reading a
+    // surface checking already refused.
+    const diagnostics = try build_env.renderDiagnostics(stderr, args.report_config);
+    if (diagnostics.errors > 0) return error.CompilationFailed;
 
     const modules = build_env.getModulesInSerializationOrder(gpa) catch {
         return error.ModuleRetrieval;
@@ -284,8 +291,9 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         break;
     }
 
-    type_table.attachAbiLayouts(&build_env) catch {
-        return error.OutOfMemory;
+    type_table.attachAbiLayouts(&build_env) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.HostedFunctionNotBound => return error.CompilationFailed,
     };
 
     // 5. Compile glue spec through checked artifacts and lower to LIR.
@@ -471,8 +479,9 @@ fn compileGlueSpec(
             .target_usize = script_target_usize,
             .specialization_strategy = specialization_strategy,
         },
-    ) catch {
-        return error.OutOfMemory;
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.HostedFunctionNotBound => return error.CompilationFailed,
     };
     errdefer lowered.deinit();
 
@@ -2607,7 +2616,7 @@ const TypeTable = struct {
         }
     }
 
-    fn attachAbiLayouts(self: *TypeTable, build_env: *BuildEnv) Allocator.Error!void {
+    fn attachAbiLayouts(self: *TypeTable, build_env: *BuildEnv) (Allocator.Error || lir.CheckedPipeline.HostedBindingError)!void {
         var artifacts = std.ArrayList(*const CheckedArtifact.CheckedModuleArtifact).empty;
         defer artifacts.deinit(self.gpa);
 

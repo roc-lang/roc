@@ -69,6 +69,7 @@ fn classifyTestHelperError(err: helpers.TestHelperError) TestHelperErrorKind {
         error.InvalidUtf8,
         error.FileNotFound,
         error.AccessDenied,
+        error.HostedFunctionNotBound,
         error.NotDir,
         error.SymLinkLoop,
         error.InputOutput,

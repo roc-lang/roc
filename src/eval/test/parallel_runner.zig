@@ -1010,7 +1010,7 @@ fn runComptimeFloatBitsTest(
 
     const node = switch (roots[0].payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .expect => {
+        .pending, .fn_value, .discarded, .expect => {
             return .{
                 .status = .fail,
                 .message = "compile-time float root did not produce a ConstStore node",
@@ -1113,7 +1113,7 @@ fn materializedComptimeFloatBitsMatch(
     resources: *helpers.ParsedResources,
     target: roc_target.RocTarget,
     expected: TestCase.Expected,
-) (std.mem.Allocator.Error || error{UnsupportedTarget})!bool {
+) (std.mem.Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{UnsupportedTarget})!bool {
     const compile_time_root = resources.checked_artifact.compile_time_roots.roots[0];
     const pattern = compile_time_root.pattern orelse return false;
     const top_level = resources.checked_artifact.top_level_values.lookupByPattern(pattern) orelse return false;
@@ -1123,7 +1123,7 @@ fn materializedComptimeFloatBitsMatch(
     };
     const const_node = switch (compile_time_root.payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .expect => return false,
+        .pending, .fn_value, .discarded, .expect => return false,
     };
     const static_request = lir.CheckedPipeline.StaticDataRequest{
         .const_locator = const_locator,

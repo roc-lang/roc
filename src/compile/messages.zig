@@ -101,9 +101,8 @@ pub const CanonicalizeTask = struct {
     cached_ast: *AST,
     /// Real imported semantic envs available to canonicalization
     imported_modules: []const CanonicalizeImport,
-    /// Validate this module as an explicitly requested checked-artifact root
-    /// instead of as a standalone `roc check` root.
-    validate_as_explicit_roots: bool,
+    /// Post-canonicalization validation this module receives.
+    validation: can.Can.Validation,
 };
 
 /// Task to type-check a canonicalized module

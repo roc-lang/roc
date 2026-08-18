@@ -18,7 +18,7 @@ const MonoAst = postcheck.Monotype.Ast;
 const MonoLower = postcheck.Monotype.Lower;
 const MonoType = postcheck.Monotype.Type;
 
-const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || error{
+const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || lir.CheckedPipeline.LowerResourceError || error{
     TestExpectedEqual,
     TestUnexpectedResult,
     MissingRootProcedure,
@@ -8437,6 +8437,7 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.FileNotFound,
         error.FileTooBig,
         error.FtruncateFailed,
+        error.HostedFunctionNotBound,
         error.InputOutput,
         error.Internal,
         error.InvalidHandle,
