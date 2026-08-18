@@ -1497,6 +1497,31 @@ const Builder = struct {
         boxyPlanInvariant("defaulted record field's declaring module was absent from boxy planning");
     }
 
+    /// The module view owning a stored nested function's checked site: the
+    /// declaring module (resolved by content identity, like every defaults
+    /// lookup) for a default-root-qualified reference, the owner template's
+    /// module otherwise (design.md "Defaulted Fields").
+    fn moduleForStoredNestedFn(self: *Builder, nested: anytype) ModuleView {
+        const identity = nested.default_root orelse
+            return self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes });
+        if (self.root_module) |root_module| {
+            if (std.mem.eql(u8, &root_module.module.module_identity.stable_hash, &identity.bytes)) {
+                return self.root_view;
+            }
+        }
+        for (self.imports) |imported| {
+            if (std.mem.eql(u8, &imported.module_identity.stable_hash, &identity.bytes)) {
+                return moduleViewFromImported(imported);
+            }
+        }
+        for (self.relation_modules) |relation| {
+            if (std.mem.eql(u8, &relation.module_identity.stable_hash, &identity.bytes)) {
+                return moduleViewFromImported(relation);
+            }
+        }
+        boxyPlanInvariant("stored default-root function's declaring module was absent from boxy planning");
+    }
+
     fn analyzeRoot(self: *Builder, root: checked.RootRequest) Allocator.Error!void {
         const host_type = typeRef(self.root_view, root.checked_type);
         const host_rep = try self.analyzeType(self.root_view, root.checked_type);
@@ -1783,7 +1808,7 @@ const Builder = struct {
         visited: *std.AutoHashMap(StaticConstVisit, void),
     ) Allocator.Error!void {
         const fn_view = switch (fn_value.fn_def) {
-            .nested => |nested| self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes }),
+            .nested => |nested| self.moduleForStoredNestedFn(nested),
             .local_template,
             .imported_template,
             .local_hosted,
@@ -1860,21 +1885,24 @@ const Builder = struct {
             .imported_hosted,
             => |template| .{ .procedure_template = template },
             .nested => |nested| blk: {
-                const view = self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes });
+                // A default-root-qualified stored function resolves its site
+                // in the declaring module against the `.default_root` owner
+                // (const-store restore is the second sanctioned resolver of
+                // default-root sites, design.md "Defaulted Fields").
+                const view = self.moduleForStoredNestedFn(nested);
                 var site_expr: ?checked.CheckedExprId = null;
                 for (view.nested_proc_sites.sites) |site| {
                     if (site.site != nested.site) continue;
-                    const site_owner = switch (site.owner) {
-                        .template => |template| template,
-                        // Stored nested functions name their owning template;
-                        // default-root sites never restore through a stored value.
-                        .default_root => continue,
-                    };
-                    if (checked_names.procedureTemplateRefEql(site_owner, nested.owner)) {
-                        site_expr = site.checked_expr orelse
-                            boxyPlanInvariant("stored nested function had no checked expression site");
-                        break;
+                    switch (site.owner) {
+                        .template => |site_owner| {
+                            if (nested.default_root != null) continue;
+                            if (!checked_names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+                        },
+                        .default_root => if (nested.default_root == null) continue,
                     }
+                    site_expr = site.checked_expr orelse
+                        boxyPlanInvariant("stored nested function had no checked expression site");
+                    break;
                 }
                 break :blk .{ .nested_expr = .{
                     .module = view.key,
@@ -9799,7 +9827,7 @@ const Builder = struct {
             boxyPlanInvariant("stored function capture plan had no checked ConstStore");
         const fn_value = store.getFn(stored_fn.fn_id);
         const fn_view = switch (fn_value.fn_def) {
-            .nested => |nested| self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes }),
+            .nested => |nested| self.moduleForStoredNestedFn(nested),
             .local_template,
             .imported_template,
             .local_hosted,
@@ -9816,7 +9844,7 @@ const Builder = struct {
     }
 
     fn nestedConstFnBody(self: *Builder, nested: anytype) WorkerBody {
-        const view = self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes });
+        const view = self.moduleForStoredNestedFn(nested);
         const expr_id = self.checkedLambdaExprForNestedFn(view, nested);
         return .{ .checked_expr = .{
             .view = view,
@@ -10061,11 +10089,16 @@ const Builder = struct {
     ) checked.CheckedExprId {
         for (view.nested_proc_sites.sites) |site| {
             if (site.site != nested.site) continue;
-            const site_owner = switch (site.owner) {
-                .template => |template| template,
-                .default_root => continue,
-            };
-            if (!checked_names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+            switch (site.owner) {
+                .template => |site_owner| {
+                    if (nested.default_root != null) continue;
+                    if (!checked_names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+                },
+                // A default-root-qualified stored function matches the
+                // declaring module's default-root site (design.md
+                // "Defaulted Fields").
+                .default_root => if (nested.default_root == null) continue,
+            }
             const expr_id = site.checked_expr orelse
                 boxyPlanInvariant("stored nested function had no checked expression site");
             const expr = view.checked_bodies.expr(expr_id);

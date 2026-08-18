@@ -29292,7 +29292,12 @@ pub const CheckedModuleArtifact = struct {
     // (`NestedProcSiteOwner`): default expressions belong to no procedure
     // template, so their sites carry the module's default-expression root set
     // as owner (design.md "Defaulted Fields").
-    const serialized_layout_version: u32 = 72;
+    // Version 73 adds the `default_root` qualifier to stored nested function
+    // references (`ConstStore.FnDef.nested`): a compile-time function value
+    // whose site lives inside a defaulted-field expression names the
+    // declaring module's content identity so const-store restore resolves
+    // the default-root site (design.md "Defaulted Fields").
+    const serialized_layout_version: u32 = 73;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35461,8 +35466,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xAC, 0xBC, 0xE1, 0x88, 0x67, 0x13, 0x98, 0x99, 0x25, 0x28, 0xF3, 0x47, 0x59, 0xEB, 0x39, 0xEB,
-        0x97, 0x8D, 0x2A, 0x39, 0xBE, 0xA6, 0x7A, 0xFE, 0xE3, 0x0D, 0x41, 0xF5, 0xD0, 0xA0, 0xD6, 0xE9,
+        0x4A, 0x65, 0x02, 0xA4, 0x8F, 0x4D, 0x24, 0x62, 0x30, 0x0C, 0x3F, 0x4C, 0x38, 0x5A, 0x52, 0x87,
+        0xDF, 0x81, 0xC3, 0xEC, 0xED, 0xCA, 0x3B, 0x0E, 0x82, 0x79, 0xF6, 0x54, 0x29, 0x44, 0xAD, 0x03,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

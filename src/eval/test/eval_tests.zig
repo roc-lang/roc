@@ -239,6 +239,94 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "10" },
     },
     .{
+        // A fn-typed default materialized into a comptime-finalized constant
+        // stores a default-root nested function in the ConstStore; the call
+        // exercises the const-store restore path for default-root sites
+        // (design.md "Defaulted Fields").
+        .name = "defaulted record field: fn-typed default restores through a comptime constant",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { f : U8 -> U8 ?? |n| n + 5 }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\call : U8 -> U8
+        \\call = |n| {
+        \\    g = cfg.f
+        \\    g(n)
+        \\}
+        \\
+        \\main = call(1)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        // Same restore path with a closure: the default's lambda captures a
+        // default-expression-local binding, so the stored function carries
+        // captures restored from the ConstStore.
+        .name = "defaulted record field: fn-typed default with a default-local capture restores through a comptime constant",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { f : U8 -> U8 ?? { k = 5
+        \\                           |n| n + k } }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\call : U8 -> U8
+        \\call = |n| {
+        \\    g = cfg.f
+        \\    g(n)
+        \\}
+        \\
+        \\main = call(1)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        // A fn-typed comptime constant whose stored value IS the default's
+        // lambda (callable binding payload), restored when the binding is
+        // called at runtime.
+        .name = "defaulted record field: fn-typed default restores as a callable comptime binding",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { f : U8 -> U8 ?? |n| n + 5 }
+        \\
+        \\g : U8 -> U8
+        \\g = Cfg.{}.f
+        \\
+        \\call : U8 -> U8
+        \\call = |n| g(n)
+        \\
+        \\main = call(1)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        // Cross-module: the consuming module's comptime constant stores a
+        // function whose default-root site lives in the DECLARING module;
+        // restore resolves that module by content identity.
+        .name = "defaulted record field: foreign fn-typed default restores through a comptime constant",
+        .source_kind = .module,
+        .imports = &.{.{ .name = "Cfg", .source = "Cfg := { f : U8 -> U8 ?? |n| n + 5 }\n" }},
+        .source =
+        \\import Cfg
+        \\
+        \\cfg : Cfg.Cfg
+        \\cfg = Cfg.Cfg.{}
+        \\
+        \\call : U8 -> U8
+        \\call = |n| {
+        \\    g = cfg.f
+        \\    g(n)
+        \\}
+        \\
+        \\main = call(1)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
         .name = "optional record field: supplied at construction and .? hits",
         .source_kind = .module,
         .source =

@@ -5185,14 +5185,35 @@ evidence and never reconstructs it. Defaults likewise carry their own
 CHECKED NESTED-FUNCTION SITES: the seal pass scans every archived
 default expression as a root, publishing each interior lambda/closure
 as a `NestedProcSite` owned by the module's `default_root` (a default
-belongs to no procedure template). Lowering resolves those sites only
-while materializing a default (the materialization context is
-explicit, mirroring its view/binder swaps—same-module materialization
-swaps in fresh binder state exactly like the foreign branch), and a
-default-root nested function instantiates no owner-template dispatch
-relations: the parameter-constraint judgment guarantees the default
-has no enclosing scheme, so its relations flow through the default
-evidence spans.
+belongs to no procedure template). Lowering resolves those sites at
+exactly two sanctioned points. First, while materializing a default
+(the materialization context is explicit, mirroring its view/binder
+swaps—same-module materialization swaps in fresh binder state exactly
+like the foreign branch). Second, while restoring a stored function
+value from the `ConstStore`: comptime finalization may store a
+default's materialized closure (a fn-typed default flowing into a
+finalized constant), so the stored nested reference
+(`ConstStore.FnDef.nested`, mirrored by Monotype's `NestedFn`) carries
+an explicit DEFAULT-ROOT QUALIFIER—the declaring module's 32-byte
+content identity—alongside the site id; restore resolves the declaring
+view through the same content-identity lookup as every other defaults
+consumer (`moduleForIdentityHash`) and matches the site against its
+`.default_root` owner, while the reference's `owner` template remains
+the checked template whose lowering RECORDED the materialization (the
+lexical context the stored evidence frames were captured against, and
+the module those frames' scope ids validate in). The restore context
+runs in default-materialization mode—view swapped to the declaring
+module, `in_default_expr` set, fresh binder state—mirroring the live
+branch, and both consuming pipelines resolve identically (Monotype's
+const restore; boxy's worker sourcing, which resolves a default-root
+stored function to a template-free `nested_expr` worker). In both
+cases a default-root nested function instantiates no owner-template
+dispatch relations: the parameter-constraint judgment guarantees the
+default has no enclosing scheme, so its relations flow through the
+default evidence spans. Because a default-root site id is relative to
+the declaring module's site table, the qualifier participates in every
+durable specialization identity that names the site (Monotype
+`CallableIdentity.nested_site` and the draft nested family address).
 
 Omission edges are EXPLICIT in every graph that orders defaults. One
 shared enumeration (src/canonicalize/default_omissions.zig) defines what
