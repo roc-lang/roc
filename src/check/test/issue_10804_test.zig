@@ -165,6 +165,42 @@ test "issue 10804: derived encoder_for reaches through a nested application of t
     try test_env.assertOneTypeError("Missing Method");
 }
 
+// A declaration that applies itself at an ever-larger argument would need a
+// different codec shape at every level, so there is no finite set of
+// obligations to check and the walk has to say so rather than descend forever.
+test "issue 10804: derived encoder_for rejects a declaration that grows its own argument" {
+    const source =
+        \\Nest(a) := [Done, More(Nest(List(a)))].{
+        \\  encoder_for : _
+        \\}
+        \\to_json : Nest(Str) -> Str
+        \\to_json = |n| Json.to_str(n)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Missing Method");
+}
+
+// The recursive occurrence here carries a concrete argument, which
+// instantiation mints fresh at every level, so recognizing it takes comparing
+// the arguments' shapes rather than the vars carrying them.
+test "issue 10804: a declaration that applies itself at a concrete argument checks once" {
+    const source =
+        \\SelfC(a) := { x : a, y : Try(SelfC(Str), [Null]) }.{
+        \\  encoder_for : _
+        \\}
+        \\to_json : SelfC(Str) -> Str
+        \\to_json = |n| Json.to_str(n)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 // Nesting a declaration inside itself gives two applications with different
 // arguments, and both have to be walked: cutting on the declaration alone
 // would skip the inner one's components.

@@ -30754,7 +30754,7 @@ fn generatedStructuralCodecBackingVar(
         method_ident,
     ) orelse return null;
     if (!isGeneratedStructuralCodecMethodBinding(method, kind)) return null;
-    if (!try self.takeDerivedCodecBackingWalk(walk, nominal)) return null;
+    if (try self.takeDerivedCodecBackingWalk(walk, nominal) != .walk_backing) return null;
     // A declaration the checker already rejected has no shape to walk; the
     // nominal validation this falls back to reports that rejection.
     const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return null;
@@ -31835,6 +31835,144 @@ const DerivedCodecWalk = struct {
     }
 };
 
+const DerivedCodecVarPair = struct { a: Var, b: Var };
+
+/// Whether two types are the same shape, compared position by position rather
+/// than by var identity. A declaration's backing is instantiated fresh at every
+/// use, so an application that recurs carries structurally equal arguments on
+/// vars the walk has never seen. Pairs already under comparison are assumed
+/// equal, which is what lets a cyclic type answer at all. Anything this does
+/// not recognize answers "different", so a miss costs a second walk of one
+/// shape rather than a skipped obligation.
+fn derivedCodecTypesEql(
+    self: *Self,
+    a_var: Var,
+    b_var: Var,
+    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
+) Allocator.Error!bool {
+    const a = self.types.resolveVar(a_var);
+    const b = self.types.resolveVar(b_var);
+    if (a.var_ == b.var_) return true;
+    if (a.desc.content == .alias) {
+        return try self.derivedCodecTypesEql(self.types.getAliasBackingVar(a.desc.content.alias), b.var_, assumed);
+    }
+    if (b.desc.content == .alias) {
+        return try self.derivedCodecTypesEql(a.var_, self.types.getAliasBackingVar(b.desc.content.alias), assumed);
+    }
+    if (a.desc.content != .structure or b.desc.content != .structure) return false;
+
+    if ((try assumed.getOrPut(.{ .a = a.var_, .b = b.var_ })).found_existing) return true;
+
+    const a_structure = a.desc.content.structure;
+    const b_structure = b.desc.content.structure;
+    if (std.meta.activeTag(a_structure) != std.meta.activeTag(b_structure)) return false;
+    return switch (a_structure) {
+        .empty_record, .empty_tag_union => true,
+        .nominal_type => |a_nominal| blk: {
+            const b_nominal = b_structure.nominal_type;
+            const a_decl = self.types.lookupNominalDecl(a_nominal) orelse break :blk false;
+            const b_decl = self.types.lookupNominalDecl(b_nominal) orelse break :blk false;
+            if (a_decl != b_decl) break :blk false;
+            break :blk try self.derivedCodecVarsEql(
+                self.types.sliceNominalArgs(a_nominal),
+                self.types.sliceNominalArgs(b_nominal),
+                assumed,
+            );
+        },
+        .tuple => |a_tuple| try self.derivedCodecVarsEql(
+            self.types.sliceVars(a_tuple.elems),
+            self.types.sliceVars(b_structure.tuple.elems),
+            assumed,
+        ),
+        .record => |a_record| blk: {
+            if (!try self.derivedCodecTypesEql(a_record.ext, b_structure.record.ext, assumed)) break :blk false;
+            break :blk try self.derivedCodecRecordFieldsEql(a_record.fields, b_structure.record.fields, assumed);
+        },
+        .record_unbound => |a_fields| try self.derivedCodecRecordFieldsEql(a_fields, b_structure.record_unbound, assumed),
+        .tag_union => |a_tag_union| blk: {
+            if (!try self.derivedCodecTypesEql(a_tag_union.ext, b_structure.tag_union.ext, assumed)) break :blk false;
+            break :blk try self.derivedCodecTagsEql(a_tag_union.tags, b_structure.tag_union.tags, assumed);
+        },
+        .fn_pure, .fn_effectful, .fn_unbound => |a_func| blk: {
+            const b_func = switch (b_structure) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| func,
+                .empty_record,
+                .empty_tag_union,
+                .nominal_type,
+                .tuple,
+                .record,
+                .record_unbound,
+                .tag_union,
+                => break :blk false,
+            };
+            if (!try self.derivedCodecTypesEql(a_func.ret, b_func.ret, assumed)) break :blk false;
+            break :blk try self.derivedCodecVarsEql(
+                self.types.sliceVars(a_func.args),
+                self.types.sliceVars(b_func.args),
+                assumed,
+            );
+        },
+    };
+}
+
+fn derivedCodecVarsEql(
+    self: *Self,
+    a_vars: []const Var,
+    b_vars: []const Var,
+    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
+) Allocator.Error!bool {
+    if (a_vars.len != b_vars.len) return false;
+    // Both lists point into the types store, which the comparison reads through.
+    const pairs = try self.gpa.alloc(DerivedCodecVarPair, a_vars.len);
+    defer self.gpa.free(pairs);
+    for (pairs, a_vars, b_vars) |*pair, a_var, b_var| pair.* = .{ .a = a_var, .b = b_var };
+    for (pairs) |pair| {
+        if (!try self.derivedCodecTypesEql(pair.a, pair.b, assumed)) return false;
+    }
+    return true;
+}
+
+fn derivedCodecRecordFieldsEql(
+    self: *Self,
+    a_range: types_mod.RecordField.SafeMultiList.Range,
+    b_range: types_mod.RecordField.SafeMultiList.Range,
+    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
+) Allocator.Error!bool {
+    const a_fields = self.types.getRecordFieldsSlice(a_range);
+    const b_fields = self.types.getRecordFieldsSlice(b_range);
+    if (a_fields.len != b_fields.len) return false;
+    for (a_fields.items(.name), b_fields.items(.name)) |a_name, b_name| {
+        if (!a_name.eql(b_name)) return false;
+    }
+    // A field whose kind is still a variable is left as "different": the kind
+    // is its own axis and this walk has no reason to decide it.
+    for (a_fields.items(.presence), b_fields.items(.presence)) |a_presence, b_presence| {
+        if (a_presence.presenceVar() != null or b_presence.presenceVar() != null) return false;
+    }
+    for (a_fields.items(.presence), b_fields.items(.presence)) |a_presence, b_presence| {
+        if (!try self.derivedCodecTypesEql(a_presence.typeVar(), b_presence.typeVar(), assumed)) return false;
+    }
+    return true;
+}
+
+fn derivedCodecTagsEql(
+    self: *Self,
+    a_range: types_mod.Tag.SafeMultiList.Range,
+    b_range: types_mod.Tag.SafeMultiList.Range,
+    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
+) Allocator.Error!bool {
+    const a_tags = self.types.getTagsSlice(a_range);
+    const b_tags = self.types.getTagsSlice(b_range);
+    if (a_tags.len != b_tags.len) return false;
+    for (a_tags.items(.name), b_tags.items(.name)) |a_name, b_name| {
+        if (!a_name.eql(b_name)) return false;
+    }
+    for (a_tags.items(.args), b_tags.items(.args)) |a_args, b_args| {
+        if (!try self.derivedCodecVarsEql(self.types.sliceVars(a_args), self.types.sliceVars(b_args), assumed)) return false;
+    }
+    return true;
+}
+
 /// Whether this nominal application's derived-codec backing still needs
 /// walking, recording it before the answer is known so that a backing which
 /// reaches itself finds the application already accounted for by the frame
@@ -31847,31 +31985,117 @@ fn takeDerivedCodecBackingWalk(
     self: *Self,
     walk: *DerivedCodecWalk,
     nominal: types_mod.NominalType,
-) Allocator.Error!bool {
+) Allocator.Error!DerivedCodecBackingWalk {
     // Builtin codecs are the format protocol itself, validated against the
     // format's own methods rather than by walking a backing shape. Monotype
     // draws the same line when it looks for a custom codec target.
-    if (nominal.originIsBuiltin()) return false;
-    const decl_idx = self.types.lookupNominalDecl(nominal) orelse return true;
-    // The argument list points into the types store, which resolution touches.
+    if (nominal.originIsBuiltin()) return .accounted_for;
+    const decl_idx = self.types.lookupNominalDecl(nominal) orelse return .walk_backing;
+    // The argument list points into the types store, which the comparison and
+    // the walk both read through.
     const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
     defer self.gpa.free(args);
     for (args) |*arg| arg.* = self.types.resolveVar(arg.*).var_;
 
+    var assumed = std.AutoHashMap(DerivedCodecVarPair, void).init(self.gpa);
+    defer assumed.deinit();
+
     for (walk.walked_apps.items) |app| {
         if (app.decl != decl_idx or app.args_len != args.len) continue;
-        const recorded = walk.appArgs(app);
-        var same = true;
-        for (recorded, args) |recorded_arg, arg| {
-            if (self.types.resolveVar(recorded_arg).var_ != arg) {
-                same = false;
-                break;
-            }
-        }
-        if (same) return false;
+        assumed.clearRetainingCapacity();
+        if (try self.derivedCodecVarsEql(walk.appArgs(app), args, &assumed)) return .accounted_for;
+
+        // The same declaration at an argument that contains what an earlier
+        // level was given is a declaration applying itself at a bigger type.
+        // Its codec would need a different shape at every level, so there is
+        // no finite set of derivations to check and none to lower either.
+        assumed.clearRetainingCapacity();
+        if (try self.derivedCodecArgsGrew(walk.appArgs(app), args, &assumed)) return .unbounded;
     }
     try walk.recordApp(decl_idx, args);
-    return true;
+    return .walk_backing;
+}
+
+/// What the walk should do with a nominal application whose codec the compiler
+/// derives.
+const DerivedCodecBackingWalk = enum {
+    /// Nothing to do: an application of this shape is already accounted for,
+    /// or the type is a builtin whose codec is the format protocol.
+    accounted_for,
+    /// The declaration applies itself at an ever-larger argument, so its
+    /// derived codec can never be monomorphized.
+    unbounded,
+    /// Walk the backing shape.
+    walk_backing,
+};
+
+/// Whether `args` contains what `earlier_args` was given, at the same
+/// positions and strictly somewhere.
+fn derivedCodecArgsGrew(
+    self: *Self,
+    earlier_args: []const Var,
+    args: []const Var,
+    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
+) Allocator.Error!bool {
+    var grew = false;
+    for (earlier_args, args) |earlier_arg, arg| {
+        assumed.clearRetainingCapacity();
+        if (try self.derivedCodecTypesEql(earlier_arg, arg, assumed)) continue;
+        if (!try self.derivedCodecTypeContains(arg, earlier_arg, assumed)) return false;
+        grew = true;
+    }
+    return grew;
+}
+
+/// Whether some component of `haystack` is the same shape as `needle`.
+fn derivedCodecTypeContains(
+    self: *Self,
+    haystack: Var,
+    needle: Var,
+    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
+) Allocator.Error!bool {
+    var pending = std.ArrayList(Var).empty;
+    defer pending.deinit(self.gpa);
+    var seen = std.AutoHashMap(Var, void).init(self.gpa);
+    defer seen.deinit();
+
+    try self.pushDerivedCodecComponents(&pending, haystack);
+    while (pending.pop()) |candidate| {
+        const root = self.types.resolveVar(candidate).var_;
+        if ((try seen.getOrPut(root)).found_existing) continue;
+        assumed.clearRetainingCapacity();
+        if (try self.derivedCodecTypesEql(root, needle, assumed)) return true;
+        try self.pushDerivedCodecComponents(&pending, root);
+    }
+    return false;
+}
+
+fn pushDerivedCodecComponents(self: *Self, pending: *std.ArrayList(Var), var_: Var) Allocator.Error!void {
+    switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+            },
+            .record_unbound => |field_range| {
+                const fields = self.types.getRecordFieldsSlice(field_range);
+                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+            },
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| try pending.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                try pending.append(self.gpa, func.ret);
+            },
+            .empty_record, .empty_tag_union => {},
+        },
+        .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
+        .flex, .rigid, .err, .field_presence => {},
+    }
 }
 
 fn validateDerivedParseVar(
@@ -32348,38 +32572,42 @@ fn validateDerivedParseNominal(
         },
     });
     if (result.isEstablished() and isGeneratedStructuralCodecMethodBinding(method_lookup, .parser)) {
-        if (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
-            walk.nominal_backing_depth += 1;
-            defer walk.nominal_backing_depth -= 1;
-            const nested_calls_start = self.scratch_generated_codec_calls.items.len;
-            defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(nested_calls_start);
-            const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return .reported_error;
-            switch (try self.validateDerivedParseVar(
-                backing_var,
-                encoding_var,
-                state_var,
-                err_var,
-                constraint,
-                env,
-                region,
-                walk,
-                .shape,
-                failure_expr,
-            )) {
-                .ok => try self.recordGeneratedCodecDerivationSnapshot(
-                    .parser,
-                    expected_fn,
-                    expected_runtime_fn,
-                    nominal_var,
+        switch (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
+            .accounted_for => {},
+            .unbounded => return .unsupported,
+            .walk_backing => {
+                walk.nominal_backing_depth += 1;
+                defer walk.nominal_backing_depth -= 1;
+                const nested_calls_start = self.scratch_generated_codec_calls.items.len;
+                defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(nested_calls_start);
+                const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return .reported_error;
+                switch (try self.validateDerivedParseVar(
+                    backing_var,
                     encoding_var,
                     state_var,
                     err_var,
-                    self.scratch_generated_codec_calls.items[nested_calls_start..],
+                    constraint,
                     env,
                     region,
-                ),
-                .unsupported, .reported_error => |validation| return validation,
-            }
+                    walk,
+                    .shape,
+                    failure_expr,
+                )) {
+                    .ok => try self.recordGeneratedCodecDerivationSnapshot(
+                        .parser,
+                        expected_fn,
+                        expected_runtime_fn,
+                        nominal_var,
+                        encoding_var,
+                        state_var,
+                        err_var,
+                        self.scratch_generated_codec_calls.items[nested_calls_start..],
+                        env,
+                        region,
+                    ),
+                    .unsupported, .reported_error => |validation| return validation,
+                }
+            },
         }
     }
     switch (try self.finishGeneratedCodecMethodValidation(
@@ -33002,36 +33230,40 @@ fn validateDerivedEncodeNominal(
         },
     });
     if (result.isEstablished() and isGeneratedStructuralCodecMethodBinding(method_lookup, .encoder)) {
-        if (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
-            walk.nominal_backing_depth += 1;
-            defer walk.nominal_backing_depth -= 1;
-            const nested_calls_start = self.scratch_generated_codec_calls.items.len;
-            defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(nested_calls_start);
-            const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return .reported_error;
-            switch (try self.validateDerivedEncodeVar(
-                backing_var,
-                encoding_var,
-                state_var,
-                err_var,
-                constraint,
-                env,
-                region,
-                walk,
-            )) {
-                .ok => try self.recordGeneratedCodecDerivationSnapshot(
-                    .encoder,
-                    expected_fn,
-                    expected_runtime_fn,
-                    nominal_var,
+        switch (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
+            .accounted_for => {},
+            .unbounded => return .unsupported,
+            .walk_backing => {
+                walk.nominal_backing_depth += 1;
+                defer walk.nominal_backing_depth -= 1;
+                const nested_calls_start = self.scratch_generated_codec_calls.items.len;
+                defer self.scratch_generated_codec_calls.shrinkRetainingCapacity(nested_calls_start);
+                const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return .reported_error;
+                switch (try self.validateDerivedEncodeVar(
+                    backing_var,
                     encoding_var,
                     state_var,
                     err_var,
-                    self.scratch_generated_codec_calls.items[nested_calls_start..],
+                    constraint,
                     env,
                     region,
-                ),
-                .unsupported, .reported_error => |validation| return validation,
-            }
+                    walk,
+                )) {
+                    .ok => try self.recordGeneratedCodecDerivationSnapshot(
+                        .encoder,
+                        expected_fn,
+                        expected_runtime_fn,
+                        nominal_var,
+                        encoding_var,
+                        state_var,
+                        err_var,
+                        self.scratch_generated_codec_calls.items[nested_calls_start..],
+                        env,
+                        region,
+                    ),
+                    .unsupported, .reported_error => |validation| return validation,
+                }
+            },
         }
     }
     return try self.finishGeneratedCodecMethodValidation(
