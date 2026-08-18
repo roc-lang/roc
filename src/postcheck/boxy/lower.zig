@@ -458,6 +458,26 @@ fn resolveNestedConstFn(
     worker: Plan.WorkerPlanId,
     nested: anytype,
 ) ResolvedWorker {
+    // A default-root-qualified stored function's site lives in the declaring
+    // module (resolved by content identity) and belongs to no checked
+    // procedure template, so its worker resolves without a template identity
+    // — exactly like `resolveNestedExprWorker`'s default-root branch
+    // (design.md "Defaulted Fields").
+    if (nested.default_root) |identity| {
+        const module = procedureModuleByIdentity(modules, &identity.bytes);
+        const expr_id = checkedLambdaExprForNestedFn(module, nested);
+        return .{
+            .worker = worker,
+            .module_key = module.key,
+            .module = module,
+            .template_ref = null,
+            .template = null,
+            .body = .{ .checked_expr = .{
+                .body_id = null,
+                .root_expr = expr_id,
+            } },
+        };
+    }
     const module = procedureModuleByKey(modules, .{ .bytes = names.procTemplateModuleDigest(nested.owner).bytes });
     const expr_id = checkedLambdaExprForNestedFn(module, nested);
     const template = module.checked_procedure_templates.get(nested.owner.template);
@@ -472,6 +492,20 @@ fn resolveNestedConstFn(
             .root_expr = expr_id,
         } },
     };
+}
+
+fn procedureModuleByIdentity(modules: Common.CheckedModules, identity: *const [32]u8) ProcedureModuleView {
+    const root = rootProcedureModule(modules);
+    if (procedureModuleIdentityMatches(root, identity)) return root;
+    for (modules.imports) |imported| {
+        const view = procedureModuleFromImport(imported);
+        if (procedureModuleIdentityMatches(view, identity)) return view;
+    }
+    for (modules.root.relation_modules) |relation| {
+        const view = procedureModuleFromImport(relation);
+        if (procedureModuleIdentityMatches(view, identity)) return view;
+    }
+    boxyLowerInvariant("stored default-root function's declaring module was absent from boxy lowering");
 }
 
 fn resolveNestedExprWorker(
@@ -524,11 +558,15 @@ fn checkedLambdaExprForNestedFn(
 ) checked.CheckedExprId {
     for (module.nested_proc_sites.sites) |site| {
         if (site.site != nested.site) continue;
-        const site_owner = switch (site.owner) {
-            .template => |template| template,
-            .default_root => continue,
-        };
-        if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+        switch (site.owner) {
+            .template => |site_owner| {
+                if (nested.default_root != null) continue;
+                if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+            },
+            // A default-root-qualified stored function matches the declaring
+            // module's default-root site (design.md "Defaulted Fields").
+            .default_root => if (nested.default_root == null) continue,
+        }
         const expr_id = site.checked_expr orelse
             boxyLowerInvariant("stored nested function had no checked expression site");
         const expr = module.checked_bodies.expr(expr_id);
@@ -17140,21 +17178,28 @@ const ProcBodyBuilder = struct {
             .imported_hosted,
             => |template| .{ .procedure_template = template },
             .nested => |nested| blk: {
-                const module = procedureModuleByKey(self.parent.modules, .{
-                    .bytes = names.procTemplateModuleDigest(nested.owner).bytes,
-                });
+                // A default-root-qualified stored function resolves its site
+                // in the declaring module (by content identity) against the
+                // `.default_root` owner (design.md "Defaulted Fields").
+                const module = if (nested.default_root) |identity|
+                    procedureModuleByIdentity(self.parent.modules, &identity.bytes)
+                else
+                    procedureModuleByKey(self.parent.modules, .{
+                        .bytes = names.procTemplateModuleDigest(nested.owner).bytes,
+                    });
                 var site_expr: ?checked.CheckedExprId = null;
                 for (module.nested_proc_sites.sites) |site| {
                     if (site.site != nested.site) continue;
-                    const site_owner = switch (site.owner) {
-                        .template => |template| template,
-                        .default_root => continue,
-                    };
-                    if (names.procedureTemplateRefEql(site_owner, nested.owner)) {
-                        site_expr = site.checked_expr orelse
-                            boxyLowerInvariant("stored nested function had no checked expression site");
-                        break;
+                    switch (site.owner) {
+                        .template => |site_owner| {
+                            if (nested.default_root != null) continue;
+                            if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+                        },
+                        .default_root => if (nested.default_root == null) continue,
                     }
+                    site_expr = site.checked_expr orelse
+                        boxyLowerInvariant("stored nested function had no checked expression site");
+                    break;
                 }
                 break :blk .{ .nested_expr = .{
                     .module = module.key,

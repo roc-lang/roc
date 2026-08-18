@@ -163,6 +163,11 @@ const SpecLookupAddress = struct {
     index_b: u32,
     index_c: u32,
     owner_fn_digest: [32]u8,
+    /// Explicitly tagged default-root qualifier: `default_root` distinguishes
+    /// a default-root nested site (whose declaring module content identity
+    /// fills `default_root_module`) from a template-owned one (zeros).
+    default_root: bool,
+    default_root_module: [32]u8,
     source_digest: [32]u8,
     evidence_digest: [32]u8,
     type_digest: [32]u8,
@@ -182,6 +187,8 @@ const SpecLookupAddress = struct {
             .index_b = 0,
             .index_c = 0,
             .owner_fn_digest = @splat(0),
+            .default_root = false,
+            .default_root_module = @splat(0),
             .source_digest = source_digest.bytes,
             .evidence_digest = evidence_digest.bytes,
             .type_digest = type_digest.bytes,
@@ -198,6 +205,10 @@ const SpecLookupAddress = struct {
                 key.index_b = site.owner_template;
                 key.index_c = site.site;
                 key.owner_fn_digest = site.owner_fn_digest.bytes;
+                if (site.default_root_module) |identity| {
+                    key.default_root = true;
+                    key.default_root_module = identity.bytes;
+                }
             },
             .hosted => |hosted| {
                 key.index_a = @intFromEnum(hosted);

@@ -9963,6 +9963,7 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
         .nested => |nested| .{ .nested = .{
             .owner = nested.owner,
             .site = nested.site,
+            .default_root = nested.default_root,
             .context_fn_key = nested.context_fn_key,
             .local_proc_context_digest = nested.local_proc_context_digest,
         } },

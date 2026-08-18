@@ -2106,6 +2106,7 @@ fn nestedSpecIdentity(
             .owner_template = @intFromEnum(nested.owner.template),
             .owner_fn_digest = .{ .bytes = context_hasher.finalResult() },
             .site = @intFromEnum(nested.site),
+            .default_root_module = nested.default_root,
         } },
         .method_scope = moduleDigestFromId(method_scope),
         .source_fn_ty_digest = source_fn_key,
@@ -5615,6 +5616,10 @@ const Builder = struct {
                 defer body_draft.deinit();
                 var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, templateForConstFnDef(fn_value.fn_def), graph, &body_draft);
                 defer fn_ctx.deinit();
+                // A default-root stored function restores in default
+                // materialization mode: `fn_view` is the declaring module and
+                // the site resolves against its `.default_root` owner.
+                fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
                 fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(fn_value);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 const draft = FinalBodyOutputGuard.begin(self);
@@ -5728,9 +5733,21 @@ const Builder = struct {
             }
             Common.invariant("nested function expression reached Monotype without a checked nested function site");
         };
+        const raw_site = @intFromEnum(site);
+        if (raw_site >= view.nested_proc_sites.sites.len) {
+            Common.invariant("nested function site id was outside the CheckedModule procedure-site table");
+        }
         return .{
             .owner = owner,
             .site = site,
+            // A default-root site belongs to no template; the produced
+            // reference carries the declaring module's content identity so a
+            // stored function value built from it stays resolvable outside
+            // materialization context (const-store restore).
+            .default_root = switch (view.nested_proc_sites.sites[raw_site].owner) {
+                .template => null,
+                .default_root => .{ .bytes = view.module_identity.stable_hash },
+            },
             .context_fn_key = context_fn_key,
             .local_proc_context_digest = local_proc_context_digest,
         };
@@ -7437,7 +7454,15 @@ const Builder = struct {
 
     fn moduleForConstFnDef(self: *Builder, fn_def: anytype) ModuleView {
         return switch (fn_def) {
-            .nested => |nested| self.moduleForDigest(names.procTemplateModuleDigest(nested.owner)),
+            // A default-root-qualified nested function's site lives in the
+            // DECLARING module (resolved by content identity, like every
+            // defaults-machinery lookup); a template-owned site lives in its
+            // owner template's module.
+            .nested => |nested| if (nested.default_root) |identity|
+                self.moduleForIdentityHash(&identity.bytes) orelse
+                    Common.invariant("stored default-root function's declaring module was not present in the lowering input")
+            else
+                self.moduleForDigest(names.procTemplateModuleDigest(nested.owner)),
             .parser_runtime => |runtime| self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner)),
             .encoder_for_runtime => |runtime| self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner)),
             .local_template,
@@ -7477,6 +7502,7 @@ const Builder = struct {
                 template.fn_def = .{ .nested = .{
                     .owner = nested.owner,
                     .site = nested.site,
+                    .default_root = nested.default_root,
                     .context_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key),
                     .local_proc_context_digest = nested.local_proc_context_digest,
                 } };
@@ -7493,6 +7519,7 @@ const Builder = struct {
             .nested => |nested| .{ .nested = .{
                 .owner = nested.owner,
                 .site = nested.site,
+                .default_root = nested.default_root,
                 .context_fn_key = nested.context_fn_key,
                 .local_proc_context_digest = nested.local_proc_context_digest,
             } },
@@ -8112,6 +8139,7 @@ const Builder = struct {
         defer body_draft.deinit();
         var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), graph, &body_draft);
         defer fn_ctx.deinit();
+        fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
         fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(fn_value);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
         fn_ctx.current_fn_key = switch (fn_value.fn_def) {
@@ -10480,6 +10508,11 @@ const DraftNestedFamilyAddress = struct {
     owner_template: u32,
     owner_fn_key: [32]u8,
     site: u32,
+    /// Explicitly tagged default-root qualifier: the site id is relative to
+    /// the declaring module's site table, so a default-root site's family
+    /// carries that module's content identity (zeros under `false`).
+    default_root: bool,
+    default_root_module: [32]u8,
     method_scope: [32]u8,
     source_fn_key: [32]u8,
 
@@ -10490,6 +10523,8 @@ const DraftNestedFamilyAddress = struct {
             .owner_template = @intFromEnum(nested.owner.template),
             .owner_fn_key = nested.context_fn_key.bytes,
             .site = @intFromEnum(nested.site),
+            .default_root = nested.default_root != null,
+            .default_root_module = if (nested.default_root) |identity| identity.bytes else @splat(0),
             .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
@@ -17399,6 +17434,13 @@ const BodyContext = struct {
         if (!names.procedureTemplateRefEql(chain.scope.owner, self.owner_template)) {
             Common.invariant("stored function evidence belonged to a different checked template");
         }
+        // A default-root nested function instantiates no owner-template
+        // dispatch relations (design.md "Defaulted Fields"): the default has
+        // no enclosing scheme, so its relations flow entirely through the
+        // default evidence spans. The chain owner above is the template that
+        // RECORDED the materialization, while `self.view` is the declaring
+        // module — its template table does not contain that owner.
+        if (self.in_default_expr) return;
         if (chain.parent) |parent| try self.replayStoredEvidenceRelations(parent.*);
         const template = self.view.templates.get(self.owner_template.template);
         switch (chain.scope.lexical) {
@@ -30107,9 +30149,12 @@ const BodyContext = struct {
             Common.invariant("stored checked function did not contain an explicit evidence root frame");
         }
         const retained_evidence = try self.materializeConstFnEvidence(fn_value);
-        const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
+        _ = self.builder.moduleForConstFnDef(fn_value.fn_def);
         const checked_template = templateForConstFnDef(fn_value.fn_def);
-        _ = fn_view.templates.get(checked_template.template);
+        // The recording owner template lives in its OWN module (for a
+        // default-root stored function, the fn's module is the declaring
+        // module, not the owner's).
+        _ = self.builder.moduleForDigest(names.procTemplateModuleDigest(checked_template)).templates.get(checked_template.template);
         const fn_def = try self.builder.constFnDefToMono(fn_value.fn_def);
         if (fn_value.captures.len != 0) {
             return try self.restoreCapturingConstFnAtNode(
@@ -30152,6 +30197,7 @@ const BodyContext = struct {
                     self.graph,
                     self.draft,
                 );
+                fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
                 fn_ctx.evidence = retained_evidence;
                 fn_ctx.inheritFrozenEmissionContext(self);
                 defer fn_ctx.deinit();
@@ -30205,6 +30251,7 @@ const BodyContext = struct {
             self.graph,
             self.draft,
         );
+        fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
         fn_ctx.evidence = retained_evidence;
         fn_ctx.inheritFrozenEmissionContext(self);
         defer fn_ctx.deinit();
@@ -30371,9 +30418,12 @@ const BodyContext = struct {
             Common.invariant("stored checked function did not contain an explicit evidence root frame");
         }
         const retained_evidence = try self.materializeConstFnEvidence(fn_value);
-        const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
+        _ = self.builder.moduleForConstFnDef(fn_value.fn_def);
         const checked_template = templateForConstFnDef(fn_value.fn_def);
-        _ = fn_view.templates.get(checked_template.template);
+        // The recording owner template lives in its OWN module (for a
+        // default-root stored function, the fn's module is the declaring
+        // module, not the owner's).
+        _ = self.builder.moduleForDigest(names.procTemplateModuleDigest(checked_template)).templates.get(checked_template.template);
         if (fn_value.captures.len != 0) {
             return try self.restoreCapturingConstFn(store_view, fn_value, template, ty, retained_evidence, static_data_const_locator);
         }
@@ -30396,6 +30446,7 @@ const BodyContext = struct {
             .nested => |nested| {
                 const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
                 var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
+                fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
                 fn_ctx.evidence = retained_evidence;
                 fn_ctx.inheritFrozenEmissionContext(self);
                 defer fn_ctx.deinit();
@@ -30441,6 +30492,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
+        fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
         fn_ctx.evidence = retained_evidence;
         fn_ctx.inheritFrozenEmissionContext(self);
         defer fn_ctx.deinit();
@@ -35914,20 +35966,34 @@ const BodyContext = struct {
         }
         const expected_head: LexicalDispatchScope = switch (fn_value.fn_def) {
             .nested => |nested| blk: {
+                // A default-root-qualified stored function's site lives in
+                // the DECLARING module (resolved by content identity); the
+                // evidence frames themselves stay validated against the
+                // recording owner template's module above, exactly as they
+                // were captured during materialization (design.md "Defaulted
+                // Fields" — const-store restore is the second sanctioned
+                // resolver of default-root sites).
+                const site_view = if (nested.default_root != null)
+                    self.builder.moduleForConstFnDef(fn_value.fn_def)
+                else
+                    owner_view;
                 const raw_site = @intFromEnum(nested.site);
-                if (raw_site >= owner_view.nested_proc_sites.sites.len) {
+                if (raw_site >= site_view.nested_proc_sites.sites.len) {
                     Common.invariant("stored nested function referenced an unknown checked site");
                 }
-                const site = owner_view.nested_proc_sites.sites[raw_site];
-                const site_owner = switch (site.owner) {
-                    .template => |template| template,
-                    // Stored nested functions name their owning template;
-                    // default-root sites are only reachable through live
-                    // default materialization, never through a stored value.
-                    .default_root => Common.invariant("stored nested function referenced a default-root checked site"),
-                };
-                if (!names.procedureTemplateRefEql(site_owner, owner)) {
-                    Common.invariant("stored nested function site belonged to a different checked template");
+                const site = site_view.nested_proc_sites.sites[raw_site];
+                switch (site.owner) {
+                    .template => |site_owner| {
+                        if (nested.default_root != null) {
+                            Common.invariant("stored default-root function referenced a template-owned checked site");
+                        }
+                        if (!names.procedureTemplateRefEql(site_owner, owner)) {
+                            Common.invariant("stored nested function site belonged to a different checked template");
+                        }
+                    },
+                    .default_root => if (nested.default_root == null) {
+                        Common.invariant("stored nested function referenced a default-root checked site without a default-root qualifier");
+                    },
                 }
                 break :blk switch (site.lexical_scope) {
                     .root => .root,
@@ -50619,6 +50685,18 @@ fn ownerTemplateForConstFnDef(fn_def: anytype) names.ProcTemplate {
     };
 }
 
+/// Whether a stored function definition names a default-root site (a lambda
+/// inside a defaulted-field expression, design.md "Defaulted Fields").
+/// Restore contexts for such functions run in default-materialization mode:
+/// `in_default_expr` set, view swapped to the declaring module, and no
+/// owner-template dispatch relations instantiated.
+fn constFnDefIsDefaultRoot(fn_def: anytype) bool {
+    return switch (fn_def) {
+        .nested => |nested| nested.default_root != null,
+        .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => false,
+    };
+}
+
 fn templateForConstFnDef(fn_def: check.ConstStore.FnDef) names.ProcTemplate {
     return switch (fn_def) {
         .local_template,
@@ -50633,15 +50711,22 @@ fn templateForConstFnDef(fn_def: check.ConstStore.FnDef) names.ProcTemplate {
 }
 
 fn checkedNestedSite(view: ModuleView, nested: anytype) checked.NestedProcSite {
+    // A default-root-qualified stored function names the declaring module's
+    // default root as the site owner; `view` is already that module
+    // (`moduleForConstFnDef` resolves it by content identity), so the match
+    // is by site id against the `.default_root` owner (design.md "Defaulted
+    // Fields" — const-store restore is the second sanctioned resolver of
+    // default-root sites, after live default materialization).
+    const wants_default_root = nested.default_root != null;
     for (view.nested_proc_sites.sites) |site| {
         if (site.site != nested.site) continue;
-        const site_owner = switch (site.owner) {
-            .template => |template| template,
-            // A stored nested function names its owning template; default-root
-            // sites are only reachable through live default materialization.
-            .default_root => continue,
-        };
-        if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+        switch (site.owner) {
+            .template => |site_owner| {
+                if (wants_default_root) continue;
+                if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+            },
+            .default_root => if (!wants_default_root) continue,
+        }
         return site;
     }
     Common.invariant("stored nested function referenced a missing checked nested site");

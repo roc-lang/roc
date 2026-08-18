@@ -28,6 +28,9 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 13: nested function references and callable identities carry the
+/// default-root qualifier (declaring module content identity) for stored
+/// functions inside defaulted-field expressions.
 /// Version 12: graph-reduced type digests (versioned digest domains,
 /// alias-opaque encoding, recursive-group reduction, and previously missing
 /// identity fields), which change every serialized digest byte.
@@ -36,7 +39,7 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 12;
+pub const FORMAT_VERSION: u32 = 13;
 
 const SECTION_COUNT = 43;
 
@@ -1624,6 +1627,12 @@ fn writeCallableIdentity(hasher: *std.crypto.hash.sha2.Sha256, callable: Ast.Cal
             writeHashU32(hasher, site.owner_template);
             writeHashBytes32(hasher, site.owner_fn_digest.bytes);
             writeHashU32(hasher, site.site);
+            if (site.default_root_module) |identity| {
+                writeHashBytes(hasher, "default_root");
+                writeHashBytes32(hasher, identity.bytes);
+            } else {
+                writeHashBytes(hasher, "no_default_root");
+            }
         },
         .hosted => |hosted| {
             writeHashBytes(hasher, "hosted");
