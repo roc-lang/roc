@@ -31866,7 +31866,9 @@ const DerivedCodecWalk = struct {
 /// What the walk should do with a nominal application whose codec the compiler
 /// derives.
 const DerivedCodecBackingWalk = union(enum) {
-    /// A frame above or an earlier sibling already carries these obligations.
+    /// Nothing for this walk to do: either a frame above or an earlier sibling
+    /// already carries these obligations, or the type is a builtin whose codec
+    /// is validated against the format's own methods.
     accounted_for,
     /// The declaration applies itself at an argument that does not shrink, so
     /// its derived codec would need a different shape at every level and can
