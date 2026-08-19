@@ -459,7 +459,7 @@ const DurableTypeSnapshot = struct {
     }
 };
 
-fn durableTypeSnapshot(allocator: Allocator, program: *const MonoAst.Program) Allocator.Error!DurableTypeSnapshot {
+fn durableTypeSnapshot(allocator: Allocator, program: *MonoAst.Program) Allocator.Error!DurableTypeSnapshot {
     const store_view = program.types.view();
     const type_digests = try allocator.alloc(check.CheckedNames.TypeDigest, store_view.types.len);
     errdefer allocator.free(type_digests);

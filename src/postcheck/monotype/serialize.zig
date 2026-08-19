@@ -28,12 +28,15 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 12: canonical graph-based type digests (versioned digest domains,
+/// alias-opaque encoding, recursive-group canonicalization, and previously
+/// missing identity fields), which change every serialized digest byte.
 /// Version 11: field access expressions carry flattened segment spans.
 /// Version 9: function metadata records whether a signature is independent
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 11;
+pub const FORMAT_VERSION: u32 = 12;
 
 const SECTION_COUNT = 43;
 

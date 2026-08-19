@@ -9826,6 +9826,13 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
     @memset(iterator_interface_visit_epochs.items, 0);
     cloned.iterator_interface_visit_epochs = @TypeOf(source.iterator_interface_visit_epochs).fromArrayList(iterator_interface_visit_epochs);
     iterator_interface_visit_epochs = .empty;
+    // The unfolding index must travel with the cloned digest caches: a clone
+    // holding cached recursive digests but no unfoldings would digest a new
+    // rolled-out prefix differently from the knot it unrolls.
+    var unfoldings = source.recursive_digest_unfoldings.iterator();
+    while (unfoldings.next()) |entry| {
+        try cloned.recursive_digest_unfoldings.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
     cloned.spans = @TypeOf(source.spans).fromArrayList(try cloneSlice(MonoType.TypeId, allocator, view.spans));
     cloned.fields = @TypeOf(source.fields).fromArrayList(try cloneSlice(MonoType.Field, allocator, view.fields));
     cloned.tags = @TypeOf(source.tags).fromArrayList(try cloneSlice(MonoType.Tag, allocator, view.tags));
