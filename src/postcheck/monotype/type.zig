@@ -314,7 +314,7 @@ pub const Store = struct {
     /// finalized digests, mapped to that member's group digest. An acyclic
     /// node whose rendering matches an entry is a rolled-out prefix of the
     /// same infinite type and adopts the member's digest, which keeps digests
-    /// independent of how deeply a recursive knot is tied — including across
+    /// independent of how deeply a recursive knot is tied—including across
     /// separate digest calls. Keys and values are content-addressed, so
     /// entries stay valid across `restore` truncations and need no rollback.
     recursive_digest_unfoldings: std.AutoHashMap([32]u8, names.TypeDigest),
@@ -639,6 +639,9 @@ pub const Store = struct {
         // A surviving reserved slot may have been filled after the mark with
         // children that are now truncated and whose ids can be reused. Clear
         // every retained containment answer so those new children are walked.
+        // Digest caches need no equivalent clearing only because no caller
+        // digests a mid-transaction fill before its rollback decision; the
+        // unfolding index is content-addressed and stays valid regardless.
         @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
         self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
@@ -655,12 +658,14 @@ pub const Store = struct {
             .named => |named| if (named.builtin_owner) |owner|
                 .{ .builtin = owner }
             else if (named.kind == .alias)
-                // Aliases are transparent for static dispatch: the owner is the
-                // backing's owner, mirroring the alias-transparent digest path
-                // above. This unwraps alias-over-alias and alias-over-nominal
-                // uniformly (the backing of an alias-over-nominal is itself a
-                // `named` node carrying the nominal's owner). The recursion
-                // terminates because alias chains in checked output are finite.
+                // Aliases are transparent for static dispatch: the owner is
+                // the backing's owner. (Content digests keep aliases opaque;
+                // dispatch is a representation question, so it unwraps.) This
+                // handles alias-over-alias and alias-over-nominal uniformly
+                // (the backing of an alias-over-nominal is itself a `named`
+                // node carrying the nominal's owner). The recursion
+                // terminates because alias chains in checked output are
+                // finite.
                 (if (named.backing) |backing|
                     self.ownerHead(backing.ty)
                 else
@@ -912,11 +917,14 @@ pub const Store = struct {
     ///
     /// Aliases with backing compare as their backing, non-alias named types
     /// compare by named identity and arguments, and structural rows compare by
-    /// label text and ordered children. `typeDigest` matches these rules with
-    /// one deliberate one-way exception: aliases digest as opaque nodes, so an
-    /// alias and its backing are equal here yet digest differently. Equal
-    /// digests still imply equality here; this is the authoritative check
-    /// before one specialization can reuse another.
+    /// label text and ordered children. Equal full digests imply equality
+    /// here—the direction interning relies on. The converse can fail one way:
+    /// aliases digest as opaque nodes (deliberately), and the digest observes
+    /// identity fields this comparison does not (`named_type.ty`,
+    /// `tag.checked_name`, `type_name` under a `source_decl`, checked-public
+    /// backing content), which production constructs consistently for equal
+    /// types. This is the authoritative check before one specialization can
+    /// reuse another.
     pub fn typeEql(
         self: *const Store,
         name_store: *const names.NameStore,
@@ -1231,15 +1239,17 @@ pub const Store = struct {
     const DigestNode = struct {
         ty: TypeId,
         mode: NamedDigestMode,
-        label: [32]u8 = undefined,
-        edge_start: u32 = 0,
-        edge_len: u32 = 0,
+        ref_start: u32 = 0,
+        ref_len: u32 = 0,
         digest: names.TypeDigest = undefined,
         resolved: bool = false,
     };
 
     /// A child reference during digesting: either an already-finalized digest
-    /// or a node of the currently discovered graph.
+    /// or a node of the currently discovered graph. Whether a child arrived as
+    /// a cache hit or as a discovered-then-resolved node must never influence
+    /// digest bytes or partitioning, so every consumer of a `ChildRef` treats
+    /// a resolved node and an external digest identically.
     const ChildRef = union(enum) {
         external: names.TypeDigest,
         node: u32,
@@ -1257,6 +1267,12 @@ pub const Store = struct {
     /// position. Every settled digest is cached unconditionally, and each
     /// reduced position publishes its one-step unfolding so later rolled-out
     /// prefixes of the same group fold to the same digests.
+    ///
+    /// Known conservative incompleteness: per-SCC reduction cannot identify
+    /// an in-SCC position with an equivalent position outside its own SCC, so
+    /// a knot entangled with a separately tied equivalent knot digests apart
+    /// from it (see the "entangled equivalent knots" test). Equal digests
+    /// still always imply structural equality; the miss only costs reuse.
     const DigestEngine = struct {
         store: *Store,
         name_store: *const names.NameStore,
@@ -1264,7 +1280,7 @@ pub const Store = struct {
         stats: ?*DigestStats,
         nodes: std.ArrayList(DigestNode),
         node_lookup: std.AutoHashMap(u64, u32),
-        edge_pool: std.ArrayList(u32),
+        ref_pool: std.ArrayList(ChildRef),
         render_buf: std.ArrayList(u8),
 
         const no_scc_position = std.math.maxInt(u32);
@@ -1278,14 +1294,14 @@ pub const Store = struct {
                 .stats = stats,
                 .nodes = .empty,
                 .node_lookup = std.AutoHashMap(u64, u32).init(store.allocator),
-                .edge_pool = .empty,
+                .ref_pool = .empty,
                 .render_buf = .empty,
             };
         }
 
         fn deinit(self: *DigestEngine) void {
             self.render_buf.deinit(self.gpa);
-            self.edge_pool.deinit(self.gpa);
+            self.ref_pool.deinit(self.gpa);
             self.node_lookup.deinit();
             self.nodes.deinit(self.gpa);
         }
@@ -1295,7 +1311,7 @@ pub const Store = struct {
             std.debug.assert(root == 0);
             var next: usize = 0;
             while (next < self.nodes.items.len) : (next += 1) {
-                try self.labelNode(@intCast(next));
+                try self.collectNode(@intCast(next));
             }
             try self.resolveSccs();
             const root_node = self.nodes.items[root];
@@ -1340,49 +1356,80 @@ pub const Store = struct {
             };
         }
 
-        fn labelNode(self: *DigestEngine, index: u32) std.mem.Allocator.Error!void {
+        fn collectNode(self: *DigestEngine, index: u32) std.mem.Allocator.Error!void {
             const ty = self.nodes.items[index].ty;
             const mode = self.nodes.items[index].mode;
-            const edge_start: u32 = @intCast(self.edge_pool.items.len);
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-            const sink = DiscoverySink{ .engine = self, .hasher = &hasher };
+            const ref_start: u32 = @intCast(self.ref_pool.items.len);
+            const sink = CollectSink{ .engine = self };
             try self.store.encodeTypeNode(self.name_store, sink, ty, mode);
             const node = &self.nodes.items[index];
-            node.label = hasher.finalResult();
-            node.edge_start = edge_start;
-            node.edge_len = @intCast(self.edge_pool.items.len - edge_start);
+            node.ref_start = ref_start;
+            node.ref_len = @intCast(self.ref_pool.items.len - ref_start);
         }
 
-        fn edgesOf(self: *const DigestEngine, index: u32) []const u32 {
+        fn refsOf(self: *const DigestEngine, index: u32) []const ChildRef {
             const node = self.nodes.items[index];
-            return self.edge_pool.items[node.edge_start..][0..node.edge_len];
+            return self.ref_pool.items[node.ref_start..][0..node.ref_len];
         }
 
-        /// Discovery sink: hashes the node's local label (scalars plus
-        /// finalized external-child digests, with positional markers for
-        /// graph children) while collecting the ordered internal edges.
-        const DiscoverySink = struct {
+        /// Discovery sink: collects the node's ordered child references while
+        /// expanding the graph. Scalars are ignored here; they participate
+        /// through the rendering sinks once the graph shape is known.
+        const CollectSink = struct {
+            engine: *DigestEngine,
+
+            fn writeBytes(self: CollectSink, bytes: []const u8) std.mem.Allocator.Error!void {
+                _ = self;
+                _ = bytes;
+            }
+
+            fn writeU32(self: CollectSink, value: u32) std.mem.Allocator.Error!void {
+                _ = self;
+                _ = value;
+            }
+
+            fn child(self: CollectSink, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!void {
+                const ref = try self.engine.childRef(ty, mode);
+                if (ref == .external) {
+                    if (self.engine.stats) |s| s.cache_hits += 1;
+                }
+                try self.engine.ref_pool.append(self.engine.gpa, ref);
+            }
+        };
+
+        /// Initial-partition sink for one cyclic SCC: hashes the member's
+        /// full encoding with every out-of-SCC child rendered as its
+        /// finalized digest and every in-SCC child as a bare positional
+        /// marker. In-SCC identities are refined afterwards; folding them
+        /// into this label would bake discovery order into the partition.
+        const SccLabelSink = struct {
             engine: *DigestEngine,
             hasher: *std.crypto.hash.sha2.Sha256,
+            member_pos_of_node: []const u32,
 
-            fn writeBytes(self: DiscoverySink, bytes: []const u8) std.mem.Allocator.Error!void {
+            fn writeBytes(self: SccLabelSink, bytes: []const u8) std.mem.Allocator.Error!void {
                 hashBytes(self.hasher, bytes);
             }
 
-            fn writeU32(self: DiscoverySink, value: u32) std.mem.Allocator.Error!void {
+            fn writeU32(self: SccLabelSink, value: u32) std.mem.Allocator.Error!void {
                 hashU32(self.hasher, value);
             }
 
-            fn child(self: DiscoverySink, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!void {
-                switch (try self.engine.childRef(ty, mode)) {
+            fn child(self: SccLabelSink, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!void {
+                switch (self.engine.resolvedChildRef(ty, mode)) {
                     .external => |digest| {
-                        hashBytes(self.hasher, "external-child");
+                        hashBytes(self.hasher, "type-digest");
                         self.hasher.update(&digest.bytes);
-                        if (self.engine.stats) |s| s.cache_hits += 1;
                     },
                     .node => |node_index| {
-                        hashBytes(self.hasher, "node-child");
-                        try self.engine.edge_pool.append(self.engine.gpa, node_index);
+                        if (self.member_pos_of_node[node_index] != no_scc_position) {
+                            hashBytes(self.hasher, "in-scc");
+                            return;
+                        }
+                        const node = self.engine.nodes.items[node_index];
+                        std.debug.assert(node.resolved);
+                        hashBytes(self.hasher, "type-digest");
+                        self.hasher.update(&node.digest.bytes);
                     },
                 }
             }
@@ -1473,10 +1520,14 @@ pub const Store = struct {
                 while (frames.items.len > 0) {
                     const frame = &frames.items[frames.items.len - 1];
                     const v = frame.node;
-                    const edges = self.edgesOf(v);
-                    if (frame.edge_cursor < edges.len) {
-                        const w = edges[frame.edge_cursor];
+                    const refs = self.refsOf(v);
+                    if (frame.edge_cursor < refs.len) {
+                        const ref = refs[frame.edge_cursor];
                         frame.edge_cursor += 1;
+                        const w = switch (ref) {
+                            .external => continue,
+                            .node => |node_index| node_index,
+                        };
                         if (visit_index[w] == unvisited) {
                             visit_index[w] = next_visit;
                             low_link[w] = next_visit;
@@ -1517,8 +1568,11 @@ pub const Store = struct {
         }
 
         fn hasSelfEdge(self: *const DigestEngine, index: u32) bool {
-            for (self.edgesOf(index)) |target| {
-                if (target == index) return true;
+            for (self.refsOf(index)) |ref| {
+                switch (ref) {
+                    .external => {},
+                    .node => |target| if (target == index) return true,
+                }
             }
             return false;
         }
@@ -1560,9 +1614,12 @@ pub const Store = struct {
                 member_pos_of_node[node_index] = @intCast(pos);
             }
 
-            // Refine to the stable bisimulation partition: start from local
-            // labels, then split by the partition identities reached by every
-            // ordered edge (finalized digests for edges leaving the SCC).
+            // Refine to the stable bisimulation partition. The initial
+            // partition renders every member with its finalized out-of-SCC
+            // child digests—computed now, not at discovery, so whether a
+            // child arrived cached or was resolved in this run cannot split
+            // bisimilar members. Refinement then splits by the partition
+            // identities reached by every ordered in-SCC reference.
             var blocks = try self.gpa.alloc(u32, member_count);
             defer self.gpa.free(blocks);
             var next_blocks = try self.gpa.alloc(u32, member_count);
@@ -1572,7 +1629,15 @@ pub const Store = struct {
                 var by_label = std.AutoHashMap([32]u8, u32).init(self.gpa);
                 defer by_label.deinit();
                 for (members, 0..) |node_index, pos| {
-                    const gop = try by_label.getOrPut(self.nodes.items[node_index].label);
+                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    const sink = SccLabelSink{
+                        .engine = self,
+                        .hasher = &hasher,
+                        .member_pos_of_node = member_pos_of_node,
+                    };
+                    const node = self.nodes.items[node_index];
+                    try self.store.encodeTypeNode(self.name_store, sink, node.ty, node.mode);
+                    const gop = try by_label.getOrPut(hasher.finalResult());
                     if (!gop.found_existing) {
                         gop.value_ptr.* = block_count;
                         block_count += 1;
@@ -1587,17 +1652,14 @@ pub const Store = struct {
                 for (members, 0..) |node_index, pos| {
                     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
                     hashU32(&hasher, blocks[pos]);
-                    for (self.edgesOf(node_index)) |target| {
+                    for (self.refsOf(node_index)) |ref| {
+                        const target = switch (ref) {
+                            .external => continue,
+                            .node => |node_target| node_target,
+                        };
                         const target_pos = member_pos_of_node[target];
-                        if (target_pos == no_scc_position) {
-                            const target_node = self.nodes.items[target];
-                            std.debug.assert(target_node.resolved);
-                            hashBytes(&hasher, "outside");
-                            hasher.update(&target_node.digest.bytes);
-                        } else {
-                            hashBytes(&hasher, "inside");
-                            hashU32(&hasher, blocks[target_pos]);
-                        }
+                        if (target_pos == no_scc_position) continue;
+                        hashU32(&hasher, blocks[target_pos]);
                     }
                     const gop = try by_signature.getOrPut(hasher.finalResult());
                     if (!gop.found_existing) {
@@ -1637,7 +1699,11 @@ pub const Store = struct {
             defer self.gpa.free(block_edge_len);
             for (0..block_count) |block| {
                 const start: u32 = @intCast(block_edges_pool.items.len);
-                for (self.edgesOf(block_rep[block])) |target| {
+                for (self.refsOf(block_rep[block])) |ref| {
+                    const target = switch (ref) {
+                        .external => continue,
+                        .node => |node_target| node_target,
+                    };
                     const target_pos = member_pos_of_node[target];
                     if (target_pos == no_scc_position) continue;
                     try block_edges_pool.append(self.gpa, blocks[target_pos]);
@@ -3219,9 +3285,9 @@ test "monotype recursive nominal digest ignores how deep the knot is tied" {
 }
 
 test "monotype recursive nominal digest still separates different arguments" {
-    // The unrolling-insensitive fold keys on the nominal's declaration *and*
-    // arguments, so a non-uniformly recursive occurrence at different arguments
-    // must not be folded into its parent.
+    // Unrolling insensitivity must key on the nominal's declaration *and*
+    // arguments: a non-uniformly recursive occurrence at different arguments
+    // is a different type and must not collapse into its parent.
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -3985,6 +4051,75 @@ test "monotype digest equates bisimilar recursive graphs of different sizes" {
     const prefix = try store.add(.{ .list = z });
     const prefix_digest = store.typeDigest(&name_store, prefix);
     try std.testing.expectEqualSlices(u8, z_digest.bytes[0..], prefix_digest.bytes[0..]);
+}
+
+test "monotype digest ignores child cachedness inside a recursive group" {
+    // k1 and k2 are equivalent positions of one knot, but k1 references a str
+    // leaf whose digest was cached before the knot was digested while k2
+    // references an uncached duplicate leaf. Whether a child arrived as a
+    // cache hit must not influence the reduced partition: both members share
+    // one digest, equal to an independently tied one-node knot over a third
+    // duplicate leaf.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const cached_str = try store.add(.{ .primitive = .str });
+    _ = store.typeDigest(&name_store, cached_str);
+    const fresh_str = try store.add(.{ .primitive = .str });
+
+    const k1 = try store.reserveSlot();
+    const k2 = try store.reserveSlot();
+    store.fillReservedSlot(k1, .{ .tuple = try store.addSpan(&.{ k2, cached_str }) });
+    store.fillReservedSlot(k2, .{ .tuple = try store.addSpan(&.{ k1, fresh_str }) });
+
+    const k1_digest = store.typeDigest(&name_store, k1);
+    const k2_digest = store.typeDigest(&name_store, k2);
+    try std.testing.expectEqualSlices(u8, k1_digest.bytes[0..], k2_digest.bytes[0..]);
+
+    const third_str = try store.add(.{ .primitive = .str });
+    const solo = try store.reserveSlot();
+    store.fillReservedSlot(solo, .{ .tuple = try store.addSpan(&.{ solo, third_str }) });
+    const solo_digest = store.typeDigest(&name_store, solo);
+    try std.testing.expectEqualSlices(u8, k1_digest.bytes[0..], solo_digest.bytes[0..]);
+}
+
+test "monotype digest keeps entangled equivalent knots conservatively distinct" {
+    // b1/b2 tie a knot that also points into c, a separately tied knot of the
+    // same infinite type. Per-SCC reduction cannot identify an in-SCC
+    // position with an equivalent position outside its own SCC, so the
+    // members digest apart from c even though all three are structurally
+    // equal. This pins a KNOWN conservative incompleteness: equal digests
+    // still imply structural equality (the direction interning relies on),
+    // and a future whole-graph reduction may intentionally flip the
+    // inequality assertions below.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const c = try store.reserveSlot();
+    store.fillReservedSlot(c, .{ .tuple = try store.addSpan(&.{ c, c }) });
+    const b1 = try store.reserveSlot();
+    const b2 = try store.reserveSlot();
+    store.fillReservedSlot(b1, .{ .tuple = try store.addSpan(&.{ b2, b1 }) });
+    store.fillReservedSlot(b2, .{ .tuple = try store.addSpan(&.{ b1, c }) });
+
+    try std.testing.expect(try store.typeEql(&name_store, b1, c));
+    try std.testing.expect(try store.typeEql(&name_store, b2, c));
+
+    const c_digest = store.typeDigest(&name_store, c);
+    const b1_digest = store.typeDigest(&name_store, b1);
+    const b2_digest = store.typeDigest(&name_store, b2);
+    try std.testing.expect(!std.mem.eql(u8, b1_digest.bytes[0..], c_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, b2_digest.bytes[0..], c_digest.bytes[0..]));
+
+    // Digests stay stable on repeat queries.
+    const b1_again = store.typeDigest(&name_store, b1);
+    try std.testing.expectEqualSlices(u8, b1_digest.bytes[0..], b1_again.bytes[0..]);
 }
 
 test "monotype digest separates tag unions by checked name" {
