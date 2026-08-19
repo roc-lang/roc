@@ -3784,22 +3784,24 @@ Builtin :: [].{
 		## }
 		## ```
 		##
-		## `reserve(spare)` sizes the allocation to hold exactly `List.len(list) + spare`
-		## items; it trusts the request instead of rounding it up. If the list is not
-		## shared and already has room for `spare` more items, it does nothing.
-		## Otherwise it always performs a heap allocation and copies the existing items
-		## into it.
+		## `reserve(spare)` aims for a capacity of `List.len(list) + spare` items; it
+		## trusts the request rather than rounding it up. If the list is not shared and
+		## already has room for `spare` more items, it does nothing. Otherwise it asks
+		## the allocator to grow the list to that size. The one exception is reserving
+		## a single item beyond the current capacity: that is indistinguishable from an
+		## ordinary [List.append] outgrowing the list, so the capacity grows
+		## geometrically instead of by one.
 		##
-		## Note that the reserve above sits before the loop. Sizing the allocation exactly
-		## makes [List.reserve] a poor fit for use inside one: a reserve that then gets
-		## filled completely leaves no room for the next one, so every iteration
-		## reallocates and copies the whole list, and the loop takes time quadratic in the
-		## final length:
+		## Note that the reserve above sits before the loop. Because [List.reserve] aims
+		## for the exact size requested, it is a poor fit for use inside one: a reserve
+		## that then gets filled completely leaves no room for the next one, so every
+		## iteration goes back to the allocator, and the loop risks taking quadratic time
+		## in the final length:
 		##
 		## ```roc
 		## expect {
-		##     # Quadratic: the two appends fill the list back up to its exact capacity,
-		##     # so the next `reserve(2)` reallocates and copies every item so far.
+		##     # The two appends fill the list back up to its exact capacity, so the
+		##     # next `reserve(2)` has to grow it again: one reallocation per iteration.
 		##     var $xs = []
 		##     while $xs.len() < 10 {
 		##         $xs = $xs.reserve(2)
@@ -3822,9 +3824,9 @@ Builtin :: [].{
 		## little observable difference. The benefit is most pronounced when reallocation
 		## would otherwise force a full copy of the list.
 		##
-		## [List.reserve] is not free—when more capacity is needed, it always performs a
-		## heap allocation. Only use it when you actually expect to make use of the extra
-		## capacity.
+		## [List.reserve] is not free—when more capacity is needed, it calls into the
+		## allocator, which may or may not have to move the existing items. Only use it
+		## when you actually expect to make use of the extra capacity.
 		##
 		## When you don't know exactly how many items you'll need, choosing a value
 		## somewhat higher than necessary is usually safe; a value that's too low may
@@ -5674,9 +5676,9 @@ Builtin :: [].{
 
 		## Ensure this dictionary has room for at least this many additional entries.
 		##
-		## Like [List.reserve], this sizes the entry allocation exactly, so call it once
-		## with the total number of entries you expect to add rather than repeatedly
-		## inside a loop.
+		## Like [List.reserve], this aims for the exact size requested rather than
+		## rounding up, so call it once with the total number of entries you expect to
+		## add rather than repeatedly inside a loop.
 		reserve : Dict(k, v), U64 -> Dict(k, v)
 			where [k.to_hash : k, Hasher -> Hasher]
 		reserve = |dict, additional| match dict {
