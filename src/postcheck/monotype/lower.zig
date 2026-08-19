@@ -16254,11 +16254,16 @@ const BodyContext = struct {
         mono_ty: Type.TypeId,
     ) Allocator.Error!void {
         // The graph cross-check can only run while relations are producing.
-        // A frozen-graph consumer—a generated parser body materializing a
-        // field default per specialization (design.md "Defaulted Fields")—
-        // lowers sealed expressions whose produced type is verified by the
-        // `sameType` check every such call path performs on the result.
-        if (!self.graph.acceptsRelationMutation()) return;
+        // Only a context explicitly marked as sealed-emission skips it: the
+        // frozen-graph boundary emitters (deferred structural serialization
+        // and callsite intrinsics, e.g. a generated parser body
+        // materializing a field default per specialization — design.md
+        // "Defaulted Fields") lower sealed expressions whose produced type
+        // every call site verifies with its `sameType` invariant. Any other
+        // frozen-phase caller is a bug and fails loudly inside
+        // `constrainTypeToMono` (the graph's relation-production
+        // requirement) instead of silently losing the cross-check.
+        if (self.frozen_sealed_emission) return;
         try self.constrainTypeToMono(checked_ty, mono_ty);
     }
 

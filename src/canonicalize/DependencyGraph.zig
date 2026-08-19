@@ -270,6 +270,14 @@ const DemandAnalyzer = struct {
     scheme_use_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, u32) = .{},
     summaries: std.AutoHashMapUnmanaged(CIR.Expr.Idx, DemandSummary) = .{},
     active_lambdas: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+    /// Dedups omitted-default expression pushes per walk, mirroring
+    /// `collectNameReferences`'s `scratch_seen_defaults` (see its doc
+    /// comment): a default expression is shared across construction sites,
+    /// and a chain of defaults that each construct omitting more defaults
+    /// would otherwise re-walk with product growth. Demand contributions are
+    /// set-based and frames fold into their parents, so one visit per walk
+    /// reaches the walk's output. Cleared per walk root.
+    scratch_seen_defaults: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
 
     fn init(
         cir: *const ModuleEnv,
@@ -331,6 +339,7 @@ const DemandAnalyzer = struct {
         self.resolved_literal_targets.deinit(self.allocator);
         self.scheme_use_by_node.deinit(self.allocator);
         self.active_lambdas.deinit(self.allocator);
+        self.scratch_seen_defaults.deinit(self.allocator);
     }
 
     fn computeSummaries(self: *DemandAnalyzer) std.mem.Allocator.Error!void {
@@ -482,6 +491,7 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         var walk = Walk{};
         defer walk.deinit(self.allocator);
+        self.scratch_seen_defaults.clearRetainingCapacity();
         try walk.push(self.allocator, .{ .visit = root_expr });
 
         try self.drainWalk(&walk, out, local_callables);
@@ -528,6 +538,7 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         var walk = Walk{};
         defer walk.deinit(self.allocator);
+        self.scratch_seen_defaults.clearRetainingCapacity();
         try walk.push(self.allocator, .{ .visit_pattern = root_pattern });
 
         try self.drainWalk(&walk, out, local_callables);
@@ -835,9 +846,12 @@ const DemandAnalyzer = struct {
                 // DefaultCycles runs before any demand graph is built and
                 // drops every name-resolvable cyclic default, so the
                 // omission relation walked here is acyclic and the walk
-                // terminates.
+                // terminates; `scratch_seen_defaults` dedups the pushes so
+                // shared defaults don't re-walk with product growth.
                 var omissions = default_omissions.omittedDefaults(self.cir, nominal.nominal_type_decl, nominal.backing_expr);
                 while (omissions.next()) |omitted| {
+                    const entry = try self.scratch_seen_defaults.getOrPut(self.allocator, omitted.default_expr);
+                    if (entry.found_existing) continue;
                     try walk.push(self.allocator, .{ .visit = omitted.default_expr });
                 }
                 try walk.push(self.allocator, .{ .visit = nominal.backing_expr });
