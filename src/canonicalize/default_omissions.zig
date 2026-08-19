@@ -31,14 +31,24 @@ pub const OmittedDefault = struct {
 /// Resolve a nominal declaration's backing record annotation fields,
 /// unwrapping (possibly nested) parentheses—`Foo := ({ ... })` declares
 /// defaults through the wrapping (`canonicalizeNominalBackingAnno` accepts
-/// them there). Null when the statement is not a nominal declaration or its
-/// backing annotation is not a record.
+/// them there). Null when the statement is not a nominal declaration, is a
+/// never-filled forward placeholder, or its backing annotation is not a
+/// record.
 pub fn backingRecordFields(
     env: *const ModuleEnv,
     decl_stmt: CIR.Statement.Idx,
 ) ?CIR.TypeAnno.RecordField.Span {
     const stmt = env.store.getStatement(decl_stmt);
     if (stmt != .s_nominal_decl) return null;
+    // A forward reference prepares a nominal declaration as a placeholder
+    // statement; when the real declaration is then never registered (its
+    // owner's associated block is skipped after a redeclaration/rejection
+    // that already reported), the placeholder survives to end of module in
+    // `env.forward_type_decls` — the same explicit state the checker guards
+    // for on alias declarations. A never-filled declaration declares no
+    // fields, so it omits nothing; `.placeholder` must not be read as a
+    // `TypeAnno.Idx` (it is the reserved index 0).
+    if (stmt.s_nominal_decl.anno == .placeholder) return null;
     var anno = env.store.getTypeAnno(stmt.s_nominal_decl.anno);
     while (anno == .parens) anno = env.store.getTypeAnno(anno.parens.anno);
     if (anno != .record) return null;

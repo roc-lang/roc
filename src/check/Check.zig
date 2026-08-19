@@ -13042,6 +13042,17 @@ fn generateAliasDecl(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // A never-filled forward placeholder: a forward reference prepared this
+    // declaration, then its owner's associated block was skipped after an
+    // already-reported redeclaration/rejection, so the real declaration
+    // never filled it. There is no annotation to generate (`.placeholder`
+    // is the reserved node index 0, not a TypeAnno); poison the decl var so
+    // every reference resolves to `.err` and is suppressed.
+    if (alias.anno == .placeholder) {
+        try self.markErroneous(decl_var);
+        return;
+    }
+
     // Get the type header's args
     const header = self.cir.store.getTypeHeader(alias.header);
     const header_args = self.cir.store.sliceTypeAnnos(header.args);
@@ -13113,6 +13124,14 @@ fn generateWhereAliasDecl(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // A never-filled forward placeholder (see `generateAliasDecl`): there is
+    // no receiver to generate; poison the decl var so every reference
+    // resolves to `.err` and is suppressed.
+    if (where_alias.receiver == .placeholder) {
+        try self.markErroneous(decl_var);
+        return;
+    }
+
     // A where alias is generated on demand, which can happen part way through
     // building a referencing signature's constraints. Its own scratch entries
     // must not land in that signature's range.
@@ -13149,6 +13168,16 @@ fn generateNominalDecl(
 ) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    // A never-filled forward placeholder (see `generateAliasDecl`): there is
+    // no backing annotation to generate, and the declaration was never
+    // registered in the nominal table, so it must not be marked invalid
+    // either (`poisonInvalidTypeDeclarations` requires a table entry).
+    // Poison the decl var so every reference instantiates `.err`.
+    if (nominal.anno == .placeholder) {
+        try self.unifyWithTargetRank(decl_var, .err, env);
+        return;
+    }
 
     // Get the type header's args
     const header = self.cir.store.getTypeHeader(nominal.header);
@@ -22930,6 +22959,17 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// defaults materialize per specialization, so a parametric field lowers its
 /// default at each site's monotype.)
 fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
+    // Every judgment and retirement below is per pending default, so a
+    // module with none has nothing to build or sweep: gating here keeps the
+    // evidence indexes (and `dispatch_scheme_uses`' loud release-mode
+    // uniqueness panic) confined to modules actually using defaults.
+    // Rejection evidence is only ever recorded for a pending default, so an
+    // empty pending list means an empty rejection set.
+    if (self.pending_default_checks.items.len == 0) {
+        std.debug.assert(self.rejected_default_exprs.count() == 0);
+        return;
+    }
+
     var recursive_defaults: std.ArrayList(PendingDefaultCheck) = .empty;
     defer recursive_defaults.deinit(self.gpa);
 
@@ -23174,7 +23214,14 @@ fn checkDefaultParameterConstraints(
     // parameters be the same type in every specialization. Pairwise scan;
     // a declaration's parameter count is tiny.
     for (params, 0..) |param, i| {
-        const param_root = self.types.resolveVar(param.var_).var_;
+        const param_resolved = self.types.resolveVar(param.var_);
+        // An `.err` root is an already-reported mismatch (standard poison
+        // recovery, exactly as rules 1-3 pass it above): copies merged into
+        // one poison share a root without the default having demanded the
+        // parameters be equal, so reporting aliasing here would stack a
+        // second problem onto the same default.
+        if (param_resolved.desc.content == .err) continue;
+        const param_root = param_resolved.var_;
         for (params[i + 1 ..]) |other| {
             if (self.types.resolveVar(other.var_).var_ != param_root) continue;
             return self.rejectDefaultParameterAliasing(pending, param.name, other.name);
