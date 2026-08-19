@@ -395,6 +395,57 @@ const TypedLiftedLocal = struct {
     ty: Type.TypeId,
 };
 
+const EquivalentNamedLayout = struct {
+    ty: Type.TypeId,
+    layout_idx: layout.Idx,
+};
+
+/// Non-recursive fields that every representation-equivalent named type shares.
+/// Bucketing on these avoids probing unrelated layouts while the existing deep
+/// comparison remains the authority for arguments, backings, and recursive types.
+const NamedRepresentationKey = struct {
+    kind: MonoType.NamedKind,
+    named_type_module: [32]u8,
+    def_module: Type.names.ModuleIdentityId,
+    source_decl: ?u32,
+    type_name_if_undeclared: ?Type.names.TypeNameId,
+    builtin_owner: ?check.StaticDispatchRegistry.BuiltinOwner,
+    args_len: u32,
+    has_backing: bool,
+    backing_use: ?MonoType.BackingUse,
+    backing_authority: ?MonoType.BackingAuthority,
+};
+
+const NamedRepresentationKeyContext = struct {
+    pub fn hash(_: NamedRepresentationKeyContext, key: NamedRepresentationKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, key.kind);
+        std.hash.autoHash(&hasher, key.named_type_module);
+        std.hash.autoHash(&hasher, key.def_module);
+        std.hash.autoHash(&hasher, key.source_decl);
+        std.hash.autoHash(&hasher, key.type_name_if_undeclared);
+        std.hash.autoHash(&hasher, key.builtin_owner);
+        std.hash.autoHash(&hasher, key.args_len);
+        std.hash.autoHash(&hasher, key.has_backing);
+        std.hash.autoHash(&hasher, key.backing_use);
+        std.hash.autoHash(&hasher, key.backing_authority);
+        return hasher.final();
+    }
+
+    pub fn eql(_: NamedRepresentationKeyContext, lhs: NamedRepresentationKey, rhs: NamedRepresentationKey) bool {
+        return lhs.kind == rhs.kind and
+            std.mem.eql(u8, &lhs.named_type_module, &rhs.named_type_module) and
+            lhs.def_module == rhs.def_module and
+            lhs.source_decl == rhs.source_decl and
+            lhs.type_name_if_undeclared == rhs.type_name_if_undeclared and
+            lhs.builtin_owner == rhs.builtin_owner and
+            lhs.args_len == rhs.args_len and
+            lhs.has_backing == rhs.has_backing and
+            lhs.backing_use == rhs.backing_use and
+            lhs.backing_authority == rhs.backing_authority;
+    }
+};
+
 const Lowerer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
@@ -430,6 +481,7 @@ const Lowerer = struct {
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
     type_layouts: collections.DenseMap(Type.TypeId, layout.Idx),
+    named_layout_index: std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage),
     layout_owner_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     const_plan_map: collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId),
     const_type_map: collections.DenseMap(Type.TypeId, const_store.ConstTypeId),
@@ -547,6 +599,7 @@ const Lowerer = struct {
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
+            .named_layout_index = std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .layout_owner_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .const_plan_map = collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
             .const_type_map = collections.DenseMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
@@ -585,6 +638,7 @@ const Lowerer = struct {
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
         self.layout_owner_types.deinit();
+        self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -631,6 +685,7 @@ const Lowerer = struct {
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
         self.layout_owner_types.deinit();
+        self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -8439,8 +8494,44 @@ const Lowerer = struct {
         return self.type_layouts.get(ty);
     }
 
+    fn deinitNamedLayoutIndex(self: *Lowerer) void {
+        var buckets = self.named_layout_index.valueIterator();
+        while (buckets.next()) |bucket| bucket.deinit(self.allocator);
+        self.named_layout_index.deinit();
+    }
+
+    fn namedRepresentationKey(
+        named: std.meta.fieldInfo(Type.Content, .named).type,
+    ) NamedRepresentationKey {
+        const compares_backing_metadata = named.kind != .alias and
+            (named.builtin_owner == null or !generatedEvidenceOwnerUsesBacking(named.builtin_owner.?));
+        const backing = named.backing;
+        return .{
+            .kind = named.kind,
+            .named_type_module = named.named_type.module.bytes,
+            .def_module = named.def.module,
+            .source_decl = named.def.source_decl,
+            .type_name_if_undeclared = if (named.def.source_decl == null) named.def.type_name else null,
+            .builtin_owner = named.builtin_owner,
+            .args_len = named.args.len,
+            .has_backing = backing != null,
+            .backing_use = if (compares_backing_metadata and backing != null) backing.?.use else null,
+            .backing_authority = if (compares_backing_metadata and backing != null) backing.?.authority else null,
+        };
+    }
+
     fn rememberLayoutForType(self: *Lowerer, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!void {
+        const already_known = self.type_layouts.get(ty) != null;
         try self.type_layouts.put(ty, layout_idx);
+        if (already_known) return;
+
+        const named = switch (self.types.get(ty)) {
+            .named => |named| named,
+            else => return,
+        };
+        const gop = try self.named_layout_index.getOrPut(namedRepresentationKey(named));
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(self.allocator, ty);
     }
 
     fn solvedTypeAlreadyHasRecursiveSlotStorage(self: *Lowerer, ty: SolvedType.TypeVarId) Common.LowerError!bool {
@@ -8522,23 +8613,21 @@ const Lowerer = struct {
         return slot_ty;
     }
 
-    const EquivalentNamedLayout = struct {
-        ty: Type.TypeId,
-        layout_idx: layout.Idx,
-    };
-
     fn knownLayoutForEquivalentNamedType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!?EquivalentNamedLayout {
-        if (self.types.get(ty) != .named) return null;
-
-        var iterator = self.type_layouts.iterator();
-        while (iterator.next()) |entry| {
-            const other_ty = entry.key_ptr.*;
+        const named = switch (self.types.get(ty)) {
+            .named => |named| named,
+            else => return null,
+        };
+        const candidates = self.named_layout_index.get(namedRepresentationKey(named)) orelse return null;
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+        for (candidates.items) |other_ty| {
             if (other_ty == ty) continue;
-            if (self.types.get(other_ty) != .named) continue;
-            var visited = std.AutoHashMap(u64, void).init(self.allocator);
-            defer visited.deinit();
+            visited.clearRetainingCapacity();
             if (try self.representationTypesEquivalent(ty, other_ty, &visited)) {
-                return .{ .ty = other_ty, .layout_idx = entry.value_ptr.* };
+                const layout_idx = self.type_layouts.get(other_ty) orelse
+                    Common.invariant("named layout index referenced a type without a layout");
+                return .{ .ty = other_ty, .layout_idx = layout_idx };
             }
         }
         return null;
@@ -10058,6 +10147,72 @@ test "layout lowering keeps opted-in nominal record declaration order" {
     try std.testing.expectEqual(@as(u32, 4), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
     try std.testing.expectEqual(@as(u32, 0), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     try std.testing.expectEqual(@as(u32, 8), lowerer.result.layouts.getStructSize(struct_idx));
+}
+
+test "named layout index reuses only representation-equivalent instantiations" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xC3} ** 32));
+    const first_name = try solved.lifted.names.internTypeName("First");
+    const equivalent_name = try solved.lifted.names.internTypeName("Equivalent");
+    const different_name = try solved.lifted.names.internTypeName("Different");
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    const first_u8 = try lowerer.types.add(.{ .primitive = .u8 });
+    const equivalent_u8 = try lowerer.types.add(.{ .primitive = .u8 });
+    const different_u64 = try lowerer.types.add(.{ .primitive = .u64 });
+    const first_args = try lowerer.types.addSpan(&.{first_u8});
+    const equivalent_args = try lowerer.types.addSpan(&.{equivalent_u8});
+    const different_args = try lowerer.types.addSpan(&.{different_u64});
+
+    const first_ty = try lowerer.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 42 },
+            .kind = .nominal,
+            .args = first_args,
+            .backing = .{ .ty = first_u8, .use = .inspectable },
+        },
+    });
+    const equivalent_ty = try lowerer.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            // A source declaration identifies the type, so display-name text is
+            // intentionally absent from the shallow representation key.
+            .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 42 },
+            .kind = .nominal,
+            .args = equivalent_args,
+            .backing = .{ .ty = equivalent_u8, .use = .inspectable },
+        },
+    });
+    const different_ty = try lowerer.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = different_name, .source_decl = 42 },
+            .kind = .nominal,
+            .args = different_args,
+            .backing = .{ .ty = different_u64, .use = .inspectable },
+        },
+    });
+
+    const first_layout = try lowerer.layoutOfType(first_ty);
+    const equivalent_layout = try lowerer.layoutOfType(equivalent_ty);
+    try std.testing.expectEqual(first_layout, equivalent_layout);
+    try std.testing.expectEqual(first_ty, lowerer.layout_owner_types.get(equivalent_ty).?);
+
+    const different_layout = try lowerer.layoutOfType(different_ty);
+    try std.testing.expect(first_layout != different_layout);
+    try std.testing.expect(lowerer.layout_owner_types.get(different_ty) == null);
+
+    // All three types share the shallow key. The distinct U64 representation is
+    // rejected by the deep comparison rather than incorrectly reusing U8.
+    const key = Lowerer.namedRepresentationKey(lowerer.types.get(first_ty).named);
+    try std.testing.expectEqual(@as(usize, 3), lowerer.named_layout_index.get(key).?.items.len);
 }
 
 test "direct LIR lower declarations are referenced" {
