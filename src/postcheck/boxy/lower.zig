@@ -461,7 +461,7 @@ fn resolveNestedConstFn(
     // A default-root-qualified stored function's site lives in the declaring
     // module (resolved by content identity) and belongs to no checked
     // procedure template, so its worker resolves without a template identity
-    // — exactly like `resolveNestedExprWorker`'s default-root branch
+    //—exactly like `resolveNestedExprWorker`'s default-root branch
     // (design.md "Defaulted Fields").
     if (nested.default_root) |identity| {
         const module = procedureModuleByIdentity(modules, &identity.bytes);

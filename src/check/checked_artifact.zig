@@ -16573,7 +16573,7 @@ fn sealCheckedProcedureTemplateRefs(
     // expressions no template body reaches: each is lowered standalone at
     // every construction site that omits its field. Collect their refs
     // exactly like a template body so the evidence pass publishes site
-    // evidence for the calls and scheme instantiations inside them —
+    // evidence for the calls and scheme instantiations inside them—
     // without this, a default calling a generic procedure reaches lowering
     // with no checked evidence vector for the callee's requirements.
     var default_plan_refs: artifact_serialize.Span = .{};
@@ -19058,8 +19058,8 @@ pub const NestedProcPathComponent = union(enum) {
 /// inside a checked procedure template's body (or an entry wrapper's generated
 /// body, which borrows its template's identity). Defaulted-field expressions
 /// (design.md "Defaulted Fields") are the exception: they belong to no
-/// template — each is lowered standalone at every construction site that omits
-/// its field — so their nested-function sites are owned by the declaring
+/// template—each is lowered standalone at every construction site that omits
+/// its field—so their nested-function sites are owned by the declaring
 /// module's default-expression root set.
 pub const NestedProcSiteOwner = union(enum) {
     template: canonical.ProcedureTemplateRef,
@@ -19146,7 +19146,7 @@ pub const NestedProcSiteTable = struct {
         // Defaulted-field expressions (design.md "Defaulted Fields") are value
         // expressions no template body reaches: each is lowered standalone at
         // every construction site that omits its field. Scan each archived
-        // default as its own root — the same walk a template body gets — so a
+        // default as its own root—the same walk a template body gets—so a
         // lambda/closure inside a default reaches lowering with a checked
         // nested-function site. The default's ROOT expression is not
         // suppressed: unlike a template body (whose root lambda IS the

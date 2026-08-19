@@ -124,7 +124,7 @@ pub const HostedFn = struct {
 /// Nested function site inside an owner function template.
 pub const NestedFn = struct {
     /// Checked template that lexically recorded the site: the site's owning
-    /// template, or — when `default_root` is set — the template whose body
+    /// template, or—when `default_root` is set—the template whose body
     /// materialized the defaulted-field expression containing the site.
     owner: names.ProcTemplate,
     site: names.ProcSiteId,

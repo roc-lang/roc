@@ -5075,7 +5075,7 @@ Restrictions:
   where-constrained helper call—the report names the field, the
   parameter, and the demanded method), a STRUCTURAL PIN—the default's
   type unifies the parameter's instantiation copy with concrete
-  structure (`?? []` on `value : a` decides `a = List(elem)` for every
+  structure (`?? []` on `value : a` decides `a = List(item)` for every
   specialization; the report names the field and the parameter it
   forces concrete)—or a PARAMETER ALIASING—the default unifies two
   parameters' instantiation copies with each other without pinning

@@ -16,7 +16,6 @@
 //! live in the foreign module and are that module's own roots (the checker's
 //! residue walk owns those edges).
 
-const std = @import("std");
 const base = @import("base");
 const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
@@ -44,7 +43,7 @@ pub fn backingRecordFields(
     // statement; when the real declaration is then never registered (its
     // owner's associated block is skipped after a redeclaration/rejection
     // that already reported), the placeholder survives to end of module in
-    // `env.forward_type_decls` — the same explicit state the checker guards
+    // `env.forward_type_decls`—the same explicit state the checker guards
     // for on alias declarations. A never-filled declaration declares no
     // fields, so it omits nothing; `.placeholder` must not be read as a
     // `TypeAnno.Idx` (it is the reserved index 0).
