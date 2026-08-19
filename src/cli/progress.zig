@@ -44,7 +44,10 @@ const name_width: usize = 28;
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
 const max_subphases: usize = 24;
-const max_counter_groups: usize = 4;
+// Test-cache diagnostics plus the post-check workload groups already require
+// four entries; retain headroom so later explicit diagnostics are not silently
+// dropped merely because their recording order changes.
+const max_counter_groups: usize = 8;
 const max_counters_per_group: usize = 24;
 
 const spinner_frames = [_][]const u8{
