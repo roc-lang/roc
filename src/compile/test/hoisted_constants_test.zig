@@ -2332,6 +2332,7 @@ fn storedI64(
         .stored_const => |stored| stored.node,
         .reserved,
         .eval_template,
+        .unimplemented,
         => return error.HoistedTemplateWasNotStored,
     };
     try std.testing.expectEqual(node_from_root, node_from_template);

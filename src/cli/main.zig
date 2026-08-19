@@ -54,7 +54,6 @@ const unbundle = @import("unbundle");
 
 comptime {
     if (builtin.is_test) {
-        _ = @import("libc_finder.zig");
         _ = @import("test_shared_memory_system.zig");
     }
 }
@@ -9088,12 +9087,16 @@ fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTarg
     return linker.DEFAULT_WASM_STACK_SIZE;
 }
 
-fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) usize {
+/// The configured initial wasm memory, or null when neither the CLI nor the
+/// platform's targets config specifies one. Null lets the linker size memory
+/// from the data segments plus the stack, which is always sufficient for
+/// those regions. The host must grow memory for its heap independently.
+fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?usize {
     if (args.wasm_memory) |bytes| return bytes;
     if (wasm) |config| {
         if (config.minimum_memory) |bytes| return bytes;
     }
-    return linker.DEFAULT_WASM_INITIAL_MEMORY;
+    return null;
 }
 
 /// Whether linked wasm output may assume linear memory starts zero-filled.
@@ -11226,6 +11229,60 @@ const CliTestPlan = struct {
         deinitCliTestPlanEntries(allocator, self.entries);
     }
 };
+
+const CliTestCacheStats = struct {
+    modules_total: u64 = 0,
+    modules_cached: u64 = 0,
+    roots_total: u64 = 0,
+    roots_cached: u64 = 0,
+};
+
+fn cliTestCacheStats(plan: *const CliTestPlan) CliTestCacheStats {
+    var stats = CliTestCacheStats{
+        .modules_total = plan.modules.len,
+        .roots_total = plan.entries.len,
+    };
+    for (plan.modules) |module| {
+        if (module.cached_results != null) {
+            stats.modules_cached += 1;
+            stats.roots_cached += module.entry_count;
+        }
+    }
+    return stats;
+}
+
+fn cliTestCacheCounters(stats: CliTestCacheStats) [6]progress.Counter {
+    return .{
+        .{ .name = "Modules total", .count = stats.modules_total },
+        .{ .name = "Modules cached", .count = stats.modules_cached },
+        .{ .name = "Modules uncached", .count = stats.modules_total - stats.modules_cached },
+        .{ .name = "Roots total", .count = stats.roots_total },
+        .{ .name = "Roots cached", .count = stats.roots_cached },
+        .{ .name = "Roots uncached", .count = stats.roots_total - stats.roots_cached },
+    };
+}
+
+test "CLI test cache counters expose partial module and root hits" {
+    const counters = cliTestCacheCounters(.{
+        .modules_total = 46,
+        .modules_cached = 45,
+        .roots_total = 361,
+        .roots_cached = 356,
+    });
+
+    try std.testing.expectEqualStrings("Modules total", counters[0].name);
+    try std.testing.expectEqual(@as(u64, 46), counters[0].count);
+    try std.testing.expectEqualStrings("Modules cached", counters[1].name);
+    try std.testing.expectEqual(@as(u64, 45), counters[1].count);
+    try std.testing.expectEqualStrings("Modules uncached", counters[2].name);
+    try std.testing.expectEqual(@as(u64, 1), counters[2].count);
+    try std.testing.expectEqualStrings("Roots total", counters[3].name);
+    try std.testing.expectEqual(@as(u64, 361), counters[3].count);
+    try std.testing.expectEqualStrings("Roots cached", counters[4].name);
+    try std.testing.expectEqual(@as(u64, 356), counters[4].count);
+    try std.testing.expectEqualStrings("Roots uncached", counters[5].name);
+    try std.testing.expectEqual(@as(u64, 5), counters[5].count);
+}
 
 const CliCachedModuleTestResults = struct {
     results: []CliTestResultItem,
@@ -14441,6 +14498,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         }
     }
     reporter.end();
+    reporter.recordCounters("Test result cache", &cliTestCacheCounters(cliTestCacheStats(&test_plan)));
 
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     if (args.timings) spec_timing.enableDetailedMonotypeBody();

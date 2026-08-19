@@ -172,14 +172,17 @@ For embedders that don't have a filesystem at all (e.g. wasm), `Coordinator` doe
 
 Set `coord.enable_hosted_transform = true` before `coord.start()`. Hosted lambda bodies in platform modules are auto-converted during canonicalization.
 
-At execution time, `RocOps.hosted_fns.fns` is a **positional array**—the interpreter calls `fns[dispatch_index]`. The dispatch index is computed deterministically by:
+At execution time, `RocOps.hosted_fns.fns` is a **positional array**—the interpreter calls `fns[dispatch_index]`. The dispatch index is the hosted function's **position in the platform header's `hosted` section**, so the array follows the order the section is written in:
 
-1. Within each checked artifact, hosted functions are sorted alphabetically by their fully-qualified name `Module.fn_name` (with trailing `!` stripped—so `Echo.line!` sorts as `Echo.line`), tiebroken by definition order.
-2. The global catalog concatenates artifacts in this order: the root (executable) artifact's hosted functions, then each imported artifact in import order, then each relation artifact in relation order.
+```text
+hosted { "roc_stdout_line": Stdout.line!, "roc_stderr_line": Stderr.line! }
+```
 
-For a platform whose hosted functions all live in one module—the typical case—this collapses to **plain alphabetical order by `Module.fn_name`**. Build your `HostedFn` array to match.
+gives `Stdout.line!` index 0 and `Stderr.line!` index 1, whatever modules they are declared in. `roc glue` emits the same numbering, so generated glue and a hand-written array agree. A declaration in the platform module itself is named without a module, since a platform cannot import itself: `hosted { "roc_helper": helper! }`.
 
-Wrong order is silent (wrong function called), not loud—be deliberate, especially when adding hosted functions across multiple modules.
+Wrong order is silent (wrong function called), not loud—be deliberate, especially when reordering the `hosted` section.
+
+A platform without a `hosted` section has no bound declarations, and post-check lowering orders whatever remains by the procedure's deterministic order key.
 
 ### URL-resolved packages
 

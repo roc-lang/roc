@@ -1485,6 +1485,7 @@ const Builder = struct {
         const stored = switch (templates.get(request.const_locator).state) {
             .stored_const => |stored| stored,
             .reserved, .eval_template => boxyPlanInvariant("static data request const was not stored before boxy planning"),
+            .unimplemented => boxyPlanInvariant("static data request reached a declaration with no implementation"),
         };
         try self.plan.root_reps.append(
             self.allocator,
@@ -2407,7 +2408,7 @@ const Builder = struct {
             .rep = rep,
             .stored_fn = if (body) |resolved_body| switch (resolved_body) {
                 .checked_expr => |checked_body| checked_body.stored_fn,
-                .intrinsic_wrapper, .hosted_proc => null,
+                .intrinsic_wrapper, .hosted_proc, .unimplemented => null,
             } else null,
         });
 
@@ -5501,7 +5502,7 @@ const Builder = struct {
             .nested_expr,
             => switch (self.rootWorkerBody(source)) {
                 .intrinsic_wrapper => |intrinsic| intrinsic.wrapper.intrinsic,
-                .checked_expr, .hosted_proc => null,
+                .checked_expr, .hosted_proc, .unimplemented => null,
             },
         };
     }
@@ -6239,6 +6240,7 @@ const Builder = struct {
             .hosted_proc => true,
             .checked_expr,
             .intrinsic_wrapper,
+            .unimplemented,
             => false,
         };
     }
@@ -6475,7 +6477,7 @@ const Builder = struct {
         }
         return switch (self.rootWorkerBody(worker.source)) {
             .intrinsic_wrapper => |intrinsic| intrinsic.wrapper.intrinsic == .str_inspect,
-            .checked_expr, .hosted_proc => false,
+            .checked_expr, .hosted_proc, .unimplemented => false,
         };
     }
 
@@ -9454,6 +9456,9 @@ const Builder = struct {
             },
             .intrinsic_wrapper => |intrinsic| try self.analyzeIntrinsicWrapperTypes(intrinsic.view, intrinsic.wrapper),
             .hosted_proc => |hosted| try self.analyzeHostedProcTypes(hosted.view, hosted.proc),
+            // A crash body references no types beyond the declared signature,
+            // which the worker's own representation already covers.
+            .unimplemented => {},
         }
     }
 
@@ -9482,6 +9487,9 @@ const Builder = struct {
             view: ModuleView,
             proc: checked.HostedProc,
         },
+        /// The declaration behind this worker has a type annotation and no
+        /// implementation, so reaching the worker crashes.
+        unimplemented,
     };
 
     fn rootWorkerBody(self: *Builder, source: WorkerSource) WorkerBody {
@@ -9668,6 +9676,7 @@ const Builder = struct {
                 .view = view,
                 .root_expr = view.entry_wrappers.get(wrapper_id).body_expr,
             } },
+            .unimplemented => .unimplemented,
         };
     }
 
@@ -9721,6 +9730,7 @@ const Builder = struct {
                 },
                 .intrinsic_wrapper,
                 .hosted_proc,
+                .unimplemented,
                 => boxyPlanInvariant("capturing stored function did not resolve to a checked function body"),
             }
         }
@@ -10467,7 +10477,9 @@ const Builder = struct {
                     }
                 },
                 .stored_const => |stored| stored_template = stored,
-                .reserved => {},
+                // Neither a reserved template nor a declaration without an
+                // implementation contributes a value to plan for.
+                .reserved, .unimplemented => {},
             }
         }
         if (stored_template) |stored| {
@@ -11448,6 +11460,7 @@ const Builder = struct {
                 .checked_body => |body| body,
                 .intrinsic_wrapper,
                 .entry_wrapper,
+                .unimplemented,
                 => continue,
             };
             if (view.checked_bodies.body(body_id).root_expr == expr) {
@@ -12441,7 +12454,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
     const body = body_builder.callableEvalTemplateBody(root_view, @enumFromInt(fixtureTableIndex(0)));
     const stored_fn = switch (body) {
         .checked_expr => |checked_body| checked_body.stored_fn orelse return error.TestUnexpectedResult,
-        .intrinsic_wrapper, .hosted_proc => return error.TestUnexpectedResult,
+        .intrinsic_wrapper, .hosted_proc, .unimplemented => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(root_key, stored_fn.module);
     try std.testing.expectEqual(fn_id, stored_fn.fn_id);

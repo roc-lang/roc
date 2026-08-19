@@ -10591,6 +10591,14 @@ provides { "roc_main": main_for_host! }
 hosted { "roc_stdout_line": Stdout.line!, "roc_stderr_line": Stderr.line! }
 ```
 
+A hosted entry names the declaration's module, except when the declaration is
+in the platform module itself, which cannot import itself and so is named
+without a module the way a `provides` entry names one:
+
+```text
+hosted { "roc_helper": helper! }
+```
+
 The symbol string is the identity of an externally-bound function. A hosted
 call resolves to the entry at its declaration slot in the `hosted` section;
 resolution never matches hosted declarations by signature, by

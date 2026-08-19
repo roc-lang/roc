@@ -5621,12 +5621,37 @@ fn addPlatformHostedItems(
 /// Resolve hosted mappings once imports and exposed definitions are known.
 /// The resulting target is the same explicit external-definition identity
 /// used by ordinary qualified value lookups.
+/// This module's own top-level definition of `ident`, for a hosted entry that
+/// named no module. A later definition wins, the way a duplicate top-level
+/// value's later definition does.
+fn platformOwnDefForIdent(self: *const Self, ident: Ident.Idx) ?CIR.Def.Idx {
+    var found: ?CIR.Def.Idx = null;
+    for (self.scratch_global_value_defs.items) |def_idx| {
+        const def = self.env.store.getDef(def_idx);
+        const pattern = self.env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        if (!pattern.assign.ident.eql(ident)) continue;
+        found = def_idx;
+    }
+    return found;
+}
+
 fn resolvePlatformHosted(self: *Self) std.mem.Allocator.Error!void {
     if (self.env.module_kind != .platform) return;
 
     for (self.env.hosted_entries.items.items) |*entry| {
         const module_alias = entry.module_ident orelse {
-            entry.target_status = .missing_module;
+            // An entry written without a module names a declaration in this
+            // platform module. Such a target has no import, so a resolved entry
+            // with no `target_import` is how later stages read "the platform's
+            // own definition".
+            const own_def = self.platformOwnDefForIdent(entry.func_ident) orelse {
+                entry.target_status = .missing_value;
+                continue;
+            };
+            entry.target_import = null;
+            entry.target_def = own_def;
+            entry.target_status = .resolved;
             continue;
         };
         const imported = self.lookupAvailableModuleEnv(module_alias) orelse blk: {

@@ -10551,9 +10551,18 @@ fn collectDeclaredHostedFunctions(
     for (module.store.sliceDefs(module.hosted_defs)) |def_idx| {
         const def = module.store.getDef(def_idx);
         const expr = module.store.getExpr(def.expr);
-        std.debug.assert(expr == .e_hosted_lambda);
+        // A declaration the hosted transform rewrote can still be replaced by a
+        // runtime error afterwards, when canonicalization rejects the
+        // declaration itself. That is already reported where it was rejected,
+        // and it names no host function for the section to map.
+        if (expr != .e_hosted_lambda) continue;
 
-        const name = try hostedDefinitionDisplayName(self.gpa, module, expr.e_hosted_lambda.symbol_name);
+        // A declaration this platform module makes is named in the hosted
+        // section without a module, so the diagnostic names it the same way.
+        const name = if (module == self.cir)
+            try hostedOwnDeclarationDisplayName(self.gpa, module, expr.e_hosted_lambda.symbol_name)
+        else
+            try hostedDefinitionDisplayName(self.gpa, module, expr.e_hosted_lambda.symbol_name);
         const gop = try declared.getOrPut(.{ .module = module, .def = def_idx });
         if (gop.found_existing) {
             self.gpa.free(name);
@@ -10604,11 +10613,15 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     }
 
     for (section) |entry| {
-        const imported_env = if (entry.target_import) |import_idx|
+        // A resolved entry with no import named this platform module's own
+        // declaration, so the module owning the target is this one.
+        const target_env = if (entry.target_import) |import_idx|
             self.hoistedImportedModule(self.cir, import_idx)
+        else if (entry.target_status == .resolved)
+            self.cir
         else
             null;
-        const target = if (imported_env) |env|
+        const target = if (target_env) |env|
             if (entry.target_def) |def_idx| HostedTarget{ .module = env, .def = def_idx } else null
         else
             null;
@@ -10676,6 +10689,21 @@ fn hostedDefinitionDisplayName(
         func_name = func_name[0 .. func_name.len - 1];
     }
     return std.fmt.allocPrint(allocator, "{s}.{s}", .{ module_name, func_name });
+}
+
+/// How a declaration this platform module makes is written in its own hosted
+/// section: the function name alone, with the trailing `!` dropped the way
+/// every other hosted name is displayed.
+fn hostedOwnDeclarationDisplayName(
+    allocator: Allocator,
+    module: *const ModuleEnv,
+    symbol_name: Ident.Idx,
+) Allocator.Error![]const u8 {
+    var func_name = module.getIdent(symbol_name);
+    if (Ident.textEndsWith(func_name, "!")) {
+        func_name = func_name[0 .. func_name.len - 1];
+    }
+    return allocator.dupe(u8, func_name);
 }
 
 fn hostedEntryDisplayName(

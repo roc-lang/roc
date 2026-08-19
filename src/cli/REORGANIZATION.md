@@ -46,7 +46,6 @@ src/cli/
 ├── target.zig                    # Target definitions (existing)
 ├── targets_validator.zig         # Targets section validation (existing)
 ├── cross_compilation.zig         # Cross-compilation validation (existing)
-├── libc_finder.zig               # Linux libc detection (existing)
 │
 ├── util_windows.zig              # Windows console functions
 ├── util_posix.zig                # POSIX shm wrappers
