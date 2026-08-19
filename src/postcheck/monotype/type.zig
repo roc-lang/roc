@@ -1062,8 +1062,8 @@ pub const Store = struct {
     }
 
     /// One digest implementation for both modes: serve the request from the
-    /// cache or canonicalize the uncached reachable subgraph and cache every
-    /// digest it settles.
+    /// cache or reduce the uncached reachable subgraph and cache every digest
+    /// it settles.
     fn computeDigest(
         self: *Store,
         name_store: *const names.NameStore,
@@ -1081,14 +1081,15 @@ pub const Store = struct {
         return try engine.run(ty, mode);
     }
 
-    /// Canonical byte encoding of one type node in one digest mode.
+    /// The digest byte encoding of one type node in one digest mode.
     ///
-    /// This is the single source of digest bytes: graph discovery, recursive
-    /// canonicalization, and final digest rendering all replay this encoding
-    /// with different child-reference sinks, so no consumer can observe two
-    /// byte encodings for the same mode. Every node starts with its versioned
-    /// digest domain, then a content-kind discriminator, every non-reference
-    /// value the mode observes, and its ordered typed edges via `sink.child`.
+    /// This is the single source of digest bytes: graph discovery,
+    /// recursive-group reduction, and final digest rendering all replay this
+    /// encoding with different child-reference sinks, so no consumer can
+    /// observe two byte encodings for the same mode. Every node starts with
+    /// its versioned digest domain, then a content-kind discriminator, every
+    /// non-reference value the mode observes, and its ordered typed edges via
+    /// `sink.child`.
     ///
     /// Aliases are opaque named nodes rather than digesting as their backing.
     /// `def.type_name` text is always hashed (also when `source_decl` is
@@ -1239,8 +1240,8 @@ pub const Store = struct {
     const DigestNode = struct {
         ty: TypeId,
         mode: NamedDigestMode,
-        ref_start: u32 = 0,
-        ref_len: u32 = 0,
+        link_start: u32 = 0,
+        link_len: u32 = 0,
         digest: names.TypeDigest = undefined,
         resolved: bool = false,
     };
@@ -1248,14 +1249,14 @@ pub const Store = struct {
     /// A child reference during digesting: either an already-finalized digest
     /// or a node of the currently discovered graph. Whether a child arrived as
     /// a cache hit or as a discovered-then-resolved node must never influence
-    /// digest bytes or partitioning, so every consumer of a `ChildRef` treats
+    /// digest bytes or partitioning, so every consumer of a `ChildLink` treats
     /// a resolved node and an external digest identically.
-    const ChildRef = union(enum) {
+    const ChildLink = union(enum) {
         external: names.TypeDigest,
         node: u32,
     };
 
-    /// Graph-canonicalizing digest computation for one requested type.
+    /// Graph-reducing digest computation for one requested type.
     ///
     /// Discovery walks the uncached reachable subgraph iteratively, pruning
     /// at children whose digest for the required mode is already cached.
@@ -1265,8 +1266,9 @@ pub const Store = struct {
     /// bisimulation refinement, linearized by the minimum-over-entry-points
     /// rotation with group-relative back-references, and digested per reduced
     /// position. Every settled digest is cached unconditionally, and each
-    /// reduced position publishes its one-step unfolding so later rolled-out
-    /// prefixes of the same group fold to the same digests.
+    /// reduced position's one-step unfolding enters the store's unfolding
+    /// index so later rolled-out prefixes of the same group fold to the same
+    /// digests.
     ///
     /// Known conservative incompleteness: per-SCC reduction cannot identify
     /// an in-SCC position with an equivalent position outside its own SCC, so
@@ -1280,7 +1282,7 @@ pub const Store = struct {
         stats: ?*DigestStats,
         nodes: std.ArrayList(DigestNode),
         node_lookup: std.AutoHashMap(u64, u32),
-        ref_pool: std.ArrayList(ChildRef),
+        link_pool: std.ArrayList(ChildLink),
         render_buf: std.ArrayList(u8),
 
         const no_scc_position = std.math.maxInt(u32);
@@ -1294,14 +1296,14 @@ pub const Store = struct {
                 .stats = stats,
                 .nodes = .empty,
                 .node_lookup = std.AutoHashMap(u64, u32).init(store.allocator),
-                .ref_pool = .empty,
+                .link_pool = .empty,
                 .render_buf = .empty,
             };
         }
 
         fn deinit(self: *DigestEngine) void {
             self.render_buf.deinit(self.gpa);
-            self.ref_pool.deinit(self.gpa);
+            self.link_pool.deinit(self.gpa);
             self.node_lookup.deinit();
             self.nodes.deinit(self.gpa);
         }
@@ -1339,16 +1341,16 @@ pub const Store = struct {
         /// Classify one child reference during discovery: already-cached
         /// children participate as finalized digests, everything else becomes
         /// a node of the discovered graph.
-        fn childRef(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!ChildRef {
+        fn childLink(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!ChildLink {
             self.store.requireConstructed(ty);
             if (self.store.cachedDigest(ty, mode)) |digest| return .{ .external = digest };
             return .{ .node = try self.internNode(ty, mode) };
         }
 
-        /// `childRef` for rendering passes after discovery: never grows the
+        /// `childLink` for rendering passes after discovery: never grows the
         /// graph, and nodes this engine already finalized may resolve through
         /// the store cache with identical bytes.
-        fn resolvedChildRef(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) ChildRef {
+        fn resolvedChildLink(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) ChildLink {
             if (self.store.cachedDigest(ty, mode)) |digest| return .{ .external = digest };
             return .{
                 .node = self.node_lookup.get(nodeKey(ty, mode)) orelse
@@ -1359,17 +1361,17 @@ pub const Store = struct {
         fn collectNode(self: *DigestEngine, index: u32) std.mem.Allocator.Error!void {
             const ty = self.nodes.items[index].ty;
             const mode = self.nodes.items[index].mode;
-            const ref_start: u32 = @intCast(self.ref_pool.items.len);
+            const link_start: u32 = @intCast(self.link_pool.items.len);
             const sink = CollectSink{ .engine = self };
             try self.store.encodeTypeNode(self.name_store, sink, ty, mode);
             const node = &self.nodes.items[index];
-            node.ref_start = ref_start;
-            node.ref_len = @intCast(self.ref_pool.items.len - ref_start);
+            node.link_start = link_start;
+            node.link_len = @intCast(self.link_pool.items.len - link_start);
         }
 
-        fn refsOf(self: *const DigestEngine, index: u32) []const ChildRef {
+        fn linksOf(self: *const DigestEngine, index: u32) []const ChildLink {
             const node = self.nodes.items[index];
-            return self.ref_pool.items[node.ref_start..][0..node.ref_len];
+            return self.link_pool.items[node.link_start..][0..node.link_len];
         }
 
         /// Discovery sink: collects the node's ordered child references while
@@ -1378,22 +1380,16 @@ pub const Store = struct {
         const CollectSink = struct {
             engine: *DigestEngine,
 
-            fn writeBytes(self: CollectSink, bytes: []const u8) std.mem.Allocator.Error!void {
-                _ = self;
-                _ = bytes;
-            }
+            fn writeBytes(_: CollectSink, _: []const u8) std.mem.Allocator.Error!void {}
 
-            fn writeU32(self: CollectSink, value: u32) std.mem.Allocator.Error!void {
-                _ = self;
-                _ = value;
-            }
+            fn writeU32(_: CollectSink, _: u32) std.mem.Allocator.Error!void {}
 
             fn child(self: CollectSink, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!void {
-                const ref = try self.engine.childRef(ty, mode);
+                const ref = try self.engine.childLink(ty, mode);
                 if (ref == .external) {
                     if (self.engine.stats) |s| s.cache_hits += 1;
                 }
-                try self.engine.ref_pool.append(self.engine.gpa, ref);
+                try self.engine.link_pool.append(self.engine.gpa, ref);
             }
         };
 
@@ -1416,7 +1412,7 @@ pub const Store = struct {
             }
 
             fn child(self: SccLabelSink, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!void {
-                switch (self.engine.resolvedChildRef(ty, mode)) {
+                switch (self.engine.resolvedChildLink(ty, mode)) {
                     .external => |digest| {
                         hashBytes(self.hasher, "type-digest");
                         self.hasher.update(&digest.bytes);
@@ -1461,7 +1457,7 @@ pub const Store = struct {
             }
 
             fn child(self: RenderSink, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!void {
-                switch (self.engine.resolvedChildRef(ty, mode)) {
+                switch (self.engine.resolvedChildLink(ty, mode)) {
                     .external => |digest| try self.emitDigest(digest),
                     .node => |node_index| {
                         if (self.scc) |ctx| {
@@ -1520,7 +1516,7 @@ pub const Store = struct {
                 while (frames.items.len > 0) {
                     const frame = &frames.items[frames.items.len - 1];
                     const v = frame.node;
-                    const refs = self.refsOf(v);
+                    const refs = self.linksOf(v);
                     if (frame.edge_cursor < refs.len) {
                         const ref = refs[frame.edge_cursor];
                         frame.edge_cursor += 1;
@@ -1568,7 +1564,7 @@ pub const Store = struct {
         }
 
         fn hasSelfEdge(self: *const DigestEngine, index: u32) bool {
-            for (self.refsOf(index)) |ref| {
+            for (self.linksOf(index)) |ref| {
                 switch (ref) {
                     .external => {},
                     .node => |target| if (target == index) return true,
@@ -1602,7 +1598,7 @@ pub const Store = struct {
             self.store.setCachedDigest(node.ty, node.mode, digest);
         }
 
-        /// Reduce one cyclic SCC by bisimulation refinement, canonicalize the
+        /// Reduce one cyclic SCC by bisimulation refinement, linearize the
         /// reduced graph with the minimum-over-entry-points rotation, and
         /// digest every member as its reduced position.
         fn resolveCyclicScc(self: *DigestEngine, members: []const u32) std.mem.Allocator.Error!void {
@@ -1652,7 +1648,7 @@ pub const Store = struct {
                 for (members, 0..) |node_index, pos| {
                     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
                     hashU32(&hasher, blocks[pos]);
-                    for (self.refsOf(node_index)) |ref| {
+                    for (self.linksOf(node_index)) |ref| {
                         const target = switch (ref) {
                             .external => continue,
                             .node => |node_target| node_target,
@@ -1699,7 +1695,7 @@ pub const Store = struct {
             defer self.gpa.free(block_edge_len);
             for (0..block_count) |block| {
                 const start: u32 = @intCast(block_edges_pool.items.len);
-                for (self.refsOf(block_rep[block])) |ref| {
+                for (self.linksOf(block_rep[block])) |ref| {
                     const target = switch (ref) {
                         .external => continue,
                         .node => |node_target| node_target,
@@ -1712,9 +1708,10 @@ pub const Store = struct {
                 block_edge_len[block] = @intCast(block_edges_pool.items.len - start);
             }
 
-            // Canonical order: preorder DFS from every entry block, keeping
-            // the lexicographically smallest rendering. The reduced graph has
-            // no two equivalent positions, so the minimum is unique.
+            // Deterministic order: preorder DFS from every entry block,
+            // keeping the lexicographically smallest rendering. The reduced
+            // graph has no two equivalent positions, so the minimum is
+            // unique.
             const order_of_block = try self.gpa.alloc(u32, block_count);
             defer self.gpa.free(order_of_block);
             const best_order = try self.gpa.alloc(u32, block_count);
@@ -1779,7 +1776,7 @@ pub const Store = struct {
                 }
             }
 
-            // Every reduced position digests as its index in the canonical
+            // Every reduced position digests as its index in the minimum
             // group encoding; every original member adopts its position's
             // digest.
             const block_digest = try self.gpa.alloc(names.TypeDigest, block_count);
@@ -1795,10 +1792,11 @@ pub const Store = struct {
                 self.finalizeNode(node_index, block_digest[blocks[pos]]);
             }
 
-            // Publish each reduced position's one-step unfolding so later
-            // rolled-out prefixes of this group fold to the same digests.
-            // Members are finalized, so a plain rendering resolves in-SCC
-            // children to their new group digests.
+            // Record each reduced position's one-step unfolding in the
+            // store's unfolding index so later rolled-out prefixes of this
+            // group fold to the same digests. Members are finalized, so a
+            // plain rendering resolves in-SCC children to their new group
+            // digests.
             for (0..block_count) |block| {
                 self.render_buf.clearRetainingCapacity();
                 const sink = RenderSink{ .engine = self, .out = &self.render_buf, .scc = null };
@@ -1807,7 +1805,7 @@ pub const Store = struct {
                 const unfolding = sha256Of(self.render_buf.items);
                 const gop = try self.store.recursive_digest_unfoldings.getOrPut(unfolding);
                 if (gop.found_existing) {
-                    // Canonical group digests are intrinsic, so an equivalent
+                    // Reduced-group digests are intrinsic, so an equivalent
                     // group digested earlier must agree.
                     std.debug.assert(std.mem.eql(u8, &gop.value_ptr.bytes, &block_digest[block].bytes));
                 } else {
@@ -3999,8 +3997,8 @@ test "monotype named type digest includes declared field order" {
 
 test "monotype digest folds a recursive knot beyond depth 300 into its unrolling" {
     // A cycle of 350 box nodes and a self-box denote the same infinite type.
-    // The old depth-256 slot-index fallback would have made the long cycle's
-    // digest depend on its ids; graph canonicalization reduces both to the
+    // The deleted depth-256 slot-index digest would have made the long
+    // cycle's digest depend on its ids; graph reduction collapses both to the
     // same one-node quotient.
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
