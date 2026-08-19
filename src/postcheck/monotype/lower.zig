@@ -13241,7 +13241,7 @@ const BodyContext = struct {
     local_proc_contexts: std.AutoHashMap(DraftLocalProcAddress, DraftLocalProcContextId),
     restored_local_proc_scope: ?RestoredLocalProcScope = null,
     /// True while this context lowers a defaulted-field expression (design.md
-    /// "Defaulted Fields"). Checking publishes nested-function sites for
+    /// "Defaulted Fields"). Checking records nested-function sites for
     /// default expressions under the `.default_root` owner (they belong to no
     /// procedure template), so site resolution must know it is inside a
     /// default's inlined materialization rather than the consuming template's

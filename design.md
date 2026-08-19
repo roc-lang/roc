@@ -5117,7 +5117,7 @@ Restrictions:
   `checkDefaultRestrictions` RETIRES every rejected default (including
   field-type mismatches, whose standard recovery leaves the var `.err`)
   by replacing the default expression and its omitting construction
-  sites with runtime errors before checked-artifact publication, so
+  sites with runtime errors before the CheckedModule is built, so
   postcheck materialization can never observe a rejected default.
 
 The CheckedModule preserves the kind: a defaulted field serializes as a
@@ -5154,7 +5154,7 @@ default expressions the same way: when body analysis reaches a record
 construction (`.record` or `.empty_record`) carrying
 `record_omitted_defaults` entries, the planner analyzes each entry's
 archived default expression against its declaring module's view under
-the consuming site's worker—the same explicit artifact data
+the consuming site's worker—the same explicit CheckedModule data
 (`record_omitted_defaults` → `defaultExpr`) and the same worker key
 lowering later uses for callable-use plans and type representations;
 declaring modules resolve by content identity, and an unresolvable
@@ -5169,7 +5169,7 @@ default may call a generic (unannotated) procedure, and that call's
 callee requirements resolve to concrete targets when
 `checkPendingDefaults` checks the default at an instantiated copy of
 its field type (a default constrains no declaration parameter, so
-nothing is left for a caller to supply). Publication walks every
+nothing is left for a caller to supply). The seal pass walks every
 archived default expression (`CheckedBodyStore.default_exprs`) as a
 ROOT outside every procedure template: `sealCheckedProcedureTemplateRefs`
 collects the defaults' value refs, dispatch plans, iterator plans,
@@ -5183,7 +5183,7 @@ per-specialization lowering finds the same finished vector through the
 ordinary `siteEvidence` lookup—lowering consumes explicit checked
 evidence and never reconstructs it. Defaults likewise carry their own
 CHECKED NESTED-FUNCTION SITES: the seal pass scans every archived
-default expression as a root, publishing each interior lambda/closure
+default expression as a root, recording each interior lambda/closure
 as a `NestedProcSite` owned by the module's `default_root` (a default
 belongs to no procedure template). Lowering resolves those sites at
 exactly two sanctioned points. First, while materializing a default
