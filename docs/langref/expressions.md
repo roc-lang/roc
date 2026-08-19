@@ -23,6 +23,7 @@ Here are all the different types of expressions in Roc:
 - Number literals, e.g. `1` or `2.34` or `0.123e4`
 - List literals, e.g. `[1, 2]` or `[]` or `["foo"]`
 - Record literals, e.g. `{ x: 1, y: 2 }` or `{}` or `{ x, y, ..other_record }`
+- [Table literals](#table-literals), e.g. `table name, age { "Ada", 36 }` — sugar for a list of records
 - Tag literals, e.g. `Foo` or `Foo(bar)`
 - Tuple literals, e.g. `(a, b, "foo")`
 - Function literals (aka "lambdas"), e.g. `|a, b| a + b` or `|| c + d`
@@ -32,6 +33,50 @@ Here are all the different types of expressions in Roc:
 - [Block expressions](#block-expressions), e.g. `{ foo() }`
 
 There are no other types of expressions in the language.
+
+## [Table Literals](#table-literals) {#table-literals}
+
+A table literal is row-oriented syntax sugar for a [list](lists) of [records](records).
+After parsing, the compiler desugars it to that list; later compiler stages never see tables.
+
+```roc
+people = table name, age, favorite_color {
+    "Bob", 12, "blue",
+    "Alice", 17, "green",
+    "Eve", 13, "red",
+}
+```
+
+This is the same as:
+
+```roc
+people = [
+    { name: "Bob", age: 12, favorite_color: "blue" },
+    { name: "Alice", age: 17, favorite_color: "green" },
+    { name: "Eve", age: 13, favorite_color: "red" },
+]
+```
+
+Column names are lowercase identifiers. A column may optionally have a type:
+
+```roc
+people = table name : Str, age : U8, favorite_color : Str {
+    "Bob", 12, "blue",
+}
+```
+
+Typed columns are applied to the whole list so numeric literals pick up the column type
+(here `12` is a `U8` rather than the default `Dec`). An empty body is allowed when the
+columns are typed: `table name : Str, age : U8 {}`.
+
+`table` is a contextual keyword. A table literal starts only when `table` is followed on
+the same line by a column name or `{`. `table(x)`, `table = …`, `foo.table`, and a bare
+`table` at the end of a line keep using `table` as an ordinary name. A table needs at
+least one column; `table {}` is invalid.
+
+Each body line is one row of comma-separated expressions. A newline at table-body depth
+ends the row. Newlines inside `()`, `[]`, `{}`, or a lambda do not. Trailing commas before
+a newline or `}` are allowed.
 
 ## [Values](#values) {#values}
 

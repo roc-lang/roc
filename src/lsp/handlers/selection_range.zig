@@ -486,6 +486,14 @@ fn collectContainingRegionsFromExpr(
             try collectContainingRegionsFromExpr(allocator, ast, f.expr, target_offset, regions);
             try collectContainingRegionsFromExpr(allocator, ast, f.body, target_offset, regions);
         },
+        .table => |t| {
+            for (ast.store.tableRowSlice(t.rows)) |row_idx| {
+                const row = ast.store.getTableRow(row_idx);
+                for (ast.store.exprSlice(row.items)) |item| {
+                    try collectContainingRegionsFromExpr(allocator, ast, item, target_offset, regions);
+                }
+            }
+        },
         .@"return" => |r| {
             try collectContainingRegionsFromExpr(allocator, ast, r.expr, target_offset, regions);
         },

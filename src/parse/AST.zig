@@ -494,6 +494,12 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_close_curly_at_end_of_match => reportParseProblem(ctx, "Unclosed Match", "I was parsing a match expression, and the file ended before the closing `}`.", "Add a closing brace after the final match branch.", .{ .example = "match value {\n    Ok(x) => x\n}" }),
         .expected_open_curly_after_match => reportParseProblem(ctx, "Expected Match Body", "I was parsing a match expression, and I expected `{` after the matched value.", "Match branches are written inside braces after the expression being matched.", .{ .example = "match result {\n    Ok(x) => x\n    Err(_) => 0\n}" }),
         .expr_unexpected_token => reportParseProblem(ctx, "Unexpected Expression Syntax", "I was parsing an expression, and this token cannot start an expression here.", "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.", .{ .example = "add(1, 2)" }),
+        .table_expected_column_name => reportParseProblem(ctx, "Expected Table Column", "I was parsing a table literal, and I expected a lowercase column name.", "A table starts with `table` followed by one or more column names, then a `{` body. Each column can optionally have a type after `:`.", .{ .example = "table name, age {\n    \"Ada\", 36,\n}" }),
+        .table_expected_open_curly => reportParseProblem(ctx, "Expected Table Body", "I was parsing a table literal, and I expected `{` after the column names.", "Table rows are written inside braces after the column header.", .{ .example = "table name, age {\n    \"Ada\", 36,\n}" }),
+        .table_expected_close_curly => reportParseProblem(ctx, "Unclosed Table", "I was parsing a table literal, and I expected `}` to close the body.", "Close the table with `}` after the last row.", .{ .example = "table name, age {\n    \"Ada\", 36,\n}" }),
+        .table_duplicate_column => reportParseProblem(ctx, "Duplicate Table Column", "I was parsing a table literal, and this column name is already used.", "Each column name in a table must be unique.", .{ .example = "table name, age {\n    \"Ada\", 36,\n}" }),
+        .table_row_width_mismatch => reportParseProblem(ctx, "Table Row Width", "I was parsing a table row, and it does not have the same number of values as there are columns.", "Each row must have one value per column, separated by commas. A newline starts the next row.", .{ .example = "table name, age {\n    \"Ada\", 36,\n    \"Alan\", 42,\n}" }),
+        .table_row_expected_separator => reportParseProblem(ctx, "Expected Table Row Separator", "I was parsing a table row, and I expected a comma or a new row here.", "Separate values in a row with commas. A newline at table-body depth starts the next row.", .{ .example = "table name, age {\n    \"Ada\", 36,\n    \"Alan\", 42,\n}" }),
         .return_outside_function => reportParseProblem(ctx, "Return Outside Function", "I was parsing a statement, and `return` appeared outside a function body.", "`return` exits from the current function. Move it inside a function body, or remove it if this code is already the final expression.", .{ .example = "foo = |x| {\n    if x < 0 { return Err(Negative) }\n    Ok(x)\n}" }),
         .expected_expr_record_field_name => reportParseProblem(ctx, "Expected Record Field", "I was parsing a record expression, and I expected a lowercase field name.", "Record fields start with lowercase names. After the name, either write `: value` or omit the value to use field punning.", .{ .example = "{ name: \"Ada\", age }" }),
         .record_field_name_cannot_be_var => reportParseProblem(ctx, "Invalid Record Field Name", "Record field names cannot start with a dollar sign.", "Names that start with `$` are reassignable variables declared with the `var` keyword, so they cannot be used as record field names.", .{ .show_found = false }),
@@ -634,6 +640,12 @@ pub const Diagnostic = struct {
         expected_close_curly_at_end_of_match,
         expected_open_curly_after_match,
         expr_unexpected_token,
+        table_expected_column_name,
+        table_expected_open_curly,
+        table_expected_close_curly,
+        table_duplicate_column,
+        table_row_width_mismatch,
+        table_row_expected_separator,
         return_outside_function,
         expected_expr_record_field_name,
         /// `$name` idents are reassignable variables and cannot name record fields
@@ -2995,6 +3007,13 @@ pub const Expr = union(enum) {
         body: Expr.Idx,
         region: TokenizedRegion,
     },
+    /// Row-oriented sugar for a list of records. Canonicalize desugars this
+    /// to `List({ ... })`; later compiler stages never see tables.
+    table: struct {
+        columns: TableColumn.Span,
+        rows: TableRow.Span,
+        region: TokenizedRegion,
+    },
     malformed: struct {
         reason: Diagnostic.Tag,
         region: TokenizedRegion,
@@ -3061,6 +3080,7 @@ pub const Expr = union(enum) {
             .@"break" => |e| e.region,
             .@"return" => |e| e.region,
             .for_expr => |e| e.region,
+            .table => |e| e.region,
             .malformed => |e| e.region,
             .string_part => |e| e.region,
             .single_quote => |e| e.region,
@@ -3578,6 +3598,30 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .table => |t| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-table");
+                try ast.appendRegionInfoToSexprTree(env, tree, t.region);
+                const attrs = tree.beginNode();
+
+                const columns = tree.beginNode();
+                try tree.pushStaticAtom("columns");
+                const columns_attrs = tree.beginNode();
+                for (ast.store.tableColumnSlice(t.columns)) |column_idx| {
+                    try ast.store.getTableColumn(column_idx).pushToSExprTree(gpa, env, ast, tree);
+                }
+                try tree.endNode(columns, columns_attrs);
+
+                const rows = tree.beginNode();
+                try tree.pushStaticAtom("rows");
+                const rows_attrs = tree.beginNode();
+                for (ast.store.tableRowSlice(t.rows)) |row_idx| {
+                    try ast.store.getTableRow(row_idx).pushToSExprTree(gpa, env, ast, tree);
+                }
+                try tree.endNode(rows, rows_attrs);
+
+                try tree.endNode(begin, attrs);
+            },
         }
     }
 };
@@ -3592,6 +3636,52 @@ pub const PatternRecordField = struct {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
+};
+
+/// A column header in a table literal: `name` or `name : Str`.
+pub const TableColumn = struct {
+    name: Token.Idx,
+    ty: ?TypeAnno.Idx,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+
+    pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+        const begin = tree.beginNode();
+        try tree.pushStaticAtom("table-column");
+        try ast.appendRegionInfoToSexprTree(env, tree, self.region);
+        try tree.pushStringPair("name", ast.resolve(self.name));
+        const attrs = tree.beginNode();
+
+        if (self.ty) |ty| {
+            try ast.store.getTypeAnno(ty).pushToSExprTree(gpa, env, ast, tree);
+        }
+
+        try tree.endNode(begin, attrs);
+    }
+};
+
+/// One row of a table literal: comma-separated expressions.
+pub const TableRow = struct {
+    items: Expr.Span,
+    region: TokenizedRegion,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+
+    pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
+        const begin = tree.beginNode();
+        try tree.pushStaticAtom("table-row");
+        try ast.appendRegionInfoToSexprTree(env, tree, self.region);
+        const attrs = tree.beginNode();
+
+        for (ast.store.exprSlice(self.items)) |item_idx| {
+            try ast.store.getExpr(item_idx).pushToSExprTree(gpa, env, ast, tree);
+        }
+
+        try tree.endNode(begin, attrs);
+    }
 };
 
 /// TODO
