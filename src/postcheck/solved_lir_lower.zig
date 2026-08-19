@@ -8998,6 +8998,8 @@ const Lowerer = struct {
             local_ty.* = (local_type_iter.next() orelse
                 Common.invariant("local layout node map count exceeded its keys")).*;
         }
+        // Equivalent named layouts are first-writer-wins, so preserve the dense
+        // table's ascending TypeId order rather than DenseMap insertion order.
         std.mem.sort(Type.TypeId, local_types, {}, struct {
             fn lessThan(_: void, lhs: Type.TypeId, rhs: Type.TypeId) bool {
                 return @intFromEnum(lhs) < @intFromEnum(rhs);
