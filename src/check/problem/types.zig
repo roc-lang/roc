@@ -226,7 +226,7 @@ pub const ComptimeInvalidNumeral = struct {
     /// conversion root lives in the module that declares the literal, so its
     /// rejection is reported during that module's own finalization. Wired
     /// through the shared resolution anyway so the report cannot silently
-    /// mis-render if that ever changes.
+    /// misrender if that ever changes.
     origin: ?ComptimeOrigin = null,
 };
 
