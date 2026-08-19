@@ -266,43 +266,32 @@ pub fn validateSerialized(comptime T: type, self: *const T, backing_len: u64) er
     try collections.validateSerializedRelocations(T, self, backing_len);
 }
 
-/// Serialized form of a POD `T` stored inline. No relocatable pointer: the
-/// value lives in the header itself. `T` must be extern-compatible, which for
-/// an enum means an explicit fixed-width backing integer, and its all-zero bit
-/// pattern must be one of its values so the default below is a real one.
-pub fn SerializedScalar(comptime T: type) type {
+/// Serialized form of a POD `T` stored inline, defaulting to `default`. No
+/// relocatable pointer: the value lives in the header itself. `T` must be
+/// extern-compatible, which for an enum means an explicit fixed-width backing
+/// integer.
+pub fn SerializedScalar(comptime T: type, comptime default: T) type {
     comptime assertRelocatablePod(T);
     comptime assertPortableSerialized(T);
     comptime assertSerializedDefaultsDefined(T);
-    comptime assertZeroIsValid(T);
     return extern struct {
-        value: T = std.mem.zeroes(T),
+        value: T = default,
 
         const Self = @This();
 
-        pub fn serialize(self: *Self, source: *const T, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            _ = gpa;
-            _ = writer;
+        /// Record `source`'s value inline. A scalar needs no separate buffer
+        /// region and no relocation, so it appends nothing to the writer and
+        /// takes neither the allocator nor the writer the driver passes.
+        pub fn serialize(self: *Self, source: *const T, _: Allocator, _: *CompactWriter) Allocator.Error!void {
             self.value = source.*;
         }
 
-        pub fn deserialize(self: *const Self, base: usize) T {
-            _ = base;
+        /// Read the inline value back. Nothing was relocated, so the buffer
+        /// base the driver passes goes unused.
+        pub fn deserialize(self: *const Self, _: usize) T {
             return self.value;
         }
     };
-}
-
-/// Reject a `SerializedScalar` element whose all-zero bit pattern is not one of
-/// its values, which would make the marker's default an invalid value.
-fn assertZeroIsValid(comptime T: type) void {
-    comptime {
-        if (@typeInfo(T) != .@"enum") return;
-        for (@typeInfo(T).@"enum".fields) |field| {
-            if (field.value == 0) return;
-        }
-        @compileError("SerializedScalar element '" ++ @typeName(T) ++ "' has no value with tag 0, so its zeroed default would be invalid.");
-    }
 }
 
 /// Relocatable serialized form of an `?T` of POD `T`. Encodes presence as a
