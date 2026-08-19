@@ -16257,7 +16257,7 @@ const BodyContext = struct {
         // Only a context explicitly marked as sealed-emission skips it: the
         // frozen-graph boundary emitters (deferred structural serialization
         // and callsite intrinsics, e.g. a generated parser body
-        // materializing a field default per specialization — design.md
+        // materializing a field default per specialization—design.md
         // "Defaulted Fields") lower sealed expressions whose produced type
         // every call site verifies with its `sameType` invariant. Any other
         // frozen-phase caller is a bug and fails loudly inside
@@ -17444,7 +17444,7 @@ const BodyContext = struct {
         // no enclosing scheme, so its relations flow entirely through the
         // default evidence spans. The chain owner above is the template that
         // RECORDED the materialization, while `self.view` is the declaring
-        // module — its template table does not contain that owner.
+        // module—its template table does not contain that owner.
         if (self.in_default_expr) return;
         if (chain.parent) |parent| try self.replayStoredEvidenceRelations(parent.*);
         const template = self.view.templates.get(self.owner_template.template);
@@ -33496,9 +33496,9 @@ const BodyContext = struct {
             } } });
         }
 
-        // The closed constructor never lists unset fields explicitly — an
+        // The closed constructor never lists unset fields explicitly—an
         // unset optional slot is constructed by the omitted-optional arm
-        // below — but every unset label must still name an OPTIONAL field in
+        // below—but every unset label must still name an OPTIONAL field in
         // the row, the same validation the update arm above applies. Without
         // it, an unset of a defaulted field would silently take the
         // defaulted arm and materialize the default, diverging from boxy
@@ -35976,7 +35976,7 @@ const BodyContext = struct {
                 // evidence frames themselves stay validated against the
                 // recording owner template's module above, exactly as they
                 // were captured during materialization (design.md "Defaulted
-                // Fields" — const-store restore is the second sanctioned
+                // Fields"—const-store restore is the second sanctioned
                 // resolver of default-root sites).
                 const site_view = if (nested.default_root != null)
                     self.builder.moduleForConstFnDef(fn_value.fn_def)
@@ -50720,7 +50720,7 @@ fn checkedNestedSite(view: ModuleView, nested: anytype) checked.NestedProcSite {
     // default root as the site owner; `view` is already that module
     // (`moduleForConstFnDef` resolves it by content identity), so the match
     // is by site id against the `.default_root` owner (design.md "Defaulted
-    // Fields" — const-store restore is the second sanctioned resolver of
+    // Fields"—const-store restore is the second sanctioned resolver of
     // default-root sites, after live default materialization).
     const wants_default_root = nested.default_root != null;
     for (view.nested_proc_sites.sites) |site| {

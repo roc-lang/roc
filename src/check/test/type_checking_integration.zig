@@ -2253,9 +2253,9 @@ test "check type - record - default - associated-value-mediated cycle is check's
     // the declaring type: `Alias.fallback` canonicalizes to
     // `e_lookup_associated_local` (a direct `Cfg.fallback` resolves in
     // scope and is CAN's cycle). Canonicalization CANNOT resolve the alias
-    // form to its target def — resolution follows transparent aliases
+    // form to its target def—resolution follows transparent aliases
     // through the type store (`resolveAssociatedLookup` in
-    // src/check/Check.zig), which only exists after checking — so the
+    // src/check/Check.zig), which only exists after checking—so the
     // lookup is terminal in DefaultCycles and CAN accepts. The checker's
     // residue walk owns the edge: checking rewrites the lookup to
     // `e_lookup_associated_resolved`, and the walk's value arm follows the

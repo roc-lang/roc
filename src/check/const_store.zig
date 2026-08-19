@@ -308,8 +308,8 @@ pub const FnDef = union(enum) {
     imported_template: names.ProcTemplate,
     nested: struct {
         /// Checked template whose lowering recorded this stored function: the
-        /// site's owning template for a template-owned site, or — when
-        /// `default_root` is set — the template whose body materialized the
+        /// site's owning template for a template-owned site, or—when
+        /// `default_root` is set—the template whose body materialized the
         /// defaulted-field expression (the lexical context the evidence
         /// frames were recorded against).
         owner: names.ProcTemplate,
