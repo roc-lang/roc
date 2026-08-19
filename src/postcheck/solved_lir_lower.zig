@@ -8521,13 +8521,14 @@ const Lowerer = struct {
     }
 
     fn rememberLayoutForType(self: *Lowerer, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!void {
-        const already_known = self.type_layouts.get(ty) != null;
+        const existing_layout = self.type_layouts.get(ty);
+        if (existing_layout) |existing| std.debug.assert(existing == layout_idx);
         try self.type_layouts.put(ty, layout_idx);
-        if (already_known) return;
+        if (existing_layout != null) return;
 
         const named = switch (self.types.get(ty)) {
             .named => |named| named,
-            else => return,
+            .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return,
         };
         const gop = try self.named_layout_index.getOrPut(namedRepresentationKey(named));
         if (!gop.found_existing) gop.value_ptr.* = .empty;
@@ -8616,7 +8617,7 @@ const Lowerer = struct {
     fn knownLayoutForEquivalentNamedType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!?EquivalentNamedLayout {
         const named = switch (self.types.get(ty)) {
             .named => |named| named,
-            else => return null,
+            .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return null,
         };
         const candidates = self.named_layout_index.get(namedRepresentationKey(named)) orelse return null;
         var visited = std.AutoHashMap(u64, void).init(self.allocator);
@@ -10213,6 +10214,145 @@ test "named layout index reuses only representation-equivalent instantiations" {
     // rejected by the deep comparison rather than incorrectly reusing U8.
     const key = Lowerer.namedRepresentationKey(lowerer.types.get(first_ty).named);
     try std.testing.expectEqual(@as(usize, 3), lowerer.named_layout_index.get(key).?.items.len);
+}
+
+test "named layout index reuses structurally equivalent recursive types" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xD3} ** 32));
+    const first_name = try solved.lifted.names.internTypeName("FirstRecursive");
+    const equivalent_name = try solved.lifted.names.internTypeName("EquivalentRecursive");
+    const next_name = try solved.lifted.names.internRecordFieldLabel("next");
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    const first_ty = try lowerer.types.add(.zst);
+    const equivalent_ty = try lowerer.types.add(.zst);
+    const first_box = try lowerer.types.add(.{ .box = first_ty });
+    const equivalent_box = try lowerer.types.add(.{ .box = equivalent_ty });
+    const first_fields = try lowerer.types.addFields(&.{
+        .{ .name = next_name, .ty = first_box, .default = null },
+    });
+    const equivalent_fields = try lowerer.types.addFields(&.{
+        .{ .name = next_name, .ty = equivalent_box, .default = null },
+    });
+    const first_backing = try lowerer.types.add(.{ .record = first_fields });
+    const equivalent_backing = try lowerer.types.add(.{ .record = equivalent_fields });
+
+    lowerer.types.set(first_ty, .{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 43 },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = first_backing, .use = .inspectable },
+        },
+    });
+    lowerer.types.set(equivalent_ty, .{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 43 },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = equivalent_backing, .use = .inspectable },
+        },
+    });
+
+    const first_layout = try lowerer.layoutOfType(first_ty);
+    const equivalent_layout = try lowerer.layoutOfType(equivalent_ty);
+    try std.testing.expectEqual(first_layout, equivalent_layout);
+    try std.testing.expectEqual(first_ty, lowerer.layout_owner_types.get(equivalent_ty).?);
+
+    const key = Lowerer.namedRepresentationKey(lowerer.types.get(first_ty).named);
+    try std.testing.expectEqual(@as(usize, 2), lowerer.named_layout_index.get(key).?.items.len);
+}
+
+test "named layout index applies backing metadata by named type policy" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xD4} ** 32));
+    const type_name = try solved.lifted.names.internTypeName("MetadataPolicy");
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    const backing_ty = try lowerer.types.add(.{ .primitive = .u8 });
+    const Case = struct {
+        kind: MonoType.NamedKind,
+        owner: ?check.StaticDispatchRegistry.BuiltinOwner,
+        expect_reuse: bool,
+    };
+    const cases = [_]Case{
+        .{ .kind = .nominal, .owner = null, .expect_reuse = false },
+        .{ .kind = .alias, .owner = null, .expect_reuse = true },
+        .{ .kind = .nominal, .owner = .fields, .expect_reuse = true },
+        .{ .kind = .nominal, .owner = .parse_tag_union_spec, .expect_reuse = true },
+    };
+
+    var visited = std.AutoHashMap(u64, void).init(allocator);
+    defer visited.deinit();
+
+    for (cases, 0..) |case, case_index| {
+        const source_decl: u32 = @intCast(100 + case_index);
+        const lhs_ty = try lowerer.types.add(.{
+            .named = .{
+                .named_type = .{ .module = .{}, .ty = undefined },
+                .def = .{ .module = module_identity, .type_name = type_name, .source_decl = source_decl },
+                .kind = case.kind,
+                .builtin_owner = case.owner,
+                .args = .empty(),
+                .backing = .{
+                    .ty = backing_ty,
+                    .use = .inspectable,
+                    .authority = .checked_public,
+                },
+            },
+        });
+        const rhs_ty = try lowerer.types.add(.{
+            .named = .{
+                .named_type = .{ .module = .{}, .ty = undefined },
+                .def = .{ .module = module_identity, .type_name = type_name, .source_decl = source_decl },
+                .kind = case.kind,
+                .builtin_owner = case.owner,
+                .args = .empty(),
+                .backing = .{
+                    .ty = backing_ty,
+                    .use = .runtime_layout_only,
+                    .authority = .generated_private,
+                },
+            },
+        });
+
+        const lhs_key = Lowerer.namedRepresentationKey(lowerer.types.get(lhs_ty).named);
+        const rhs_key = Lowerer.namedRepresentationKey(lowerer.types.get(rhs_ty).named);
+        try std.testing.expectEqual(case.expect_reuse, NamedRepresentationKeyContext.eql(.{}, lhs_key, rhs_key));
+        try std.testing.expectEqual(case.expect_reuse, lhs_key.backing_use == null);
+        try std.testing.expectEqual(case.expect_reuse, lhs_key.backing_authority == null);
+        try std.testing.expectEqual(case.expect_reuse, rhs_key.backing_use == null);
+        try std.testing.expectEqual(case.expect_reuse, rhs_key.backing_authority == null);
+
+        visited.clearRetainingCapacity();
+        try std.testing.expectEqual(case.expect_reuse, try lowerer.representationTypesEquivalent(lhs_ty, rhs_ty, &visited));
+
+        const lhs_layout = try lowerer.layoutOfType(lhs_ty);
+        const rhs_layout = try lowerer.layoutOfType(rhs_ty);
+        if (case.expect_reuse) {
+            try std.testing.expectEqual(lhs_layout, rhs_layout);
+            try std.testing.expectEqual(lhs_ty, lowerer.layout_owner_types.get(rhs_ty).?);
+        } else {
+            // The physical primitive layout happens to match, but the metadata
+            // policy prevents this from being an indexed reuse.
+            try std.testing.expectEqual(lhs_layout, rhs_layout);
+            try std.testing.expect(lowerer.layout_owner_types.get(rhs_ty) == null);
+        }
+    }
 }
 
 test "direct LIR lower declarations are referenced" {
