@@ -1477,7 +1477,7 @@ const Builder = struct {
         const origin = default.origin() orelse
             boxyPlanInvariant("defaulted record field carried no declaring module identity");
         const names = view.canonical_names orelse
-            boxyPlanInvariant("defaulted record field's consuming module had no canonical name store");
+            boxyPlanInvariant("defaulted record field's consuming module had no checked name store");
         const origin_hash = names.moduleIdentityBytes(origin);
         if (self.root_module) |root_module| {
             if (std.mem.eql(u8, &root_module.module.module_identity.stable_hash, origin_hash)) {

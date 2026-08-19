@@ -669,6 +669,12 @@ const CheckTypeCheckerPatternsStep = struct {
         // inspected_run.zig dispatches on a hosted function's ABI symbol, which is
         // matched by name at the host boundary and has no Ident.Idx.
         .{ .file = "inspected_run.zig", .start = 107, .end = 107 },
+        // compile_time_finalization.zig resolves comptime-failure provenance by
+        // matching the failing LIR statement's source-file entry (text stamped by
+        // the declaring module's lowering) against the finalizing module's
+        // qualified name—cross-module, so there is no shared ident store to
+        // compare indices in. Error-reporting path, not a type-checker judgment.
+        .{ .file = "compile_time_finalization.zig", .start = 2145, .end = 2155 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
