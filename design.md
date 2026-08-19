@@ -5272,7 +5272,7 @@ inline `expect` in a `??` default fails inside the consumer's root);
 and `comptime_invalid_numeral`/`comptime_invalid_quote` (structurally
 local—conversion roots live with their literal and each module
 finalizes its own roots—but wired through the same helper so a change
-cannot silently mis-render). Both comptime engines carry the
+cannot silently misrender). Both comptime engines carry the
 provenance—the interpreter via failed-statement and per-expect
 statement locs, the dev backend via failure-region hooks emitted
 before each crash and each expect-failed call, passing
