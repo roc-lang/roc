@@ -33,6 +33,7 @@ pub const StaticDataError = Allocator.Error || error{MissingSymbol};
 
 /// Errors that can occur while encoding a relocatable wasm object.
 pub const RelocatableEncodeError = Allocator.Error || error{
+    InvalidFunctionSymbol,
     InvalidRelocationSymbol,
     UnsupportedSectionSymbolRelocation,
 };
@@ -583,6 +584,11 @@ memory_min_pages: u32,
 memory_max_pages: ?u32,
 has_stack_pointer: bool,
 stack_pointer_init: u32,
+/// Number of globals found when preloading an existing Wasm binary. Their
+/// initializers remain in the original bytes and are not represented here.
+/// Surgical merging therefore rejects them, while sealed-boundary inspection
+/// may accept them because it never re-encodes the object.
+preloaded_defined_global_count: u32,
 /// Whether the module has a funcref table (for call_indirect).
 has_table: bool,
 /// Function indices to place in the table (element section).
@@ -639,6 +645,7 @@ pub fn init(allocator: Allocator) Self {
         .memory_max_pages = null,
         .has_stack_pointer = false,
         .stack_pointer_init = 65536,
+        .preloaded_defined_global_count = 0,
         .has_table = false,
         .table_func_indices = .empty,
         .extra_globals = .empty,
@@ -1755,9 +1762,12 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
     if (import_delta > 0) {
         // Shift defined function symbols.
         for (self.linking.symbol_table.items) |*sym| {
-            if (sym.isFunction() and !sym.isUndefined() and sym.index >= old_import_count) {
-                sym.index += import_delta;
-            }
+            // Every defined function moves when imports are inserted ahead of
+            // the function section. Testing the old numeric boundary is wrong
+            // after more than one merge: an earlier definition can have an
+            // index below the latest import count even though it is still a
+            // definition, leaving an object symbol that aliases an import.
+            if (sym.isFunction() and !sym.isUndefined()) sym.index += import_delta;
         }
         // Shift element section entries (table func indices).
         for (self.table_func_indices.items) |*fi| {
@@ -1914,18 +1924,20 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                         data_segment_remap[src_sym.index]
                     else
                         src_sym.index;
-                    if (src_name) |name| {
-                        if (self.resolveUndefinedDataSymbols(
-                            &undefined_data,
-                            name,
-                            new_segment_idx,
-                            src_sym.data_offset,
-                            src_sym.data_size,
-                            src_sym.flags,
-                            src_sym.name,
-                        )) |existing| {
-                            symbol_remap[src_sym_idx] = existing;
-                            continue;
+                    if (mode == .relocatable_object or !src_sym.isLocal()) {
+                        if (src_name) |name| {
+                            if (self.resolveUndefinedDataSymbols(
+                                &undefined_data,
+                                name,
+                                new_segment_idx,
+                                src_sym.data_offset,
+                                src_sym.data_size,
+                                src_sym.flags,
+                                src_sym.name,
+                            )) |existing| {
+                                symbol_remap[src_sym_idx] = existing;
+                                continue;
+                            }
                         }
                     }
                     const new_sym_idx: u32 = @intCast(self.linking.symbol_table.items.len);
@@ -2574,6 +2586,180 @@ pub const NoLinkObjectContractError = error{
     UnexpectedUndefinedSymbol,
 };
 
+/// Errors reported when a relocatable Roc-owned object does not match the
+/// platform header's exact public symbol contract.
+pub const SealRocObjectError = Allocator.Error || error{
+    MissingPublicDefinition,
+    DuplicatePublicDefinition,
+    UnexpectedWasmExport,
+    UnexpectedUndefinedFunctionSymbol,
+    UnexpectedUndefinedSymbol,
+};
+
+fn localizeRocDefinitions(
+    self: *Self,
+    public_definitions: []const []const u8,
+) (Allocator.Error || error{ DuplicatePublicDefinition, MissingPublicDefinition })!void {
+    var public_counts = std.StringHashMap(u32).init(self.allocator);
+    defer public_counts.deinit();
+    for (public_definitions) |name| {
+        const gop = try public_counts.getOrPut(name);
+        if (gop.found_existing) return error.DuplicatePublicDefinition;
+        gop.value_ptr.* = 0;
+    }
+
+    for (self.linking.symbol_table.items) |*sym| {
+        if (sym.isUndefined()) continue;
+        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items);
+        const is_public = if (name) |symbol_name| public_counts.getPtr(symbol_name) else null;
+        if (is_public) |count| {
+            count.* += 1;
+            if (count.* > 1) return error.DuplicatePublicDefinition;
+            sym.flags &= ~(WasmLinking.SymFlag.BINDING_WEAK |
+                WasmLinking.SymFlag.BINDING_LOCAL |
+                WasmLinking.SymFlag.VISIBILITY_HIDDEN);
+        } else {
+            sym.flags &= ~(WasmLinking.SymFlag.BINDING_WEAK |
+                WasmLinking.SymFlag.EXPORTED |
+                WasmLinking.SymFlag.NO_STRIP);
+            sym.flags |= WasmLinking.SymFlag.BINDING_LOCAL |
+                WasmLinking.SymFlag.VISIBILITY_HIDDEN;
+        }
+    }
+
+    var public_it = public_counts.valueIterator();
+    while (public_it.next()) |count| {
+        if (count.* != 1) return error.MissingPublicDefinition;
+    }
+}
+
+/// Seal a fully-composed Roc-owned relocatable object before any platform
+/// object participates in symbol resolution.
+///
+/// `public_definitions` is the exact `provides` symbol set. Every other
+/// compiler-owned definition becomes a true local symbol; hidden visibility is
+/// deliberately not used as a substitute because hidden globals still
+/// participate in static symbol resolution. Undefined functions are accepted
+/// only when named by `allowed_undefined_functions` (the used `hosted` symbols
+/// plus the fixed runtime ABI). Wasm's relocatable object globals/table remain
+/// permitted as structural linker inputs.
+pub fn sealRocObject(
+    self: *Self,
+    public_definitions: []const []const u8,
+    allowed_undefined_functions: []const []const u8,
+) SealRocObjectError!void {
+    // Relocatable definitions belong in the linking symbol table. A standard
+    // Wasm export bypasses that visibility boundary and cannot be made private
+    // by changing symbol flags, so fail closed instead of preserving it.
+    if (self.exports.items.len != 0) return error.UnexpectedWasmExport;
+
+    try self.localizeRocDefinitions(public_definitions);
+    for (self.linking.symbol_table.items) |sym| {
+        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items);
+
+        if (sym.isUndefined()) {
+            switch (sym.kind) {
+                .function => {
+                    const function_name = name orelse return error.UnexpectedUndefinedSymbol;
+                    if (!stringInSlice(function_name, allowed_undefined_functions)) {
+                        return error.UnexpectedUndefinedFunctionSymbol;
+                    }
+                },
+                .global => {
+                    const global_name = name orelse return error.UnexpectedUndefinedSymbol;
+                    if (!isAllowedObjectAbiGlobal(global_name)) {
+                        return error.UnexpectedUndefinedSymbol;
+                    }
+                },
+                .table => {
+                    const table_name = name orelse return error.UnexpectedUndefinedSymbol;
+                    if (!std.mem.eql(u8, table_name, "__indirect_function_table")) {
+                        return error.UnexpectedUndefinedSymbol;
+                    }
+                },
+                .data, .section, .event => return error.UnexpectedUndefinedSymbol,
+            }
+        }
+    }
+}
+
+/// Apply this module's sealed symbol flags directly to the corresponding
+/// linking symbol table in `object_bytes` without re-encoding any Wasm code,
+/// data, element, COMDAT, or relocation section. The replacement uses the
+/// original LEB width, so section offsets and relocation metadata remain
+/// byte-for-byte intact.
+pub fn patchRelocatableSymbolFlags(self: *const Self, object_bytes: []u8) ParseError!void {
+    if (object_bytes.len < 8 or !std.mem.eql(u8, object_bytes[0..4], &.{ 0x00, 0x61, 0x73, 0x6D })) {
+        return error.InvalidMagic;
+    }
+
+    var cursor: usize = 8;
+    while (cursor < object_bytes.len) {
+        const section_id = object_bytes[cursor];
+        cursor += 1;
+        const payload_len = try readU32(object_bytes, &cursor);
+        const payload_end = cursor + payload_len;
+        if (payload_end > object_bytes.len) return error.UnexpectedEnd;
+        if (section_id != @intFromEnum(SectionId.custom_section)) {
+            cursor = payload_end;
+            continue;
+        }
+
+        var linking_cursor = cursor;
+        const section_name = try readString(object_bytes[0..payload_end], &linking_cursor);
+        if (!std.mem.eql(u8, section_name, "linking")) {
+            cursor = payload_end;
+            continue;
+        }
+        if (try readU32(object_bytes[0..payload_end], &linking_cursor) != WasmLinking.LINKING_VERSION) {
+            return error.InvalidLinkingVersion;
+        }
+
+        while (linking_cursor < payload_end) {
+            const subsection_id = object_bytes[linking_cursor];
+            linking_cursor += 1;
+            const subsection_len = try readU32(object_bytes[0..payload_end], &linking_cursor);
+            const subsection_end = linking_cursor + subsection_len;
+            if (subsection_end > payload_end) return error.UnexpectedEnd;
+            if (subsection_id != @intFromEnum(WasmLinking.LinkingSubsection.symbol_table)) {
+                linking_cursor = subsection_end;
+                continue;
+            }
+
+            const symbol_count = try readU32(object_bytes[0..subsection_end], &linking_cursor);
+            if (symbol_count != self.linking.symbol_table.items.len) return error.InvalidSection;
+            for (self.linking.symbol_table.items) |desired_symbol| {
+                const symbol_start = linking_cursor;
+                if (symbol_start >= subsection_end) return error.UnexpectedEnd;
+                linking_cursor += 1; // symbol kind
+                const flags_start = linking_cursor;
+                _ = try readU32(object_bytes[0..subsection_end], &linking_cursor);
+                const flags_end = linking_cursor;
+
+                linking_cursor = symbol_start;
+                const encoded_symbol = try WasmLinking.SymInfo.parse(object_bytes[0..subsection_end], &linking_cursor);
+                if (encoded_symbol.kind != desired_symbol.kind) return error.InvalidSection;
+                patchU32LebSameWidth(object_bytes[flags_start..flags_end], desired_symbol.flags) catch return error.InvalidSection;
+            }
+            if (linking_cursor != subsection_end) return error.InvalidSection;
+            return;
+        }
+        return error.InvalidSection;
+    }
+    return error.MissingLinkingSection;
+}
+
+fn patchU32LebSameWidth(bytes: []u8, value: u32) error{Overflow}!void {
+    if (bytes.len == 0 or bytes.len > 5) return error.Overflow;
+    var remaining = value;
+    for (bytes, 0..) |*byte, i| {
+        byte.* = @truncate(remaining & 0x7f);
+        remaining >>= 7;
+        if (i + 1 < bytes.len) byte.* |= 0x80;
+    }
+    if (remaining != 0) return error.Overflow;
+}
+
 /// Verify that a no-link app object exposes only app definitions and wasm object ABI imports.
 /// Function imports are the wasm object encoding of undefined symbols; under
 /// the symbol ABI the app object legitimately references the platform's
@@ -3183,10 +3369,22 @@ pub fn finalizeMemoryAndTableWithConfig(self: *Self, config: FinalMemoryConfig) 
 const wasm_magic = "\x00asm";
 const wasm_version = 1;
 
-/// Parse a relocatable WASM binary into a WasmModule.
-/// The input bytes must contain `linking` and `reloc.*` custom sections
-/// if `require_relocatable` is true.
-pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: bool) ParseError!Self {
+pub const PreloadMode = enum {
+    /// Inspect a final module. Relocatable metadata is not required.
+    executable,
+    /// Parse an object that will be surgically merged and re-encoded. Such an
+    /// object cannot contain defined globals because their initializers are not
+    /// represented by `WasmModule`'s surgical-linking data structures.
+    relocatable_for_merge,
+    /// Inspect an LLD-produced object solely to verify and patch its linking
+    /// symbol flags in place. Defined globals are safe here: they remain in the
+    /// original bytes, and are not externally visible unless exported or
+    /// represented by a non-local linking symbol.
+    relocatable_for_sealing,
+};
+
+/// Parse a WASM binary into a WasmModule according to its precise consumer.
+pub fn preload(allocator: Allocator, bytes: []const u8, mode: PreloadMode) ParseError!Self {
     if (bytes.len < 8) return error.UnexpectedEnd;
     if (!std.mem.eql(u8, bytes[0..4], wasm_magic)) return error.InvalidMagic;
     if (std.mem.readInt(u32, bytes[4..8], .little) != wasm_version) return error.InvalidVersion;
@@ -3248,12 +3446,12 @@ pub fn preload(allocator: Allocator, bytes: []const u8, require_relocatable: boo
     try module.normalizeDataRelocations();
 
     // Validate relocatable requirements
-    if (require_relocatable) {
+    if (mode != .executable) {
         if (module.linking.symbol_table.items.len == 0)
             return error.MissingLinkingSection;
         if (module.reloc_code.entries.items.len == 0)
             return error.MissingRelocCode;
-        if (module.has_stack_pointer)
+        if (mode == .relocatable_for_merge and module.preloaded_defined_global_count != 0)
             return error.HasInternalGlobals;
     }
 
@@ -3439,9 +3637,7 @@ fn parseMemorySection_(self: *Self, bytes: []const u8, cursor: *usize) ParseErro
 fn parseGlobalSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!void {
     const section_size = try beginSection(bytes, cursor, .global_section) orelse return;
     const section_end = cursor.* + section_size;
-    // For relocatable modules, globals should NOT be defined internally
-    // (the __stack_pointer comes from an import). Mark that we found them.
-    self.has_stack_pointer = true;
+    self.preloaded_defined_global_count = try readU32(bytes[0..section_end], cursor);
     cursor.* = section_end;
 }
 
@@ -3701,6 +3897,19 @@ pub fn encode(self: *Self, allocator: Allocator) EncodeError![]u8 {
 /// sections. Function bodies are emitted directly from `code_bytes`, because
 /// relocation offsets are recorded against that representation.
 pub fn encodeRelocatable(self: *Self, allocator: Allocator) RelocatableEncodeError![]u8 {
+    const function_count = self.import_fn_count + @as(u32, @intCast(self.func_type_indices.items.len));
+    for (self.linking.symbol_table.items) |sym| {
+        if (sym.kind != .function) continue;
+        const valid = if (sym.isUndefined()) sym.index < self.import_fn_count else sym.index >= self.import_fn_count and sym.index < function_count;
+        if (!valid) {
+            std.log.err(
+                "invalid relocatable function symbol {s}: index {d}, imports {d}, functions {d}, flags 0x{x}",
+                .{ sym.name orelse "<unnamed>", sym.index, self.import_fn_count, function_count, sym.flags },
+            );
+            return error.InvalidFunctionSymbol;
+        }
+    }
+
     var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(allocator);
 
@@ -4785,22 +4994,22 @@ fn writeSectionBody(allocator: Allocator, out: *std.ArrayList(u8), body: []const
 
 test "preload—rejects bytes without WASM magic number" {
     const bad_bytes = [_]u8{ 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 };
-    try std.testing.expectError(error.InvalidMagic, preload(std.testing.allocator, &bad_bytes, false));
+    try std.testing.expectError(error.InvalidMagic, preload(std.testing.allocator, &bad_bytes, .executable));
 }
 
 test "preload—rejects wrong version" {
     const bad_bytes = [_]u8{ 0x00, 0x61, 0x73, 0x6D, 0x02, 0x00, 0x00, 0x00 };
-    try std.testing.expectError(error.InvalidVersion, preload(std.testing.allocator, &bad_bytes, false));
+    try std.testing.expectError(error.InvalidVersion, preload(std.testing.allocator, &bad_bytes, .executable));
 }
 
 test "preload—rejects too-short input" {
     const bad_bytes = [_]u8{ 0x00, 0x61, 0x73, 0x6D };
-    try std.testing.expectError(error.UnexpectedEnd, preload(std.testing.allocator, &bad_bytes, false));
+    try std.testing.expectError(error.UnexpectedEnd, preload(std.testing.allocator, &bad_bytes, .executable));
 }
 
 test "preload—parses minimal valid module (magic + version only)" {
     const bytes = [_]u8{ 0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00 };
-    var module = try preload(std.testing.allocator, &bytes, false);
+    var module = try preload(std.testing.allocator, &bytes, .executable);
     defer module.deinit();
     try std.testing.expectEqual(@as(usize, 0), module.func_types.items.len);
     try std.testing.expectEqual(@as(usize, 0), module.imports.items.len);
@@ -4811,7 +5020,7 @@ test "preload—parses type section with multiple signatures" {
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
 
-    var module = try preload(allocator, wasm_bytes, false);
+    var module = try preload(allocator, wasm_bytes, .executable);
     defer module.deinit();
 
     // We built 1 type: () -> ()
@@ -4825,7 +5034,7 @@ test "preload—parses import section with function import" {
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
 
-    var module = try preload(allocator, wasm_bytes, false);
+    var module = try preload(allocator, wasm_bytes, .executable);
     defer module.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), module.imports.items.len);
@@ -4840,7 +5049,7 @@ test "preload—records correct function_offsets for code section" {
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
 
-    var module = try preload(allocator, wasm_bytes, false);
+    var module = try preload(allocator, wasm_bytes, .executable);
     defer module.deinit();
 
     // 1 locally-defined function
@@ -4857,7 +5066,7 @@ test "preload—parses linking section symbol table" {
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
 
-    var module = try preload(allocator, wasm_bytes, false);
+    var module = try preload(allocator, wasm_bytes, .executable);
     defer module.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), module.linking.symbol_table.items.len);
@@ -4883,7 +5092,7 @@ test "preload—parses reloc.CODE section entries" {
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
 
-    var module = try preload(allocator, wasm_bytes, false);
+    var module = try preload(allocator, wasm_bytes, .executable);
     defer module.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), module.reloc_code.entries.items.len);
@@ -4904,7 +5113,7 @@ test "preload—parses reloc.CODE section entries" {
 test "preload—require_relocatable rejects module without linking section" {
     // A minimal valid module with no custom sections
     const bytes = [_]u8{ 0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00 };
-    try std.testing.expectError(error.MissingLinkingSection, preload(std.testing.allocator, &bytes, true));
+    try std.testing.expectError(error.MissingLinkingSection, preload(std.testing.allocator, &bytes, .relocatable_for_merge));
 }
 
 test "preload—parsed module has correct function count" {
@@ -4912,7 +5121,7 @@ test "preload—parsed module has correct function count" {
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
 
-    var module = try preload(allocator, wasm_bytes, false);
+    var module = try preload(allocator, wasm_bytes, .executable);
     defer module.deinit();
 
     // 1 import + 1 defined = 2 total functions
@@ -4930,7 +5139,7 @@ test "preload—parses export section" {
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
 
-    var module = try preload(allocator, wasm_bytes, false);
+    var module = try preload(allocator, wasm_bytes, .executable);
     defer module.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), module.exports.items.len);
@@ -4978,7 +5187,7 @@ test "preload—parses memory section" {
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
 
-    var module = try preload(allocator, wasm_bytes, false);
+    var module = try preload(allocator, wasm_bytes, .executable);
     defer module.deinit();
 
     try std.testing.expect(module.has_memory);
@@ -4990,7 +5199,7 @@ test "preload—symbol name resolution from imports" {
     const wasm_bytes = try buildTestRelocatableModule(allocator);
     defer allocator.free(wasm_bytes);
 
-    var module = try preload(allocator, wasm_bytes, false);
+    var module = try preload(allocator, wasm_bytes, .executable);
     defer module.deinit();
 
     // Symbol 0 is implicitly named—resolve via imports
@@ -5298,7 +5507,7 @@ test "preload—parses real Zig-compiled wasm host object" {
     const allocator = std.testing.allocator;
     const host_bytes = @import("wasm_host_fixture").host_wasm;
 
-    var module = try preload(allocator, host_bytes, true);
+    var module = try preload(allocator, host_bytes, .relocatable_for_merge);
     defer module.deinit();
 
     // The host should have function imports (extern fn declarations in host.zig)
@@ -5503,7 +5712,7 @@ test "setup—table size matches element count after finalization" {
     defer allocator.free(encoded);
 
     // Parse the encoded output to verify table section
-    var decoded = try preload(allocator, encoded, false);
+    var decoded = try preload(allocator, encoded, .executable);
     defer decoded.deinit();
 
     // The table should exist
@@ -5585,7 +5794,7 @@ test "setup—finalized module encodes and re-parses as valid WASM" {
     try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, encoded[4..8], .little));
 
     // Should be parseable as a non-relocatable module
-    var decoded = try preload(allocator, encoded, false);
+    var decoded = try preload(allocator, encoded, .executable);
     defer decoded.deinit();
 
     // Verify memory is defined
@@ -5600,15 +5809,15 @@ test "setup—finalized module encodes and re-parses as valid WASM" {
     }
     try std.testing.expect(found_memory);
 
-    // Verify __stack_pointer global is defined
-    try std.testing.expect(decoded.has_stack_pointer);
+    // Verify one global definition was present in the encoded module.
+    try std.testing.expectEqual(@as(u32, 1), decoded.preloaded_defined_global_count);
 }
 
 test "phase5—real host object ABI preparation preserves function imports" {
     const allocator = std.testing.allocator;
     const host_bytes = @import("wasm_host_fixture").host_wasm;
 
-    var module = try preload(allocator, host_bytes, true);
+    var module = try preload(allocator, host_bytes, .relocatable_for_merge);
     defer module.deinit();
 
     const fn_count_before = module.import_fn_count;
@@ -5628,7 +5837,7 @@ test "phase5—real host module: full setup and finalization produces valid WASM
     const allocator = std.testing.allocator;
     const host_bytes = @import("wasm_host_fixture").host_wasm;
 
-    var module = try preload(allocator, host_bytes, true);
+    var module = try preload(allocator, host_bytes, .relocatable_for_merge);
     defer module.deinit();
 
     // Phase 5 setup
@@ -6540,7 +6749,7 @@ test "parseElementSection_—parses function indices into table_func_indices" {
     defer allocator.free(encoded);
 
     // Re-parse from binary
-    var parsed = try Self.preload(allocator, encoded, false);
+    var parsed = try Self.preload(allocator, encoded, .executable);
     defer parsed.deinit();
 
     // Verify element section was parsed
@@ -6886,6 +7095,162 @@ test "verifyNoUndefinedFunctionSymbolsInNamespace—uses relocatable symbol reso
     try module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_");
 }
 
+test "sealRocObject keeps only provides global and localizes compiler support" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    _ = try module.addFunctionImportWithSymbol("env", "roc_alloc", type_idx);
+
+    const entry = try module.addDefinedFunction(type_idx);
+    const entry_symbol_idx = try module.addDefinedFunctionSymbol(entry.local, "roc_main", 0);
+    const compiler_rt = try module.addDefinedFunction(type_idx);
+    const compiler_rt_symbol = try module.addDefinedFunctionSymbol(
+        compiler_rt.local,
+        "__multi3",
+        WasmLinking.SymFlag.EXPORTED,
+    );
+    const private_segment: u32 = @intCast(module.data_segments.items.len);
+    _ = try module.addDataSegment(&.{1}, 1);
+    const private_data_symbol = try module.addDataSymbol(
+        private_segment,
+        "compiler_private_data",
+        0,
+        1,
+        WasmLinking.SymFlag.EXPORTED | WasmLinking.SymFlag.NO_STRIP,
+    );
+
+    try module.sealRocObject(&.{"roc_main"}, &.{"roc_alloc"});
+
+    const entry_symbol = module.linking.symbol_table.items[entry_symbol_idx.raw()];
+    try std.testing.expect(!entry_symbol.isLocal());
+    try std.testing.expectEqual(@as(u32, 0), entry_symbol.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN);
+
+    const sealed_compiler_rt = module.linking.symbol_table.items[compiler_rt_symbol.raw()];
+    try std.testing.expect(sealed_compiler_rt.isLocal());
+    try std.testing.expect((sealed_compiler_rt.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0);
+    try std.testing.expectEqual(@as(u32, 0), sealed_compiler_rt.flags & WasmLinking.SymFlag.EXPORTED);
+    const sealed_private_data = module.linking.symbol_table.items[private_data_symbol.raw()];
+    try std.testing.expect(sealed_private_data.isLocal());
+    try std.testing.expect((sealed_private_data.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0);
+    try std.testing.expectEqual(@as(u32, 0), sealed_private_data.flags & WasmLinking.SymFlag.EXPORTED);
+    try std.testing.expectEqual(@as(u32, 0), sealed_private_data.flags & WasmLinking.SymFlag.NO_STRIP);
+    try std.testing.expectEqual(@as(usize, 0), module.exports.items.len);
+}
+
+test "sealRocObject rejects an undeclared compiler-owned import" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    _ = try module.addFunctionImportWithSymbol("env", "__multi3", type_idx);
+    const entry = try module.addDefinedFunction(type_idx);
+    _ = try module.addDefinedFunctionSymbol(entry.local, "roc_main", 0);
+
+    try std.testing.expectError(
+        error.UnexpectedUndefinedFunctionSymbol,
+        module.sealRocObject(&.{"roc_main"}, &.{"roc_alloc"}),
+    );
+}
+
+test "sealRocObject requires every provides symbol exactly once" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    const entry = try module.addDefinedFunction(type_idx);
+    _ = try module.addDefinedFunctionSymbol(entry.local, "roc_main", 0);
+
+    try std.testing.expectError(
+        error.MissingPublicDefinition,
+        module.sealRocObject(&.{ "roc_main", "roc_other" }, &.{}),
+    );
+}
+
+test "sealRocObject rejects standard Wasm exports" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    const entry = try module.addDefinedFunction(type_idx);
+    _ = try module.addDefinedFunctionSymbol(entry.local, "roc_main", 0);
+    try module.exports.append(allocator, .{ .name = "roc_main", .kind = .func, .idx = entry.function.raw() });
+
+    try std.testing.expectError(
+        error.UnexpectedWasmExport,
+        module.sealRocObject(&.{"roc_main"}, &.{}),
+    );
+}
+
+test "sealed symbol flags patch an existing relocatable object in place" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    const type_idx = try module.addFuncType(&.{}, &.{});
+    const imported = try module.addFunctionImportWithSymbol("env", "roc_alloc", type_idx);
+    const entry = try module.addDefinedFunction(type_idx);
+    _ = try module.addDefinedFunctionSymbol(entry.local, "roc_main", WasmLinking.SymFlag.EXPORTED);
+    const support = try module.addDefinedFunction(type_idx);
+    _ = try module.addDefinedFunctionSymbol(support.local, "__multi3", WasmLinking.SymFlag.EXPORTED);
+    try module.reloc_code.entries.append(allocator, .{ .index = .{
+        .type_id = .function_index_leb,
+        .offset = 0,
+        .symbol_index = imported.symbol.raw(),
+    } });
+
+    const object_bytes = try module.encodeRelocatable(allocator);
+    defer allocator.free(object_bytes);
+    try module.sealRocObject(&.{"roc_main"}, &.{"roc_alloc"});
+    try module.patchRelocatableSymbolFlags(object_bytes);
+
+    var patched = try Self.preload(allocator, object_bytes, .relocatable_for_sealing);
+    defer patched.deinit();
+    const entry_symbol = try patched.findDefinedFunctionSymbolExact("roc_main");
+    try std.testing.expect(!patched.linking.symbol_table.items[entry_symbol.raw()].isLocal());
+    const support_symbol = try patched.findDefinedFunctionSymbolExact("__multi3");
+    try std.testing.expect(patched.linking.symbol_table.items[support_symbol.raw()].isLocal());
+}
+
+test "final merge cannot resolve platform imports from sealed local symbols" {
+    const allocator = std.testing.allocator;
+    var platform = Self.init(allocator);
+    defer platform.deinit();
+
+    const type_idx = try platform.addFuncType(&.{}, &.{});
+    const platform_function_import = try platform.addFunctionImportWithSymbol("env", "__multi3", type_idx);
+    const platform_data_import = try platform.addUndefinedDataSymbol("compiler_private_data");
+
+    var sealed = Self.init(allocator);
+    defer sealed.deinit();
+    _ = try sealed.addFuncType(&.{}, &.{});
+    const local_function = try sealed.addDefinedFunction(type_idx);
+    _ = try sealed.addDefinedFunctionSymbol(
+        local_function.local,
+        "__multi3",
+        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+    );
+    const segment: u32 = @intCast(sealed.data_segments.items.len);
+    _ = try sealed.addDataSegment(&.{1}, 1);
+    _ = try sealed.addDataSymbol(
+        segment,
+        "compiler_private_data",
+        0,
+        1,
+        WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+    );
+
+    var result = try platform.mergeModule(&sealed);
+    defer result.deinit();
+
+    try std.testing.expect(platform.linking.symbol_table.items[platform_function_import.symbol.raw()].isUndefined());
+    try std.testing.expect(platform.linking.symbol_table.items[platform_data_import.raw()].isUndefined());
+}
+
 test "verifyNoLinkObjectContract - allows only env wasm object ABI imports" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
@@ -7184,7 +7549,7 @@ test "encodeRelocatable roundtrip - preserves data symbols and data relocations"
     defer allocator.free(encoded);
     try std.testing.expect(std.mem.find(u8, encoded, "__linear_memory") != null);
 
-    var parsed = try Self.preload(allocator, encoded, true);
+    var parsed = try Self.preload(allocator, encoded, .relocatable_for_merge);
     defer parsed.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), parsed.data_segments.items.len);
@@ -7839,7 +8204,7 @@ test "builtins payload defines exactly the registry's linkable members" {
     const registry = @import("builtins").builtin_registry;
 
     const wasm32_builtins = @import("wasm32_builtins");
-    var builtins_module = try preload(allocator, wasm32_builtins.bytes, false);
+    var builtins_module = try preload(allocator, wasm32_builtins.bytes, .executable);
     defer builtins_module.deinit();
 
     inline for (comptime std.enums.values(registry.BuiltinFn)) |f| {
@@ -7857,7 +8222,7 @@ test "preload + merge + encode roundtrip with real builtins" {
 
     // Load the pre-built wasm32 builtins object
     const wasm32_builtins = @import("wasm32_builtins");
-    var builtins_module = try preload(allocator, wasm32_builtins.bytes, false);
+    var builtins_module = try preload(allocator, wasm32_builtins.bytes, .executable);
     defer builtins_module.deinit();
 
     // Create an app module with standard RocOps imports
