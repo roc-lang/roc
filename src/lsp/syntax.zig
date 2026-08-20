@@ -573,6 +573,7 @@ pub const SyntaxChecker = struct {
             self.std_io,
             builtin_modules,
         );
+        errdefer env.deinit();
         env.compiler_version = build_options.compiler_version;
         env.setFinalizeExecutableArtifacts(false);
 
