@@ -1016,7 +1016,17 @@ const RestoredResource = union(enum) {
 const RestitutionSwitch = struct {
     branch_resources: []std.ArrayList(RestoredResource),
     default_resources: std.ArrayList(RestoredResource) = .empty,
+    /// The converged resource carrier for each call argument position. One
+    /// position can denote a whole unit or one residual field, never both.
+    position_resources: [arc_sig.tracked_param_count]?RestoredResource = .{null} ** arc_sig.tracked_param_count,
     restored_positions: arc_sig.ParamMask = 0,
+};
+
+const OutcomeRestitution = struct {
+    refinement: OutcomeRefinement,
+    sig: arc_sig.RcSig,
+    position: usize,
+    resource: RestoredResource,
 };
 
 const OutcomeRefinement = struct {
@@ -3856,9 +3866,12 @@ const Inserter = struct {
         const unit = self.unitOf(root);
         const root_used = try self.ownershipPlaceUsedInPath(next, unit);
         const has_unit = owned.contains(unit);
-        const conditionally_returned = has_unit and root_used and
-            try self.completeProjectionUseIsRestituted(target, unit, next);
-        const move_root = has_unit and (!root_used or conditionally_returned);
+        const restitution = if (root_used)
+            try self.completeProjectionRestitution(target, unit, next)
+        else
+            null;
+        const move_root = has_unit and (!root_used or restitution != null);
+        if (restitution) |claim| try self.setOutcomeRestoration(claim, move_root);
         if (move_root) owned.unset(unit);
         self.placeUnit(owned, target);
         return .{
@@ -3885,12 +3898,12 @@ const Inserter = struct {
     /// non-RC field reads, and statements that do not mention the container
     /// may intervene. The call's explicit outcome switch must then guard every
     /// later use of the root with restitution.
-    fn completeProjectionUseIsRestituted(
+    fn completeProjectionRestitution(
         self: *Inserter,
         projection: LIR.LocalId,
         root: LIR.LocalId,
         next: LIR.CFStmtId,
-    ) ResourceError!bool {
+    ) ResourceError!?OutcomeRestitution {
         var aliases = std.ArrayList(LIR.LocalId).empty;
         try aliases.append(self.emission_allocator, root);
         var cursor = next;
@@ -3908,20 +3921,20 @@ const Inserter = struct {
                     },
                     .field => |field| {
                         if (aliasesContain(aliases.items, field.source) and self.localContainsRefcounted(assign.target)) {
-                            return false;
+                            return null;
                         }
                     },
-                    .discriminant => |op| if (aliasesContain(aliases.items, op.source)) return false,
-                    .tag_payload => |op| if (aliasesContain(aliases.items, op.source)) return false,
-                    .tag_payload_struct => |op| if (aliasesContain(aliases.items, op.source)) return false,
-                    .list_reinterpret => |op| if (aliasesContain(aliases.items, op.backing_ref)) return false,
-                    .nominal => |op| if (aliasesContain(aliases.items, op.backing_ref)) return false,
+                    .discriminant => |op| if (aliasesContain(aliases.items, op.source)) return null,
+                    .tag_payload => |op| if (aliasesContain(aliases.items, op.source)) return null,
+                    .tag_payload_struct => |op| if (aliasesContain(aliases.items, op.source)) return null,
+                    .list_reinterpret => |op| if (aliasesContain(aliases.items, op.backing_ref)) return null,
+                    .nominal => |op| if (aliasesContain(aliases.items, op.backing_ref)) return null,
                 }
                 cursor = assign.next;
             } else if (stmt == .assign_literal) {
                 cursor = stmt.assign_literal.next;
             } else if (stmt == .assign_low_level) {
-                if (self.spanContainsAlias(stmt.assign_low_level.args, aliases.items)) return false;
+                if (self.spanContainsAlias(stmt.assign_low_level.args, aliases.items)) return null;
                 cursor = stmt.assign_low_level.next;
             } else if (stmt == .assign_call) {
                 const args = self.store.getLocalSpan(stmt.assign_call.args);
@@ -3929,17 +3942,17 @@ const Inserter = struct {
                 for (0..GuardedList.borrowLen(args)) |position| {
                     const arg = GuardedList.at(args, position);
                     if (arg == projection) {
-                        if (projection_position != null) return false;
+                        if (projection_position != null) return null;
                         projection_position = position;
                     } else if (aliasesContain(aliases.items, arg)) {
-                        return false;
+                        return null;
                     }
                 }
                 if (projection_position) |position| {
                     var sig = self.solution.sigOf(stmt.assign_call.proc);
                     sig.outcomes = self.solution.availableOutcomeSpanOf(stmt.assign_call.proc);
-                    if (!self.outcomeArgumentsHaveDistinctPlaces(stmt.assign_call.args, sig)) return false;
-                    return try self.useIsGuardedByOutcomeRestitution(
+                    if (!self.outcomeArgumentsHaveDistinctPlaces(stmt.assign_call.args, sig)) return null;
+                    return try self.outcomeRestitutionGuard(
                         root,
                         .{ .unit = root },
                         position,
@@ -3950,7 +3963,7 @@ const Inserter = struct {
                 }
                 cursor = stmt.assign_call.next;
             } else {
-                return false;
+                return null;
             }
         }
     }
@@ -4705,6 +4718,44 @@ const Inserter = struct {
         try resources.append(self.solve_allocator, resource);
     }
 
+    fn removeRestoredResource(resources: *std.ArrayList(RestoredResource), resource: RestoredResource) void {
+        var index: usize = 0;
+        while (index < resources.items.len) {
+            if (restoredResourceEql(resources.items[index], resource)) {
+                _ = resources.orderedRemove(index);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn clearOutcomeRestoration(
+        self: *Inserter,
+        refinement: OutcomeRefinement,
+        position: usize,
+    ) void {
+        const bit = arc_sig.paramBit(position) orelse return;
+        const entry = self.restitution_switches.getPtr(refinement.stmt) orelse return;
+        const old = entry.position_resources[position] orelse {
+            entry.restored_positions &= ~bit;
+            return;
+        };
+        entry.position_resources[position] = null;
+        entry.restored_positions &= ~bit;
+
+        // Distinct-place admission normally makes this scan find nothing.
+        // Keeping it explicit makes replacement total even for a future
+        // extension that lets two positions carry separate receipts for one
+        // representation-transparent value.
+        for (entry.position_resources) |maybe_resource| {
+            if (maybe_resource) |resource| {
+                if (restoredResourceEql(resource, old)) return;
+            }
+        }
+        for (entry.branch_resources) |*resources| removeRestoredResource(resources, old);
+        removeRestoredResource(&entry.default_resources, old);
+    }
+
     fn registerOutcomeRestoration(
         self: *Inserter,
         refinement: OutcomeRefinement,
@@ -4723,6 +4774,14 @@ const Inserter = struct {
         } else if (entry.value_ptr.branch_resources.len != GuardedList.borrowLen(branches)) {
             arcInvariant("ARC restitution switch changed branch arity");
         }
+        if (entry.value_ptr.position_resources[position]) |old| {
+            if (restoredResourceEql(old, resource)) {
+                entry.value_ptr.restored_positions |= bit;
+                return;
+            }
+            self.clearOutcomeRestoration(refinement, position);
+        }
+        entry.value_ptr.position_resources[position] = resource;
         const outcomes = self.solution.sigTable().outcomesOf(sig);
         for (0..GuardedList.borrowLen(branches)) |index| {
             const mask = outcomeMaskForValue(outcomes, GuardedList.at(branches, index).value) orelse continue;
@@ -4732,6 +4791,14 @@ const Inserter = struct {
             if ((mask & bit) != 0) try self.appendUniqueRestoredResource(&entry.value_ptr.default_resources, resource);
         }
         entry.value_ptr.restored_positions |= bit;
+    }
+
+    fn setOutcomeRestoration(self: *Inserter, claim: OutcomeRestitution, active: bool) ResourceError!void {
+        if (active) {
+            try self.registerOutcomeRestoration(claim.refinement, claim.sig, claim.position, claim.resource);
+        } else {
+            self.clearOutcomeRestoration(claim.refinement, claim.position);
+        }
     }
 
     fn switchRestoresPosition(
@@ -4920,7 +4987,7 @@ const Inserter = struct {
         return false;
     }
 
-    fn useIsGuardedByOutcomeRestitution(
+    fn outcomeRestitutionGuard(
         self: *Inserter,
         local: LIR.LocalId,
         resource: RestoredResource,
@@ -4928,9 +4995,9 @@ const Inserter = struct {
         target: LIR.LocalId,
         next: LIR.CFStmtId,
         sig: arc_sig.RcSig,
-    ) ResourceError!bool {
-        const bit = arc_sig.paramBit(position) orelse return false;
-        const refinement = try self.findOutcomeRefinement(target, next, sig) orelse return false;
+    ) ResourceError!?OutcomeRestitution {
+        const bit = arc_sig.paramBit(position) orelse return null;
+        const refinement = try self.findOutcomeRefinement(target, next, sig) orelse return null;
         const switch_stmt = self.store.getCFStmt(refinement.stmt).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const outcomes = self.solution.sigTable().outcomesOf(sig);
@@ -4941,19 +5008,23 @@ const Inserter = struct {
             if ((mask & bit) != 0) {
                 has_restored_outcome = true;
             } else if (try self.ownershipPlaceUsedInPath(branch.body, local)) {
-                return false;
+                return null;
             }
         }
         if (defaultOutcomeMask(outcomes, branches)) |mask| {
             if ((mask & bit) != 0) {
                 has_restored_outcome = true;
             } else if (try self.ownershipPlaceUsedInPath(switch_stmt.default_branch, local)) {
-                return false;
+                return null;
             }
         }
-        if (!has_restored_outcome) return false;
-        try self.registerOutcomeRestoration(refinement, sig, position, resource);
-        return true;
+        if (!has_restored_outcome) return null;
+        return .{
+            .refinement = refinement,
+            .sig = sig,
+            .position = position,
+            .resource = resource,
+        };
     }
 
     fn callArgOwnership(
@@ -5026,16 +5097,26 @@ const Inserter = struct {
                 null;
             const used_after_call = field_receipt != null or
                 (local != target and try self.groupUsedInPath(next, local, loop_keep));
-            const restored_resource: RestoredResource = if (field_receipt) |receipt|
-                .{ .field = receipt.place }
-            else
-                .{ .unit = owner };
-            const conditionally_returned = if (field_receipt) |receipt| blk: {
-                if (callee == null or !outcome_places_distinct) break :blk false;
-                try self.registerOutcomeRestoration(.{ .stmt = receipt.refinement }, outcome_sig, position, restored_resource);
-                break :blk true;
+            const restored_resource: RestoredResource = if (field_receipt) |receipt| blk: {
+                // A live residual shell can receive its field back. Once the
+                // root resource has ended, the projection binding is the
+                // returned unit's only exact carrier and must be settled as
+                // an ordinary standalone unit on the restituting edge.
+                break :blk if (owned.contains(receipt.place.root))
+                    .{ .field = receipt.place }
+                else
+                    .{ .unit = owner };
+            } else .{ .unit = owner };
+            const restitution: ?OutcomeRestitution = if (field_receipt) |receipt| blk: {
+                if (callee == null or !outcome_places_distinct) break :blk null;
+                break :blk .{
+                    .refinement = .{ .stmt = receipt.refinement },
+                    .sig = outcome_sig,
+                    .position = position,
+                    .resource = restored_resource,
+                };
             } else if (used_after_call and callee != null and outcome_places_distinct)
-                try self.useIsGuardedByOutcomeRestitution(
+                try self.outcomeRestitutionGuard(
                     local,
                     restored_resource,
                     position,
@@ -5044,19 +5125,20 @@ const Inserter = struct {
                     outcome_sig,
                 )
             else
-                false;
+                null;
             const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
                 self.groupSharesOtherOperand(locals, position, local);
-            const can_transfer = owned.contains(owner) and (!used_after_call or conditionally_returned) and !projected_alias_conflict;
+            const can_transfer = owned.contains(owner) and (!used_after_call or restitution != null) and !projected_alias_conflict;
+            if (restitution) |claim| try self.setOutcomeRestoration(claim, can_transfer);
 
             if (can_transfer) {
-                if (outcome_places_distinct) {
+                var restores_position = restitution != null;
+                if (!restores_position and outcome_places_distinct) {
                     if (try self.findOutcomeRefinement(target, next, outcome_sig)) |refinement| {
-                        if (self.switchRestoresPosition(refinement, position)) {
-                            demanded.outcomes = outcome_sig.outcomes;
-                        }
+                        restores_position = self.switchRestoresPosition(refinement, position);
                     }
                 }
+                if (restores_position) demanded.outcomes = outcome_sig.outcomes;
                 // A dying argument moving into an owned position that is
                 // statically unique with no borrow live at the call demands
                 // a variant whose parameter is seeded born-unique, so
@@ -6413,6 +6495,10 @@ const Inserter = struct {
 
     fn fieldRestitutionForEmission(self: *const Inserter, stmt: LIR.CFStmtId, position: usize) ?arc_dismantle.FieldRestitutionArg {
         const receipt = self.dismantles.fieldRestitutionArg(stmt, position) orelse return null;
+        // An ownership-complete projection transfers the root unit. Treating
+        // that same read as a partial field take would publish two receipts
+        // for one call position and restore the same committed place twice.
+        if (self.dismantles.completeTakeRoot(receipt.projection) != null) return null;
         if (self.dismantles.ownedOnlyContainerOf(receipt.place.root) != null and
             !self.owned_binding_override.contains(receipt.place.root)) return null;
         return receipt;

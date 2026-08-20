@@ -9418,8 +9418,24 @@ For a partial committed struct field, the initial closed capability additionally
 requires the field-read binding's only operand read to be that direct call.
 Dismantle analysis records `(call statement, argument position) -> (root,
 field identity, refinement switch)` as explicit producer data. The caller ARC
-solver consumes that record: a restituting edge refills exactly that field in
-the root residual mask, while every other edge leaves it absent. Any additional
+solver consumes that record together with the exact call-entry state. When the
+aggregate resource is still present as a residual shell, a restituting edge
+refills exactly that field in the root residual mask. When the aggregate
+resource has already ended after its last take, the field-read binding is the
+unit's carrier instead, so the restituting edge restores that standalone
+binding for ordinary path-local release. A structurally ownership-complete
+field or tag-payload read transfers only the root unit; dismantle analysis must
+not record a partial-field receipt for the same call position. Thus absent root,
+empty residual shell, and spent field remain distinct without manufacturing an
+aggregate value after its lifetime.
+
+Each result-refinement switch carries at most one active receipt per call
+argument position. The structured ownership fixed point replaces or clears
+that receipt whenever revisiting the call changes whether the exact argument
+unit transfers; registrations are not an append-only side table. A switch edge
+applies only the converged active receipts, so an earlier optimistic visit
+cannot restore a unit that the final call schedule retained. Every other edge
+leaves the active place absent. Any additional
 field-read-binding use, ambiguous call position, unsupported result
 continuation, or non-owned callee position rejects this field-place capability
 and keeps the unconditional schedule. Emission never rescans the call

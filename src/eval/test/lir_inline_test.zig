@@ -7950,7 +7950,10 @@ test "field takes drop the field-read retains of dying local records" {
 // A field read placed after an if-diamond still takes: every branch of the
 // lowered switch falls straight through to its shared continuation, so the
 // read past the rejoin runs exactly once on every path and may consume the
-// dying record's stored unit for its field.
+// dying record's stored unit for its field. Because this record has one RC
+// field, its root ownership resource ends at the take; checked-call failure
+// restitution must restore the standalone field carrier, not manufacture a
+// residual aggregate resource after the diamond.
 test "field takes cross a fall-through branch diamond" {
     const allocator = std.testing.allocator;
     const source =
@@ -7984,6 +7987,9 @@ test "field takes cross a fall-through branch diamond" {
 // A field consumed on every arm of a branch—here List.set's success arm and
 // the `??` fallback arm—takes on each path: the paths are exclusive, each
 // takes exactly once, and the residual is the same wherever the record dies.
+// The one-RC-field projection is also ownership-complete, so this pins that
+// one call position receives the root-unit receipt only—not a second partial
+// field receipt—and that the failure arm can move the restored unit onward.
 test "field takes split across the arms of a branch" {
     const allocator = std.testing.allocator;
     const source =

@@ -185,6 +185,7 @@ pub const CallArg = struct {
 /// Exact aggregate field place and result refinement that can restore it.
 pub const FieldRestitutionArg = struct {
     place: Take,
+    projection: LIR.CFStmtId,
     refinement: LIR.CFStmtId,
 };
 
@@ -544,6 +545,7 @@ const ReadKind = struct {
 
 const FieldRestitution = struct {
     call_arg: CallArg,
+    projection: LIR.CFStmtId,
     switch_stmt: LIR.CFStmtId,
     field_mask: u64,
     outcomes: arc_sig.OutcomeSpan,
@@ -1180,6 +1182,7 @@ pub fn compute(
             if (!any_restitution) continue;
             try field_restitutions.append(gpa, .{
                 .call_arg = .{ .stmt = call_stmt_id, .position = position },
+                .projection = read.stmt,
                 .switch_stmt = refinement,
                 .field_mask = bit,
                 .outcomes = outcomes,
@@ -1363,6 +1366,7 @@ pub fn compute(
             if (slot.found_existing) {
                 if (slot.value_ptr.place.root != local or
                     slot.value_ptr.place.field_mask != receipt.field_mask or
+                    slot.value_ptr.projection != receipt.projection or
                     slot.value_ptr.refinement != receipt.switch_stmt)
                 {
                     dismantleInvariant("ARC field restitution call argument had conflicting committed places");
@@ -1370,6 +1374,7 @@ pub fn compute(
             } else {
                 slot.value_ptr.* = .{
                     .place = .{ .root = local, .field_mask = receipt.field_mask },
+                    .projection = receipt.projection,
                     .refinement = receipt.switch_stmt,
                 };
             }
