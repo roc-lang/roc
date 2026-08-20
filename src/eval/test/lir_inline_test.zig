@@ -136,6 +136,7 @@ fn lowerModuleWithOptions(
         .{ .requests = &published_roots },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .consume_dead_boxes = false,
             .specialization_strategy = options.specialization_strategy,
             .checked_module_state = options.checked_module_state,
             .inline_mode = inline_mode,
@@ -3596,7 +3597,7 @@ fn collectLirResultProcShape(
                 if (stmt.op == .str_count_utf8_bytes) shape.str_count_utf8_bytes_count += 1;
                 if (stmt.op == .str_concat) shape.str_concat_count += 1;
                 if (stmt.op == .box_box) shape.box_box_count += 1;
-                if (stmt.op == .box_unbox) shape.box_unbox_count += 1;
+                if (stmt.op == .box_unbox or stmt.op == .box_unbox_borrowed) shape.box_unbox_count += 1;
                 if (stmt.op == .box_prepare_update) shape.box_prepare_update_count += 1;
                 if (stmt.op == .ptr_cast) shape.ptr_cast_count += 1;
                 if (stmt.op == .ptr_load) shape.ptr_load_count += 1;
@@ -4838,7 +4839,7 @@ test "destination baseline: boxed record update reboxes a list and string payloa
     try std.testing.expect(shape.tag_assign_count >= 2);
 }
 
-test "destination phase 3: direct boxed update wrapper calls a return-slot variant" {
+test "destination phase 3: direct boxed update wrapper keeps aggregate ownership explicit" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
         \\Model : {
@@ -4862,18 +4863,18 @@ test "destination phase 3: direct boxed update wrapper calls a return-slot varia
 
     const root_shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
 
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_cast_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_load_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_cast_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_load_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_store_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_struct_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_struct_count"));
     try std.testing.expectEqual(@as(usize, 0), root_shape.ptr_store_count);
-    try std.testing.expectEqual(@as(usize, 1), try reachableReturnSlotProcCount(allocator, &lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), try reachableReturnSlotProcCount(allocator, &lowered_source.lowered));
 }
 
-test "destination phase 3: effectful boxed update wrapper prepares box update" {
+test "destination phase 3: effectful boxed update wrapper keeps aggregate ownership explicit" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
         \\Model : {
@@ -4892,9 +4893,9 @@ test "destination phase 3: effectful boxed update wrapper prepares box update" {
     , .wrappers);
     defer lowered_source.deinit(allocator);
 
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
 }
 
 test "destination baseline: boxed lambda is packed then boxed" {

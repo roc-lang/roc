@@ -8926,6 +8926,18 @@ generates constraints per statement:
   to supply that consumed unit. Every post-ARC statement therefore contains
   the exact concrete operation and effect the backend executes. The variant
   mapping is static low-level-op data, and only ARC may select from it.
+  `Box.unbox` is the ownership-transfer case: its neutral operation is solved
+  conservatively as consuming so the payload has an ownership place distinct
+  from the outer allocation. Emission selects the ARC-only borrowing variant
+  only when another use or alias keeps the box lender live. Consuming unbox
+  frees a unique outer allocation and transfers its stored payload units
+  unchanged; for a shared outer allocation it retains the payload children
+  and releases the consumed box reference. A zero-sized box is null and the
+  consuming operation neither dereferences nor frees it.
+  The allocation-faithful compiled pipeline enables this selection. The
+  interpreter's value model explicitly selects the borrowing variant because
+  it does not model transfer of an outer allocation independently from erased
+  recursive payload ownership.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the
@@ -9286,7 +9298,8 @@ succeed by deleting increfs that would otherwise hold refcounts above 1
 during read phases, and early drop placement returns counts to 1 before
 mutation points.
 
-One interaction is accepted and documented rather than solved here: a borrow
+One interaction remains accepted and documented rather than solved generally:
+a borrow
 whose lifetime extends past a uniqueness-checked mutation of its lender's
 allocation forces the runtime copy path for that mutation. The solution is
 still sound and still RC-minimal under the constraint system; it is the
@@ -9294,6 +9307,9 @@ constraint system itself that does not yet weigh mutation points. Extending
 the flow analysis to account for `may_runtime_uniqueness_check_args`
 positions when choosing between a borrow and an owned move is future design
 work and must be added to the equations, not patched in emission.
+Dead `Box` lenders are the explicit exception already modeled by the
+consuming/borrowing `Box.unbox` operation pair; they do not extend a borrow
+through the mutation merely because control flow separates unbox and re-box.
 
 ### Field Takes From Dying Aggregates
 
@@ -9757,6 +9773,11 @@ region. It follows only explicit `next` edges from `box_unbox` to the terminal
 proc-wide operand counts to prove that the consumed input box and returned box
 have no consumers outside the rewrite. Control-flow regions or additional box
 consumers are rejected rather than classified from source shape or names.
+Payload layouts that themselves own collection or aggregate RC units use the
+consuming-unbox path instead of `reuse_box`: keeping the outer allocation live
+would keep those nested units logically stored during a uniqueness-checked
+mutation. Flat payloads and existing scalar box-reuse cases retain the direct
+allocation-reuse rewrite.
 
 `reuse_erased_callable` is the erased-callable counterpart. Erased callables are
 not ordinary `Box(T)` payloads; their allocation stores a callable entry, an

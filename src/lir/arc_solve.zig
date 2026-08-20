@@ -515,6 +515,7 @@ const Solver = struct {
     store: *const LirStore,
     rc_local: []const bool,
     boxy_rc_descs: []const ?LIR.BoxyDescRef,
+    consume_dead_boxes: bool,
     domain: *const ArcLocalDomain,
     sigs: []arc_sig.RcSig,
     unique_seed_masks: []arc_sig.ParamMask,
@@ -570,6 +571,11 @@ const Solver = struct {
     stack: std.ArrayList(LIR.CFStmtId),
 };
 
+fn inferenceRcEffect(solver: *const Solver, op: anytype, declared: anytype) @TypeOf(declared) {
+    if (!solver.consume_dead_boxes and op == .box_unbox) return op.arcBorrowedResultVariant().?.rcEffect();
+    return op.arcInferenceRcEffect(declared);
+}
+
 /// Solves binding modes and proc signatures for every local in the store.
 pub fn solve(
     allocator: Allocator,
@@ -577,6 +583,7 @@ pub fn solve(
     rc_local: []const bool,
     boxy_rc_descs: []const ?LIR.BoxyDescRef,
     roots: []const LIR.LirProcSpecId,
+    consume_dead_boxes: bool,
 ) SolveError!Solution {
     const local_count = store.localCount();
     const proc_count = store.procSpecCount();
@@ -592,6 +599,7 @@ pub fn solve(
         .store = store,
         .rc_local = rc_local,
         .boxy_rc_descs = boxy_rc_descs,
+        .consume_dead_boxes = consume_dead_boxes,
         .domain = &domain,
         .sigs = try allocator.alloc(arc_sig.RcSig, proc_count),
         .unique_seed_masks = try allocator.alloc(arc_sig.ParamMask, proc_count),
@@ -784,7 +792,7 @@ pub fn solve(
         if (dense_uniqueness.destroyed.isSet(arc_index)) unique_destroyed.set(local);
     }
     if (builtin.mode == .Debug) {
-        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null, null, null);
+        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null, null, null, solver.consume_dead_boxes);
         defer independently_unique.deinit(allocator);
         if (!unique.eql(independently_unique.unique) or !unique_destroyed.eql(independently_unique.destroyed)) {
             solveInvariant("typed uniqueness facts disagreed with independent LIR analysis");
@@ -1343,7 +1351,7 @@ fn liftProcStmtFacts(
             },
         }),
         .assign_low_level => |assign| {
-            const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
+            const rc_effect = inferenceRcEffect(solver, assign.op, assign.rc_effect);
             solver.unique_seed_masks[proc_index] |= lowLevelUniqueSeedMask(
                 solver.store,
                 proc_params,
@@ -2246,7 +2254,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try liftVisibilitySeed(solver, assign.target);
         },
         .assign_low_level => |assign| {
-            const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
+            const rc_effect = inferenceRcEffect(solver, assign.op, assign.rc_effect);
             const args = store.getLocalSpan(assign.args);
             const borrow_source = lowLevelBorrowSource(solver.domain, rc_effect, args);
             if (rc_effect.retain_result and borrow_source != no_local) {
@@ -3255,7 +3263,7 @@ const UniqueOriginFacts = struct {
     }
 };
 
-fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, stmt: LIR.CFStmt) SolveError!void {
+fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, stmt: LIR.CFStmt, consume_dead_boxes: bool) SolveError!void {
     switch (stmt) {
         .assign_ref => |assign| switch (assign.op) {
             .local => |source| try facts.noteAlias(assign.target, source),
@@ -3299,7 +3307,7 @@ fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, st
             if (assign.target_desc) |target_desc| facts.noteForeign(target_desc);
         },
         .assign_call_dict => |assign| facts.noteForeign(assign.target),
-        .assign_low_level => |assign| if (assign.op.arcInferenceRcEffect(assign.rc_effect).result_unique)
+        .assign_low_level => |assign| if ((if (!consume_dead_boxes and assign.op == .box_unbox) assign.op.arcBorrowedResultVariant().?.rcEffect() else assign.op.arcInferenceRcEffect(assign.rc_effect)).result_unique)
             facts.noteBirth(assign.target)
         else
             facts.noteForeign(assign.target),
@@ -3654,7 +3662,7 @@ pub fn computeUniqueness(
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, null);
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, null, true);
 }
 
 const ProcUniquenessDomain = struct {
@@ -3693,6 +3701,7 @@ pub fn computeProcUniqueness(
         proc,
         stmts,
         .{ .local_to_dense = local_to_dense, .count = dense_local_count },
+        true,
     );
 }
 
@@ -3706,6 +3715,7 @@ fn computeUniquenessDetailed(
     only_proc: ?LIR.LirProcSpecId,
     exact_stmts: ?[]const LIR.CFStmtId,
     proc_domain: ?ProcUniquenessDomain,
+    consume_dead_boxes: bool,
 ) SolveError!Uniqueness {
     const local_count = if (proc_domain) |domain| domain.count else store.localCount();
 
@@ -3889,7 +3899,7 @@ fn computeUniquenessDetailed(
             break :blk @intFromEnum(stmts[exact_stmt_index]);
         } else reachable_iter.next() orelse break;
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-        if (origin_facts) |facts| try collectUniqueOriginStmt(facts, store, stmt);
+        if (origin_facts) |facts| try collectUniqueOriginStmt(facts, store, stmt, consume_dead_boxes);
         switch (stmt) {
             .assign_ref => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
@@ -4129,7 +4139,10 @@ fn computeUniquenessDetailed(
                 }
             },
             .assign_low_level => |assign| {
-                const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
+                const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
+                    assign.op.arcBorrowedResultVariant().?.rcEffect()
+                else
+                    assign.op.arcInferenceRcEffect(assign.rc_effect);
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 if (rc_effect.result_unique) {
                     marks.noteBirth(&born, assign.target);

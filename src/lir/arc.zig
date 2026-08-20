@@ -45,6 +45,9 @@ pub const InsertOptions = struct {
     /// enable this; dev builds and compile-time evaluation use the solved
     /// single variant per proc.
     specialize: bool = false,
+    /// Select consuming Box.unbox when its lender is dead. Compiled backends
+    /// enable this; the value-model interpreter keeps an explicit borrow.
+    consume_dead_boxes: bool = true,
 };
 
 const no_proc_local_index = std.math.maxInt(u32);
@@ -240,6 +243,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     var inserter = Inserter{
         .store = store,
         .layouts = layouts,
+        .options = options,
     };
     const boxy_rc_descs = try computeBoxyRcDescs(store);
     defer store.allocator.free(boxy_rc_descs);
@@ -258,6 +262,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         borrow_anchor_refcounted,
         boxy_rc_descs,
         options.roots,
+        options.consume_dead_boxes,
     );
     defer solution.deinit();
     inserter.solution = &solution;
@@ -1174,6 +1179,7 @@ const ArcPlans = struct {
 const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
+    options: InsertOptions,
     local_contains_refcounted: []const bool = &.{},
     boxy_rc_descs: []const ?LIR.BoxyDescRef = &.{},
     solution: *const arc_solve.Solution = undefined,
@@ -2271,7 +2277,14 @@ const Inserter = struct {
                 .assign_low_level => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const borrowed_variant = assign.op.arcBorrowedResultVariant();
-                    const use_borrowed = borrowed_variant != null and self.isBindingBorrowed(assign.target);
+                    var use_borrowed = borrowed_variant != null and self.isBindingBorrowed(assign.target);
+                    if (borrowed_variant != null and assign.op == .box_unbox) {
+                        const args = self.store.getLocalSpan(assign.args);
+                        const boxed = GuardedList.at(args, 0);
+                        use_borrowed = !self.options.consume_dead_boxes or
+                            !self.ownsUnit(&segment.owned, boxed) or
+                            try self.groupUsedInPathExcept(assign.next, boxed, assign.target, segment.ctx.loop_keep);
+                    }
                     const selected_op = if (use_borrowed) borrowed_variant.? else assign.op;
                     const selected_effect = if (borrowed_variant != null) selected_op.rcEffect() else assign.rc_effect;
                     const transfer = try self.transferForLowLevel(
@@ -3805,7 +3818,14 @@ const Inserter = struct {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
             arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
         }
-        var preserve_consumed_args = try self.preserveConsumedArgMask(args, rc_effect.consume_args, next, target, loop_keep);
+        var preserve_consumed_args = try self.preserveConsumedArgMask(
+            args,
+            rc_effect.consume_args,
+            rc_effect.result_aliases_consumed_args,
+            next,
+            target,
+            loop_keep,
+        );
         if (supply_missing_consumed_args) {
             const locals = self.store.getLocalSpan(args);
             for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
@@ -4106,6 +4126,7 @@ const Inserter = struct {
         self: *Inserter,
         span: LIR.LocalSpan,
         mask: u64,
+        result_aliases_mask: u64,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         loop_keep: ?LoopKeep,
@@ -4119,7 +4140,11 @@ const Inserter = struct {
             const bit = argMaskBit(i);
             if ((mask & bit) == 0) continue;
             if (local == target) continue;
-            if (try self.groupUsedInPath(next, local, loop_keep)) {
+            const used_after = if ((result_aliases_mask & bit) != 0)
+                try self.groupUsedInPathExcept(next, local, target, loop_keep)
+            else
+                try self.groupUsedInPath(next, local, loop_keep);
+            if (used_after) {
                 preserve |= bit;
             }
         }
@@ -5544,7 +5569,7 @@ const Inserter = struct {
     ) ResourceError!bool {
         const reads = try self.livenessRow(start, loop_keep);
         const leader = self.solution.leaderOf(local);
-        for (self.domain().frame_locals) |member_local| {
+        for (self.domain().refcounted_locals) |member_local| {
             if (self.solution.leaderOf(member_local) != leader) continue;
             if (member_local == except) continue;
             const bit = self.rawLivenessBitOf(member_local) orelse
@@ -7446,7 +7471,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     });
 
     const local_contains_refcounted = [_]bool{ true, false, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{}, &.{});
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{}, &.{}, true);
     defer solution.deinit();
     var global_local_index = [_]u32{ no_proc_local_index, no_proc_local_index, no_proc_local_index };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -7520,7 +7545,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     });
 
     const local_contains_refcounted = [_]bool{ true, true, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{}, &.{});
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{}, &.{}, true);
     defer solution.deinit();
     try testing.expectEqual(leader, solution.leaderOf(local_alias));
 
@@ -9746,6 +9771,68 @@ test "RC borrow: read-only sublist materializes a borrowed view" {
     try testing.expect(std.meta.eql(emitted.op.rcEffect(), emitted.rc_effect));
     try f.expectRc(slice, 0, 0, 0);
     try f.expectRc(list, 0, 1, 0);
+}
+
+test "RC Box.unbox consumes a dead box for an owned result" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const boxed = try f.local(f.box_str);
+    const source = try f.local(.str);
+    const payload = try f.local(.str);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, 1, ret);
+    const consume_payload = try f.assignCall(call_result, &.{payload}, assign_result);
+    const unbox = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = payload,
+        .op = .box_unbox,
+        .rc_effect = LIR.LowLevel.box_unbox.rcEffect(),
+        .args = try f.span(&.{boxed}),
+        .next = consume_payload,
+    } });
+    const make_box = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = boxed,
+        .op = .box_box,
+        .rc_effect = LIR.LowLevel.box_box.rcEffect(),
+        .args = try f.span(&.{source}),
+        .next = unbox,
+    } });
+    const body = try f.assignStr(source, "owned", make_box);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    const emitted = f.reachableLowLevelAssign(payload);
+    try testing.expectEqual(LIR.LowLevel.box_unbox, emitted.op);
+    try f.expectRc(boxed, 0, 0, 0);
+    try f.expectRc(payload, 0, 0, 0);
+}
+
+test "RC Box.unbox keeps the payload borrowed while the box survives" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const boxed = try f.local(f.box_str);
+    const payload = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, 1, ret);
+    const use_box = try f.expectStmt(boxed, assign_result);
+    const use_payload = try f.expectStmt(payload, use_box);
+    const unbox = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = payload,
+        .op = .box_unbox,
+        .rc_effect = LIR.LowLevel.box_unbox.rcEffect(),
+        .args = try f.span(&.{boxed}),
+        .next = use_payload,
+    } });
+    _ = try f.addProc(&.{boxed}, unbox, .i64);
+    try f.run();
+
+    const emitted = f.reachableLowLevelAssign(payload);
+    try testing.expectEqual(LIR.LowLevel.box_unbox_borrowed, emitted.op);
+    try testing.expect(std.meta.eql(emitted.op.rcEffect(), emitted.rc_effect));
+    try f.expectRc(payload, 1, 1, 0);
+    try f.expectRc(boxed, 0, 1, 0);
 }
 
 test "RC borrow: owned sublist from borrowed parameter retains one input unit" {

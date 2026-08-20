@@ -4395,7 +4395,8 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_str => try self.emitDecToStr(target, GuardedList.at(arg_locals, 0)),
             .num_to_str => try self.emitNumToStr(target, GuardedList.at(arg_locals, 0)),
             .box_box => try self.emitBoxBox(target, GuardedList.at(arg_locals, 0)),
-            .box_unbox => try self.emitBoxUnbox(target, GuardedList.at(arg_locals, 0)),
+            .box_unbox => try self.emitBoxUnboxOwned(target, GuardedList.at(arg_locals, 0)),
+            .box_unbox_borrowed => try self.emitBoxUnbox(target, GuardedList.at(arg_locals, 0)),
             .box_prepare_update => try self.emitBoxPrepareUpdate(target, GuardedList.at(arg_locals, 0), unique_args),
             .erased_capture_load => try self.emitErasedCaptureLoad(target, GuardedList.at(arg_locals, 0)),
             .ptr_alloca => try self.emitPtrAlloca(target),
@@ -9326,7 +9327,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         const null_ptr = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
-        const enabled = abi.contains_refcounted and abi.elem_layout_idx != null;
+        const enabled = abi.contains_refcounted;
 
         try call_args.append(
             self.allocator,
@@ -10149,6 +10150,37 @@ pub const MonoLlvmCodeGen = struct {
     fn emitBoxUnbox(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const ptr = try self.loadPointer(self.slot(arg).ptr);
         if (self.slot(target).size > 0) try self.copyBytes(self.slot(target).ptr, ptr, self.slot(target).size, self.slot(target).alignment);
+    }
+
+    fn emitBoxUnboxOwned(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const box_layout = self.localLayout(arg);
+        const box = self.layoutValue(box_layout);
+        if (box.tag == .box_of_zst or self.slot(target).size == 0) return;
+        if (box.tag != .box) return error.CompilationFailed;
+
+        const ptr_ty = try self.ptrType();
+        const abi = self.layouts().builtinBoxAbi(box_layout);
+        const enabled = abi.contains_refcounted and abi.elem_layout_idx != null;
+        const null_ptr = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
+        const payload_incref = if (enabled)
+            try self.declareRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx orelse return error.CompilationFailed }, .atomic)
+        else
+            null;
+        _ = try self.callBuiltin(
+            builtinSymbol(.box_unbox_owned),
+            .void,
+            &.{ ptr_ty, ptr_ty, self.ptrSizedIntType(), .i32, .i1, ptr_ty, ptr_ty },
+            &.{
+                self.slot(target).ptr,
+                try self.loadPointer(self.slot(arg).ptr),
+                builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory,
+                builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory,
+                builder.intValue(.i1, @intFromBool(enabled)) catch return error.OutOfMemory,
+                if (payload_incref) |func| func.toValue(builder) else null_ptr,
+                self.rocOps(),
+            },
+        );
     }
 
     fn emitBoxPrepareUpdate(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, unique_args: u64) Error!void {

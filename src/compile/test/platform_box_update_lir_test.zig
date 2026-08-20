@@ -8,12 +8,15 @@ const GuardedList = lir.LirStore.GuardedList;
 
 const harness = @import("lower_to_lir_harness.zig");
 
-test "platform boxed update wrapper prepares in-place update" {
-    try harness.runAppPathLirInspection("test/int/app.roc", .{ .inline_mode = .wrappers }, expectBoxPrepareUpdate);
+test "platform boxed model wrappers consume dead boxes" {
+    try harness.runAppPathLirInspection("test/box-model-uniqueness/app.roc", .{ .inline_mode = .wrappers, .consume_dead_boxes = true }, expectConsumingBoxUnbox);
 }
 
-fn expectBoxPrepareUpdate(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
+fn expectConsumingBoxUnbox(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
     var prepare_update_count: usize = 0;
+    var owned_unbox_count: usize = 0;
+    var borrowed_unbox_count: usize = 0;
+    var list_set_count: usize = 0;
 
     for (0..store.getProcSpecs().len) |index| {
         const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
@@ -64,6 +67,9 @@ fn expectBoxPrepareUpdate(store: *const lir.LirStore, _: *const layout.Store) ha
                 => |stmt| try work.append(std.testing.allocator, stmt.next),
                 .assign_low_level => |stmt| {
                     if (stmt.op == .box_prepare_update) prepare_update_count += 1;
+                    if (stmt.op == .box_unbox) owned_unbox_count += 1;
+                    if (stmt.op == .box_unbox_borrowed) borrowed_unbox_count += 1;
+                    if (stmt.op == .list_set) list_set_count += 1;
                     try work.append(std.testing.allocator, stmt.next);
                 },
                 .switch_stmt => |stmt| {
@@ -110,5 +116,8 @@ fn expectBoxPrepareUpdate(store: *const lir.LirStore, _: *const layout.Store) ha
         }
     }
 
-    try std.testing.expectEqual(@as(usize, 1), prepare_update_count);
+    try std.testing.expectEqual(@as(usize, 0), prepare_update_count);
+    try std.testing.expectEqual(@as(usize, 3), owned_unbox_count);
+    try std.testing.expectEqual(@as(usize, 0), borrowed_unbox_count);
+    try std.testing.expectEqual(@as(usize, 4), list_set_count);
 }
