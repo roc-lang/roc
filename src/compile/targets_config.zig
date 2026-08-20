@@ -58,9 +58,8 @@ pub const WasmImportMemory = enum {
 
 /// Optional wasm-specific settings from a target record in a platform header.
 pub const WasmTargetConfig = struct {
-    /// Final host-visible function exports. `null` preserves the legacy
-    /// contract where public symbols are read from the platform object; a
-    /// present slice, including an empty one, is the complete export set.
+    /// Final host-visible function exports. The platform header is the sole
+    /// authority: `null` and an explicit empty slice both export no functions.
     exports: ?[]const []const u8 = null,
     import_memory: WasmImportMemory = .no,
     minimum_memory: ?usize = null,
