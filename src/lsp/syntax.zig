@@ -562,7 +562,7 @@ pub const SyntaxChecker = struct {
         // Create a fresh BuildEnv. The LSP reuses one pre-published Builtin
         // across checks; each BuildEnv borrows it and never deinitializes it.
         const cwd = try std.Io.Dir.cwd().realPathFileAlloc(self.std_io, ".", self.allocator);
-        defer self.allocator.free(cwd);
+        errdefer self.allocator.free(cwd);
         const builtin_modules = try self.sharedBuiltinModules();
         var env = BuildEnv.initBorrowingBuiltinModules(
             self.allocator,
@@ -583,7 +583,7 @@ pub const SyntaxChecker = struct {
         }
 
         const debug_handles = self.debug.build or self.debug.syntax or self.debug.server;
-        const handle = try BuildEnvHandle.create(self.allocator, env, owner_build, debug_handles);
+        const handle = try BuildEnvHandle.create(self.allocator, env, cwd, owner_build, debug_handles);
         self.build_env = handle;
         return handle;
     }
