@@ -4863,6 +4863,8 @@ pub fn build(b: *std.Build) void {
                 "--assert-alloc-balanced",
                 "--min-allocs",
                 "1",
+                "--max-allocs",
+                "2",
             });
             run_wasm_str_interp_leading_literal_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_str_interp_leading_literal_test.step);
