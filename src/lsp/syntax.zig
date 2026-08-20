@@ -549,6 +549,7 @@ pub const SyntaxChecker = struct {
         // Release the previous_build_env owner first.
         if (self.previous_build_env) |old_prev| {
             old_prev.release(owner_previous);
+            self.previous_build_env = null;
         }
 
         // Move build_env to previous_build_env, transferring ownership tag.
