@@ -256,11 +256,13 @@ remove_record_field = |person| {
 	rest
 }
 
-# A record type field can have a default value (`field : Type ?? default`) or be
+# A record field can have a default value (`field : Type ?? default`) or be
 # optional (`field ?: Type`). Both let you leave the field out when you build the record.
 # A defaulted field is always there when you read it, so you read it with plain `.field`.
 # An optional field may be missing, so you read it with `.?field`, which gives you a `Try`.
-ServerConfig : { host : Str, port : U16 ?? 8080, timeout_ms ?: U64 }
+# Defaults are only allowed on a nominal (`:=`) type declaration's backing record,
+# so every construction that omits a defaulted field is an explicit `ServerConfig.{...}`.
+ServerConfig := { host : Str, port : U16 ?? 8080, timeout_ms ?: U64 }
 
 describe_config : ServerConfig -> Str
 describe_config = |config| {
@@ -436,7 +438,7 @@ main! = |_args| {
 
 	# We only provide `host`, so `port` falls back to its default and `timeout_ms` is missing.
 	minimal_config : ServerConfig
-	minimal_config = { host: "localhost" }
+	minimal_config = ServerConfig.{ host: "localhost" }
 	print!(describe_config(minimal_config))
 
 	# Reading an optional field that was not provided gives `Err(MissingField)`.
@@ -446,7 +448,7 @@ main! = |_args| {
 
 	# Here we do provide all fields, so `.?timeout_ms` is an `Ok`.
 	full_config : ServerConfig
-	full_config = { host: "example.com", port: 80, timeout_ms: 5000 }
+	full_config = ServerConfig.{ host: "example.com", port: 80, timeout_ms: 5000 }
 	print!(describe_config(full_config))
 	expect full_config.?timeout_ms == Ok(5000)
 
