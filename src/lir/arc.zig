@@ -4905,16 +4905,6 @@ const Inserter = struct {
         }
     }
 
-    fn switchRestoresPosition(
-        self: *const Inserter,
-        refinement: OutcomeRefinement,
-        position: usize,
-    ) bool {
-        const restoration = self.restitution_switches.get(refinement.stmt) orelse return false;
-        const bit = arc_sig.paramBit(position) orelse return false;
-        return (restoration.restored_positions & bit) != 0;
-    }
-
     fn isAliasOfOwnershipPlace(self: *const Inserter, local: LIR.LocalId, root: LIR.LocalId) bool {
         var cursor = @intFromEnum(local);
         var steps: usize = 0;
@@ -5150,6 +5140,75 @@ const Inserter = struct {
         if (callee) |direct| outcome_sig.outcomes = self.solution.availableOutcomeSpanOf(direct);
         const outcome_places_distinct = !outcome_sig.outcomes.isEmpty() and
             self.outcomeArgumentsHaveDistinctPlaces(span, outcome_sig);
+        const outcome_mask = self.outcomeRestitutableMask(outcome_sig);
+        const outcome_refinement = if (outcome_places_distinct)
+            try self.findOutcomeRefinement(target, next, outcome_sig)
+        else
+            null;
+
+        // One outcome span is an atomic calling convention. Preflight every
+        // position named by any row before changing the call-entry ownership
+        // state. Selecting the span for one argument also makes the callee
+        // return every other named argument on its restituting outcomes, even
+        // when the caller only needs to release that returned unit.
+        var outcome_required = false;
+        var outcome_admissible = outcome_refinement != null and outcome_mask != 0;
+        var unchecked_outcome_positions = outcome_mask;
+        if (outcome_refinement) |refinement| {
+            for (0..arc_sig.tracked_param_count) |position| {
+                self.clearOutcomeRestoration(refinement, position);
+            }
+        }
+        for (0..@min(GuardedList.borrowLen(locals), arc_sig.tracked_param_count)) |position| {
+            const bit = arc_sig.paramBit(position).?;
+            if ((outcome_mask & bit) == 0) continue;
+            unchecked_outcome_positions &= ~bit;
+            const local = GuardedList.at(locals, position);
+            if (!self.localContainsRefcounted(local) or callee_sig.paramMode(position) != .owned) {
+                outcome_admissible = false;
+                continue;
+            }
+            const owner = self.unitOf(local);
+            const field_receipt = if (call_stmt) |stmt_id|
+                self.fieldRestitutionForEmission(stmt_id, position)
+            else
+                null;
+            const used_after_call = field_receipt != null or
+                (local != target and try self.groupUsedInPath(next, local, loop_keep));
+            const restored_resource: RestoredResource = if (field_receipt) |receipt|
+                if (owned.contains(receipt.place.root))
+                    .{ .field = receipt.place }
+                else
+                    .{ .unit = owner }
+            else
+                .{ .unit = owner };
+            const restitution: ?OutcomeRestitution = if (field_receipt) |receipt| blk: {
+                if (outcome_refinement == null or receipt.refinement != outcome_refinement.?.stmt) break :blk null;
+                break :blk .{
+                    .refinement = outcome_refinement.?,
+                    .sig = outcome_sig,
+                    .position = position,
+                    .resource = restored_resource,
+                };
+            } else try self.outcomeRestitutionGuard(
+                local,
+                restored_resource,
+                position,
+                target,
+                next,
+                outcome_sig,
+            );
+            const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
+                self.groupSharesOtherOperand(locals, position, local);
+            const can_transfer = owned.contains(owner) and
+                (!used_after_call or restitution != null) and
+                !projected_alias_conflict;
+            if (used_after_call and restitution != null) outcome_required = true;
+            if (restitution == null or !can_transfer) outcome_admissible = false;
+        }
+        outcome_admissible = outcome_admissible and outcome_required and unchecked_outcome_positions == 0;
+        if (outcome_admissible) demanded.outcomes = outcome_sig.outcomes;
+
         for (0..GuardedList.borrowLen(locals)) |position| {
             const local = GuardedList.at(locals, position);
             if (!self.localContainsRefcounted(local)) continue;
@@ -5211,15 +5270,17 @@ const Inserter = struct {
                 else
                     .{ .unit = owner };
             } else .{ .unit = owner };
-            const restitution: ?OutcomeRestitution = if (field_receipt) |receipt| blk: {
-                if (callee == null or !outcome_places_distinct) break :blk null;
+            const restitution: ?OutcomeRestitution = if (!outcome_admissible)
+                null
+            else if (field_receipt) |receipt| blk: {
                 break :blk .{
                     .refinement = .{ .stmt = receipt.refinement },
                     .sig = outcome_sig,
                     .position = position,
                     .resource = restored_resource,
                 };
-            } else if (used_after_call and callee != null and outcome_places_distinct)
+            } else if (callee != null and outcome_places_distinct and
+                (outcome_mask & (arc_sig.paramBit(position) orelse 0)) != 0)
                 try self.outcomeRestitutionGuard(
                     local,
                     restored_resource,
@@ -5236,13 +5297,6 @@ const Inserter = struct {
             if (restitution) |claim| try self.setOutcomeRestoration(claim, can_transfer);
 
             if (can_transfer) {
-                var restores_position = restitution != null;
-                if (!restores_position and outcome_places_distinct) {
-                    if (try self.findOutcomeRefinement(target, next, outcome_sig)) |refinement| {
-                        restores_position = self.switchRestoresPosition(refinement, position);
-                    }
-                }
-                if (restores_position) demanded.outcomes = outcome_sig.outcomes;
                 // A dying argument moving into an owned position that is
                 // statically unique with no borrow live at the call demands
                 // a variant whose parameter is seeded born-unique, so
@@ -11231,6 +11285,211 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
     }
     try testing.expect(remaining > 0);
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
+}
+
+test "RC outcome restitution releases every returned argument before a nested join" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.list_i64,
+    });
+
+    // Failure returns both input ownership units. Success consumes both, but
+    // only the first changed list appears in the source result.
+    const first_param = try f.local(f.list_i64);
+    const choose_success = try f.local(.i64);
+    const second_param = try f.local(f.list_i64);
+    const changed_first = try f.local(f.list_i64);
+    const changed_second = try f.local(f.list_i64);
+    const callee_result = try f.local(outcome_layout);
+    const success_ret = try f.ret(callee_result);
+    const success_tag = try f.assignTag(callee_result, 1, changed_first, success_ret);
+    const consume_first = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = changed_first,
+        .op = .list_reverse,
+        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .args = try f.span(&.{first_param}),
+        .next = success_tag,
+    } });
+    const consume_second = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = changed_second,
+        .op = .list_reverse,
+        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .args = try f.span(&.{second_param}),
+        .next = consume_first,
+    } });
+    const failure_ret = try f.ret(callee_result);
+    const failure_tag = try f.assignTag(callee_result, 0, null, failure_ret);
+    const callee_body = try f.switchStmt(choose_success, consume_second, failure_tag, null);
+    const callee = try f.addProc(&.{ first_param, choose_success, second_param }, callee_body, outcome_layout);
+
+    const first_input = try f.local(f.list_i64);
+    const second_input = try f.local(f.list_i64);
+    const caller_choose = try f.local(.i64);
+    const call_result = try f.local(outcome_layout);
+    const discriminant = try f.local(.u8);
+    const output = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+    const joined_ret = try f.ret(output);
+    const success_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const success_body = try f.assignI64(output, 1, success_jump);
+    const failure_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const failure_value = try f.assignI64(output, 0, failure_jump);
+    const failure_body = try f.expectStmt(first_input, failure_value);
+    const refine = try f.switchStmt(discriminant, success_body, failure_body, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee,
+        .args = try f.span(&.{ first_input, caller_choose, second_input }),
+        .next = read_discriminant,
+    } });
+    const caller_body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = joined_ret,
+        .remainder = call,
+    } });
+    const caller = try f.addProc(&.{ first_input, caller_choose, second_input }, caller_body, .i64);
+
+    // A second caller uses the second input on the non-restituting success
+    // edge. The complete span is therefore inadmissible even though failure
+    // could restore the first input; this call must keep the base convention.
+    const rejected_first = try f.local(f.list_i64);
+    const rejected_second = try f.local(f.list_i64);
+    const rejected_choose = try f.local(.i64);
+    const rejected_result = try f.local(outcome_layout);
+    const rejected_discriminant = try f.local(.u8);
+    const rejected_output = try f.local(.i64);
+    const rejected_join_id = f.freshJoinPointId();
+    const rejected_ret = try f.ret(rejected_output);
+    const rejected_success_jump = try f.store.addCFStmt(.{ .jump = .{ .target = rejected_join_id } });
+    const rejected_success_value = try f.assignI64(rejected_output, 1, rejected_success_jump);
+    const rejected_success = try f.expectStmt(rejected_second, rejected_success_value);
+    const rejected_failure_jump = try f.store.addCFStmt(.{ .jump = .{ .target = rejected_join_id } });
+    const rejected_failure_value = try f.assignI64(rejected_output, 0, rejected_failure_jump);
+    const rejected_failure = try f.expectStmt(rejected_first, rejected_failure_value);
+    const rejected_refine = try f.switchStmt(rejected_discriminant, rejected_success, rejected_failure, null);
+    const rejected_read = try f.assignDiscriminant(rejected_discriminant, rejected_result, rejected_refine);
+    const rejected_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = rejected_result,
+        .proc = callee,
+        .args = try f.span(&.{ rejected_first, rejected_choose, rejected_second }),
+        .next = rejected_read,
+    } });
+    const rejected_body = try f.store.addCFStmt(.{ .join = .{
+        .id = rejected_join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = rejected_ret,
+        .remainder = rejected_call,
+    } });
+    const rejected_caller = try f.addProc(&.{ rejected_first, rejected_choose, rejected_second }, rejected_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 0), f.countRc(first_input, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(second_input, .incref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(second_input, .decref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(rejected_first, .incref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(rejected_second, .incref));
+
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        const stmt = f.store.getCFStmt(cursor);
+        if (stmt == .assign_call and stmt.assign_call.target == call_result) {
+            try testing.expect(stmt.assign_call.proc != callee);
+            break;
+        }
+        cursor = switch (stmt) {
+            .join => |join| join.remainder,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+            .init_uninitialized,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .store_struct,
+            .store_tag,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .jump,
+            .ret,
+            .crash,
+            => return error.MissingOutcomeCall,
+        };
+    }
+    try testing.expect(remaining > 0);
+
+    cursor = f.store.getProcSpec(rejected_caller).body orelse return error.MissingCallerBody;
+    remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        const stmt = f.store.getCFStmt(cursor);
+        if (stmt == .assign_call and stmt.assign_call.target == rejected_result) {
+            try testing.expectEqual(callee, stmt.assign_call.proc);
+            break;
+        }
+        cursor = switch (stmt) {
+            .join => |join| join.remainder,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+            .init_uninitialized,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .store_struct,
+            .store_tag,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .jump,
+            .ret,
+            .crash,
+            => return error.MissingOutcomeCall,
+        };
+    }
+    try testing.expect(remaining > 0);
 }
 
 test "ARC outcome capability rejects a stale discriminant after return-local rebind" {

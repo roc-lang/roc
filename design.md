@@ -9406,6 +9406,20 @@ post-ARC program contains ordinary calls, switches, `incref`, and `decref`
 statements, and backends continue to follow those statements without knowing
 about conditional ownership.
 
+An outcome span is one atomic calling convention for a call. If any argument
+requires that convention, every owned parameter position named by any row in
+the span must transfer an exact distinct ownership place and register its
+receipt at the same result-refinement switch. This includes a returned unit
+whose only caller action is path-local release: omitting that receipt would
+make the callee return ownership that the caller state cannot represent. ARC
+admits the span only after checking all named positions without mutating the
+call-entry state, then applies all transfers and registrations together. If
+any named position is unavailable, aliased, live on a non-restituting edge, or
+otherwise lacks the exact receipt, the call retains the unconditional base
+convention; a partial set of receipts must never select the complete span.
+Fixed-point revisits replace or clear the whole call-position receipt set
+before recording a new atomic decision.
+
 Ownership places compose with restitution. If an ownership-complete field or
 tag-payload read moves a dying aggregate's stored unit into a checked call, a
 restored outcome places the root ownership-place unit back before that
