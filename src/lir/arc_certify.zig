@@ -4026,6 +4026,7 @@ const Certifier = struct {
             }
             switch (stmt) {
                 .assign_ref => |assign| {
+                    try self.validateResidualShellFields(&state, assign);
                     switch (assign.op) {
                         .local => |source| {
                             if (assign.target != source) {
@@ -4558,6 +4559,71 @@ const Certifier = struct {
         const info = &self.values.items[value];
         info.payload_source = source_value;
         info.payload_projection = projection;
+    }
+
+    fn validateResidualShellFields(
+        self: *Certifier,
+        state: *const State,
+        assign: @FieldType(LIR.CFStmt, "assign_ref"),
+    ) CertifyError!void {
+        const absent_fields = self.store.getU32Span(assign.residual_shell_absent_fields);
+        const source = switch (assign.op) {
+            .local => |local| local,
+            .discriminant,
+            .field,
+            .tag_payload,
+            .tag_payload_struct,
+            .list_reinterpret,
+            .nominal,
+            => {
+                if (absent_fields.len != 0) {
+                    return self.fail("residual-shell field metadata attached to a non-local alias", .{});
+                }
+                return;
+            },
+        };
+        const target_layout = self.store.getLocal(assign.target).layout_idx;
+        const source_layout = self.store.getLocal(source).layout_idx;
+        const source_layout_value = self.layouts.getLayout(source_layout);
+        if (!self.isRc(source) or !self.isRc(assign.target) or target_layout != source_layout or source_layout_value.tag != .struct_) {
+            if (absent_fields.len != 0) {
+                return self.fail("residual-shell field metadata attached to a non-struct or layout-changing alias", .{});
+            }
+            return;
+        }
+
+        const source_value = state.valueOf(source);
+        if (source_value == no_value) {
+            if (absent_fields.len != 0) {
+                return self.fail("residual-shell field metadata named an unbound source", .{});
+            }
+            return;
+        }
+        const required = self.requiredClaimMask(source_value) orelse 0;
+        var observed: u64 = 0;
+        for (0..absent_fields.len) |index| {
+            const field_index = GuardedList.at(absent_fields, index);
+            if (field_index >= 64) {
+                return self.fail("residual-shell field index {d} exceeds the certified field domain", .{field_index});
+            }
+            const field_mask = @as(u64, 1) << @intCast(field_index);
+            if ((required & field_mask) == 0) {
+                return self.fail("residual-shell metadata names non-RC or absent field {d}", .{field_index});
+            }
+            if ((observed & field_mask) != 0) {
+                return self.fail("residual-shell metadata repeats field {d}", .{field_index});
+            }
+            observed |= field_mask;
+        }
+
+        // The certifier's field claims settle lazily at consumption and are
+        // shared by every alias of one ValueId. They are therefore not the
+        // path-local residual snapshot attached to this particular binding;
+        // ARC's solved plan is the authority for partial masks. Once the
+        // whole value is dead, however, every RC field must be absent.
+        if (!try self.valueIsLive(state, source_value) and observed != required) {
+            return self.fail("released struct representation is missing exact residual-shell metadata", .{});
+        }
     }
 
     fn bindLocalAlias(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId) CertifyError!void {
@@ -6572,6 +6638,7 @@ test "certify carries a released struct representation across a join for scalar 
     const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
         .op = .{ .local = record },
+        .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
         .next = read_scalar,
     } });
     const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
@@ -6583,6 +6650,58 @@ test "certify carries a released struct representation across a join for scalar 
         .remainder = release,
     } });
     _ = try f.addProc(&.{record}, body, .i64);
+    try f.certify();
+}
+
+test "certify rejects a released struct alias without exact residual-shell fields" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const record = try f.local(record_layout);
+    const alias = try f.local(record_layout);
+    const scalar = try f.local(.i64);
+
+    const ret = try f.ret(scalar);
+    const read_scalar = try fieldReadStmt(&f, scalar, alias, 1, ret);
+    const malformed_alias = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .{ .local = record },
+        .next = read_scalar,
+    } });
+    const release = try f.decrefStmt(record, record_layout, malformed_alias);
+    _ = try f.addProc(&.{record}, release, .i64);
+
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "missing exact residual-shell metadata") != null);
+}
+
+test "certify accepts shell fields transferred before their lazy claims settle" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const record = try f.local(record_layout);
+    const alias = try f.local(record_layout);
+    const field = try f.local(.str);
+    const scalar = try f.local(.i64);
+
+    const ret = try f.ret(scalar);
+    const release_field = try f.decrefStmt(field, .str, ret);
+    const read_scalar = try fieldReadStmt(&f, scalar, alias, 1, release_field);
+    const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .{ .local = record },
+        .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
+        .next = read_scalar,
+    } });
+    const body = try fieldReadStmt(&f, field, record, 0, alias_shell);
+    _ = try f.addProc(&.{record}, body, .i64);
+
     try f.certify();
 }
 

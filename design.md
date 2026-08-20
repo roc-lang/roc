@@ -9535,11 +9535,36 @@ non-refcounted field read. It cannot be consumed, released again, passed to a
 call, or used for an RC-bearing field or payload read. Thus backends still see
 ordinary field reads and explicit RC statements, while certification keeps
 representation availability distinct from ownership-unit availability. A
-borrowed result
+materialized same-layout alias of a shell carries the exact committed-layout
+RC-field indices that are absent in LIR. ARC derives that list directly from the
+path's solved residual mask; it is not reconstructed from nearby retains or
+field reads. Debug evaluators use the list only to avoid interpreting the stale
+bytes of moved fields as live values while still validating every remaining
+field. An outcome receipt that restores a field changes the solved residual
+mask before successor materialization, so aliases on that successor omit the
+restored field from their absent list. Backends need no ownership behavior for
+this validation metadata. Certification checks that every listed index names a
+distinct refcounted field and that a fully dead representation lists every such
+field. It does not compare a partial list to its field-claim state: claims
+settle lazily when field reads are consumed and are shared by an alias set, so
+they are not a path-local snapshot of one binding. The later consumption and
+terminal balance checks independently prove those transfers. A borrowed result
 keeps the root unit key until a later consuming operation makes the same
 path-sensitive decision. This applies to ordinary owned locals and to owned
 join parameters; join parameters are not themselves assigned one global place
 origin because each incoming edge defines the join cell independently.
+
+Ownership-complete root transfer and committed struct-field transfer are two
+exact alternatives at one read, not cumulative decisions. If the root unit
+moves, no residual field transition is applied. If root transfer is unavailable
+because the path keeps the aggregate ownership place live, but dismantle
+analysis independently committed the read's field identity and that field is
+present in the incoming residual mask, the read instead takes that one field:
+`R'(a) = R(a) - {f}`. The aggregate remains as a representation shell for the
+later uses admitted by the field-take rules. If neither resource is present,
+the result pays its ordinary retain. Suppressing that retain without applying
+exactly one of these transfers is invalid: it would leave both the residual
+release and the read result claiming the same stored unit.
 
 On another control-flow path where the aggregate read did not run, the root
 still holds the unit and receives its ordinary whole release. Consequently no

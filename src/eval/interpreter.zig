@@ -1428,13 +1428,41 @@ pub const Interpreter = struct {
         value: Value,
         allow_zeroed_box_payload_holes: bool,
     ) Error!void {
+        return self.setLocalCheckedWithResidualShell(
+            frame,
+            stmt_id,
+            local_id,
+            value,
+            allow_zeroed_box_payload_holes,
+            .empty(),
+        );
+    }
+
+    fn setLocalCheckedWithResidualShell(
+        self: *LirInterpreter,
+        frame: *Frame,
+        stmt_id: ?CFStmtId,
+        local_id: LocalId,
+        value: Value,
+        allow_zeroed_box_payload_holes: bool,
+        residual_shell_absent_fields: LIR.U32Span,
+    ) Error!void {
         const layout_idx = self.store.getLocal(local_id).layout_idx;
         const normalized_value = try self.normalizeFloatNanValue(value, layout_idx);
 
         if (builtin.mode == .Debug) {
             var visited = std.ArrayList(DebugVisitedValue).empty;
             defer visited.deinit(self.evalAllocator());
-            self.debugAssertValueMatchesLayout(frame.proc_id, stmt_id, local_id, normalized_value, layout_idx, &visited, allow_zeroed_box_payload_holes);
+            self.debugAssertValueMatchesLayout(
+                frame.proc_id,
+                stmt_id,
+                local_id,
+                normalized_value,
+                layout_idx,
+                &visited,
+                allow_zeroed_box_payload_holes,
+                residual_shell_absent_fields,
+            );
         }
 
         frame.setLocal(local_id, normalized_value);
@@ -1521,9 +1549,21 @@ pub const Interpreter = struct {
         layout_idx: layout_mod.Idx,
         visited: *std.ArrayList(DebugVisitedValue),
         allow_zeroed_box_payload_holes: bool,
+        residual_shell_absent_fields: LIR.U32Span,
     ) void {
         var path_buf: [96]DebugValuePathStep = undefined;
-        self.debugAssertValueMatchesLayoutAt(proc_id, stmt_id, local_id, value, layout_idx, visited, &path_buf, 0, allow_zeroed_box_payload_holes);
+        self.debugAssertValueMatchesLayoutAt(
+            proc_id,
+            stmt_id,
+            local_id,
+            value,
+            layout_idx,
+            visited,
+            &path_buf,
+            0,
+            allow_zeroed_box_payload_holes,
+            residual_shell_absent_fields,
+        );
     }
 
     fn debugAssertValueMatchesLayoutAt(
@@ -1537,6 +1577,7 @@ pub const Interpreter = struct {
         path_buf: []DebugValuePathStep,
         path_len: usize,
         allow_zeroed_box_payload_holes: bool,
+        residual_shell_absent_fields: LIR.U32Span,
     ) void {
         if (builtin.mode != .Debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
@@ -1613,6 +1654,7 @@ pub const Interpreter = struct {
                     path_buf,
                     next_len,
                     allow_nested_zeroed_box_payload_holes,
+                    residual_shell_absent_fields,
                 );
             },
             .erased_callable => {
@@ -1675,6 +1717,7 @@ pub const Interpreter = struct {
                         path_buf,
                         next_len,
                         allow_zeroed_box_payload_holes,
+                        residual_shell_absent_fields,
                     );
                 }
             },
@@ -1692,11 +1735,22 @@ pub const Interpreter = struct {
             },
             .struct_ => {
                 const struct_info = self.layout_store.getStructInfo(layout_val);
+                const absent_fields = self.store.getU32Span(residual_shell_absent_fields);
                 for (0..struct_info.fields.len) |i| {
                     const field = struct_info.fields.get(@intCast(i));
                     // Padding spacers hold uninitialized bytes; there is no value
                     // to validate against their (size-only) layout.
                     if (field.is_padding) continue;
+                    if (path_len == 0) {
+                        var is_absent = false;
+                        for (0..absent_fields.len) |absent_index| {
+                            if (GuardedList.at(absent_fields, absent_index) == field.index) {
+                                is_absent = true;
+                                break;
+                            }
+                        }
+                        if (is_absent) continue;
+                    }
                     const field_offset = self.layout_store.getStructFieldOffset(layout_val.getStruct().idx, @intCast(i));
                     var next_len = path_len;
                     if (next_len < path_buf.len) {
@@ -1717,6 +1771,7 @@ pub const Interpreter = struct {
                         path_buf,
                         next_len,
                         allow_zeroed_box_payload_holes,
+                        residual_shell_absent_fields,
                     );
                 }
             },
@@ -1765,6 +1820,7 @@ pub const Interpreter = struct {
                     path_buf,
                     next_len,
                     allow_zeroed_box_payload_holes,
+                    residual_shell_absent_fields,
                 );
             },
             .closure => {
@@ -2337,7 +2393,7 @@ pub const Interpreter = struct {
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
-                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited, false);
+                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited, false, .empty());
                 }
                 const raw_layout_val = self.layout_store.getLayout(raw_layout);
                 const coercion_unwraps = raw_layout != proc_spec.ret_layout and
@@ -2353,7 +2409,7 @@ pub const Interpreter = struct {
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
-                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited, false);
+                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited, false, .empty());
                 }
                 // When the declared return layout merely relabels the returned
                 // local's bytes, keep the local's own layout so the descriptor
@@ -2429,7 +2485,14 @@ pub const Interpreter = struct {
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const value = try self.evalAssignRef(frame, assign.op, target_layout);
-                    try self.setLocalChecked(frame, current, assign.target, value, false);
+                    try self.setLocalCheckedWithResidualShell(
+                        frame,
+                        current,
+                        assign.target,
+                        value,
+                        false,
+                        assign.residual_shell_absent_fields,
+                    );
                     if (assign.op == .local) {
                         const source = assign.op.local;
                         const source_desc = frame.localDesc(source) orelse if (self.store.getLocal(source).boxy_desc) |desc_ref|

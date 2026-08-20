@@ -82,6 +82,15 @@ const Printer = struct {
                         .list_reinterpret => |l| try writer.print("ref.list_reinterpret l{d}", .{@intFromEnum(l.backing_ref)}),
                         .nominal => |n| try writer.print("ref.nominal l{d}", .{@intFromEnum(n.backing_ref)}),
                     }
+                    const absent_fields = self.store.getU32Span(s.residual_shell_absent_fields);
+                    if (absent_fields.len != 0) {
+                        try writer.writeAll(" shell_absent={");
+                        for (0..absent_fields.len) |index| {
+                            if (index != 0) try writer.writeAll(",");
+                            try writer.print("{d}", .{GuardedList.at(absent_fields, index)});
+                        }
+                        try writer.writeAll("}");
+                    }
                     try writer.writeAll("\n");
                     current = s.next;
                 },

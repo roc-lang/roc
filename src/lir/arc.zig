@@ -1138,6 +1138,10 @@ const ArcPlanStep = struct {
     pre_release_extra: std.ArrayList(ReleaseDecision) = .empty,
     pre_retain: std.ArrayList(LIR.LocalId) = .empty,
     retain_assign_ref_target: bool = true,
+    /// Absent committed field places on a same-layout representation-shell
+    /// alias, in the dismantle container's compact field-mask domain.
+    residual_shell_absent_mask: u64 = 0,
+    residual_shell_all_rc_fields_absent: bool = false,
     retain_set_target: bool = true,
     preserve_consumed_args: u64 = 0,
     transfer_mask: u64 = 0,
@@ -1160,6 +1164,8 @@ const ArcPlanStep = struct {
         self.pre_release_extra.clearRetainingCapacity();
         self.pre_retain.clearRetainingCapacity();
         self.retain_assign_ref_target = true;
+        self.residual_shell_absent_mask = 0;
+        self.residual_shell_all_rc_fields_absent = false;
         self.retain_set_target = true;
         self.preserve_consumed_args = 0;
         self.transfer_mask = 0;
@@ -1691,6 +1697,65 @@ const Inserter = struct {
         return next;
     }
 
+    fn materializeResidualShellAbsentFields(
+        self: *Inserter,
+        assign: @FieldType(LIR.CFStmt, "assign_ref"),
+        absent_mask: u64,
+        all_rc_fields_absent: bool,
+    ) ResourceError!LIR.U32Span {
+        if (absent_mask == 0 and !all_rc_fields_absent) return .empty();
+        const source = switch (assign.op) {
+            .local => |local| local,
+            .discriminant,
+            .field,
+            .tag_payload,
+            .tag_payload_struct,
+            .list_reinterpret,
+            .nominal,
+            => arcInvariant("ARC attached representation-shell fields to a non-local alias"),
+        };
+        if (self.store.getLocal(source).layout_idx != self.store.getLocal(assign.target).layout_idx) {
+            arcInvariant("ARC attached representation-shell fields to a layout-changing alias");
+        }
+        if (all_rc_fields_absent) {
+            if (absent_mask != 0) arcInvariant("ARC representation-shell alias mixed full and residual absent-field domains");
+            const source_layout = self.layouts.getLayout(self.store.getLocal(source).layout_idx);
+            if (source_layout.tag != .struct_) arcInvariant("ARC full representation shell did not have struct layout");
+            const info = self.layouts.getStructInfo(source_layout);
+            var count: usize = 0;
+            for (0..info.fields.len) |index| {
+                const field = info.fields.get(@intCast(index));
+                if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
+                count += 1;
+            }
+            const semantic_fields = try self.emission_allocator.alloc(u32, count);
+            var next_field: usize = 0;
+            for (0..info.fields.len) |index| {
+                const field = info.fields.get(@intCast(index));
+                if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
+                semantic_fields[next_field] = field.index;
+                next_field += 1;
+            }
+            return try self.store.addU32Span(semantic_fields);
+        }
+
+        const container = self.dismantleFor(self.unitOf(source)) orelse
+            arcInvariant("ARC residual representation-shell alias has no committed field domain");
+        if ((absent_mask & ~container.full_mask) != 0) {
+            arcInvariant("ARC representation-shell alias exceeded its committed field domain");
+        }
+
+        var semantic_fields: [64]u32 = undefined;
+        var count: usize = 0;
+        for (container.fields, 0..) |field, index| {
+            const field_mask = @as(u64, 1) << @intCast(index);
+            if ((absent_mask & field_mask) == 0) continue;
+            semantic_fields[count] = field.field_idx;
+            count += 1;
+        }
+        return try self.store.addU32Span(semantic_fields[0..count]);
+    }
+
     fn materializeArcPlanStep(self: *Inserter, step: *const ArcPlanStep, tail: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         const stmt = self.store.getCFStmt(step.stmt);
         const saved_rewrite_stmt = self.current_rewrite_stmt;
@@ -1719,6 +1784,11 @@ const Inserter = struct {
                 break :blk try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = assign.target,
                     .op = assign.op,
+                    .residual_shell_absent_fields = try self.materializeResidualShellAbsentFields(
+                        assign,
+                        step.residual_shell_absent_mask,
+                        step.residual_shell_all_rc_fields_absent,
+                    ),
                     .next = next,
                 } });
             },
@@ -2112,8 +2182,32 @@ const Inserter = struct {
             switch (stmt) {
                 .assign_ref => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+                    if (assign.op == .local and
+                        self.store.getLocal(assign.op.local).layout_idx == self.store.getLocal(assign.target).layout_idx and
+                        self.layouts.getLayout(self.store.getLocal(assign.op.local).layout_idx).tag == .struct_ and
+                        self.localContainsRefcounted(assign.op.local))
+                    {
+                        const source_unit = self.unitOf(assign.op.local);
+                        if (self.dismantleFor(source_unit)) |container| {
+                            if (segment.owned.contains(source_unit)) {
+                                step.residual_shell_absent_mask = container.full_mask & ~segment.owned.residualMask(source_unit);
+                            } else {
+                                // A dismantlable unit that is no longer in
+                                // the path state leaves only its inline
+                                // representation. Every committed RC field
+                                // is absent from that shell.
+                                step.residual_shell_absent_mask = container.full_mask;
+                            }
+                        } else if (!segment.owned.contains(source_unit) and !self.isBindingBorrowed(source_unit)) {
+                            // Complete-root transfer or whole release leaves
+                            // a representation-only struct even when no
+                            // partial-field container domain was needed.
+                            step.residual_shell_all_rc_fields_absent = true;
+                        }
+                    }
                     var transfer = AliasBindTransfer{ .retain_target = true, .release_old_target = false };
                     const complete_take_root = self.dismantles.completeTakeRoot(segment.cursor);
+                    var complete_moved_root = false;
                     if (self.isBindingBorrowed(assign.target)) {
                         transfer.retain_target = false;
                     } else if (complete_take_root) |root| {
@@ -2123,6 +2217,7 @@ const Inserter = struct {
                             root,
                             assign.next,
                         );
+                        complete_moved_root = !transfer.retain_target;
                     } else {
                         switch (assign.op) {
                             .local => |source| {
@@ -2146,12 +2241,21 @@ const Inserter = struct {
                     // retain is paid. Complete projections made their
                     // path-sensitive move decision above.
                     if (self.takeForEmission(segment.cursor)) |take| {
-                        transfer.retain_target = false;
-                        // A complete projection already moved the aggregate's
-                        // sole unit above. Only partial takes update the
-                        // per-field residual state.
-                        if (complete_take_root == null) {
-                            segment.owned.takeResidualField(self.unitOf(take.root), take.field_mask);
+                        if (complete_moved_root) {
+                            // The complete projection moved the root unit, so
+                            // there is no residual shell to update.
+                        } else {
+                            const take_root = self.unitOf(take.root);
+                            const field_available = segment.owned.contains(take_root) and
+                                (segment.owned.residualMask(take_root) & take.field_mask) == take.field_mask;
+                            if (complete_take_root == null or field_available) {
+                                // When a later use keeps the aggregate root
+                                // alive, an independently committed field take
+                                // moves only this stored unit and leaves the
+                                // exact residual shell behind.
+                                transfer.retain_target = false;
+                                segment.owned.takeResidualField(take_root, take.field_mask);
+                            }
                         }
                     }
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
