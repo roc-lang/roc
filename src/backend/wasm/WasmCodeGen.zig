@@ -984,6 +984,7 @@ fn emitStrBinaryResultCall(
     result_offset: u32,
     kind: BuiltinKind,
     host_import: ?u32,
+    update_mode: ?i32,
 ) Allocator.Error!void {
     if (self.externalCallsUseRelocs()) {
         const lhs_fields = try self.loadRocStrFields(lhs);
@@ -991,6 +992,7 @@ fn emitStrBinaryResultCall(
         try self.emitFpOffset(result_offset);
         try self.emitRocStrFields(lhs_fields);
         try self.emitRocStrFields(rhs_fields);
+        if (update_mode) |mode| try self.emitI32Const(mode);
         try self.emitLocalGet(self.roc_ops_local);
     } else {
         try self.emitLocalGet(lhs);
@@ -1008,7 +1010,26 @@ fn emitStrDropLowLevel(self: *Self, args: anytype, kind: BuiltinKind, host_impor
     const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(b);
     const result_offset = try self.allocStackMemory(12, 4);
-    try self.emitStrBinaryResultCall(a, b, result_offset, kind, host_import);
+    try self.emitStrBinaryResultCall(a, b, result_offset, kind, host_import, null);
+    try self.emitFpOffset(result_offset);
+}
+
+fn emitStrConcatLowLevel(self: *Self, args: anytype, unique_args: u64) Allocator.Error!void {
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const lhs = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(lhs);
+    try self.emitProcLocal(GuardedList.at(args, 1));
+    const rhs = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(rhs);
+    const result_offset = try self.allocStackMemory(12, 4);
+    try self.emitStrBinaryResultCall(
+        lhs,
+        rhs,
+        result_offset,
+        BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_concat)),
+        self.str_concat_import,
+        updateModeImmForArg(unique_args, 0),
+    );
     try self.emitFpOffset(result_offset);
 }
 
@@ -13934,84 +13955,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_static_small_word_caseless_eq => {
             try self.generateLLStrStaticSmallWordCaselessEq(args);
         },
-        .str_concat => {
-            // LowLevel str_concat: concatenate 2 strings
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            const a_str = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalSet(a_str);
-            try self.emitProcLocal(GuardedList.at(args, 1));
-            const b_str = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalSet(b_str);
-
-            // Extract ptr+len from each
-            const a_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const a_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitExtractStrPtrLen(a_str, a_ptr, a_len);
-            const b_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const b_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitExtractStrPtrLen(b_str, b_ptr, b_len);
-
-            // total = a_len + b_len
-            const total = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalGet(a_len);
-            try self.emitLocalGet(b_len);
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-            try self.emitLocalSet(total);
-
-            const result_offset = try self.allocStackMemory(12, 4);
-            const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitFpOffset(result_offset);
-            try self.emitLocalSet(result_ptr);
-
-            const zero = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitI32Const(0);
-            try self.emitLocalSet(zero);
-
-            try self.emitLocalGet(total);
-            try self.emitI32Const(12);
-            self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-            {
-                try self.emitZeroInit(result_ptr, 12);
-                try self.emitMemCopyLoop(result_ptr, zero, a_ptr, a_len);
-                try self.emitMemCopyLoop(result_ptr, a_len, b_ptr, b_len);
-
-                try self.emitLocalGet(result_ptr);
-                try self.emitLocalGet(total);
-                try self.emitI32Const(0x80);
-                self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.i32_store8) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 11) catch return error.OutOfMemory;
-            }
-            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            {
-                try self.emitHeapAllocWithRefcount(total, 1, false);
-                const buf = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                try self.emitLocalSet(buf);
-
-                try self.emitMemCopyLoop(buf, zero, a_ptr, a_len);
-                try self.emitMemCopyLoop(buf, a_len, b_ptr, b_len);
-
-                try self.emitLocalGet(result_ptr);
-                try self.emitLocalGet(buf);
-                try self.emitStoreOp(.i32, 0);
-
-                try self.emitLocalGet(result_ptr);
-                try self.emitLocalGet(total);
-                try self.emitI32Const(1);
-                self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
-                try self.emitStoreOp(.i32, 4);
-
-                try self.emitLocalGet(result_ptr);
-                try self.emitLocalGet(total);
-                try self.emitStoreOp(.i32, 8);
-            }
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-
-            try self.emitLocalGet(result_ptr);
-        },
+        .str_concat => try self.emitStrConcatLowLevel(args, ll.unique_args),
         .str_contains => {
             // Check if string a contains substring b
             try self.generateLLStrSearch(args, .contains);
