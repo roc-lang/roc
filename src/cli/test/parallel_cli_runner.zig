@@ -9598,6 +9598,12 @@ fn printProblemResult(tc: CliCase, r: TestResult, ms: f64) void {
     printRepro(tc);
 }
 
+/// How many lines of a failing case's captured output to print. A crashing
+/// child's own report is the whole diagnosis on a platform the reader cannot
+/// reproduce on, and a Roc crash report plus a stack trace runs to dozens of
+/// lines, so the budget has to clear that with room to spare.
+const captured_output_line_budget = 200;
+
 fn printCapturedOutput(label: []const u8, capture: ?[]const u8) void {
     const data = capture orelse return;
     if (data.len == 0) return;
@@ -9607,7 +9613,7 @@ fn printCapturedOutput(label: []const u8, capture: ?[]const u8) void {
         if (line.len == 0) continue;
         if (count == 0) {
             std.debug.print("        {s}: {s}\n", .{ label, line });
-        } else if (count < 5) {
+        } else if (count < captured_output_line_budget) {
             std.debug.print("        {s}\n", .{line});
         } else {
             std.debug.print("        ... ({s} truncated)\n", .{label});
