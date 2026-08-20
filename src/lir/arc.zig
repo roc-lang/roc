@@ -5569,7 +5569,11 @@ const Inserter = struct {
     ) ResourceError!bool {
         const reads = try self.livenessRow(start, loop_keep);
         const leader = self.solution.leaderOf(local);
-        for (self.domain().refcounted_locals) |member_local| {
+        // Resource locals include concrete RC values plus the solver-authored
+        // ownership-unit and borrow-group representatives. Those synthetic
+        // anchors have liveness bits even though they need no concrete RC
+        // helper of their own, and must participate in lender-death checks.
+        for (self.domain().resource_locals) |member_local| {
             if (self.solution.leaderOf(member_local) != leader) continue;
             if (member_local == except) continue;
             const bit = self.rawLivenessBitOf(member_local) orelse
@@ -7574,6 +7578,76 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     try testing.expectEqual(@as(usize, 2), domain.resource_locals.len);
     try testing.expectEqual(@as(usize, 1), domain.group_leaders.len);
     try testing.expectEqual(@as(usize, 3), domain.livenessBitLen());
+}
+
+test "ARC lender-death query sees a live solver-only borrow anchor" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // The solver knows `anchor` participates in ARC because it is a borrow
+    // anchor, while emission knows only `concrete` has a concrete RC helper.
+    // This is the same split used by descriptor-driven projections: the
+    // anchor has a real liveness bit but must never receive an incref/decref.
+    const anchor = try f.local(.str);
+    const concrete = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, 0, ret);
+    const use_anchor = try f.expectStmt(anchor, assign_result);
+    const body = try f.assignRefLocal(concrete, anchor, use_anchor);
+    const proc = try f.addProc(&.{anchor}, body, .i64);
+
+    const solver_rc = [_]bool{ true, true, false };
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &solver_rc, &.{}, &.{proc}, true);
+    defer solution.deinit();
+    try testing.expectEqual(anchor, solution.leaderOf(concrete));
+
+    // Only the borrowed projection has a concrete RC representation. The
+    // lender is a solver-authored anchor in the exact resource domain.
+    const concrete_rc = [_]bool{ false, true, false };
+    var global_local_index = [_]u32{ no_proc_local_index, no_proc_local_index, no_proc_local_index };
+    var domain_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer domain_arena.deinit();
+    var domain = try ProcArcDomain.init(
+        domain_arena.allocator(),
+        &f.store,
+        &solution,
+        &concrete_rc,
+        &global_local_index,
+        f.store.getProcSpec(proc).frame_locals,
+    );
+    defer domain.clearGlobalIndices();
+    try testing.expectEqual(@as(usize, 2), domain.resource_locals.len);
+    try testing.expectEqual(@as(usize, 1), domain.refcounted_locals.len);
+
+    const stmt_node_indices = try testing.allocator.alloc(u32, f.store.cfStmtCount());
+    defer testing.allocator.free(stmt_node_indices);
+    @memset(stmt_node_indices, no_stmt_node_index);
+    var liveness_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer liveness_arena.deinit();
+    var liveness_graphs = [_]?Inserter.ReadBeforeRebindGraph{null};
+    var loop_liveness_caches = std.ArrayList(LoopLivenessCache).empty;
+    defer loop_liveness_caches.deinit(testing.allocator);
+    try loop_liveness_caches.append(testing.allocator, .{});
+
+    var inserter = Inserter{
+        .store = &f.store,
+        .layouts = &f.layouts,
+        .options = .{},
+        .solution = &solution,
+        .current_domain = &domain,
+        .current_source_proc = proc,
+        .current_proc_body = body,
+        .stmt_node_indices = stmt_node_indices,
+        .liveness_graphs = &liveness_graphs,
+        .liveness_allocator = liveness_arena.allocator(),
+        .loop_liveness_caches = &loop_liveness_caches,
+    };
+
+    // Excluding the concrete projection leaves only the live solver anchor.
+    // Scanning `refcounted_locals` here incorrectly reports the lender dead;
+    // scanning the exact `resource_locals` domain reports it live.
+    try testing.expect(try inserter.groupUsedInPathExcept(use_anchor, concrete, concrete, null));
 }
 
 test "RC pass-through: non-refcounted i64 block unchanged" {
