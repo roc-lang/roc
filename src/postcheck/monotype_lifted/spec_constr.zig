@@ -4289,8 +4289,8 @@ const Subst = struct {
     /// locals that share a binder but were monomorphized at different types are
     /// distinct bindings and must not read one another's substitution. Every
     /// local reference resolves through here, so the digest must come from the
-    /// store's memoized construction (which is why these helpers need the
-    /// program mutable); the uncached walk re-hashes the whole type per call.
+    /// store's memoized construction, which is why these helpers need the
+    /// program mutable.
     fn binderIdentityOf(program: *Ast.Program, local: Ast.LocalId) ?BinderIdentity {
         const local_data = program.getLocal(local);
         const binder = local_data.binder orelse return null;
@@ -12214,6 +12214,10 @@ fn valueType(program: *const Ast.Program, value: Value) Type.TypeId {
 /// the callee's own body) carry different ids and compare by digest. Both
 /// sides digest through the store's memoized construction, which is why this
 /// probe (and everything that reaches it) takes the program mutable.
+///
+/// The full digest treats aliases as opaque, so this deliberately answers
+/// false for an alias-wrapped type against its backing: that can miss an
+/// optimization but can never merge two representations invalidly.
 fn sameType(program: *Ast.Program, lhs: Type.TypeId, rhs: Type.TypeId) bool {
     if (lhs == rhs) return true;
     const lhs_digest = program.types.typeDigestCached(&program.names, lhs, null);

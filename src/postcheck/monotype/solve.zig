@@ -1328,6 +1328,24 @@ pub const InstGraph = struct {
         };
     }
 
+    /// Generated-iterator identities are representation-level: a type
+    /// nickname over the same item type must produce the same generated
+    /// iterator machinery, or an alias could duplicate that machinery and
+    /// alter unification behavior. Type digests treat aliases as opaque
+    /// nodes, so peel aliases to their backing before digesting here.
+    fn peelAliasBacking(types: *const Type.Store, ty: Type.TypeId) Type.TypeId {
+        var current = ty;
+        // Alias chains in checked output are finite, so this terminates.
+        while (true) {
+            const node = types.get(current);
+            if (node != .named) return current;
+            const named = node.named;
+            if (named.kind != .alias) return current;
+            const backing = named.backing orelse return current;
+            current = backing.ty;
+        }
+    }
+
     /// Seal producer identities for graph-owned iterator representations only
     /// after all type relations and representation decisions have been
     /// applied. Immutable Type-shaped snapshots of resolved nodes are used
@@ -1357,12 +1375,12 @@ pub const InstGraph = struct {
                     Common.invariant("forced-dynamic iterator identity did not have exactly one item argument");
                 }
                 const item = try self.provisionalTypeViewForNode(named.args[0]);
-                const item_digest = self.types.typeDigest(self.name_store, item);
+                const item_digest = self.types.typeDigest(self.name_store, peelAliasBacking(self.types, item));
                 hasher.update("roc.generated_iterator.forced_dynamic_identity");
                 hasher.update(&item_digest.bytes);
             } else {
                 const final = try self.provisionalTypeViewForNode(node);
-                const shape = self.types.typeDigest(self.name_store, final);
+                const shape = self.types.typeDigest(self.name_store, peelAliasBacking(self.types, final));
                 hasher.update("roc.generated_iterator.final_identity");
                 hasher.update(&shape.bytes);
                 if (provenance.callable_evidence) |evidence| {
