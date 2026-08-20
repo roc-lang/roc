@@ -165,10 +165,11 @@ test "issue 10804: derived encoder_for reaches through a nested application of t
     try test_env.assertOneTypeError("Missing Method");
 }
 
-// A declaration that applies itself at an ever-larger argument would need a
-// different codec shape at every level, so there is no finite set of
-// obligations to check and the walk has to say so rather than descend forever.
-test "issue 10804: derived encoder_for rejects a declaration that grows its own argument" {
+// A declaration that applies itself at an argument built from its own formal
+// has no last level, so its codec would need a different shape at each one.
+// That is a property of the declaration, and the walk has to report it rather
+// than follow the applications forever.
+test "issue 10804: derived encoder_for rejects a declaration that grows its own formal" {
     const source =
         \\Nest(a) := [Done, More(Nest(List(a)))].{
         \\  encoder_for : _
@@ -181,6 +182,43 @@ test "issue 10804: derived encoder_for rejects a declaration that grows its own 
     defer test_env.deinit();
 
     try test_env.assertOneTypeError("Missing Method");
+}
+
+// A formal passed straight through leaves the application the same size, so
+// applying a declaration to a sibling's larger argument is not growth.
+test "issue 10804: two applications of one declaration may differ in size" {
+    const source =
+        \\Wrap(a) :: { x : a }.{
+        \\  encoder_for : _
+        \\}
+        \\Chart :: { p : Wrap(Str), q : Wrap(List(Str)) }.{
+        \\  encoder_for : _
+        \\}
+        \\out = Json.to_str(Chart.{ p: { x: "s" }, q: { x: ["t"] } })
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+// The recursive occurrence's argument is a fixed type rather than one built
+// from the formal, so the applications reach a last level even though that
+// argument happens to be larger than the one the outer level was given.
+test "issue 10804: a self-application at a fixed larger argument still checks" {
+    const source =
+        \\SelfE(a) := { x : a, y : Try(SelfE({ p ?: Str }), [Null]) }.{
+        \\  encoder_for : _
+        \\}
+        \\to_json : SelfE(Str) -> Str
+        \\to_json = |n| Json.to_str(n)
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
 }
 
 // The recursive occurrence here carries a concrete argument, which

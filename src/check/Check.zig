@@ -30791,10 +30791,12 @@ fn generatedStructuralCodecBackingVar(
         method_ident,
     ) orelse return null;
     if (!isGeneratedStructuralCodecMethodBinding(method, kind)) return null;
-    if (try self.takeDerivedCodecBackingWalk(walk, nominal) != .walk_backing) return null;
-    // A declaration the checker already rejected has no shape to walk; the
-    // nominal validation this falls back to reports that rejection.
+    // Open the shape before recording the application: a declaration the
+    // checker already rejected has no shape to walk, and the nominal
+    // validation this falls back to has to see an unrecorded application to
+    // report that rejection.
     const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return null;
+    if (try self.takeDerivedCodecBackingWalk(walk, nominal) != .walk_backing) return null;
     // The rest of this constraint is spent inside this backing.
     walk.nominal_backing_depth += 1;
     return backing_var;
@@ -31896,6 +31898,11 @@ fn derivedCodecTypesEql(
     if (b.desc.content == .alias) {
         return try self.derivedCodecTypesEql(a.var_, self.types.getAliasBackingVar(b.desc.content.alias), assumed);
     }
+    // A solved field kind is a small enumeration, so two copies of one kind are
+    // the same kind; `defaulted` carries the identity of one written default.
+    if (a.desc.content == .field_presence and b.desc.content == .field_presence) {
+        return std.meta.eql(a.desc.content.field_presence, b.desc.content.field_presence);
+    }
     if (a.desc.content != .structure or b.desc.content != .structure) return false;
 
     if ((try assumed.getOrPut(.{ .a = a.var_, .b = b.var_ })).found_existing) return true;
@@ -31959,12 +31966,8 @@ fn derivedCodecVarsEql(
     assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
 ) Allocator.Error!bool {
     if (a_vars.len != b_vars.len) return false;
-    // Both lists point into the types store, which the comparison reads through.
-    const pairs = try self.gpa.alloc(DerivedCodecVarPair, a_vars.len);
-    defer self.gpa.free(pairs);
-    for (pairs, a_vars, b_vars) |*pair, a_var, b_var| pair.* = .{ .a = a_var, .b = b_var };
-    for (pairs) |pair| {
-        if (!try self.derivedCodecTypesEql(pair.a, pair.b, assumed)) return false;
+    for (a_vars, b_vars) |a_var, b_var| {
+        if (!try self.derivedCodecTypesEql(a_var, b_var, assumed)) return false;
     }
     return true;
 }
@@ -31981,12 +31984,13 @@ fn derivedCodecRecordFieldsEql(
     for (a_fields.items(.name), b_fields.items(.name)) |a_name, b_name| {
         if (!a_name.eql(b_name)) return false;
     }
-    // A field whose kind is still a variable is left as "different": the kind
-    // is its own axis and this walk has no reason to decide it.
     for (a_fields.items(.presence), b_fields.items(.presence)) |a_presence, b_presence| {
-        if (a_presence.presenceVar() != null or b_presence.presenceVar() != null) return false;
-    }
-    for (a_fields.items(.presence), b_fields.items(.presence)) |a_presence, b_presence| {
+        const a_kind = a_presence.presenceVar();
+        const b_kind = b_presence.presenceVar();
+        if ((a_kind == null) != (b_kind == null)) return false;
+        if (a_kind) |a_kind_var| {
+            if (!try self.derivedCodecTypesEql(a_kind_var, b_kind.?, assumed)) return false;
+        }
         if (!try self.derivedCodecTypesEql(a_presence.typeVar(), b_presence.typeVar(), assumed)) return false;
     }
     return true;
@@ -32008,6 +32012,98 @@ fn derivedCodecTagsEql(
         if (!try self.derivedCodecVarsEql(self.types.sliceVars(a_args), self.types.sliceVars(b_args), assumed)) return false;
     }
     return true;
+}
+
+/// Whether this declaration's derived codec would need a different shape at
+/// every level: somewhere in its backing template it applies a declaration at
+/// an argument that properly contains one of its own formals, so following the
+/// applications substitutes a strictly bigger type each time around. This is a
+/// property of the declaration, read off the template where the formals are
+/// still visible, not of any one application.
+fn derivedCodecDeclGrowsItsFormals(self: *Self, decl_idx: types_mod.NominalDecl.Idx) Allocator.Error!bool {
+    const decl = self.types.getNominalDecl(decl_idx);
+    if (!decl.isValid()) return false;
+    const formals = try self.gpa.dupe(Var, self.types.sliceVars(decl.formals));
+    defer self.gpa.free(formals);
+    if (formals.len == 0) return false;
+    for (formals) |*formal| formal.* = self.types.resolveVar(formal.*).var_;
+
+    var pending = std.ArrayList(Var).empty;
+    defer pending.deinit(self.gpa);
+    var seen = std.AutoHashMap(Var, void).init(self.gpa);
+    defer seen.deinit();
+    try pending.append(self.gpa, decl.backing);
+
+    while (pending.pop()) |candidate| {
+        const resolved = self.types.resolveVar(candidate);
+        if ((try seen.getOrPut(resolved.var_)).found_existing) continue;
+        if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+            const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(resolved.desc.content.structure.nominal_type));
+            defer self.gpa.free(args);
+            for (args) |arg| {
+                if (try self.derivedCodecArgGrowsAFormal(arg, formals)) return true;
+            }
+        }
+        try self.pushDerivedCodecComponents(&pending, resolved.var_);
+    }
+    return false;
+}
+
+/// Whether `arg` is built from a formal rather than being one: a formal passed
+/// straight through leaves the application the same size, while a formal under
+/// a constructor makes it bigger.
+fn derivedCodecArgGrowsAFormal(self: *Self, arg: Var, formals: []const Var) Allocator.Error!bool {
+    const arg_root = self.types.resolveVar(arg).var_;
+    for (formals) |formal| {
+        if (formal == arg_root) return false;
+    }
+
+    var pending = std.ArrayList(Var).empty;
+    defer pending.deinit(self.gpa);
+    var seen = std.AutoHashMap(Var, void).init(self.gpa);
+    defer seen.deinit();
+    try self.pushDerivedCodecComponents(&pending, arg_root);
+
+    while (pending.pop()) |candidate| {
+        const root = self.types.resolveVar(candidate).var_;
+        if ((try seen.getOrPut(root)).found_existing) continue;
+        for (formals) |formal| {
+            if (formal == root) return true;
+        }
+        try self.pushDerivedCodecComponents(&pending, root);
+    }
+    return false;
+}
+
+/// The components a type is built from, one level down.
+fn pushDerivedCodecComponents(self: *Self, pending: *std.ArrayList(Var), var_: Var) Allocator.Error!void {
+    switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+                try pending.append(self.gpa, record.ext);
+            },
+            .record_unbound => |field_range| {
+                const fields = self.types.getRecordFieldsSlice(field_range);
+                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+            },
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| try pending.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                try pending.append(self.gpa, tag_union.ext);
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                try pending.append(self.gpa, func.ret);
+            },
+            .empty_record, .empty_tag_union => {},
+        },
+        .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
+        .flex, .rigid, .err, .field_presence => {},
+    }
 }
 
 /// Whether this nominal application's derived-codec backing still needs
@@ -32037,18 +32133,21 @@ fn takeDerivedCodecBackingWalk(
     var assumed = std.AutoHashMap(DerivedCodecVarPair, void).init(self.gpa);
     defer assumed.deinit();
 
+    var seen_decl = false;
     for (walk.walked_apps.items) |app| {
-        if (app.decl != decl_idx or app.args_len != args.len) continue;
+        if (app.decl != decl_idx) continue;
+        seen_decl = true;
+        if (app.args_len != args.len) continue;
         assumed.clearRetainingCapacity();
         if (try self.derivedCodecVarsEql(walk.appArgs(app), args, &assumed)) return .accounted_for;
-
-        // The same declaration at an argument that contains what an earlier
-        // level was given is a declaration applying itself at a bigger type.
-        // Its codec would need a different shape at every level, so there is
-        // no finite set of derivations to check and none to lower either.
-        assumed.clearRetainingCapacity();
-        if (try self.derivedCodecArgsGrew(walk.appArgs(app), args, &assumed)) return .unbounded;
     }
+
+    // Reaching one declaration again at a shape the walk has not accounted for
+    // is only finite when the declaration passes its formals through. One that
+    // grows them has no last level to reach, so there is no finite set of
+    // obligations to check and none to lower either.
+    if (seen_decl and try self.derivedCodecDeclGrowsItsFormals(decl_idx)) return .unbounded;
+
     try walk.recordApp(decl_idx, args);
     return .walk_backing;
 }
@@ -32059,81 +32158,12 @@ const DerivedCodecBackingWalk = enum {
     /// Nothing to do: an application of this shape is already accounted for,
     /// or the type is a builtin whose codec is the format protocol.
     accounted_for,
-    /// The declaration applies itself at an ever-larger argument, so its
-    /// derived codec can never be monomorphized.
+    /// The declaration grows its own formals, so its derived codec can never
+    /// be monomorphized.
     unbounded,
     /// Walk the backing shape.
     walk_backing,
 };
-
-/// Whether `args` contains what `earlier_args` was given, at the same
-/// positions and strictly somewhere.
-fn derivedCodecArgsGrew(
-    self: *Self,
-    earlier_args: []const Var,
-    args: []const Var,
-    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
-) Allocator.Error!bool {
-    var grew = false;
-    for (earlier_args, args) |earlier_arg, arg| {
-        assumed.clearRetainingCapacity();
-        if (try self.derivedCodecTypesEql(earlier_arg, arg, assumed)) continue;
-        if (!try self.derivedCodecTypeContains(arg, earlier_arg, assumed)) return false;
-        grew = true;
-    }
-    return grew;
-}
-
-/// Whether some component of `haystack` is the same shape as `needle`.
-fn derivedCodecTypeContains(
-    self: *Self,
-    haystack: Var,
-    needle: Var,
-    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
-) Allocator.Error!bool {
-    var pending = std.ArrayList(Var).empty;
-    defer pending.deinit(self.gpa);
-    var seen = std.AutoHashMap(Var, void).init(self.gpa);
-    defer seen.deinit();
-
-    try self.pushDerivedCodecComponents(&pending, haystack);
-    while (pending.pop()) |candidate| {
-        const root = self.types.resolveVar(candidate).var_;
-        if ((try seen.getOrPut(root)).found_existing) continue;
-        assumed.clearRetainingCapacity();
-        if (try self.derivedCodecTypesEql(root, needle, assumed)) return true;
-        try self.pushDerivedCodecComponents(&pending, root);
-    }
-    return false;
-}
-
-fn pushDerivedCodecComponents(self: *Self, pending: *std.ArrayList(Var), var_: Var) Allocator.Error!void {
-    switch (self.types.resolveVar(var_).desc.content) {
-        .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
-            .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
-            .record => |record| {
-                const fields = self.types.getRecordFieldsSlice(record.fields);
-                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
-            },
-            .record_unbound => |field_range| {
-                const fields = self.types.getRecordFieldsSlice(field_range);
-                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
-            },
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                for (tags.items(.args)) |tag_args| try pending.appendSlice(self.gpa, self.types.sliceVars(tag_args));
-            },
-            .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
-                try pending.append(self.gpa, func.ret);
-            },
-            .empty_record, .empty_tag_union => {},
-        },
-        .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
-        .flex, .rigid, .err, .field_presence => {},
-    }
-}
 
 fn validateDerivedParseVar(
     self: *Self,
