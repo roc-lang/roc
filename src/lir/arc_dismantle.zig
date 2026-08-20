@@ -1270,6 +1270,17 @@ pub fn compute(
         const origin = places.get(edge.source) orelse continue;
         if (origin.root == ambiguous_index) continue;
         try result.complete_takes.put(gpa, @enumFromInt(edge.kind.projection), @enumFromInt(origin.root));
+
+        // A complete projection can move its root's exact unit in an owned
+        // parameter emission. Publish that mechanical capability to variant
+        // admission just like an ordinary field dismantle; the path solver
+        // remains responsible for proving whether the move is legal at this
+        // particular read (including outcome-conditioned restitution).
+        const source_info = param_info.get(origin.root) orelse continue;
+        if (source_info.proc == ambiguous_index) continue;
+        const source_proc: LIR.LirProcSpecId = @enumFromInt(source_info.proc);
+        if (solution.isPinnedProc(source_proc)) continue;
+        result.owned_only_param_benefits[source_info.proc] |= arc_sig.paramBit(source_info.position).?;
     }
 
     // A leaf procedure's ordinary field dismantle makes its parameter

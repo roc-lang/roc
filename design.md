@@ -9278,17 +9278,142 @@ added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,
 not by the theoretical vector space.
 
-A build without mode specialization is the same worklist with every demand
-vector forced to the solved `RcSig`, which yields exactly one variant per
-proc. Dev builds (`--opt=dev`) and compile-time evaluation use that
-single-variant form, because solving is the only new compile-time cost they
-accept. Interpreter builds (`--opt=interpreter`) also use the single-variant
-form. `--opt=speed` and `--opt=size` both enable full specialization;
-specialization clones proc bodies, but each variant carries fewer RC
-statements, and variant counts are bounded by realized demand vectors. All
-forms run the identical solver; they differ only in which demand vectors get
-a variant, so build modes can never disagree about observable program
-results—only RC statement placement and proc count differ.
+A build without optional mode specialization suppresses general cost-only
+demand vectors, but it does not force every call to the solved base `RcSig`.
+Two exact ownership schedules remain mandatory in every ARC run: an owned
+field-take variant when a complete stored unit must move out of an aggregate,
+and an outcome-restitution variant when the caller proved the explicit result
+refinement declared below. The base convention cannot represent either
+schedule without manufacturing an ownership unit or dropping a conditionally
+returned one, so these are correctness-preserving ARC forms rather than
+optional code-growth optimization. Dev builds, compile-time evaluation, and
+interpreter LIR all admit those exact demanded variants even when their target
+sets general specialization to disabled. The value-model interpreter follows
+their emitted LIR ownership statements mechanically; it does not infer the
+variant from runtime counts. `--opt=speed` and `--opt=size` additionally enable
+general mode specialization. All forms run the identical solver and therefore
+may differ only in optional RC placement and proc count, never observable
+program results.
+
+### Outcome-Conditioned Argument Restitution
+
+An owned direct-call argument may be returned to its caller as an ownership
+unit without appearing in the procedure's source-level result. This happens
+when the procedure consumes the argument on some result outcomes but leaves
+the exact entry unit untouched on others. Checked consuming wrappers are the
+representative example: the success outcome moves an input collection into the
+result, while the failure outcome returns only an error value and must restore
+the still-unchanged input unit to the caller.
+
+Restitution is an ARC calling-convention declaration, not a source tag convention and
+not a runtime value. A solved source procedure keeps its ordinary
+unconditional base `RcSig`; a separate available-outcome span may be demanded
+only by a proved call site, selecting an opt-in procedure variant. `RcSig`
+carries that span only on the selected variant. Each row contains
+one committed top-level result discriminant and a mask of owned parameter
+positions whose exact entry units are present again after that outcome. The
+rows cover every normally returned discriminant admitted by the signature;
+an absent or incomplete span means that the procedure has no restitution
+capability. Pinned, hosted, erased, dictionary-dispatched, bodyless, and
+address-escaping procedures never carry restitution rows.
+
+The initial closed capability is deliberately exact and total. It applies only
+to a direct Roc procedure whose committed return layout is a top-level tag
+union whose committed representation contains RC state (so the certifier can
+track the result value), whose every normal return is reached with one
+statically known `assign_tag` discriminant for the current binding of the
+returned local, and whose ownership-neutral
+control-flow graph can account mechanically for every ownership-moving
+statement on every path. The solver propagates one bit per represented owned
+entry parameter. A consuming call position, consuming low-level argument,
+aggregate operand, tag payload, store operand, moving Boxy operand, or returned
+same-value alias clears that entry bit. Borrowing reads leave it set. At each
+normal return, the bits still set are intersected with every other path that
+returns the same discriminant. A loop is the ordinary finite fixed point over
+`(statement, remaining-entry-mask, known-result-discriminant)` states.
+
+Every write to the returned local first kills the current discriminant witness;
+only an `assign_tag` to that exact binding establishes a replacement. Thus an
+alias, `set_local`, call result, store, or other rebind between tag construction
+and return rejects the capability rather than reusing stale tag information.
+The initial join rule carries a known witness only across a jump whose body is
+the exact `ret` of that returned local; any other join-carried witness is
+unsupported. The capability is rejected as a whole, rather than weakened or
+guessed, when any normal return lacks a current witness; a returned
+discriminant is not covered; the procedure or an invoked ownership operation
+falls outside the declared transfer rules; a same-value origin is ambiguous or
+rebound; or the control-flow graph contains an edge for which the exact
+ownership state cannot be represented by this domain. Rejection selects the
+ordinary unconditional owned convention. This is a closed ARC capability boundary
+for the staged feature, not a fallback that later stages may compensate for.
+Expanding the boundary requires declaring the additional transfer equation
+here first and pinning both its accepted and rejected cases with tests.
+
+A caller uses restitution only when the result-control relation is explicit in
+LIR. Until that proof succeeds the call continues to target the unconditional
+base procedure, which releases every unreturned owned argument itself. The
+direct call result may pass through pure same-value aliases, then one
+explicit discriminant read must feed a switch. Each explicit switch arm is
+matched by its integer value; the default arm denotes exactly the signature's
+outcome rows not named by explicit arms. For an argument position, an arm may
+restore the unit only when every outcome reaching that arm carries the bit.
+The caller proves that no occurrence of the argument's ownership place exists
+between the call and refinement or on an arm where the bit is absent. Uses
+after a shared continuation therefore reject the transfer unless every outcome
+reaching that continuation restores it. No source symbol, tag name, function
+name, source pattern, range proof, or backend behavior participates in this
+decision.
+
+The initial caller domain also requires every potentially restitutable
+argument position to name a distinct representation-transparent ownership
+place. Passing the same local twice, or passing it together with a same-value
+alias, rejects the outcome variant and uses the unconditional base convention;
+the must-owned set cannot yet represent two independently returned units at
+one place. After ARC materialization, explicit `incref`, `decref`, conditional
+`decref`, and `free` bookkeeping may appear between the discriminant read and
+its switch. These statements cannot rebind the scalar discriminant relation,
+so certification preserves its explicit provenance across them while still
+validating their balance effects against the exact restitution receipt. Every
+other intervening statement kills the refinement provenance.
+
+When the proof holds, call transfer removes the argument unit exactly as for
+an ordinary owned call and targets the outcome-specialized variant. The
+matching switch edge places that same unit back in the must-owned state. On
+the variant's callee side, a return carrying the signature's bit omits the
+parameter's terminal release; the base procedure and all other outcomes
+consume or release it normally. These are compile-time ownership-state transitions only. The
+post-ARC program contains ordinary calls, switches, `incref`, and `decref`
+statements, and backends continue to follow those statements without knowing
+about conditional ownership.
+
+Ownership places compose with restitution. If an ownership-complete field or
+tag-payload read moves a dying aggregate's stored unit into a checked call, a
+restored outcome places the root ownership-place unit back before that
+outcome's later field or tag-payload read. Consequently the success path may
+mutate the read value in place while the
+failure path may still use the unchanged aggregate, without manufacturing a
+second unit. The field-take rules remain responsible for proving the complete
+field or tag-payload read; restitution never guesses aggregate structure.
+
+Range proving composes by deleting unreachable result outcomes or their
+switch arms before ARC, which may make the ordinary unconditional transfer
+sufficient. It is neither a premise nor a substitute for restitution: the
+unproved checked path must have the same uniqueness behavior. Interpreter and
+compile-time LIR runs consume the same explicit mandatory outcome variants and
+RC statements; neither reconstructs this ARC-only calling convention from
+runtime reference counts.
+
+The debug certifier derives the outcome relation independently from emitted
+procedure control flow. On a restituting callee return it accepts an otherwise
+live owned parameter only when that exact return discriminant's row carries the
+bit, and requires the unit to remain the parameter's unchanged entry unit. At
+each direct call it treats an owned argument as spent until the explicit result
+switch, restores it only on arms whose complete signature outcome set carries
+the bit, and rejects any intervening or non-restored use. It also verifies that
+every signature row has a reachable matching return and that every normal
+return is covered. Signature claims and caller refinement must both certify;
+there is no trusted emission-side side table and no incomplete certification
+path.
 
 ### In-Place Mutation Interaction
 
@@ -9352,8 +9477,19 @@ Ownership-complete aggregate reads and borrowed pure aliases form explicit
 ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
 If the final read result binds owned, that read moves the unit only when the
-root unit is present and the root's liveness group has no later use on that
-path; otherwise it retains exactly as an ordinary read would. A borrowed result
+root unit is present and the ownership place has no later RC-bearing use on
+that path; otherwise it retains exactly as an ordinary read would. A pure
+same-value alias followed only by non-refcounted field reads is
+representation-only: an inline struct's scalar bytes remain available after
+its stored RC units move or are released, so such reads do not keep the
+ownership place live. The certifier represents this state explicitly as a
+struct representation shell. A shell may cross a join, may be copied only by
+a same-layout pure local alias, and may be used only as the source of a
+non-refcounted field read. It cannot be consumed, released again, passed to a
+call, or used for an RC-bearing field or payload read. Thus backends still see
+ordinary field reads and explicit RC statements, while certification keeps
+representation availability distinct from ownership-unit availability. A
+borrowed result
 keeps the root unit key until a later consuming operation makes the same
 path-sensitive decision. This applies to ordinary owned locals and to owned
 join parameters; join parameters are not themselves assigned one global place
@@ -9448,12 +9584,13 @@ container is independently relevant, the read stays borrowed. Restoration of
 the remaining read chains happens only after all representatives exist, so
 correctness is independent of local numbering.
 
-Partial dismantling across diverging paths -- a field consumed in one switch
-arm and not another -- is future work: it needs per-path residual masks, and
-the spine rule above is precisely what makes the residual global. Until then,
-the record-update lowering's spread-read hoisting is what keeps conditional
-consumers in-place, by ending the container's liveness before the mutation
-rather than dismantling it.
+Partial dismantling across diverging paths -- a field remaining owned after a
+switch in one arm but consumed in another -- is future work: it needs per-path
+residual masks, and the spine rule above is precisely what makes the residual
+global. This is distinct from arms that settle the whole RC unit in different
+ways (for example, one arm takes the sole optional payload while the proven
+Missing arm releases the empty container): both reach the continuation with
+the same zero-unit representation shell and require no residual mask.
 
 ### Debug Borrow Certifier
 

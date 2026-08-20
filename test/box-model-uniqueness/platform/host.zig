@@ -54,8 +54,10 @@ fn hostedBranch() callconv(.c) bool {
 }
 
 extern fn roc_init() callconv(.c) Box;
+extern fn roc_init_append() callconv(.c) Box;
 extern fn roc_update_straight(Box) callconv(.c) Box;
 extern fn roc_update_adapter(Box) callconv(.c) Box;
+extern fn roc_update_append(Box) callconv(.c) Box;
 extern fn roc_cursor(Box) callconv(.c) u64;
 
 comptime {
@@ -67,8 +69,12 @@ comptime {
 
 fn __main() callconv(.c) void {}
 
-fn checkLoop(comptime update: *const fn (Box) callconv(.c) Box, comptime label: []const u8) bool {
-    var boxed = roc_init();
+fn checkLoop(
+    comptime init: *const fn () callconv(.c) Box,
+    comptime update: *const fn (Box) callconv(.c) Box,
+    comptime label: []const u8,
+) bool {
+    var boxed = init();
     for (0..8) |iteration| {
         host_env.bytes = 0;
         boxed = update(boxed);
@@ -87,9 +93,10 @@ fn checkLoop(comptime update: *const fn (Box) callconv(.c) Box, comptime label: 
 }
 
 fn main(_: c_int, _: [*][*:0]u8) callconv(.c) c_int {
-    const straight_ok = checkLoop(&roc_update_straight, "straight");
-    const adapter_ok = checkLoop(&roc_update_adapter, "adapter");
-    if (!straight_ok or !adapter_ok) return 1;
+    const straight_ok = checkLoop(&roc_init, &roc_update_straight, "straight");
+    const adapter_ok = checkLoop(&roc_init, &roc_update_adapter, "adapter");
+    const append_ok = checkLoop(&roc_init_append, &roc_update_append, "append-after-oob");
+    if (!straight_ok or !adapter_ok or !append_ok) return 1;
     std.debug.print("box model updates stayed in place\n", .{});
     return 0;
 }

@@ -2,7 +2,9 @@ platform ""
     requires {
         [Model : model] for main : {
             init : {} -> model,
+            init_append : {} -> model,
             update : model -> model,
+            update_append : model -> model,
             cursor : model -> U64,
         }
     }
@@ -10,8 +12,10 @@ platform ""
     packages {}
     provides {
         "roc_init": init_for_host,
+        "roc_init_append": init_append_for_host,
         "roc_update_straight": update_straight_for_host,
         "roc_update_adapter": update_adapter_for_host!,
+        "roc_update_append": update_append_for_host!,
         "roc_cursor": cursor_for_host,
     }
     hosted { "roc_host_branch": Host.branch! }
@@ -32,6 +36,9 @@ import Host
 init_for_host : {} -> Box(Model)
 init_for_host = |{}| Box.box((main.init)({}))
 
+init_append_for_host : {} -> Box(Model)
+init_append_for_host = |{}| Box.box((main.init_append)({}))
+
 update_straight_for_host : Box(Model) -> Box(Model)
 update_straight_for_host = |boxed| Box.box((main.update)(Box.unbox(boxed)))
 
@@ -39,6 +46,13 @@ update_adapter_for_host! : Box(Model) => Box(Model)
 update_adapter_for_host! = |boxed| {
     model = Box.unbox(boxed)
     next = if Host.branch!() (main.update)(model) else (main.update)((main.update)(model))
+    Box.box(next)
+}
+
+update_append_for_host! : Box(Model) => Box(Model)
+update_append_for_host! = |boxed| {
+    model = Box.unbox(boxed)
+    next = if Host.branch!() (main.update_append)(model) else model
     Box.box(next)
 }
 
