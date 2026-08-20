@@ -9339,14 +9339,14 @@ normal return, the bits still set are intersected with every other path that
 returns the same discriminant. A loop is the ordinary finite fixed point over
 the per-resource rows below.
 
-The analysis is a polynomial product of independent finite resource facts, not
+The analysis is a polynomial product of independent finite resource states, not
 an enumeration of parameter subsets. For each represented entry parameter
 `p`, it solves the two-point ownership row `present_p < spent_p` over
 `(statement, known-result-discriminant)`: a consumption changes `present_p` to
 `spent_p`, a second consumption rejects the capability, and control-flow joins
 meet the row independently for `p`. Outcome masks are assembled only after all
 parameter rows converge. The result-discriminant witness is one shared finite
-control fact; it is never multiplied by a full parameter subset. Complexity is
+control state; it is never multiplied by a full parameter subset. Complexity is
 therefore polynomial in statements, represented parameters, and committed
 result variants. A work item or visited key containing the complete remaining
 parameter mask is forbidden, because independent branches can otherwise
@@ -9415,12 +9415,12 @@ failure path may still use the unchanged aggregate, without manufacturing a
 second unit. The field-take rules remain responsible for proving the complete
 field or tag-payload read; restitution never guesses aggregate structure.
 For a partial committed struct field, the initial closed capability additionally
-requires the projection binding's only operand read to be that direct call.
+requires the field-read binding's only operand read to be that direct call.
 Dismantle analysis records `(call statement, argument position) -> (root,
 field identity, refinement switch)` as explicit producer data. The caller ARC
 solver consumes that record: a restituting edge refills exactly that field in
 the root residual mask, while every other edge leaves it absent. Any additional
-projection-binding use, ambiguous call position, unsupported result
+field-read-binding use, ambiguous call position, unsupported result
 continuation, or non-owned callee position rejects this field-place capability
 and keeps the unconditional schedule. Emission never rescans the call
 continuation to reconstruct the field or refinement.
@@ -9689,7 +9689,7 @@ post-take whole use, a second take of one field, a missing or extra edge
 normalization, a receipt that restores a spent field, and any merge that would
 have to union or guess ownership. Neither ARC nor certification consults a
 backend, mutation name, source pattern, or runtime uniqueness check to recover
-these facts.
+this ownership state.
 
 ### Debug Borrow Certifier
 
