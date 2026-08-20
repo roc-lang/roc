@@ -59,5 +59,12 @@ main = {
         }
         { model: next_model, effects: [Observe] }
     },
+    update_erased: |model| {
+        bump = model.cursor % 2
+        {
+            model,
+            apply: |current| { ..current, cursor: current.cursor + bump },
+        }
+    },
     cursor: |model| model.cursor,
 }

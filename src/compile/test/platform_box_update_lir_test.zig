@@ -82,6 +82,7 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
         "update_adapter_for_host!",
         "update_append_for_host!",
         "update_pattern_for_host!",
+        "update_erased_for_host!",
         "cursor_for_host",
     };
     for (&wrapper_names) |name| {
@@ -144,6 +145,7 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
     var found_append = false;
     var found_cursor = false;
     var found_pattern = false;
+    var found_erased = false;
 
     for (store.getProcSpecs(), 0..) |_, index| {
         const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
@@ -166,6 +168,9 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
             // neither checked mutation needs a defensive list retain.
             try expectProcCounts(counts, 1, 1, 0, 1);
             found_pattern = true;
+        } else if (std.mem.eql(u8, name, "update_erased_for_host!")) {
+            try expectProcCounts(counts, 1, 0, 0, 0);
+            found_erased = true;
         } else if (std.mem.eql(u8, name, "cursor_for_host")) {
             try expectProcCounts(counts, 1, 0, 0, 0);
             found_cursor = true;
@@ -177,10 +182,11 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
     try std.testing.expect(found_append);
     try std.testing.expect(found_cursor);
     try std.testing.expect(found_pattern);
+    try std.testing.expect(found_erased);
     try std.testing.expectEqual(@as(usize, 0), total.prepare_update);
     try std.testing.expectEqual(@as(usize, 0), total.owned_unbox);
-    try std.testing.expectEqual(@as(usize, 5), total.borrowed_unbox);
-    try std.testing.expectEqual(@as(usize, 5), total.box_release);
+    try std.testing.expectEqual(@as(usize, 6), total.borrowed_unbox);
+    try std.testing.expectEqual(@as(usize, 6), total.box_release);
     try std.testing.expectEqual(@as(usize, 5), total.list_set);
     try std.testing.expectEqual(@as(usize, 2), total.list_replace);
     try std.testing.expectEqual(@as(usize, 0), total.box_retain);

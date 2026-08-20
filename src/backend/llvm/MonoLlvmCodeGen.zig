@@ -3300,8 +3300,8 @@ pub const MonoLlvmCodeGen = struct {
                 .local, .runtime, .dict_method_arg, .dict_method_hidden => return error.CompilationFailed,
             };
             const wip = self.wip orelse return error.CompilationFailed;
-            const ids = wip.alloca(.normal, .i32, try self.boxyInt(.i32, captures.len), LlvmBuilder.Alignment.fromByteUnits(4), .default, "boxy_capture_ids") catch return error.OutOfMemory;
-            const descs = wip.alloca(.normal, ptr_ty, try self.boxyInt(.i32, captures.len), self.targetPointerAlignment(), .default, "boxy_capture_descs") catch return error.OutOfMemory;
+            const ids = try self.allocEntryBlockSlot(.i32, @intCast(captures.len), LlvmBuilder.Alignment.fromByteUnits(4), "boxy_capture_ids");
+            const descs = try self.allocEntryBlockSlot(ptr_ty, @intCast(captures.len), self.targetPointerAlignment(), "boxy_capture_descs");
             for (0..captures.len) |i| {
                 const capture = GuardedList.at(captures, i);
                 const id_ptr = try self.offsetPtr(ids, @intCast(i * 4));
@@ -3362,8 +3362,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn boxyOutDescPtr(self: *MonoLlvmCodeGen, name: []const u8) Error!LlvmBuilder.Value {
-        const wip = self.wip orelse return error.CompilationFailed;
-        return wip.alloca(.normal, try self.ptrType(), .@"1", self.targetPointerAlignment(), .default, name) catch return error.OutOfMemory;
+        return try self.allocEntryBlockSlot(try self.ptrType(), 1, self.targetPointerAlignment(), name);
     }
 
     fn emitBoxyBox(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
@@ -3542,7 +3541,7 @@ pub const MonoLlvmCodeGen = struct {
         const arg_stride = desc_offset + word;
 
         const args_ptr = if (arg_locals.len == 0) try self.boxyNullPtr() else blk: {
-            const raw = wip.alloca(.normal, .i8, try self.boxyInt(.i32, arg_locals.len * arg_stride), self.targetPointerAlignment(), .default, "boxy_call_args") catch return error.OutOfMemory;
+            const raw = try self.allocEntryBlockSlot(.i8, @intCast(arg_locals.len * arg_stride), self.targetPointerAlignment(), "boxy_call_args");
             for (0..arg_locals.len) |i| {
                 const local = GuardedList.at(arg_locals, i);
                 const desc_local = GuardedList.at(arg_desc_locals, i);
@@ -3556,7 +3555,7 @@ pub const MonoLlvmCodeGen = struct {
         };
 
         const hidden_ptr = if (hidden_locals.len == 0) try self.boxyNullPtr() else blk: {
-            const raw = wip.alloca(.normal, ptr_ty, try self.boxyInt(.i32, hidden_locals.len), self.targetPointerAlignment(), .default, "boxy_hidden_args") catch return error.OutOfMemory;
+            const raw = try self.allocEntryBlockSlot(ptr_ty, @intCast(hidden_locals.len), self.targetPointerAlignment(), "boxy_hidden_args");
             for (0..hidden_locals.len) |i| {
                 const local = GuardedList.at(hidden_locals, i);
                 try self.storePointer(try self.offsetPtr(raw, @intCast(i * word)), try self.loadPointer(self.slot(local).ptr));
@@ -3594,9 +3593,8 @@ pub const MonoLlvmCodeGen = struct {
         default_layout: layout.Idx,
         fractional: bool,
     ) Error!void {
-        const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
-        const literal_ptr = wip.alloca(.normal, .i128, .@"1", LlvmBuilder.Alignment.fromByteUnits(16), .default, "boxy_literal") catch return error.OutOfMemory;
+        const literal_ptr = try self.allocEntryBlockSlot(.i128, 1, LlvmBuilder.Alignment.fromByteUnits(16), "boxy_literal");
         try self.storeI128Literal(literal_ptr, .i128, value);
         const out_desc = try self.boxyOutDescPtr("boxy_literal_desc");
         try self.callBoxyVoid(
@@ -3715,7 +3713,6 @@ pub const MonoLlvmCodeGen = struct {
         try self.prepareLocalWrite(target);
         try self.materializeLocalIfDeferred(closure);
         const builder = self.builder orelse return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         const closure_ptr = try self.loadPointer(self.slot(closure).ptr);
         const fn_ptr = try self.loadPointer(closure_ptr);
@@ -3761,8 +3758,7 @@ pub const MonoLlvmCodeGen = struct {
         const arg_descs_ptr = if (arg_desc_locals.len == 0)
             builder.nullValue(ptr_ty) catch return error.OutOfMemory
         else blk: {
-            const desc_count = builder.intValue(.i32, arg_desc_locals.len) catch return error.OutOfMemory;
-            const desc_buf = wip.alloca(.normal, ptr_ty, desc_count, self.targetPointerAlignment(), .default, "erased_arg_descs") catch return error.OutOfMemory;
+            const desc_buf = try self.allocEntryBlockSlot(ptr_ty, @intCast(arg_desc_locals.len), self.targetPointerAlignment(), "erased_arg_descs");
             for (0..arg_desc_locals.len) |i| {
                 const desc_local = GuardedList.at(arg_desc_locals, i);
                 try self.storePointer(
@@ -3821,7 +3817,6 @@ pub const MonoLlvmCodeGen = struct {
         if (capture) |capture_local| try self.materializeLocalIfDeferred(capture_local);
         if (reuse) |reuse_local| try self.materializeLocalIfDeferred(reuse_local);
         const builder = self.builder orelse return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         const capture_size = if (capture_layout) |idx| self.layoutByteSize(idx) else 0;
         const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size));
@@ -3848,14 +3843,12 @@ pub const MonoLlvmCodeGen = struct {
         const metadata_desc = if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
 
         const data_ptr = if (reuse) |reuse_local| blk: {
-            const capture_src = wip.alloca(
-                .normal,
+            const capture_src = try self.allocEntryBlockSlot(
                 .i8,
-                try self.boxyInt(.i32, total_capture_size),
+                total_capture_size,
                 LlvmBuilder.Alignment.fromByteUnits(builtins.erased_callable.capture_alignment),
-                .default,
                 "erased_repack_capture",
-            ) catch return error.OutOfMemory;
+            );
             if (capture) |capture_local| {
                 if (capture_size > 0) {
                     try self.copyBytes(capture_src, self.slot(capture_local).ptr, capture_size, self.alignmentForLayout(capture_layout.?));
@@ -12669,9 +12662,16 @@ pub const MonoLlvmCodeGen = struct {
                 const tag = wip.instructions.get(@intFromEnum(instruction)).tag;
                 if (builtin.mode == .Debug and block_idx != 0) {
                     if (tag == .alloca or tag == .@"alloca inalloca") {
+                        const builder = self.builder orelse return error.CompilationFailed;
+                        const instruction_index = @intFromEnum(instruction);
+                        const instruction_name = if (wip.strip)
+                            "<stripped>"
+                        else
+                            (wip.names.items[instruction_index].slice(builder) orelse "<anonymous>");
+                        const function_name = wip.function.name(builder).slice(builder) orelse "<anonymous>";
                         std.debug.panic(
-                            "LLVM/codegen invariant violated: fixed-lifetime alloca emitted outside the procedure entry block",
-                            .{},
+                            "LLVM/codegen invariant violated: fixed-lifetime alloca '{s}' emitted in block {d} outside procedure '{s}' entry block",
+                            .{ instruction_name, block_idx, function_name },
                         );
                     }
                 }

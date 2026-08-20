@@ -6,6 +6,7 @@ platform ""
             update : model -> model,
             update_append : model -> model,
             update_pattern : model -> { model : model, effects : List([Observe]) },
+            update_erased : model -> { model : model, apply : model -> model },
             cursor : model -> U64,
         }
     }
@@ -18,6 +19,7 @@ platform ""
         "roc_update_adapter": update_adapter_for_host!,
         "roc_update_append": update_append_for_host!,
         "roc_update_pattern": update_pattern_for_host!,
+        "roc_update_erased": update_erased_for_host!,
         "roc_cursor": cursor_for_host,
     }
     hosted { "roc_host_branch": Host.branch! }
@@ -67,6 +69,18 @@ update_pattern_for_host! = |boxed| {
     } else {
         step.model
     }
+    Box.box(next)
+}
+
+# LLVM regression: the dead Box is normalized to borrowed-unbox + explicit RC
+# before this branch, while the selected arm performs an erased callable call
+# whose fixed-size ABI descriptor scratch must live in the procedure entry
+# frame rather than being allocated lazily in the arm.
+update_erased_for_host! : Box(Model) => Box(Model)
+update_erased_for_host! = |boxed| {
+    model = Box.unbox(boxed)
+    step = (main.update_erased)(model)
+    next = if Host.branch!() (step.apply)(step.model) else step.model
     Box.box(next)
 }
 
