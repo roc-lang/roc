@@ -65,6 +65,9 @@ const ProcArcDomain = struct {
     frame_locals: []const LIR.LocalId,
     resource_bit_index: []const u32,
     resource_locals: []const LIR.LocalId,
+    /// Full committed field-place domain for dismantlable aggregate
+    /// resources; zero for ordinary whole-value resources.
+    resource_full_masks: []u64,
     refcounted_locals: []const LIR.LocalId,
     group_bit_index: []const u32,
     group_leaders: []const LIR.LocalId,
@@ -140,6 +143,8 @@ const ProcArcDomain = struct {
             resource_locals_buffer[resource_count] = frame_locals[frame_index];
             resource_count += 1;
         }
+        const resource_full_masks = try allocator.alloc(u64, resource_count);
+        @memset(resource_full_masks, 0);
 
         // A solved borrow group may have members in several proc specs when
         // ownership-neutral bodies share locals. Liveness rows are proc-local,
@@ -176,6 +181,7 @@ const ProcArcDomain = struct {
             .frame_locals = frame_locals,
             .resource_bit_index = resource_bit_index,
             .resource_locals = resource_locals_buffer[0..resource_count],
+            .resource_full_masks = resource_full_masks,
             .refcounted_locals = refcounted_locals_buffer[0..refcounted_count],
             .group_bit_index = group_bit_index,
             .group_leaders = group_leaders_buffer[0..group_count],
@@ -209,6 +215,29 @@ const ProcArcDomain = struct {
     fn resourceLocalAt(self: *const ProcArcDomain, bit_index: usize) LIR.LocalId {
         if (bit_index >= self.resource_locals.len) arcInvariant("ARC ownership bit exceeded its proc domain");
         return self.resource_locals[bit_index];
+    }
+
+    fn installResidualDomains(self: *ProcArcDomain, solution: *const arc_solve.Solution, dismantles: *const arc_dismantle.Dismantles) void {
+        var normal = dismantles.containers.iterator();
+        while (normal.next()) |entry| self.installResidualDomain(solution, entry.key_ptr.*, entry.value_ptr.full_mask);
+        var owned_only = dismantles.owned_only_containers.iterator();
+        while (owned_only.next()) |entry| self.installResidualDomain(solution, entry.key_ptr.*, entry.value_ptr.full_mask);
+    }
+
+    fn installResidualDomain(self: *ProcArcDomain, solution: *const arc_solve.Solution, local: LIR.LocalId, full_mask: u64) void {
+        const local_index = @intFromEnum(local);
+        if (local_index >= self.global_local_index.len) return;
+        if (self.global_local_index[local_index] == no_proc_local_index) return;
+        const unit = solution.unitLocalOf(local);
+        const bit = self.resourceBitOf(unit) orelse arcInvariant("ARC residual aggregate has no ownership resource");
+        const prior = self.resource_full_masks[bit];
+        if (prior != 0 and prior != full_mask) arcInvariant("ARC ownership resource has conflicting committed field domains");
+        self.resource_full_masks[bit] = full_mask;
+    }
+
+    fn fullResidualMaskAt(self: *const ProcArcDomain, bit_index: usize) u64 {
+        if (bit_index >= self.resource_full_masks.len) arcInvariant("ARC residual mask exceeded its proc domain");
+        return self.resource_full_masks[bit_index];
     }
 
     fn groupBitOf(self: *const ProcArcDomain, leader: LIR.LocalId) ?usize {
@@ -359,6 +388,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             proc_local_index,
             original_frame_locals[@intFromEnum(source_proc)],
         );
+        domain.installResidualDomains(&solution, &dismantles);
         defer domain.clearGlobalIndices();
         inserter.current_domain = &domain;
         defer inserter.current_domain = null;
@@ -377,7 +407,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         defer emission_arena.deinit();
         inserter.emission_allocator = emission_arena.allocator();
         inserter.solve_allocator = inserter.emission_allocator;
-        var death_scratch = std.ArrayList(LIR.LocalId).empty;
+        var death_scratch = std.ArrayList(ReleaseDecision).empty;
         var transfer_position_scratch = std.ArrayList(u32).empty;
         var retain_arg_scratch = std.ArrayList(LIR.LocalId).empty;
         var dismantle_temps = std.ArrayList(LIR.LocalId).empty;
@@ -394,9 +424,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         try loop_liveness_caches.append(inserter.emission_allocator, .{});
         inserter.loop_liveness_caches = &loop_liveness_caches;
 
-        var owned_param_override = try OwnedSet.init(inserter.emission_allocator, &domain);
-        defer owned_param_override.deinit();
-        inserter.owned_param_override = &owned_param_override;
+        var owned_binding_override = try OwnedSet.init(inserter.emission_allocator, &domain);
+        defer owned_binding_override.deinit();
+        inserter.owned_binding_override = &owned_binding_override;
 
         var unique_param_override = try OwnedSet.init(inserter.emission_allocator, &domain);
         defer unique_param_override.deinit();
@@ -411,11 +441,23 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             const param = GuardedList.at(emit_params_for_overrides, position);
             const bit = arc_sig.paramBit(position) orelse break;
             if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
-                owned_param_override.set(param);
+                owned_binding_override.set(param);
             }
             if ((emit_sig.unique_params & bit) != 0) {
                 unique_param_override.set(param);
             }
+        }
+        for (domain.frame_locals) |local| {
+            if (dismantles.isTakeBinding(local)) owned_binding_override.set(local);
+        }
+        // A field read solved borrowed in the unconditional base signature
+        // becomes an owned binding exactly when the explicit dismantle plan
+        // says it takes a field from a parameter overridden to owned. This is
+        // part of the mandatory field-take variant, not optional inlining or
+        // specialization.
+        for (domain.frame_locals) |local| {
+            const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
+            if (owned_binding_override.contains(root)) owned_binding_override.set(local);
         }
 
         const join_bodies = solution.joinBodiesOf(source_proc);
@@ -966,9 +1008,14 @@ const SwitchSummary = struct {
 
 /// Units a direct call conditionally returns to the caller, partitioned by
 /// the exact result-discriminant switch that refines them.
+const RestoredResource = union(enum) {
+    unit: LIR.LocalId,
+    field: arc_dismantle.Take,
+};
+
 const RestitutionSwitch = struct {
-    branch_units: []std.ArrayList(LIR.LocalId),
-    default_units: std.ArrayList(LIR.LocalId) = .empty,
+    branch_resources: []std.ArrayList(RestoredResource),
+    default_resources: std.ArrayList(RestoredResource) = .empty,
     restored_positions: arc_sig.ParamMask = 0,
 };
 
@@ -1017,22 +1064,32 @@ const SolveTask = union(enum) {
 
 fn cloneOwnedSetWith(allocator: Allocator, source: *const OwnedSet) ResourceError!OwnedSet {
     const bits = try source.bits.clone(allocator);
-    return .{ .allocator = allocator, .domain = source.domain, .bits = bits };
+    const residual_masks = try allocator.dupe(u64, source.residual_masks);
+    return .{ .allocator = allocator, .domain = source.domain, .bits = bits, .residual_masks = residual_masks };
 }
 
 fn assignOwnedSet(target: *OwnedSet, source: *const OwnedSet) void {
     target.requireSameDomain(source);
     target.bits.unsetAll();
     target.bits.setUnion(source.bits);
+    @memcpy(target.residual_masks, source.residual_masks);
 }
 
 /// Intersects `target` with `other` in place, reporting whether any bit
 /// dropped. Intersection never adds bits, so a changed population count is
 /// exactly a changed set.
 fn intersectOwnedSetChanged(target: *OwnedSet, other: *const OwnedSet) bool {
-    const before = target.bits.count();
+    target.requireSameDomain(other);
+    var changed = false;
+    var before = target.bits.iterator(.{});
+    while (before.next()) |bit| {
+        if (!other.bits.isSet(bit) or (target.residual_masks[bit] & ~other.residual_masks[bit]) != 0) {
+            changed = true;
+            break;
+        }
+    }
     target.intersect(other);
-    return target.bits.count() != before;
+    return changed;
 }
 
 /// Sentinel outside the compact plan-index domain.
@@ -1043,6 +1100,12 @@ const no_plan: u32 = std.math.maxInt(u32);
 /// emit.
 const ReleaseDecision = union(enum) {
     initialized: LIR.LocalId,
+    /// Release exactly these committed aggregate field places. A zero mask
+    /// settles a representation shell without emitting RC statements.
+    residual: struct {
+        value: LIR.LocalId,
+        field_mask: u64,
+    },
     maybe_initialized: struct {
         value: LIR.LocalId,
         condition: LIR.LocalId,
@@ -1078,7 +1141,7 @@ const ArcPlanStep = struct {
     call_callee: ?LIR.LirProcSpecId = null,
     call_demanded: arc_sig.RcSig = arc_sig.RcSig.all_owned,
     call_target_override: ?LIR.LirProcSpecId = null,
-    post_release: std.ArrayList(LIR.LocalId) = .empty,
+    post_release: std.ArrayList(ReleaseDecision) = .empty,
 
     fn reset(self: *ArcPlanStep, stmt: LIR.CFStmtId) void {
         self.initialized = true;
@@ -1212,7 +1275,7 @@ const Inserter = struct {
     variants: *VariantTable = undefined,
     /// Parameter locals whose borrowed solved binding is overridden to owned
     /// for the variant currently being emitted.
-    owned_param_override: *OwnedSet = undefined,
+    owned_binding_override: *OwnedSet = undefined,
     /// Parameter locals the current variant's demand vector seeds as born
     /// unique; consumed by `uniqueArgsMask` through `isLocalUniqueHere`.
     unique_param_override: *OwnedSet = undefined,
@@ -1259,7 +1322,7 @@ const Inserter = struct {
     materialized_joins: []?LIR.CFStmtId = &.{},
     /// Reused planning buffers. Their contents are ephemeral; every slice
     /// retained by an ArcPlan is copied into the proc arena first.
-    death_scratch: *std.ArrayList(LIR.LocalId) = undefined,
+    death_scratch: *std.ArrayList(ReleaseDecision) = undefined,
     transfer_position_scratch: *std.ArrayList(u32) = undefined,
     retain_arg_scratch: *std.ArrayList(LIR.LocalId) = undefined,
 
@@ -1573,6 +1636,12 @@ const Inserter = struct {
     fn materializeReleaseDecision(self: *Inserter, release: ReleaseDecision, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         return switch (release) {
             .initialized => |local| try self.releaseLocalIfRc(local, next),
+            .residual => |residual| try self.dismantleContainer(
+                residual.value,
+                self.dismantleFor(residual.value) orelse arcInvariant("ARC residual release named a container without a committed field domain"),
+                residual.field_mask,
+                next,
+            ),
             .maybe_initialized => |conditional| try self.releaseMaybeInitializedLocal(
                 conditional.condition,
                 conditional.condition_mask,
@@ -1631,7 +1700,7 @@ const Inserter = struct {
         var release_index = step.post_release.items.len;
         while (release_index > 0) {
             release_index -= 1;
-            next = try self.releaseLocalIfRc(step.post_release.items[release_index], next);
+            next = try self.materializeReleaseDecision(step.post_release.items[release_index], next);
         }
 
         var cloned: LIR.CFStmtId = switch (stmt) {
@@ -1809,12 +1878,24 @@ const Inserter = struct {
                 } });
             },
             .assign_low_level => |assign| blk: {
-                const op = if (step.low_level_selection) |selection| selection.op else assign.op;
-                const rc_effect = if (step.low_level_selection) |selection| selection.rc_effect else assign.rc_effect;
+                var op = if (step.low_level_selection) |selection| selection.op else assign.op;
+                var rc_effect = if (step.low_level_selection) |selection| selection.rc_effect else assign.rc_effect;
                 if (rc_effect.retain_args != 0) {
                     next = try self.retainMaskedArgs(assign.args, rc_effect.retain_args & ~step.transfer_mask, next);
                 }
                 if (rc_effect.retain_result and !step.skip_result_retain) next = try self.retainLocalIfRc(assign.target, next);
+                if (op == .box_unbox) {
+                    // Normalize ownership transfer into operations whose RC
+                    // meaning is already explicit in LIR. The payload retain
+                    // and outer release cancel on a unique box; on a shared
+                    // box they create the result's independent child units.
+                    const args = self.store.getLocalSpan(assign.args);
+                    const boxed = GuardedList.at(args, 0);
+                    next = try self.releaseLocalIfRc(boxed, next);
+                    next = try self.retainLocalIfRc(assign.target, next);
+                    op = .box_unbox_borrowed;
+                    rc_effect = op.rcEffect();
+                }
                 break :blk try self.store.addCFStmt(.{ .assign_low_level = .{
                     .target = assign.target,
                     .op = op,
@@ -2022,9 +2103,10 @@ const Inserter = struct {
                 .assign_ref => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     var transfer = AliasBindTransfer{ .retain_target = true, .release_old_target = false };
+                    const complete_take_root = self.dismantles.completeTakeRoot(segment.cursor);
                     if (self.isBindingBorrowed(assign.target)) {
                         transfer.retain_target = false;
-                    } else if (self.dismantles.completeTakeRoot(segment.cursor)) |root| {
+                    } else if (complete_take_root) |root| {
                         transfer = try self.transferForCompleteProjectionBind(
                             &segment.owned,
                             assign.target,
@@ -2053,7 +2135,15 @@ const Inserter = struct {
                     // field unit: the target still binds owned, but no
                     // retain is paid. Complete projections made their
                     // path-sensitive move decision above.
-                    if (self.takeApplies(segment.cursor)) transfer.retain_target = false;
+                    if (self.takeForEmission(segment.cursor)) |take| {
+                        transfer.retain_target = false;
+                        // A complete projection already moved the aggregate's
+                        // sole unit above. Only partial takes update the
+                        // per-field residual state.
+                        if (complete_take_root == null) {
+                            segment.owned.takeResidualField(self.unitOf(take.root), take.field_mask);
+                        }
+                    }
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.retain_assign_ref_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
@@ -2075,7 +2165,7 @@ const Inserter = struct {
                 .assign_call => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const unique_demand = self.variants.enabled and !self.solution.isPinnedProc(assign.proc);
-                    const transfer = try self.transferForCall(&segment.owned, assign.proc, self.solution.sigOf(assign.proc), unique_demand, assign.args, assign.next, assign.target, null, segment.ctx.loop_keep);
+                    const transfer = try self.transferForCall(&segment.owned, segment.cursor, assign.proc, self.solution.sigOf(assign.proc), unique_demand, assign.args, assign.next, assign.target, null, segment.ctx.loop_keep);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     try step.pre_retain.appendSlice(self.solve_allocator, transfer.args.retain_args);
                     step.retain_call_result = transfer.retain_call_result;
@@ -2089,7 +2179,7 @@ const Inserter = struct {
                 },
                 .assign_call_erased => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForCall(&segment.owned, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, segment.ctx.loop_keep);
+                    const transfer = try self.transferForCall(&segment.owned, null, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, segment.ctx.loop_keep);
                     var preserve_reuse_source = false;
                     if (assign.reuse_closure) {
                         if (assign.closure == assign.target) arcInvariant("owned erased call cannot consume and rebind the same local");
@@ -2450,7 +2540,7 @@ const Inserter = struct {
                             const branch = GuardedList.at(branches, branch_index);
                             if (restoration) |restored| {
                                 var branch_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
-                                restoreOutcomeUnits(&branch_owned, restored.branch_units[branch_index].items);
+                                restoreOutcomeResources(&branch_owned, restored.branch_resources[branch_index].items);
                                 try self.pushSolveSegment(tasks, branch.body, &branch_owned, branch_ctx, child_plans.branch_plans[branch_index]);
                             } else {
                                 try self.pushSolveSegment(tasks, branch.body, &segment.owned, branch_ctx, child_plans.branch_plans[branch_index]);
@@ -2458,7 +2548,7 @@ const Inserter = struct {
                         }
                         if (restoration) |restored| {
                             var default_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
-                            restoreOutcomeUnits(&default_owned, restored.default_units.items);
+                            restoreOutcomeResources(&default_owned, restored.default_resources.items);
                             try self.pushSolveSegment(tasks, switch_stmt.default_branch, &default_owned, branch_ctx, child_plans.default_plan);
                         } else {
                             try self.pushSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, branch_ctx, child_plans.default_plan);
@@ -2473,7 +2563,7 @@ const Inserter = struct {
                         const branch = GuardedList.at(branches, branch_index);
                         if (restoration) |restored| {
                             var branch_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
-                            restoreOutcomeUnits(&branch_owned, restored.branch_units[branch_index].items);
+                            restoreOutcomeResources(&branch_owned, restored.branch_resources[branch_index].items);
                             try self.pushSolveSegment(tasks, branch.body, &branch_owned, segment.ctx, child_plans.branch_plans[branch_index]);
                         } else {
                             try self.pushSolveSegment(tasks, branch.body, &segment.owned, segment.ctx, child_plans.branch_plans[branch_index]);
@@ -2481,7 +2571,7 @@ const Inserter = struct {
                     }
                     if (restoration) |restored| {
                         var default_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
-                        restoreOutcomeUnits(&default_owned, restored.default_units.items);
+                        restoreOutcomeResources(&default_owned, restored.default_resources.items);
                         try self.pushSolveSegment(tasks, switch_stmt.default_branch, &default_owned, segment.ctx, child_plans.default_plan);
                     } else {
                         try self.pushSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, segment.ctx, child_plans.default_plan);
@@ -2700,20 +2790,40 @@ const Inserter = struct {
         return .{ .initialized = local };
     }
 
+    fn releaseDecisionFrom(self: *const Inserter, owned: *const OwnedSet, local: LIR.LocalId) ReleaseDecision {
+        if (owned.fullResidualMask(local) != 0) {
+            return .{ .residual = .{ .value = local, .field_mask = owned.residualMask(local) } };
+        }
+        return self.releaseDecision(local);
+    }
+
     fn collectReleaseDifferenceInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet, keep: *const OwnedSet) ResourceError!void {
         owned.requireSameDomain(keep);
         releases.clearRetainingCapacity();
         var iter = owned.bits.iterator(.{ .direction = .reverse });
         while (iter.next()) |bit| {
-            if (keep.bits.isSet(bit)) continue;
-            try releases.append(self.solve_allocator, self.releaseDecision(owned.domain.resourceLocalAt(bit)));
+            const local = owned.domain.resourceLocalAt(bit);
+            if (!keep.bits.isSet(bit)) {
+                try releases.append(self.solve_allocator, self.releaseDecisionFrom(owned, local));
+                continue;
+            }
+            const residual_difference = owned.residual_masks[bit] & ~keep.residual_masks[bit];
+            if (residual_difference != 0) {
+                try releases.append(self.solve_allocator, .{ .residual = .{
+                    .value = local,
+                    .field_mask = residual_difference,
+                } });
+            }
         }
     }
 
     fn collectReleaseAllInto(self: *Inserter, releases: *std.ArrayList(ReleaseDecision), owned: *const OwnedSet) ResourceError!void {
         releases.clearRetainingCapacity();
         var iter = owned.bits.iterator(.{ .direction = .reverse });
-        while (iter.next()) |bit| try releases.append(self.solve_allocator, self.releaseDecision(owned.domain.resourceLocalAt(bit)));
+        while (iter.next()) |bit| {
+            const local = owned.domain.resourceLocalAt(bit);
+            try releases.append(self.solve_allocator, self.releaseDecisionFrom(owned, local));
+        }
     }
 
     fn addRestitutionKeep(
@@ -2736,15 +2846,18 @@ const Inserter = struct {
             if (!owned.contains(param)) {
                 arcInvariant("ARC restitution boundary did not carry its exact entry parameter unit");
             }
-            keep.set(param);
+            keep.copyResourceFrom(owned, param);
         }
     }
 
-    fn restoreOutcomeUnits(owned: *OwnedSet, units: []const LIR.LocalId) void {
-        for (units) |unit| {
-            if (owned.contains(unit)) arcInvariant("ARC outcome restoration duplicated a live ownership unit");
-            owned.set(unit);
-        }
+    fn restoreOutcomeResources(owned: *OwnedSet, resources: []const RestoredResource) void {
+        for (resources) |resource| switch (resource) {
+            .unit => |unit| {
+                if (owned.contains(unit)) arcInvariant("ARC outcome restoration duplicated a live ownership unit");
+                owned.set(unit);
+            },
+            .field => |field| owned.restoreResidualField(field.root, field.field_mask),
+        };
     }
 
     fn noteRestitutionBoundaryReads(
@@ -3383,7 +3496,7 @@ const Inserter = struct {
         while (entry_iter.next()) |index| {
             const local = summary.entry_state.domain.resourceLocalAt(index);
             if (self.groupUsedFromTable(remainder_reads, local) or summary.body_keep.contains(local)) {
-                keep.set(local);
+                keep.copyResourceFrom(&summary.entry_state, local);
             }
         }
         if (keep.eql(&summary.entry_keep)) return false;
@@ -3580,7 +3693,7 @@ const Inserter = struct {
 
     fn isBindingBorrowed(self: *const Inserter, local: LIR.LocalId) bool {
         if (!self.solution.isBorrowed(local)) return false;
-        return !self.owned_param_override.contains(local);
+        return !self.owned_binding_override.contains(local);
     }
 
     // Ownership-transfer keying layer
@@ -3624,7 +3737,10 @@ const Inserter = struct {
     }
 
     fn ownsUnit(self: *const Inserter, owned: *const OwnedSet, local: LIR.LocalId) bool {
-        return owned.contains(self.unitOf(local));
+        const unit = self.unitOf(local);
+        if (!owned.contains(unit)) return false;
+        const full = owned.fullResidualMask(unit);
+        return full == 0 or owned.residualMask(unit) == full;
     }
 
     /// Test-and-clear by unit key; returns whether a unit moved.
@@ -3825,7 +3941,7 @@ const Inserter = struct {
                     if (!self.outcomeArgumentsHaveDistinctPlaces(stmt.assign_call.args, sig)) return false;
                     return try self.useIsGuardedByOutcomeRestitution(
                         root,
-                        root,
+                        .{ .unit = root },
                         position,
                         stmt.assign_call.target,
                         stmt.assign_call.next,
@@ -3884,6 +4000,7 @@ const Inserter = struct {
     fn transferForCall(
         self: *Inserter,
         owned: *OwnedSet,
+        call_stmt: ?LIR.CFStmtId,
         callee: ?LIR.LirProcSpecId,
         callee_sig: arc_sig.RcSig,
         unique_demand: bool,
@@ -3893,7 +4010,7 @@ const Inserter = struct {
         extra_use: ?LIR.LocalId,
         loop_keep: ?LoopKeep,
     ) ResourceError!CallTransfer {
-        const arg_ownership = try self.callArgOwnership(callee, owned, callee_sig, unique_demand, args, next, target, loop_keep);
+        const arg_ownership = try self.callArgOwnership(call_stmt, callee, owned, callee_sig, unique_demand, args, next, target, loop_keep);
         const target_feeds_call = self.spanUsesLocal(args, target) or
             (extra_use != null and extra_use.? == target);
         const release_old_target = if (target_feeds_call)
@@ -4205,7 +4322,7 @@ const Inserter = struct {
         span: ?LIR.LocalSpan,
         next: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
-        collected: ?*std.ArrayList(LIR.LocalId),
+        collected: ?*std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         for (singles) |local| {
             try self.noteDeathIfUnused(owned, local, next, loop_keep, collected);
@@ -4238,7 +4355,7 @@ const Inserter = struct {
         local: LIR.LocalId,
         next: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
-        collected: ?*std.ArrayList(LIR.LocalId),
+        collected: ?*std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         // A borrowed operand's lifetime event belongs to its owning leader:
         // the leader dies when no group member has a later use.
@@ -4255,10 +4372,10 @@ const Inserter = struct {
         if (used) {
             return;
         }
-        owned.unset(owner);
         if (collected) |list| {
-            try list.append(self.emission_allocator, owner);
+            try list.append(self.emission_allocator, self.releaseDecisionFrom(owned, owner));
         }
+        owned.unset(owner);
     }
 
     fn noteCallResultDeathIfUnused(
@@ -4268,7 +4385,7 @@ const Inserter = struct {
         ret_mode: arc_sig.Mode,
         next: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
-        collected: ?*std.ArrayList(LIR.LocalId),
+        collected: ?*std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         if (ret_mode == .owned and self.solution.isBorrowed(local)) {
             try self.noteOwnedLocalDeathIfUnused(owned, local, next, loop_keep, collected);
@@ -4283,15 +4400,15 @@ const Inserter = struct {
         local: LIR.LocalId,
         next: LIR.CFStmtId,
         loop_keep: ?LoopKeep,
-        collected: ?*std.ArrayList(LIR.LocalId),
+        collected: ?*std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         if (!owned.contains(local)) return;
         if (self.solution.isJoinParam(local)) return;
         if (try self.valueUsedInPath(next, local, loop_keep)) return;
-        owned.unset(local);
         if (collected) |list| {
-            try list.append(self.emission_allocator, local);
+            try list.append(self.emission_allocator, self.releaseDecisionFrom(owned, local));
         }
+        owned.unset(local);
     }
 
     fn retainMaskedArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -4572,13 +4689,20 @@ const Inserter = struct {
         return if (any) mask else null;
     }
 
-    fn appendUniqueRestoredUnit(
+    fn restoredResourceEql(a: RestoredResource, b: RestoredResource) bool {
+        return switch (a) {
+            .unit => |unit| b == .unit and b.unit == unit,
+            .field => |field| b == .field and b.field.root == field.root and b.field.field_mask == field.field_mask,
+        };
+    }
+
+    fn appendUniqueRestoredResource(
         self: *Inserter,
-        units: *std.ArrayList(LIR.LocalId),
-        unit: LIR.LocalId,
+        resources: *std.ArrayList(RestoredResource),
+        resource: RestoredResource,
     ) ResourceError!void {
-        for (units.items) |existing| if (existing == unit) return;
-        try units.append(self.solve_allocator, unit);
+        for (resources.items) |existing| if (restoredResourceEql(existing, resource)) return;
+        try resources.append(self.solve_allocator, resource);
     }
 
     fn registerOutcomeRestoration(
@@ -4586,26 +4710,26 @@ const Inserter = struct {
         refinement: OutcomeRefinement,
         sig: arc_sig.RcSig,
         position: usize,
-        unit: LIR.LocalId,
+        resource: RestoredResource,
     ) ResourceError!void {
         const bit = arc_sig.paramBit(position) orelse return;
         const switch_stmt = self.store.getCFStmt(refinement.stmt).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const entry = try self.restitution_switches.getOrPut(self.solve_allocator, refinement.stmt);
         if (!entry.found_existing) {
-            const branch_units = try self.solve_allocator.alloc(std.ArrayList(LIR.LocalId), GuardedList.borrowLen(branches));
-            @memset(branch_units, .empty);
-            entry.value_ptr.* = .{ .branch_units = branch_units };
-        } else if (entry.value_ptr.branch_units.len != GuardedList.borrowLen(branches)) {
+            const branch_resources = try self.solve_allocator.alloc(std.ArrayList(RestoredResource), GuardedList.borrowLen(branches));
+            @memset(branch_resources, .empty);
+            entry.value_ptr.* = .{ .branch_resources = branch_resources };
+        } else if (entry.value_ptr.branch_resources.len != GuardedList.borrowLen(branches)) {
             arcInvariant("ARC restitution switch changed branch arity");
         }
         const outcomes = self.solution.sigTable().outcomesOf(sig);
         for (0..GuardedList.borrowLen(branches)) |index| {
             const mask = outcomeMaskForValue(outcomes, GuardedList.at(branches, index).value) orelse continue;
-            if ((mask & bit) != 0) try self.appendUniqueRestoredUnit(&entry.value_ptr.branch_units[index], unit);
+            if ((mask & bit) != 0) try self.appendUniqueRestoredResource(&entry.value_ptr.branch_resources[index], resource);
         }
         if (defaultOutcomeMask(outcomes, branches)) |mask| {
-            if ((mask & bit) != 0) try self.appendUniqueRestoredUnit(&entry.value_ptr.default_units, unit);
+            if ((mask & bit) != 0) try self.appendUniqueRestoredResource(&entry.value_ptr.default_resources, resource);
         }
         entry.value_ptr.restored_positions |= bit;
     }
@@ -4799,7 +4923,7 @@ const Inserter = struct {
     fn useIsGuardedByOutcomeRestitution(
         self: *Inserter,
         local: LIR.LocalId,
-        unit: LIR.LocalId,
+        resource: RestoredResource,
         position: usize,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
@@ -4828,12 +4952,13 @@ const Inserter = struct {
             }
         }
         if (!has_restored_outcome) return false;
-        try self.registerOutcomeRestoration(refinement, sig, position, unit);
+        try self.registerOutcomeRestoration(refinement, sig, position, resource);
         return true;
     }
 
     fn callArgOwnership(
         self: *Inserter,
+        call_stmt: ?LIR.CFStmtId,
         callee: ?LIR.LirProcSpecId,
         owned: *OwnedSet,
         callee_sig: arc_sig.RcSig,
@@ -4895,11 +5020,24 @@ const Inserter = struct {
             }
 
             const owner = self.unitOf(local);
-            const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
-            const conditionally_returned = if (used_after_call and callee != null and outcome_places_distinct)
+            const field_receipt = if (call_stmt) |stmt_id|
+                self.fieldRestitutionForEmission(stmt_id, position)
+            else
+                null;
+            const used_after_call = field_receipt != null or
+                (local != target and try self.groupUsedInPath(next, local, loop_keep));
+            const restored_resource: RestoredResource = if (field_receipt) |receipt|
+                .{ .field = receipt.place }
+            else
+                .{ .unit = owner };
+            const conditionally_returned = if (field_receipt) |receipt| blk: {
+                if (callee == null or !outcome_places_distinct) break :blk false;
+                try self.registerOutcomeRestoration(.{ .stmt = receipt.refinement }, outcome_sig, position, restored_resource);
+                break :blk true;
+            } else if (used_after_call and callee != null and outcome_places_distinct)
                 try self.useIsGuardedByOutcomeRestitution(
                     local,
-                    owner,
+                    restored_resource,
                     position,
                     target,
                     next,
@@ -6265,12 +6403,19 @@ const Inserter = struct {
     /// Whether this statement's field read is a take in the current
     /// emission. Takes on containers solved borrowed apply only when the
     /// variant demand vector overrides the parameter to owned.
-    fn takeApplies(self: *const Inserter, stmt: LIR.CFStmtId) bool {
-        if (self.dismantles.isTake(stmt)) return true;
-        if (self.dismantles.ownedOnlyTakeParam(stmt)) |param| {
-            return self.owned_param_override.contains(param);
+    fn takeForEmission(self: *const Inserter, stmt: LIR.CFStmtId) ?arc_dismantle.Take {
+        if (self.dismantles.takeAt(stmt)) |take| return take;
+        if (self.dismantles.ownedOnlyTake(stmt)) |take| {
+            if (self.owned_binding_override.contains(take.root)) return take;
         }
-        return false;
+        return null;
+    }
+
+    fn fieldRestitutionForEmission(self: *const Inserter, stmt: LIR.CFStmtId, position: usize) ?arc_dismantle.FieldRestitutionArg {
+        const receipt = self.dismantles.fieldRestitutionArg(stmt, position) orelse return null;
+        if (self.dismantles.ownedOnlyContainerOf(receipt.place.root) != null and
+            !self.owned_binding_override.contains(receipt.place.root)) return null;
+        return receipt;
     }
 
     /// The dismantle plan for this local's release in the current emission,
@@ -6278,7 +6423,7 @@ const Inserter = struct {
     fn dismantleFor(self: *const Inserter, local: LIR.LocalId) ?arc_dismantle.Container {
         if (self.dismantles.containerOf(local)) |container| return container;
         if (self.dismantles.ownedOnlyContainerOf(local)) |container| {
-            if (self.owned_param_override.contains(local)) return container;
+            if (self.owned_binding_override.contains(local)) return container;
         }
         return null;
     }
@@ -6286,7 +6431,7 @@ const Inserter = struct {
     fn releaseLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (!self.localContainsRefcounted(local)) return next;
         if (self.dismantleFor(local)) |container| {
-            return try self.dismantleContainer(local, container, next);
+            return try self.dismantleContainer(local, container, container.full_mask, next);
         }
         const rc = self.rcHelperForLocal(.decref, local);
         return try self.store.addCFStmt(.{ .decref = .{
@@ -6303,13 +6448,16 @@ const Inserter = struct {
     /// solved arrays never meet: field layouts drive the helpers directly,
     /// and the container's atomicity covers its stored payloads exactly as
     /// the whole-struct helper would have.
-    fn dismantleContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+    fn dismantleContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, residual_mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        if ((residual_mask & ~container.full_mask) != 0) arcInvariant("ARC residual release exceeded its committed aggregate field domain");
         const atomicity = self.rcAtomicity(local);
         var tail = next;
-        var index = container.residual.len;
+        var index = container.fields.len;
         while (index > 0) {
             index -= 1;
-            const field = container.residual[index];
+            const field = container.fields[index];
+            const field_mask = @as(u64, 1) << @intCast(field.field_idx);
+            if ((residual_mask & field_mask) == 0) continue;
             const rc = self.rcHelperForLayout(.decref, field.layout_idx);
             if (self.layouts.rcHelperPlan(rc) == .noop) {
                 arcInvariant("ARC dismantle selected a noop RC helper for a refcounted residual field");
@@ -6467,29 +6615,41 @@ const OwnedSet = struct {
     allocator: std.mem.Allocator,
     domain: *const ProcArcDomain,
     bits: ExactBitSet,
+    /// Exact committed aggregate field places still stored in each resource.
+    /// Ordinary resources have a zero full domain and ignore this row.
+    residual_masks: []u64,
 
     fn init(allocator: std.mem.Allocator, domain: *const ProcArcDomain) ResourceError!OwnedSet {
         const bits = try ExactBitSet.initEmpty(allocator, domain.resource_locals.len);
-        return .{ .allocator = allocator, .domain = domain, .bits = bits };
+        const residual_masks = try allocator.alloc(u64, domain.resource_locals.len);
+        @memset(residual_masks, 0);
+        return .{ .allocator = allocator, .domain = domain, .bits = bits, .residual_masks = residual_masks };
     }
 
     fn deinit(self: *OwnedSet) void {
         self.bits.deinit(self.allocator);
+        self.allocator.free(self.residual_masks);
     }
 
     fn clone(self: *const OwnedSet) ResourceError!OwnedSet {
         const bits = try self.bits.clone(self.allocator);
-        return .{ .allocator = self.allocator, .domain = self.domain, .bits = bits };
+        const residual_masks = try self.allocator.dupe(u64, self.residual_masks);
+        return .{ .allocator = self.allocator, .domain = self.domain, .bits = bits, .residual_masks = residual_masks };
     }
 
     fn set(self: *OwnedSet, local: LIR.LocalId) void {
-        self.bits.set(self.domain.requiredResourceBitOf(local));
+        const bit = self.domain.requiredResourceBitOf(local);
+        self.bits.set(bit);
+        self.residual_masks[bit] = self.domain.fullResidualMaskAt(bit);
     }
 
     fn unset(self: *OwnedSet, local: LIR.LocalId) void {
         // Scalars are outside the ownership lattice, so removing one is the
         // same empty-set operation the former zeroed global bit performed.
-        if (self.domain.resourceBitOf(local)) |bit| self.bits.unset(bit);
+        if (self.domain.resourceBitOf(local)) |bit| {
+            self.bits.unset(bit);
+            self.residual_masks[bit] = 0;
+        }
     }
 
     fn contains(self: *const OwnedSet, local: LIR.LocalId) bool {
@@ -6499,12 +6659,53 @@ const OwnedSet = struct {
 
     fn eql(self: *const OwnedSet, other: *const OwnedSet) bool {
         self.requireSameDomain(other);
-        return self.bits.eql(other.bits);
+        return self.bits.eql(other.bits) and std.mem.eql(u64, self.residual_masks, other.residual_masks);
     }
 
     fn intersect(self: *OwnedSet, other: *const OwnedSet) void {
         self.requireSameDomain(other);
         self.bits.setIntersection(other.bits);
+        for (self.residual_masks, 0..) |*mask, bit| {
+            if (!self.bits.isSet(bit)) {
+                mask.* = 0;
+            } else {
+                mask.* &= other.residual_masks[bit];
+            }
+        }
+    }
+
+    fn residualMask(self: *const OwnedSet, local: LIR.LocalId) u64 {
+        const bit = self.domain.resourceBitOf(local) orelse return 0;
+        return self.residual_masks[bit];
+    }
+
+    fn fullResidualMask(self: *const OwnedSet, local: LIR.LocalId) u64 {
+        const bit = self.domain.resourceBitOf(local) orelse return 0;
+        return self.domain.fullResidualMaskAt(bit);
+    }
+
+    fn takeResidualField(self: *OwnedSet, local: LIR.LocalId, field_mask: u64) void {
+        const bit = self.domain.requiredResourceBitOf(local);
+        if (!self.bits.isSet(bit)) arcInvariant("ARC field take reached an absent aggregate resource");
+        if ((self.residual_masks[bit] & field_mask) != field_mask) arcInvariant("ARC field take consumed an absent committed field place");
+        self.residual_masks[bit] &= ~field_mask;
+    }
+
+    fn restoreResidualField(self: *OwnedSet, local: LIR.LocalId, field_mask: u64) void {
+        const bit = self.domain.requiredResourceBitOf(local);
+        if (!self.bits.isSet(bit)) arcInvariant("ARC field restitution reached an absent aggregate resource");
+        const full = self.domain.fullResidualMaskAt(bit);
+        if ((field_mask & ~full) != 0) arcInvariant("ARC field restitution exceeded its committed aggregate field domain");
+        if ((self.residual_masks[bit] & field_mask) != 0) arcInvariant("ARC field restitution duplicated a live committed field place");
+        self.residual_masks[bit] |= field_mask;
+    }
+
+    fn copyResourceFrom(self: *OwnedSet, source: *const OwnedSet, local: LIR.LocalId) void {
+        self.requireSameDomain(source);
+        const bit = self.domain.requiredResourceBitOf(local);
+        if (!source.bits.isSet(bit)) arcInvariant("ARC copied an absent ownership resource");
+        self.bits.set(bit);
+        self.residual_masks[bit] = source.residual_masks[bit];
     }
 
     fn requireSameDomain(self: *const OwnedSet, other: *const OwnedSet) void {
@@ -9282,6 +9483,44 @@ test "RC switch continuation merge releases branch-divergent owner at the bounda
     try f.expectRc(diverged, 0, 1, 0);
 }
 
+test "RC divergent field takes normalize exact residual places on each switch edge" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const cond = try f.local(.i64);
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const pair = try f.local(f.pair_str);
+    const first_read = try f.local(.str);
+    const second_read = try f.local(.str);
+    const first_sink = try f.local(.i64);
+    const second_sink = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const first_call = try f.assignCall(first_sink, &.{first_read}, ret);
+    const first_branch = try f.assignRefField(first_read, pair, 0, first_call);
+    const second_call = try f.assignCall(second_sink, &.{second_read}, ret);
+    const second_branch = try f.assignRefField(second_read, pair, 1, second_call);
+    const choose = try f.switchStmt(cond, first_branch, second_branch, ret);
+    const assign_result = try f.assignI64(result, 7, choose);
+    const assign_pair = try f.assignStruct(pair, &.{ first, second }, assign_result);
+    const assign_second = try f.assignStr(second, "second", assign_pair);
+    const assign_first = try f.assignStr(first, "first", assign_second);
+    const body = try f.assignI64(cond, 1, assign_first);
+
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    // Each arm moves a different stored string into its call. Its edge then
+    // releases exactly the opposite residual field before the common
+    // continuation; neither projection needs a retain and no path releases
+    // the partially dismantled pair as a whole.
+    try f.expectRc(first_read, 0, 0, 0);
+    try f.expectRc(second_read, 0, 0, 0);
+    try f.expectRc(pair, 0, 0, 0);
+    try testing.expectEqual(@as(usize, 2), f.countAllRc());
+}
+
 fn chainedJoinSolveWork(join_count: usize) Allocator.Error!u64 {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -10511,7 +10750,7 @@ test "RC borrow: read-only sublist materializes a borrowed view" {
     try f.expectRc(list, 0, 1, 0);
 }
 
-test "RC Box.unbox consumes a dead box for an owned result" {
+test "RC Box.unbox normalizes consuming ownership to explicit RC statements" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
     const boxed = try f.local(f.box_str);
@@ -10541,9 +10780,10 @@ test "RC Box.unbox consumes a dead box for an owned result" {
     try f.run();
 
     const emitted = f.reachableLowLevelAssign(payload);
-    try testing.expectEqual(LIR.LowLevel.box_unbox, emitted.op);
-    try f.expectRc(boxed, 0, 0, 0);
-    try f.expectRc(payload, 0, 0, 0);
+    try testing.expectEqual(LIR.LowLevel.box_unbox_borrowed, emitted.op);
+    try testing.expect(std.meta.eql(emitted.op.rcEffect(), emitted.rc_effect));
+    try f.expectRc(boxed, 0, 1, 0);
+    try f.expectRc(payload, 1, 0, 0);
 }
 
 test "RC Box.unbox keeps the payload borrowed while the box survives" {
@@ -11186,6 +11426,49 @@ test "RC outcome restitution intersects every outcome represented by the default
     try testing.expectEqual(@as(usize, 0), f.countRc(input, .incref));
 }
 
+test "RC outcome restitution solves sixteen independent conditional arguments polynomially" {
+    if (builtin.mode != .Debug) return;
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.list_i64,
+    });
+    const count = arc_sig.tracked_param_count;
+    var params: [count]LIR.LocalId = undefined;
+    var conditions: [count]LIR.LocalId = undefined;
+    var sinks: [count]LIR.LocalId = undefined;
+    for (0..count) |index| {
+        params[index] = try f.local(f.list_i64);
+        conditions[index] = try f.local(.i64);
+        sinks[index] = try f.local(.i64);
+    }
+    const result = try f.local(outcome_layout);
+    const ret = try f.ret(result);
+    var next = try f.assignTag(result, 0, null, ret);
+    var index: usize = count;
+    while (index > 0) {
+        index -= 1;
+        const consume = try f.assignCall(sinks[index], &.{params[index]}, next);
+        next = try f.switchStmt(conditions[index], consume, next, next);
+    }
+    var args: [count * 2]LIR.LocalId = undefined;
+    for (0..count) |arg_index| {
+        args[arg_index] = params[arg_index];
+        args[count + arg_index] = conditions[arg_index];
+    }
+    _ = try f.addProc(&args, next, outcome_layout);
+
+    const before = arc_solve.outcome_solver_iterations;
+    try f.run();
+    const work = arc_solve.outcome_solver_iterations - before;
+
+    // Each parameter has only present/spent rows at each statement. The old
+    // full-mask walk materialized all 2^16 subsets at the final continuation.
+    try testing.expect(work <= count * f.store.cfStmtCount() * 2);
+}
+
 test "RC outcome restitution follows an exact result through a terminal join" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -11352,6 +11635,101 @@ test "RC specialization: owned-only field take demands an owned variant" {
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try f.expectRc(pair, 0, 0, 0);
     try testing.expectEqual(@as(usize, 1), f.countRc(field, .incref));
+}
+
+test "RC field take restores the exact aggregate field on checked failure without optional specialization" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.list_i64,
+    });
+
+    // Callee convention: success consumes the list into the result; failure
+    // returns the unchanged entry ownership unit by outcome convention.
+    const callee_list = try f.local(f.list_i64);
+    const callee_choose = try f.local(.i64);
+    const callee_changed = try f.local(f.list_i64);
+    const callee_result = try f.local(outcome_layout);
+    const callee_success_ret = try f.ret(callee_result);
+    const callee_success_tag = try f.assignTag(callee_result, 1, callee_changed, callee_success_ret);
+    const callee_mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = callee_changed,
+        .op = .list_reverse,
+        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .args = try f.span(&.{callee_list}),
+        .next = callee_success_tag,
+    } });
+    const callee_failure_ret = try f.ret(callee_result);
+    const callee_failure_tag = try f.assignTag(callee_result, 0, null, callee_failure_ret);
+    const callee_body = try f.switchStmt(callee_choose, callee_mutate, callee_failure_tag, null);
+    const callee = try f.addProc(&.{ callee_list, callee_choose }, callee_body, outcome_layout);
+
+    // Caller takes pair.field0 into the checked call. Its failure arm rereads
+    // that same committed place and consumes it; field1 remains residual on
+    // both arms. The first projection has exactly one operand read (the call),
+    // so Dismantles can publish an exact call-argument field receipt.
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const first_projection = try f.local(f.list_i64);
+    const caller_choose = try f.local(.i64);
+    const call_result = try f.local(outcome_layout);
+    const discriminant = try f.local(.u8);
+    const failure_projection = try f.local(f.list_i64);
+    const failure_changed = try f.local(f.list_i64);
+    const answer = try f.local(.i64);
+    const caller_ret = try f.ret(answer);
+    const success = try f.assignI64(answer, 1, caller_ret);
+    const failure_done = try f.assignI64(answer, 0, caller_ret);
+    const failure_consume = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = failure_changed,
+        .op = .list_reverse,
+        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .args = try f.span(&.{failure_projection}),
+        .next = failure_done,
+    } });
+    const failure_read = try f.assignRefField(failure_projection, pair, 0, failure_consume);
+    const refine = try f.switchStmt(discriminant, success, failure_read, null);
+    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = call_result,
+        .proc = callee,
+        .args = try f.span(&.{ first_projection, caller_choose }),
+        .next = read_discriminant,
+    } });
+    const choose = try f.assignI64(caller_choose, 1, call);
+    const first_read = try f.assignRefField(first_projection, pair, 0, choose);
+    const make_pair = try f.assignStruct(pair, &.{ first, second }, first_read);
+    const make_second = try f.assignList(second, &.{}, make_pair);
+    const caller_body = try f.assignList(first, &.{}, make_second);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = false });
+
+    // The exact outcome variant is mandatory in dev/no-inline mode. Both
+    // field reads are moves, so neither manufactures a list unit.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 0), f.countRc(first_projection, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(failure_projection, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(pair, .decref));
+
+    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+    var remaining = f.store.cfStmtCount() + 1;
+    while (remaining > 0) : (remaining -= 1) {
+        const stmt = f.store.getCFStmt(cursor);
+        if (stmt == .assign_call and stmt.assign_call.target == call_result) {
+            try testing.expect(@intFromEnum(stmt.assign_call.proc) >= base_proc_count);
+            break;
+        }
+        cursor = switch (stmt) {
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .incref, .decref, .free => |linear| linear.next,
+            else => return error.MissingOutcomeCall,
+        };
+    }
+    try testing.expect(remaining > 0);
 }
 
 test "RC field-take demand crosses complete tag payload and wrapper calls" {

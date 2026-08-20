@@ -58,6 +58,7 @@ extern fn roc_init_append() callconv(.c) Box;
 extern fn roc_update_straight(Box) callconv(.c) Box;
 extern fn roc_update_adapter(Box) callconv(.c) Box;
 extern fn roc_update_append(Box) callconv(.c) Box;
+extern fn roc_update_pattern(Box) callconv(.c) Box;
 extern fn roc_cursor(Box) callconv(.c) u64;
 
 comptime {
@@ -96,7 +97,8 @@ fn main(_: c_int, _: [*][*:0]u8) callconv(.c) c_int {
     const straight_ok = checkLoop(&roc_init, &roc_update_straight, "straight");
     const adapter_ok = checkLoop(&roc_init, &roc_update_adapter, "adapter");
     const append_ok = checkLoop(&roc_init_append, &roc_update_append, "append-after-oob");
-    if (!straight_ok or !adapter_ok or !append_ok) return 1;
+    const pattern_ok = checkLoop(&roc_init, &roc_update_pattern, "pattern-adapter");
+    if (!straight_ok or !adapter_ok or !append_ok or !pattern_ok) return 1;
     std.debug.print("box model updates stayed in place\n", .{});
     return 0;
 }

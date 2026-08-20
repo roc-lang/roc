@@ -205,7 +205,9 @@ pub fn countReachableReads(store: *LirStore, body: CFStmtId) Allocator.Error!Rea
     return .{ .allocator = store.allocator, .counts = counts };
 }
 
-fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
+/// Add this statement's operand reads to an existing per-local count row.
+/// Definitions are deliberately excluded, matching `countReachableReads`.
+pub fn countStmtReads(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) void {
     switch (stmt) {
         .assign_ref => |s| switch (s.op) {
             .local => |source| noteRead(counts, source),

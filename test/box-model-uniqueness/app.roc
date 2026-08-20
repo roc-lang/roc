@@ -1,12 +1,24 @@
 app [Model, main] { pf: platform "./platform/main.roc" }
 
-Model : { points : List(F32), cursor : U64 }
+Model : {
+    points : List(F32),
+    trail : List(F32),
+    cursor : U64,
+    pattern : [Set, Append, Other],
+}
 
 main = {
-    init: |{}| { points: List.repeat(0.0.F32, 4096), cursor: 0 },
+    init: |{}| {
+        points: List.repeat(0.0.F32, 4096),
+        trail: List.reserve(List.repeat(0.0.F32, 32), 16),
+        cursor: 0,
+        pattern: Set,
+    },
     init_append: |{}| {
         points: List.reserve(List.repeat(0.0.F32, 4096), 16),
+        trail: List.reserve(List.repeat(0.0.F32, 32), 16),
         cursor: 0,
+        pattern: Set,
     },
     update: |model| {
         points = match List.set(model.points, model.cursor % 4096, model.cursor.to_f32()) {
@@ -30,6 +42,22 @@ main = {
             Err(_) => after_replace
         }
         { ..model, points: List.append(points, model.cursor.to_f32()), cursor: model.cursor + 1 }
+    },
+    update_pattern: |model| {
+        next_model = match model.pattern {
+            Set => {
+                points = match List.set(model.points, model.cursor % 4096, model.cursor.to_f32()) {
+                    Ok(updated) => updated
+                    Err(_) => model.points
+                }
+                { ..model, points, cursor: model.cursor + 1 }
+            }
+            Append => {
+                { ..model, trail: List.append(model.trail, model.cursor.to_f32()), cursor: model.cursor + 1 }
+            }
+            Other => model
+        }
+        { model: next_model, effects: [Observe] }
     },
     cursor: |model| model.cursor,
 }

@@ -5,6 +5,7 @@ platform ""
             init_append : {} -> model,
             update : model -> model,
             update_append : model -> model,
+            update_pattern : model -> { model : model, effects : List([Observe]) },
             cursor : model -> U64,
         }
     }
@@ -16,6 +17,7 @@ platform ""
         "roc_update_straight": update_straight_for_host,
         "roc_update_adapter": update_adapter_for_host!,
         "roc_update_append": update_append_for_host!,
+        "roc_update_pattern": update_pattern_for_host!,
         "roc_cursor": cursor_for_host,
     }
     hosted { "roc_host_branch": Host.branch! }
@@ -53,6 +55,18 @@ update_append_for_host! : Box(Model) => Box(Model)
 update_append_for_host! = |boxed| {
     model = Box.unbox(boxed)
     next = if Host.branch!() (main.update_append)(model) else model
+    Box.box(next)
+}
+
+update_pattern_for_host! : Box(Model) => Box(Model)
+update_pattern_for_host! = |boxed| {
+    model = Box.unbox(boxed)
+    step = (main.update_pattern)(model)
+    next = if Host.branch!() {
+        if List.len(step.effects) > 0 step.model else step.model
+    } else {
+        step.model
+    }
     Box.box(next)
 }
 

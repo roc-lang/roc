@@ -4735,6 +4735,9 @@ const Certifier = struct {
     }
 
     fn applyLowLevel(self: *Certifier, state: *State, assign: anytype) CertifyError!void {
+        if (assign.op == .box_unbox) {
+            return self.fail("post-ARC LIR retained a consuming Box.unbox instead of explicit RC statements", .{});
+        }
         const arg_locals = self.store.getLocalSpan(assign.args);
 
         // The masks in an `RcEffect` row name argument positions, but the row
@@ -6826,4 +6829,25 @@ test "certify rejects an outcome-specialized return without an exact discriminan
         f.diag.message(),
         "outcome-specialized return lacked an exact current result discriminant witness",
     ) != null);
+}
+
+test "certify rejects consuming Box.unbox after the ARC boundary" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+
+    const box_str = try f.layouts.insertBox(.str);
+    const boxed = try f.local(box_str);
+    const payload = try f.local(.str);
+    const ret = try f.ret(payload);
+    const body = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = payload,
+        .op = .box_unbox,
+        .rc_effect = LIR.LowLevel.box_unbox.rcEffect(),
+        .args = try f.store.addLocalSpan(&.{boxed}),
+        .next = ret,
+    } });
+    _ = try f.addProc(&.{boxed}, body, .str);
+
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "post-ARC LIR retained a consuming Box.unbox") != null);
 }

@@ -3272,39 +3272,6 @@ fn emitDataPtrFree(self: *Self, data_ptr_local: u32, alignment: u32, elements_re
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 }
 
-fn emitConsumedBoxUnbox(self: *Self, box_ptr: u32, payload_ptr: u32, box_abi: anytype) Allocator.Error!void {
-    const masked_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rc_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    const rc_val = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(box_ptr);
-    try self.emitI32Const(-4);
-    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-    try self.emitLocalSet(masked_ptr);
-    try self.emitLocalGet(masked_ptr);
-    try self.emitI32Const(-4);
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(rc_ptr);
-    try self.emitLoadI32AtPtrOffset(rc_ptr, 0, rc_val);
-
-    try self.emitLocalGet(rc_val);
-    try self.emitI32Const(1);
-    self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-    try self.emitDataPtrFree(box_ptr, box_abi.elem_alignment, box_abi.contains_refcounted);
-    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-    if (box_abi.contains_refcounted) {
-        if (box_abi.elem_layout_idx) |elem_layout_idx| {
-            const helper_key = RcHelperKey{ .op = .incref, .layout_idx = elem_layout_idx };
-            if (self.getLayoutStore().rcHelperPlan(helper_key) != .noop) {
-                try self.emitExplicitRcHelperCallForValuePtr(helper_key, .atomic, payload_ptr, 1);
-            }
-        }
-    }
-    try self.emitDataPtrDecref(box_ptr, box_abi.elem_alignment, box_abi.contains_refcounted);
-    self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-}
-
 fn emitBuiltinInternalListElementDecrefsIfUnique(
     self: *Self,
     list_ptr_local: u32,
@@ -14520,7 +14487,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 }
             }
         },
-        .box_unbox, .box_unbox_borrowed => {
+        // Consuming Box.unbox is normalized by ARC into the borrowed load
+        // followed by explicit RC statements.
+        .box_unbox => unreachable,
+        .box_unbox_borrowed => {
             // box_unbox(box_ptr) -> value
             // Box is a transparent pointer - dereference it
             const box_expr = GuardedList.at(args, 0);
@@ -14596,9 +14566,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         try self.emitLocalSet(dst_local);
 
                         try self.emitMemCopy(dst_local, 0, src_local, result_size);
-                        if (ll.op == .box_unbox and !erased_box_ptr) {
-                            try self.emitConsumedBoxUnbox(src_local, dst_local, ls.builtinBoxAbi(box_layout_idx));
-                        }
                         try self.emitLocalGet(dst_local);
                     } else {
                         const box_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -14632,12 +14599,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                             try self.emitMemCopy(temp_ptr, 0, box_ptr, result_size);
                             try self.emitLocalGet(temp_ptr);
                             try self.emitLoadOpSized(result_vt, result_size, 0);
-                            if (ll.op == .box_unbox and !erased_box_ptr) {
-                                const value_local = self.storage.allocAnonymousLocal(result_vt) catch return error.OutOfMemory;
-                                try self.emitLocalSet(value_local);
-                                try self.emitConsumedBoxUnbox(box_ptr, temp_ptr, ls.builtinBoxAbi(box_layout_idx));
-                                try self.emitLocalGet(value_local);
-                            }
                         }
                     }
                 }

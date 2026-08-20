@@ -5082,46 +5082,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Return the heap pointer (which IS the Box value)
                     return .{ .general_reg = heap_ptr };
                 },
-                .box_unbox => {
-                    const ls = self.layout_store;
-                    const box_arg_layout = self.valueLayout(GuardedList.at(args, 0));
-                    const box_layout_data = ls.getLayout(box_arg_layout);
-                    if (box_layout_data.tag == .box_of_zst or ls.isZeroSized(ls.getLayout(ll.ret_layout))) {
-                        _ = try self.emitValueLocal(GuardedList.at(args, 0));
-                        return .{ .immediate_i64 = 0 };
-                    }
-                    const box_abi = ls.builtinBoxAbi(box_arg_layout);
-                    const elem_size: u32 = box_abi.elem_size;
-                    const box_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    const box_reg = try self.ensureInGeneralReg(box_loc);
-                    defer self.codegen.freeGeneral(box_reg);
-                    const result_offset = self.codegen.allocStackSlot(elem_size);
-                    const elem_incref_reg = if (box_abi.contains_refcounted)
-                        try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, box_abi.elem_layout_idx orelse unreachable)
-                    else
-                        null;
-                    defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
-                    const roc_ops_reg = self.roc_ops_reg orelse unreachable;
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    try builder.addLeaArg(frame_ptr, result_offset);
-                    try builder.addRegArg(box_reg);
-                    try builder.addImmArg(@intCast(elem_size));
-                    try builder.addImmArg(@intCast(box_abi.elem_alignment));
-                    try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
-                    if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                    try builder.addRegArg(roc_ops_reg);
-                    try self.callBuiltin(&builder, .box_unbox_owned);
-                    const elem_layout_data = ls.getLayout(ll.ret_layout);
-                    if (ll.ret_layout == .i128 or ll.ret_layout == .u128 or ll.ret_layout == .dec) {
-                        return .{ .stack_i128 = result_offset };
-                    } else if (ll.ret_layout == .str) {
-                        return .{ .stack_str = result_offset };
-                    } else if (elem_layout_data.tag == .list or elem_layout_data.tag == .list_of_zst) {
-                        return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
-                    } else {
-                        return .{ .stack = .{ .offset = result_offset, .size = ValueSize.fromByteCount(elem_size) } };
-                    }
-                },
+                // Consuming Box.unbox is normalized by ARC into the borrowed
+                // load followed by explicit RC statements.
+                .box_unbox => unreachable,
                 .box_unbox_borrowed => {
                     // Box.unbox(box) -> value: dereference the box pointer
                     const ls = self.layout_store;

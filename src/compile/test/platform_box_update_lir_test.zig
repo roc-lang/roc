@@ -15,6 +15,7 @@ const Counts = struct {
     list_replace: usize = 0,
     list_append: usize = 0,
     box_retain: usize = 0,
+    box_release: usize = 0,
     list_retain: usize = 0,
     calls_to_unbox_proc: usize = 0,
 
@@ -25,7 +26,7 @@ const Counts = struct {
     }
 };
 
-test "platform boxed model without inlining consumes the Box but preserves checked mutation failure ownership" {
+test "platform boxed model without inlining transfers checked mutation field ownership" {
     try harness.runAppPathLirInspection(
         "test/box-model-uniqueness/app.roc",
         .{ .inline_mode = .none, .consume_dead_boxes = true, .proc_debug_names = true },
@@ -54,9 +55,10 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
 
         if (store.procDebugName(proc_id)) |name| {
             if (std.mem.eql(u8, name, "Builtin.Box.unbox")) {
-                try std.testing.expectEqual(@as(usize, 1), counts.owned_unbox);
-                try std.testing.expectEqual(@as(usize, 0), counts.borrowed_unbox);
+                try std.testing.expectEqual(@as(usize, 0), counts.owned_unbox);
+                try std.testing.expectEqual(@as(usize, 1), counts.borrowed_unbox);
                 try std.testing.expectEqual(@as(usize, 0), counts.box_retain);
+                try std.testing.expectEqual(@as(usize, 1), counts.box_release);
                 found_unbox_body = true;
             } else if (std.mem.eql(u8, name, "list_set_unsafe")) {
                 try std.testing.expectEqual(@as(usize, 1), counts.list_set);
@@ -68,8 +70,9 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
     try std.testing.expect(found_unbox_body);
     try std.testing.expect(found_list_set_body);
     try std.testing.expectEqual(@as(usize, 0), total.prepare_update);
-    try std.testing.expectEqual(@as(usize, 1), total.owned_unbox);
-    try std.testing.expectEqual(@as(usize, 0), total.borrowed_unbox);
+    try std.testing.expectEqual(@as(usize, 0), total.owned_unbox);
+    try std.testing.expect(total.borrowed_unbox >= 1);
+    try std.testing.expect(total.box_release >= total.borrowed_unbox);
     try std.testing.expectEqual(@as(usize, 1), total.list_set);
     try std.testing.expectEqual(@as(usize, 1), total.list_replace);
     try std.testing.expectEqual(@as(usize, 1), total.list_append);
@@ -78,6 +81,7 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
         "update_straight_for_host",
         "update_adapter_for_host!",
         "update_append_for_host!",
+        "update_pattern_for_host!",
         "cursor_for_host",
     };
     for (&wrapper_names) |name| {
@@ -93,17 +97,30 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
     try std.testing.expectEqual(@as(usize, 0), total.box_retain);
     try std.testing.expect(total.list_retain > 0);
 
-    // The reachable call graph must remain free of Box-lender retains. Its
-    // checked list helpers still contain RC work on control-flow paths other
-    // than the runtime fixture's out-of-bounds path.
+    // This combined graph also reaches unconditional base collection helpers
+    // through controls that the runtime allocation loop does not execute, so
+    // it intentionally retains their RC statements. Box ownership remains
+    // transfer-only throughout.
     const active = try countReachableNamed(
         store,
         layouts,
         unbox_proc,
         &.{ "update_straight_for_host", "update_adapter_for_host!", "cursor_for_host" },
     );
+
+    // The divergent pattern adapter exercises pairwise residual masks: Set
+    // consumes points, Append consumes trail, and Other forwards the intact
+    // model. Every reachable edge stays retain-free in no-inline mode.
+    const pattern_active = try countReachableNamed(
+        store,
+        layouts,
+        unbox_proc,
+        &.{"update_pattern_for_host!"},
+    );
     try std.testing.expectEqual(@as(usize, 0), active.box_retain);
     try std.testing.expect(active.list_retain > 0);
+    try std.testing.expectEqual(@as(usize, 0), pattern_active.box_retain);
+    try std.testing.expectEqual(@as(usize, 0), pattern_active.list_retain);
 
     // List.replace and List.update retain values on other control-flow paths
     // in their unconditional base procedures. The allocation fixture executes
@@ -126,6 +143,7 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
     var found_adapter = false;
     var found_append = false;
     var found_cursor = false;
+    var found_pattern = false;
 
     for (store.getProcSpecs(), 0..) |_, index| {
         const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
@@ -142,6 +160,12 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
         } else if (std.mem.eql(u8, name, "update_append_for_host!")) {
             try expectProcCounts(counts, 1, 0, 2, 1);
             found_append = true;
+        } else if (std.mem.eql(u8, name, "update_pattern_for_host!")) {
+            // Divergent arms consume different committed model fields. Each
+            // edge must carry or settle its exact residual field places, so
+            // neither checked mutation needs a defensive list retain.
+            try expectProcCounts(counts, 1, 1, 0, 1);
+            found_pattern = true;
         } else if (std.mem.eql(u8, name, "cursor_for_host")) {
             try expectProcCounts(counts, 1, 0, 0, 0);
             found_cursor = true;
@@ -152,18 +176,21 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
     try std.testing.expect(found_adapter);
     try std.testing.expect(found_append);
     try std.testing.expect(found_cursor);
+    try std.testing.expect(found_pattern);
     try std.testing.expectEqual(@as(usize, 0), total.prepare_update);
-    try std.testing.expectEqual(@as(usize, 4), total.owned_unbox);
-    try std.testing.expectEqual(@as(usize, 0), total.borrowed_unbox);
-    try std.testing.expectEqual(@as(usize, 4), total.list_set);
+    try std.testing.expectEqual(@as(usize, 0), total.owned_unbox);
+    try std.testing.expectEqual(@as(usize, 5), total.borrowed_unbox);
+    try std.testing.expectEqual(@as(usize, 5), total.box_release);
+    try std.testing.expectEqual(@as(usize, 5), total.list_set);
     try std.testing.expectEqual(@as(usize, 2), total.list_replace);
     try std.testing.expectEqual(@as(usize, 0), total.box_retain);
     try std.testing.expectEqual(@as(usize, 0), total.list_retain);
 }
 
-fn expectProcCounts(counts: Counts, owned_unbox: usize, list_set: usize, list_replace: usize, list_append: usize) harness.LowerToLirHarnessError!void {
-    try std.testing.expectEqual(owned_unbox, counts.owned_unbox);
-    try std.testing.expectEqual(@as(usize, 0), counts.borrowed_unbox);
+fn expectProcCounts(counts: Counts, normalized_unbox: usize, list_set: usize, list_replace: usize, list_append: usize) harness.LowerToLirHarnessError!void {
+    try std.testing.expectEqual(@as(usize, 0), counts.owned_unbox);
+    try std.testing.expectEqual(normalized_unbox, counts.borrowed_unbox);
+    try std.testing.expectEqual(normalized_unbox, counts.box_release);
     try std.testing.expectEqual(list_set, counts.list_set);
     try std.testing.expectEqual(list_replace, counts.list_replace);
     try std.testing.expectEqual(list_append, counts.list_append);
@@ -212,6 +239,10 @@ fn countProc(
             } else if (retained_tag == .list) {
                 counts.list_retain += 1;
             }
+        } else if (stmt == .decref) {
+            const release = stmt.decref;
+            const released_tag = layouts.getLayout(store.getLocal(release.value).layout_idx).tag;
+            if (released_tag == .box) counts.box_release += 1;
         } else if (stmt == .assign_low_level) {
             const low_level = stmt.assign_low_level;
             if (low_level.op == .box_prepare_update) counts.prepare_update += 1;

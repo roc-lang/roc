@@ -8929,11 +8929,18 @@ generates constraints per statement:
   `Box.unbox` is the ownership-transfer case: its neutral operation is solved
   conservatively as consuming so the payload has an ownership place distinct
   from the outer allocation. Emission selects the ARC-only borrowing variant
-  only when another use or alias keeps the box lender live. Consuming unbox
-  frees a unique outer allocation and transfers its stored payload units
-  unchanged; for a shared outer allocation it retains the payload children
-  and releases the consumed box reference. A zero-sized box is null and the
-  consuming operation neither dereferences nor frees it.
+  when another use or alias keeps the box lender live. An owned selection is
+  normalized before the backend boundary into the borrowing payload copy,
+  followed by an explicit payload `incref` and outer-box `decref`. If the box
+  is unique, its decref frees the outer allocation and drops the stored payload
+  unit, cancelling the explicit incref; if it is shared, the outer decref does
+  not drop children and the explicit incref is the unboxed value's new unit.
+  Thus both paths leave the payload count unchanged relative to the ownership
+  result, without any backend reading an RC header or choosing a path. Flat
+  and zero-sized payload helpers are no-ops; a null zero-sized box is neither
+  dereferenced nor freed. Post-ARC LIR may not contain the consuming
+  `box_unbox` operation: the certifier and every backend see only the borrowed
+  copy and explicit RC statements.
   The allocation-faithful compiled pipeline enables this selection. The
   interpreter's value model explicitly selects the borrowing variant because
   it does not model transfer of an outer allocation independently from erased
@@ -9330,7 +9337,20 @@ aggregate operand, tag payload, store operand, moving Boxy operand, or returned
 same-value alias clears that entry bit. Borrowing reads leave it set. At each
 normal return, the bits still set are intersected with every other path that
 returns the same discriminant. A loop is the ordinary finite fixed point over
-`(statement, remaining-entry-mask, known-result-discriminant)` states.
+the per-resource rows below.
+
+The analysis is a polynomial product of independent finite resource facts, not
+an enumeration of parameter subsets. For each represented entry parameter
+`p`, it solves the two-point ownership row `present_p < spent_p` over
+`(statement, known-result-discriminant)`: a consumption changes `present_p` to
+`spent_p`, a second consumption rejects the capability, and control-flow joins
+meet the row independently for `p`. Outcome masks are assembled only after all
+parameter rows converge. The result-discriminant witness is one shared finite
+control fact; it is never multiplied by a full parameter subset. Complexity is
+therefore polynomial in statements, represented parameters, and committed
+result variants. A work item or visited key containing the complete remaining
+parameter mask is forbidden, because independent branches can otherwise
+materialize every subset of sixteen parameters.
 
 Every write to the returned local first kills the current discriminant witness;
 only an `assign_tag` to that exact binding establishes a replacement. Thus an
@@ -9394,6 +9414,16 @@ mutate the read value in place while the
 failure path may still use the unchanged aggregate, without manufacturing a
 second unit. The field-take rules remain responsible for proving the complete
 field or tag-payload read; restitution never guesses aggregate structure.
+For a partial committed struct field, the initial closed capability additionally
+requires the projection binding's only operand read to be that direct call.
+Dismantle analysis records `(call statement, argument position) -> (root,
+field identity, refinement switch)` as explicit producer data. The caller ARC
+solver consumes that record: a restituting edge refills exactly that field in
+the root residual mask, while every other edge leaves it absent. Any additional
+projection-binding use, ambiguous call position, unsupported result
+continuation, or non-owned callee position rejects this field-place capability
+and keeps the unconditional schedule. Emission never rescans the call
+continuation to reconstruct the field or refinement.
 
 Range proving composes by deleting unreachable result outcomes or their
 switch arms before ARC, which may make the ordinary unconditional transfer
@@ -9524,15 +9554,14 @@ where the field cannot have been taken yet—a take where it may already be
 gone would double-consume its unit on that path. A borrow of the field, and
 any whole use of the container, must likewise run where no take can have
 happened: after a take, the container's bytes for that field can alias the
-taker's mutation rather than the original value. Every exit the flow reaches—
-returns, crashes, and jumps that leave the region, such as a loop's back
-edge—must agree on the taken set (`may == must`), so the residual release
-is the same however the death point was reached. Merges meet pointwise, and
-a loop poisons its own takes: a take inside one reaches itself as
-possibly-taken. Consuming reads on exclusive branches thereby take exactly
-when every path through the branching takes the field exactly once—the
-success and fallback arms of a checked mutation are the archetype—and
-a read the flow never reaches keeps its field residual. A field that fails
+taker's mutation rather than the original value. An explicit outcome field
+receipt changes the matching edge state from taken back to available before
+that edge is walked; this is the only transition that can clear a
+`may-taken` bit. Merges meet pointwise, and a loop poisons its own takes: a
+take inside one reaches itself as possibly-taken unless an exact receipt
+dominates every repeated entry. Exclusive branches may leave different
+residual masks; the ARC join equations below normalize their exact
+differences. A read the flow never reaches keeps its field residual. A field that fails
 any rule simply stays residual—its reads keep their retains and its stored
 unit is released at the death point—and a container whose take set comes
 out empty keeps today's whole release exactly.
@@ -9584,13 +9613,83 @@ container is independently relevant, the read stays borrowed. Restoration of
 the remaining read chains happens only after all representatives exist, so
 correctness is independent of local numbering.
 
-Partial dismantling across diverging paths -- a field remaining owned after a
-switch in one arm but consumed in another -- is future work: it needs per-path
-residual masks, and the spine rule above is precisely what makes the residual
-global. This is distinct from arms that settle the whole RC unit in different
-ways (for example, one arm takes the sole optional payload while the proven
-Missing arm releases the empty container): both reach the continuation with
-the same zero-unit representation shell and require no residual mask.
+#### Per-edge aggregate residuals
+
+Field ownership is not a property of a container local for its whole lifetime.
+It is a property of one ownership state on one control-flow edge. For every
+eligible aggregate resource `a`, committed layout supplies a finite ordered set
+`F(a)` of its directly stored refcounted field places. An ARC ownership state
+therefore carries `R(a) subseteq F(a)`: the exact stored units still owned by
+`a` on that path. An absent aggregate resource and `R(a) = empty` are distinct:
+the former has no usable value, while the latter is a representation shell
+whose non-refcounted bytes may still be read under the shell rules above. The
+initial state of an owned binding is `R(a) = F(a)`.
+
+The transfer equations use committed field identities, never statement shape
+or source names:
+
+- taking field `f` requires `f in R(a)` and produces the field result's owned
+  unit while updating `R'(a) = R(a) - {f}`
+- borrowing or retaining field `f` requires `f in R(a)` and leaves `R(a)`
+  unchanged
+- a whole move, whole release, call argument, aggregate insertion, or return
+  requires `R(a) = F(a)`; it removes the aggregate resource exactly as before
+- dismantling a residual `S` emits one field read and release for every
+  `f in S`, then leaves `R'(a) = empty`
+- rebinding a name first settles its exact residual state; it cannot silently
+  replace a nonempty `R(a)`
+
+Switch and join summaries carry these residual masks as part of their ordinary
+ownership state. For incoming states `R_i(a)`, the common state is the greatest
+state that every incoming edge can supply without inventing ownership:
+`R_join(a) = intersection_i R_i(a)`. Each edge is normalized explicitly by a
+plan-owned dismantle decision for `R_i(a) - R_join(a)` before entering the
+continuation. Consequently every field unit is either carried by the common
+aggregate resource, moved to another explicitly owned local, or released on
+that edge. Merely intersecting masks without emitting those difference
+releases is invalid. A resource missing on any incoming edge has an empty
+common residual; present incoming edges must settle all of their residual
+fields and all paths enter with the same representation-shell state when the
+continuation still reads scalar bytes. Join parameters remain independently
+owned cells: their incoming values are checked and normalized at each jump,
+not unified with an unrelated aggregate local because their layouts happen to
+match.
+
+Loop headers use the same finite descending fixed point. The header residual
+starts from the entry state and meets every reachable back edge by
+intersection; whenever it shrinks, all affected entry and back-edge plans are
+recomputed and normalize their exact differences. A take in a loop is admitted
+only when its field is present in the converged header state at every execution
+that reaches it. Thus a take that can reach itself with the field absent is
+rejected; no runtime drop flag or optimistic first-iteration schedule is
+introduced.
+
+`ArcPlan` snapshots store the full residual state used to make their decisions,
+and `ReleaseDecision` distinguishes a whole local release from an explicit
+aggregate residual release carrying the exact committed field mask. Plan
+materialization follows those decisions mechanically. Outcome-conditioned
+argument restitution carries the same resource-place state: a failure receipt
+restores exactly the argument places named by that outcome row, including the
+residual mask that existed at the call boundary. It may not refill a field
+already transferred before the call or coalesce two argument positions that
+name the same ownership place. Normal and outcome-refined continuations are
+joined only after their receipts have produced ordinary exact ownership
+states, so outcome specialization composes with branch residuals without a
+second ownership mechanism.
+
+The certifier derives residual ownership independently from emitted LIR. Its
+state records the outstanding committed field claims for every aggregate
+representative. A field take removes exactly one claim; a residual dismantle is
+certified as the corresponding sequence of field claims and releases; whole
+uses require the full claim set; and shell-only uses require the empty claim
+set. Join summaries include exact claim masks and accept an edge only after its
+emitted releases make the edge state equal to the summary state. Loop summaries
+iterate those same exact masks to a fixed point. The certifier rejects a
+post-take whole use, a second take of one field, a missing or extra edge
+normalization, a receipt that restores a spent field, and any merge that would
+have to union or guess ownership. Neither ARC nor certification consults a
+backend, mutation name, source pattern, or runtime uniqueness check to recover
+these facts.
 
 ### Debug Borrow Certifier
 
