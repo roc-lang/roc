@@ -182,6 +182,7 @@ pub const CallArg = struct {
     position: u8,
 };
 
+/// Exact aggregate field place and result refinement that can restore it.
 pub const FieldRestitutionArg = struct {
     place: Take,
     refinement: LIR.CFStmtId,
