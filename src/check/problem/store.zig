@@ -50,6 +50,8 @@ pub const Store = struct {
         source: ExhaustivenessSiteSource,
         site: ?CheckedExhaustivenessSiteId = null,
         region: base.Region,
+        /// Region of the earlier statement that stopped compile-time validation.
+        comptime_blocked_by: ?base.Region = null,
         problem: Problem,
     };
 
@@ -171,6 +173,25 @@ pub const Store = struct {
         unreachable;
     }
 
+    /// Record the earlier statement that stopped compile-time validation of this
+    /// site. The report names that statement so the reader can move the
+    /// destructure above it.
+    pub fn markPendingStaticExhaustivenessComptimeBlocked(
+        self: *Self,
+        source: ExhaustivenessSiteSource,
+        blocking_region: base.Region,
+    ) void {
+        for (self.pending_static_exhaustiveness.items) |*pending| {
+            if (!exhaustivenessSourcesEqual(pending.source, source)) continue;
+            pending.comptime_blocked_by = blocking_region;
+            return;
+        }
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: blocked exhaustiveness source had no pending diagnostic", .{});
+        }
+        unreachable;
+    }
+
     pub fn resolvePendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
         var write: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
@@ -203,7 +224,7 @@ pub const Store = struct {
                 index += 1;
                 continue;
             }
-            var problem = pending.problem;
+            var problem = pendingProblem(pending);
             if (pending.mode == .empirical) {
                 switch (problem) {
                     .non_exhaustive_match => |*match| match.empirical = true,
@@ -265,11 +286,23 @@ pub const Store = struct {
         return false;
     }
 
+    /// The blocking-statement region is decided after the pending problem is
+    /// built, so it is applied on the way out of the pending list.
+    fn pendingProblem(pending: PendingStaticExhaustiveness) Problem {
+        var problem = pending.problem;
+        if (pending.comptime_blocked_by) |blocking_region| {
+            if (problem == .non_exhaustive_destructure) {
+                problem.non_exhaustive_destructure.comptime_blocked_by = blocking_region;
+            }
+        }
+        return problem;
+    }
+
     pub fn flushPendingStaticExhaustiveness(self: *Self, gpa: Allocator) std.mem.Allocator.Error!usize {
         var count: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
             if (pending.mode != .static) continue;
-            _ = try self.appendProblem(gpa, pending.problem);
+            _ = try self.appendProblem(gpa, pendingProblem(pending));
             count += 1;
         }
         self.pending_static_exhaustiveness.clearRetainingCapacity();
@@ -279,7 +312,7 @@ pub const Store = struct {
     pub fn flushAllPendingStaticExhaustiveness(self: *Self, gpa: Allocator) std.mem.Allocator.Error!usize {
         const count = self.pending_static_exhaustiveness.items.len;
         for (self.pending_static_exhaustiveness.items) |pending| {
-            _ = try self.appendProblem(gpa, pending.problem);
+            _ = try self.appendProblem(gpa, pendingProblem(pending));
         }
         self.pending_static_exhaustiveness.clearRetainingCapacity();
         return count;
