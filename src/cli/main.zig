@@ -2778,7 +2778,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     // Check if this is a default_app (headerless file with main!) before
     // linking the platform host shim.
-    if (try readDefaultAppSource(ctx, args.path)) |source| {
+    if (try readDefaultAppSource(ctx, args.path, .default_app)) |source| {
         // Headerless default apps never hot reload; they just run once. The shared-memory
         // shim is the run mechanism where the default platform runtime exists (Linux native,
         // or any cross-target run); elsewhere we use the plain run-once path.
@@ -3561,10 +3561,30 @@ fn finishCompiledRun(
     return finishRunTermination(ctx, exe_path, classifyNativeRunTermination(term), diagnostics);
 }
 
+/// How to classify a headerless file that failed to parse. A syntax error such
+/// as an unbalanced paren swallows every declaration after it, `main!`
+/// included, so such a file cannot be classified reliably.
+const UnparsableHeaderless = enum {
+    /// Report it as not a default app. `roc check` and `roc build` use this:
+    /// their plain-module paths already report the syntax errors against the
+    /// user's own file.
+    not_default_app,
+    /// Claim it as a default app anyway. `roc run` uses this: its staged-app
+    /// path remaps diagnostics back to the user's file, whereas falling
+    /// through ends in a misleading "expected app header" about a file that
+    /// never had a header to begin with.
+    default_app,
+};
+
 /// Check if a file is a default_app (headerless file with a main! function).
 /// On success, returns the file source (caller owns the allocation).
-/// Returns null if the file is not a default_app.
-fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.Error!?[]const u8 {
+/// Returns null if the file is not a default_app; `unparsable` decides which
+/// answer a headerless file that failed to parse gets.
+fn readDefaultAppSource(
+    ctx: *CliCtx,
+    file_path: []const u8,
+    unparsable: UnparsableHeaderless,
+) std.mem.Allocator.Error!?[]const u8 {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
     const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -3639,8 +3659,11 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.E
     }
 
     if (!ast.hasMainBangDecl()) {
-        ctx.gpa.free(source);
-        return null;
+        const may_still_be_default_app = unparsable == .default_app and ast.hasErrors();
+        if (!may_still_be_default_app) {
+            ctx.gpa.free(source);
+            return null;
+        }
     }
 
     return source;
@@ -8247,7 +8270,7 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     // Headerless apps build through a synthetic default platform.
-    if (try readDefaultAppSource(ctx, args.path)) |source| {
+    if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source| {
         return rocBuildDefaultApp(ctx, args, source);
     }
 
@@ -17164,7 +17187,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         var extra_buf: [2][]const u8 = undefined;
         const extra_paths = appendExtraWatchPaths(.{ .check = args }, &extra_buf);
 
-        if (try readDefaultAppSource(ctx, args.path)) |source| {
+        if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source| {
             var default_result = rocCheckDefaultAppPreserved(
                 ctx,
                 args,
@@ -17222,7 +17245,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         return finishRocCheck(ctx, args, stdout, stderr, timer_start_ns, check_result);
     }
 
-    var check_result = if (try readDefaultAppSource(ctx, args.path)) |source|
+    var check_result = if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source|
         rocCheckDefaultApp(ctx, args, source, cache_config) catch |err| {
             reporter.fail();
             return handleProcessFileError(err, stderr, args.path);
