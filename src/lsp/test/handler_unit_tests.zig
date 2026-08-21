@@ -282,3 +282,133 @@ test "document highlight handler returns empty for non-identifier with test synt
     try std.testing.expect(result == .array);
     try std.testing.expectEqual(@as(usize, 0), result.array.items.len);
 }
+
+test "hover handler returns invalid_params error for negative position coordinates without panicking" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file_uri = try tempFileUri(allocator, &tmp, "hover_negative.roc");
+    defer allocator.free(file_uri);
+
+    const hover_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":-1,"character":-1}}}}}}
+    , .{file_uri});
+    defer allocator.free(hover_body);
+    const input = try requestInput(allocator, file_uri, "x = 1", hover_body);
+    defer allocator.free(input);
+
+    var writer_buffer: [16384]u8 = undefined;
+    const run = try runUnitServer(allocator, input, &writer_buffer);
+    defer freeRun(allocator, run);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, try responseWithId(allocator, run.responses, 2), .{});
+    defer parsed.deinit();
+    const err_obj = parsed.value.object.get("error") orelse return error.MissingError;
+    try std.testing.expect(err_obj == .object);
+    const code = err_obj.object.get("code") orelse return error.MissingCode;
+    try std.testing.expectEqual(@as(i64, -32602), code.integer);
+}
+
+test "completion handler returns invalid_params error for negative position coordinates without panicking" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file_uri = try tempFileUri(allocator, &tmp, "completion_negative.roc");
+    defer allocator.free(file_uri);
+
+    const completion_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":-1,"character":-1}}}}}}
+    , .{file_uri});
+    defer allocator.free(completion_body);
+    const input = try requestInput(allocator, file_uri, "x = 1", completion_body);
+    defer allocator.free(input);
+
+    var writer_buffer: [16384]u8 = undefined;
+    const run = try runUnitServer(allocator, input, &writer_buffer);
+    defer freeRun(allocator, run);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, try responseWithId(allocator, run.responses, 2), .{});
+    defer parsed.deinit();
+    const err_obj = parsed.value.object.get("error") orelse return error.MissingError;
+    try std.testing.expect(err_obj == .object);
+    const code = err_obj.object.get("code") orelse return error.MissingCode;
+    try std.testing.expectEqual(@as(i64, -32602), code.integer);
+}
+
+test "definition handler returns invalid_params error for negative position coordinates without panicking" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file_uri = try tempFileUri(allocator, &tmp, "def_negative.roc");
+    defer allocator.free(file_uri);
+
+    const def_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":-1,"character":-1}}}}}}
+    , .{file_uri});
+    defer allocator.free(def_body);
+    const input = try requestInput(allocator, file_uri, "x = 1", def_body);
+    defer allocator.free(input);
+
+    var writer_buffer: [16384]u8 = undefined;
+    const run = try runUnitServer(allocator, input, &writer_buffer);
+    defer freeRun(allocator, run);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, try responseWithId(allocator, run.responses, 2), .{});
+    defer parsed.deinit();
+    const err_obj = parsed.value.object.get("error") orelse return error.MissingError;
+    try std.testing.expect(err_obj == .object);
+    const code = err_obj.object.get("code") orelse return error.MissingCode;
+    try std.testing.expectEqual(@as(i64, -32602), code.integer);
+}
+
+test "document highlight handler returns invalid_params error for negative position coordinates without panicking" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file_uri = try tempFileUri(allocator, &tmp, "highlight_negative.roc");
+    defer allocator.free(file_uri);
+
+    const highlight_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":-1,"character":-1}}}}}}
+    , .{file_uri});
+    defer allocator.free(highlight_body);
+    const input = try requestInput(allocator, file_uri, "x = 1", highlight_body);
+    defer allocator.free(input);
+
+    var writer_buffer: [16384]u8 = undefined;
+    const run = try runUnitServer(allocator, input, &writer_buffer);
+    defer freeRun(allocator, run);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, try responseWithId(allocator, run.responses, 2), .{});
+    defer parsed.deinit();
+    const err_obj = parsed.value.object.get("error") orelse return error.MissingError;
+    try std.testing.expect(err_obj == .object);
+    const code = err_obj.object.get("code") orelse return error.MissingCode;
+    try std.testing.expectEqual(@as(i64, -32602), code.integer);
+}
+
+test "selection range handler returns invalid_params error for negative position coordinates without panicking" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file_uri = try tempFileUri(allocator, &tmp, "select_negative.roc");
+    defer allocator.free(file_uri);
+
+    const select_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/selectionRange","params":{{"textDocument":{{"uri":"{s}"}},"positions":[{{"line":-1,"character":-1}}]}}}}
+    , .{file_uri});
+    defer allocator.free(select_body);
+    const input = try requestInput(allocator, file_uri, "x = 1", select_body);
+    defer allocator.free(input);
+
+    var writer_buffer: [16384]u8 = undefined;
+    const run = try runUnitServer(allocator, input, &writer_buffer);
+    defer freeRun(allocator, run);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, try responseWithId(allocator, run.responses, 2), .{});
+    defer parsed.deinit();
+    const err_obj = parsed.value.object.get("error") orelse return error.MissingError;
+    try std.testing.expect(err_obj == .object);
+    const code = err_obj.object.get("code") orelse return error.MissingCode;
+    try std.testing.expectEqual(@as(i64, -32602), code.integer);
+}
