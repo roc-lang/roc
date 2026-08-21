@@ -407,6 +407,9 @@ pub const NonExhaustiveDestructure = struct {
     missing_patterns: MissingPatternsRange,
     /// This was discovered by compile-time evaluation taking the generated miss branch.
     empirical: bool = false,
+    /// Region of the earlier statement that stopped compile-time validation of
+    /// this destructure.
+    comptime_blocked_by: ?base.Region = null,
 };
 
 /// A compile-time-only branch or match alternative was not taken by compile-time evaluation.

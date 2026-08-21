@@ -4629,6 +4629,36 @@ pub const ReportBuilder = struct {
             }, self, &report);
         }
 
+        if (data.comptime_blocked_by) |blocking_region| {
+            try report.document.addLineBreak();
+            // The renderer writes the prose above a secondary region verbatim,
+            // so this line must stay short enough to fit the report width.
+            try D.renderSlice(&.{
+                D.bytes("This earlier statement stopped compile-time validation:"),
+            }, self, &report);
+            try report.document.addLineBreak();
+
+            const blocking_region_info = self.module_env.calcRegionInfo(blocking_region);
+            try report.document.addSourceRegion(
+                blocking_region_info,
+                .dimmed,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+
+            try D.renderSlice(&.{
+                D.bytes("The right-hand side uses only compile-time-known values, so Roc could confirm this pattern at compile time. Roc does not evaluate expressions at compile time after that statement. Move this destructure above it, or handle the missing patterns with"),
+                D.bytes("match").withAnnotation(.keyword),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("?").withAnnotation(.keyword),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("or"),
+                D.bytes("??").withAnnotation(.keyword),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report);
+        }
+
         return report;
     }
 
