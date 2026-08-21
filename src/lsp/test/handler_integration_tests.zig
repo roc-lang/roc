@@ -747,17 +747,17 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() integration_s
     const initialized_msg = try frame(allocator, initialized_body);
     defer allocator.free(initialized_msg);
 
-    // Document with type annotation. Position (2, 4) is on the 'U' of 'U64'.
+    // Document with type annotation. Position (1, 20) is on 'Str'.
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [x] {{ pf: platform \"{s}\" }}\\n\\nx : U64\\nx = 42"}}}}}}
-    , .{ file_uri, platform_path });
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"Helpers :: [].{{\n\tencode_json : a -> Str where [a.encoder_for : _ -> (a, _ -> Try(_, _))]\n\tencode_json = |a| Json.to_str(a)\n}}\n"}}}}}}
+    , .{file_uri});
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request definition for 'U64' on line 2, character 4 (the type in the annotation).
+    // Request definition for 'Str' on line 1, character 20.
     const definition_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":4}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":1,"character":20}}}}}}
     , .{file_uri});
     defer allocator.free(definition_body);
     const definition_msg = try frame(allocator, definition_body);
@@ -806,13 +806,10 @@ pub fn definitionHandlerNavigatesToBuiltinTypeFromTypeAnnotation() integration_s
     var response = try responseById(allocator, responses, 2);
     defer response.deinit();
     const result = try response.result();
-    if (result == .object) {
-        const uri = try stringField(result, "uri");
-        try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
-        try expectRange(try objectField(result, "range"), 0, 0, 0, 0);
-    } else {
-        try std.testing.expect(result == .null);
-    }
+    try std.testing.expect(result == .object);
+    const uri = try stringField(result, "uri");
+    try std.testing.expect(std.mem.endsWith(u8, uri, "Builtin.roc"));
+    try expectRange(try objectField(result, "range"), 0, 0, 0, 0);
 }
 
 /// Verifies document symbols still work after a goto-definition request.
