@@ -547,6 +547,8 @@ pub const LowLevel = enum(u16) {
     // Box operations
     box_box,
     box_unbox,
+    /// ARC-only borrowing variant of box_unbox.
+    box_unbox_borrowed,
     /// Box(T) -> Box(T): consume a box and return a unique box containing the
     /// same payload. Reuses the allocation when uniqueness is known or the
     /// runtime check succeeds; otherwise copies the payload into a fresh box,
@@ -962,7 +964,13 @@ pub const LowLevel = enum(u16) {
 
             .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
 
-            .box_unbox => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
+            .box_unbox => .{
+                .may_retain_or_release = true,
+                .consume_args = argMask(&.{0}),
+                .result_shares_args = argMask(&.{0}),
+            },
+
+            .box_unbox_borrowed => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
             .box_prepare_update => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
@@ -1392,13 +1400,20 @@ pub const LowLevel = enum(u16) {
     /// Neutral LIR keeps the source operation; ARC uses this explicit mapping
     /// while solving and materializes exactly one of the two operations.
     pub fn arcBorrowedResultVariant(self: LowLevel) ?LowLevel {
-        return if (self == .list_sublist) .list_sublist_borrowed else null;
+        if (self == .list_sublist) return .list_sublist_borrowed;
+        if (self == .box_unbox) return .box_unbox_borrowed;
+        return null;
     }
 
     /// Ownership signature ARC solves for this neutral low-level statement.
     /// Operations without an ARC-only borrowed variant retain their declared
     /// statement effect, including synthetic effects used by focused tests.
     pub fn arcInferenceRcEffect(self: LowLevel, declared: RcEffect) RcEffect {
+        // Box.unbox must establish an independent payload ownership place in
+        // the solved graph. Emission may still select the borrowing variant
+        // when the box lender survives, but an owned variant must not leave
+        // the payload's unit keyed to the consumed box allocation.
+        if (self == .box_unbox) return declared;
         const borrowed = self.arcBorrowedResultVariant() orelse return declared;
         return borrowed.rcEffect();
     }

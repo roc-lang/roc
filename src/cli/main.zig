@@ -12094,6 +12094,11 @@ fn lowerCheckedSourceToLir(
             .target_usize = target_usize,
             .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .consume_dead_boxes = switch (roots) {
+                .linked_output => true,
+                .platform_entrypoints => |artifact| artifact == .dev_run_image,
+                .test_plan => false,
+            },
             // Test lowering executes inline expects at every opt level; other
             // backends omit them from optimized output.
             .inline_expects = switch (roots) {

@@ -312,9 +312,12 @@ const cases = [_]Case{
         \\{
         \\    payload = Str.concat("a boxed payload long enough ", "to allocate on the heap")
         \\    holder = [payload, payload]
-        \\    boxed = Box.box(payload)
-        \\    unboxed = Box.unbox(boxed)
-        \\    Str.count_utf8_bytes(unboxed) + List.len(holder)
+        \\    read_then_store = |boxed| {
+        \\        unboxed = Box.unbox(boxed)
+        \\        boxes = [boxed]
+        \\        Str.count_utf8_bytes(unboxed) + List.len(boxes)
+        \\    }
+        \\    read_then_store(Box.box(payload)) + List.len(holder)
         \\}
         ,
     },
@@ -534,6 +537,18 @@ const cases = [_]Case{
         ,
     },
     .{
+        .name = "flat boxed update exercises allocation reuse",
+        .inline_wrappers = true,
+        .expected_live_allocations = 1,
+        .source =
+        \\{
+        \\    step : Box(U64) -> Box(U64)
+        \\    step = |boxed| Box.box(Box.unbox(boxed) + 1)
+        \\    step(Box.box(0))
+        \\}
+        ,
+    },
+    .{
         .name = "list range copies within, unique and shared inputs",
         .source =
         \\{
@@ -632,9 +647,8 @@ const cases = [_]Case{
     },
 };
 
-/// Ops that no Roc program reaches. Each needs a reason; the sweep fails when
-/// one of these turns out to be covered after all, so a reason that stops being
-/// true cannot sit here unnoticed.
+/// Ops that this source-level sweep cannot reach. Each needs a reason; the
+/// sweep fails when one turns out to be covered after all.
 ///
 /// Every entry here is an op nothing produces: no name in `Builtin.roc` maps to
 /// it through `canonicalize/BuiltinLowLevel.zig`, and no lowering pass emits
@@ -642,6 +656,7 @@ const cases = [_]Case{
 /// have gone unchecked. Wiring one up is what makes its row matter, and doing
 /// that removes it from this table.
 const exemptions = [_]Exemption{
+    .{ .op = .box_unbox, .reason = "allocation-consuming compiled variant is pinned by focused LIR and runtime-helper tests" },
     .{ .op = .list_first, .reason = "no producer: List.first lowers through list_get_unsafe" },
     .{ .op = .list_last, .reason = "no producer: List.last lowers through list_get_unsafe" },
     .{ .op = .list_drop_first, .reason = "no producer: List.drop_first lowers through list_sublist" },
