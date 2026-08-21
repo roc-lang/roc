@@ -395,6 +395,57 @@ const TypedLiftedLocal = struct {
     ty: Type.TypeId,
 };
 
+const EquivalentNamedLayout = struct {
+    ty: Type.TypeId,
+    layout_idx: layout.Idx,
+};
+
+/// Non-recursive fields that every representation-equivalent named type shares.
+/// Bucketing on these avoids probing unrelated layouts while the existing deep
+/// comparison remains the authority for arguments, backings, and recursive types.
+const NamedRepresentationKey = struct {
+    kind: MonoType.NamedKind,
+    named_type_module: [32]u8,
+    def_module: Type.names.ModuleIdentityId,
+    source_decl: ?u32,
+    type_name_if_undeclared: ?Type.names.TypeNameId,
+    builtin_owner: ?check.StaticDispatchRegistry.BuiltinOwner,
+    args_len: u32,
+    has_backing: bool,
+    backing_use: ?MonoType.BackingUse,
+    backing_authority: ?MonoType.BackingAuthority,
+};
+
+const NamedRepresentationKeyContext = struct {
+    pub fn hash(_: NamedRepresentationKeyContext, key: NamedRepresentationKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, key.kind);
+        std.hash.autoHash(&hasher, key.named_type_module);
+        std.hash.autoHash(&hasher, key.def_module);
+        std.hash.autoHash(&hasher, key.source_decl);
+        std.hash.autoHash(&hasher, key.type_name_if_undeclared);
+        std.hash.autoHash(&hasher, key.builtin_owner);
+        std.hash.autoHash(&hasher, key.args_len);
+        std.hash.autoHash(&hasher, key.has_backing);
+        std.hash.autoHash(&hasher, key.backing_use);
+        std.hash.autoHash(&hasher, key.backing_authority);
+        return hasher.final();
+    }
+
+    pub fn eql(_: NamedRepresentationKeyContext, lhs: NamedRepresentationKey, rhs: NamedRepresentationKey) bool {
+        return lhs.kind == rhs.kind and
+            std.mem.eql(u8, &lhs.named_type_module, &rhs.named_type_module) and
+            lhs.def_module == rhs.def_module and
+            lhs.source_decl == rhs.source_decl and
+            lhs.type_name_if_undeclared == rhs.type_name_if_undeclared and
+            lhs.builtin_owner == rhs.builtin_owner and
+            lhs.args_len == rhs.args_len and
+            lhs.has_backing == rhs.has_backing and
+            lhs.backing_use == rhs.backing_use and
+            lhs.backing_authority == rhs.backing_authority;
+    }
+};
+
 const Lowerer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
@@ -430,6 +481,7 @@ const Lowerer = struct {
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
     type_layouts: collections.DenseMap(Type.TypeId, layout.Idx),
+    named_layout_index: std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage),
     layout_owner_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     const_plan_map: collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId),
     const_type_map: collections.DenseMap(Type.TypeId, const_store.ConstTypeId),
@@ -547,6 +599,7 @@ const Lowerer = struct {
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
+            .named_layout_index = std.HashMap(NamedRepresentationKey, std.ArrayList(Type.TypeId), NamedRepresentationKeyContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .layout_owner_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(allocator),
             .const_plan_map = collections.DenseMap(Type.TypeId, LirProgram.ConstPlanId).init(allocator),
             .const_type_map = collections.DenseMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
@@ -585,6 +638,7 @@ const Lowerer = struct {
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
         self.layout_owner_types.deinit();
+        self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -631,6 +685,7 @@ const Lowerer = struct {
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
         self.layout_owner_types.deinit();
+        self.deinitNamedLayoutIndex();
         self.type_layouts.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -8439,8 +8494,45 @@ const Lowerer = struct {
         return self.type_layouts.get(ty);
     }
 
+    fn deinitNamedLayoutIndex(self: *Lowerer) void {
+        var buckets = self.named_layout_index.valueIterator();
+        while (buckets.next()) |bucket| bucket.deinit(self.allocator);
+        self.named_layout_index.deinit();
+    }
+
+    fn namedRepresentationKey(
+        named: std.meta.fieldInfo(Type.Content, .named).type,
+    ) NamedRepresentationKey {
+        const compares_backing_metadata = named.kind != .alias and
+            (named.builtin_owner == null or !generatedEvidenceOwnerUsesBacking(named.builtin_owner.?));
+        const backing = named.backing;
+        return .{
+            .kind = named.kind,
+            .named_type_module = named.named_type.module.bytes,
+            .def_module = named.def.module,
+            .source_decl = named.def.source_decl,
+            .type_name_if_undeclared = if (named.def.source_decl == null) named.def.type_name else null,
+            .builtin_owner = named.builtin_owner,
+            .args_len = named.args.len,
+            .has_backing = backing != null,
+            .backing_use = if (compares_backing_metadata and backing != null) backing.?.use else null,
+            .backing_authority = if (compares_backing_metadata and backing != null) backing.?.authority else null,
+        };
+    }
+
     fn rememberLayoutForType(self: *Lowerer, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!void {
+        const existing_layout = self.type_layouts.get(ty);
+        if (existing_layout) |existing| std.debug.assert(existing == layout_idx);
         try self.type_layouts.put(ty, layout_idx);
+        if (existing_layout != null) return;
+
+        const named = switch (self.types.get(ty)) {
+            .named => |named| named,
+            .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return,
+        };
+        const gop = try self.named_layout_index.getOrPut(namedRepresentationKey(named));
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(self.allocator, ty);
     }
 
     fn solvedTypeAlreadyHasRecursiveSlotStorage(self: *Lowerer, ty: SolvedType.TypeVarId) Common.LowerError!bool {
@@ -8522,23 +8614,21 @@ const Lowerer = struct {
         return slot_ty;
     }
 
-    const EquivalentNamedLayout = struct {
-        ty: Type.TypeId,
-        layout_idx: layout.Idx,
-    };
-
     fn knownLayoutForEquivalentNamedType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!?EquivalentNamedLayout {
-        if (self.types.get(ty) != .named) return null;
-
-        var iterator = self.type_layouts.iterator();
-        while (iterator.next()) |entry| {
-            const other_ty = entry.key_ptr.*;
+        const named = switch (self.types.get(ty)) {
+            .named => |named| named,
+            .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return null,
+        };
+        const candidates = self.named_layout_index.get(namedRepresentationKey(named)) orelse return null;
+        var visited = std.AutoHashMap(u64, void).init(self.allocator);
+        defer visited.deinit();
+        for (candidates.items) |other_ty| {
             if (other_ty == ty) continue;
-            if (self.types.get(other_ty) != .named) continue;
-            var visited = std.AutoHashMap(u64, void).init(self.allocator);
-            defer visited.deinit();
+            visited.clearRetainingCapacity();
             if (try self.representationTypesEquivalent(ty, other_ty, &visited)) {
-                return .{ .ty = other_ty, .layout_idx = entry.value_ptr.* };
+                const layout_idx = self.type_layouts.get(other_ty) orelse
+                    Common.invariant("named layout index referenced a type without a layout");
+                return .{ .ty = other_ty, .layout_idx = layout_idx };
             }
         }
         return null;
@@ -8884,13 +8974,12 @@ const Lowerer = struct {
         var graph = layout.Graph{};
         defer graph.deinit(self.allocator);
 
-        const local_nodes = try self.allocator.alloc(?layout.GraphNodeId, self.types.typeCount());
-        defer self.allocator.free(local_nodes);
-        @memset(local_nodes, null);
+        var local_nodes = collections.DenseMap(Type.TypeId, layout.GraphNodeId).init(self.allocator);
+        defer local_nodes.deinit();
         var builder = LayoutGraphBuilder{
             .lowerer = self,
             .graph = &graph,
-            .local_nodes = local_nodes,
+            .local_nodes = &local_nodes,
         };
         const root = try builder.inputForType(ty);
         var commit = try self.result.layouts.commitGraph(&graph, root);
@@ -8902,10 +8991,24 @@ const Lowerer = struct {
         }
 
         const node = layout.graphInputLocal(root) orelse Common.invariant("layout graph root was neither committed nor local");
-        for (local_nodes, 0..) |maybe_node, type_index| {
-            if (maybe_node) |mapped_node| {
-                try self.rememberLayoutForType(@enumFromInt(type_index), commit.value_layouts[@intFromEnum(mapped_node)]);
+        const local_types = try self.allocator.alloc(Type.TypeId, local_nodes.count());
+        defer self.allocator.free(local_types);
+        var local_type_iter = local_nodes.keyIterator();
+        for (local_types) |*local_ty| {
+            local_ty.* = (local_type_iter.next() orelse
+                Common.invariant("local layout node map count exceeded its keys")).*;
+        }
+        // Equivalent named layouts are first-writer-wins, so preserve the dense
+        // table's ascending TypeId order rather than DenseMap insertion order.
+        std.mem.sort(Type.TypeId, local_types, {}, struct {
+            fn lessThan(_: void, lhs: Type.TypeId, rhs: Type.TypeId) bool {
+                return @intFromEnum(lhs) < @intFromEnum(rhs);
             }
+        }.lessThan);
+        for (local_types) |local_ty| {
+            const mapped_node = local_nodes.get(local_ty) orelse
+                Common.invariant("local layout node key had no mapped node");
+            try self.rememberLayoutForType(local_ty, commit.value_layouts[@intFromEnum(mapped_node)]);
         }
         return self.knownLayoutForType(ty) orelse commit.value_layouts[@intFromEnum(node)];
     }
@@ -8913,17 +9016,16 @@ const Lowerer = struct {
     const LayoutGraphBuilder = struct {
         lowerer: *Lowerer,
         graph: *layout.Graph,
-        local_nodes: []?layout.GraphNodeId,
+        local_nodes: *collections.DenseMap(Type.TypeId, layout.GraphNodeId),
 
         fn inputForType(self: *LayoutGraphBuilder, ty: Type.TypeId) Common.LowerError!layout.GraphInput {
-            const index = @intFromEnum(ty);
             if (self.lowerer.knownLayoutForType(ty)) |layout_idx| return layout.committedGraphInput(layout_idx);
             if (try self.lowerer.knownLayoutForEquivalentNamedType(ty)) |layout_idx| {
                 try self.lowerer.rememberLayoutForType(ty, layout_idx.layout_idx);
                 try self.lowerer.layout_owner_types.put(ty, layout_idx.ty);
                 return layout.committedGraphInput(layout_idx.layout_idx);
             }
-            if (self.local_nodes[index]) |node| return layout.localGraphInput(node);
+            if (self.local_nodes.get(ty)) |node| return layout.localGraphInput(node);
 
             switch (self.lowerer.types.get(ty)) {
                 .primitive => |primitive| return layout.committedGraphInput(primitiveLayout(primitive)),
@@ -8945,7 +9047,7 @@ const Lowerer = struct {
                         try self.lowerer.typeContainsCallable(backing.ty))
                     {
                         const node = try self.graph.reserveNode(self.lowerer.allocator);
-                        self.local_nodes[index] = node;
+                        try self.local_nodes.put(ty, node);
                         self.graph.setNode(node, .{ .box = try self.inputForType(backing.ty) });
                         return layout.localGraphInput(node);
                     }
@@ -8960,8 +9062,8 @@ const Lowerer = struct {
                         self.declaredOrderHasPadding(named.declared_order))
                     {
                         const node = try self.graph.reserveNode(self.lowerer.allocator);
-                        self.local_nodes[index] = node;
-                        self.local_nodes[@intFromEnum(backing.ty)] = node;
+                        try self.local_nodes.put(ty, node);
+                        try self.local_nodes.put(backing.ty, node);
                         const field_span = try self.declaredOrderStructFields(named.declared_order, backing.ty);
                         self.graph.setNode(node, .{ .struct_ = self.graph.declaredOrder(field_span) });
                         return layout.localGraphInput(node);
@@ -8970,7 +9072,7 @@ const Lowerer = struct {
                     const backing_input = try self.inputForType(backing.ty);
                     if (layout.graphInputCommitted(backing_input)) |layout_idx| return layout.committedGraphInput(layout_idx);
                     if (layout.graphInputLocal(backing_input)) |node| {
-                        self.local_nodes[index] = node;
+                        try self.local_nodes.put(ty, node);
                         return layout.localGraphInput(node);
                     }
                     Common.invariant("named backing layout input was neither committed nor local");
@@ -8979,7 +9081,7 @@ const Lowerer = struct {
             }
 
             const node = try self.graph.reserveNode(self.lowerer.allocator);
-            self.local_nodes[index] = node;
+            try self.local_nodes.put(ty, node);
             self.graph.setNode(node, try self.nodeForType(ty));
             return layout.localGraphInput(node);
         }
@@ -9724,6 +9826,13 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
     @memset(iterator_interface_visit_epochs.items, 0);
     cloned.iterator_interface_visit_epochs = @TypeOf(source.iterator_interface_visit_epochs).fromArrayList(iterator_interface_visit_epochs);
     iterator_interface_visit_epochs = .empty;
+    // The unfolding index must travel with the cloned digest caches: a clone
+    // holding cached recursive digests but no unfoldings would digest a new
+    // rolled-out prefix differently from the knot it unrolls.
+    var unfoldings = source.recursive_digest_unfoldings.iterator();
+    while (unfoldings.next()) |entry| {
+        try cloned.recursive_digest_unfoldings.put(entry.key_ptr.*, entry.value_ptr.*);
+    }
     cloned.spans = @TypeOf(source.spans).fromArrayList(try cloneSlice(MonoType.TypeId, allocator, view.spans));
     cloned.fields = @TypeOf(source.fields).fromArrayList(try cloneSlice(MonoType.Field, allocator, view.fields));
     cloned.tags = @TypeOf(source.tags).fromArrayList(try cloneSlice(MonoType.Tag, allocator, view.tags));
@@ -10058,6 +10167,283 @@ test "layout lowering keeps opted-in nominal record declaration order" {
     try std.testing.expectEqual(@as(u32, 4), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
     try std.testing.expectEqual(@as(u32, 0), lowerer.result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     try std.testing.expectEqual(@as(u32, 8), lowerer.result.layouts.getStructSize(struct_idx));
+}
+
+test "sparse local layout nodes commit in type id order" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xD5} ** 32));
+    const first_name = try solved.lifted.names.internTypeName("FirstLocal");
+    const second_name = try solved.lifted.names.internTypeName("SecondLocal");
+    const probe_name = try solved.lifted.names.internTypeName("ProbeLocal");
+    const value_name = try solved.lifted.names.internRecordFieldLabel("value");
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    const value_ty = try lowerer.types.add(.{ .primitive = .u32 });
+    const padding_ty = try lowerer.types.add(.zst);
+    const backing_fields = try lowerer.types.addFields(&.{
+        .{ .name = value_name, .ty = value_ty, .default = null },
+    });
+    const backing_ty = try lowerer.types.add(.{ .record = backing_fields });
+    const declared_order = try lowerer.types.addDeclaredFields(&.{
+        .{ .named = value_name },
+        .{ .padding = padding_ty },
+    });
+    const first_ty = try lowerer.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 42 },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = backing_ty, .use = .inspectable },
+            .declared_order = declared_order,
+        },
+    });
+    const second_ty = try lowerer.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = second_name, .source_decl = 42 },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = backing_ty, .use = .inspectable },
+            .declared_order = declared_order,
+        },
+    });
+
+    // Discover the higher TypeId first. Commit still remembers touched types in
+    // ascending TypeId order, matching the previous dense-slice traversal.
+    const root_items = try lowerer.types.addSpan(&.{ second_ty, first_ty });
+    const root_ty = try lowerer.types.add(.{ .tuple = root_items });
+    _ = try lowerer.layoutOfType(root_ty);
+
+    const key = Lowerer.namedRepresentationKey(lowerer.types.get(first_ty).named);
+    const candidates = lowerer.named_layout_index.get(key).?;
+    try std.testing.expectEqualSlices(Type.TypeId, &.{ first_ty, second_ty }, candidates.items);
+    const first_layout = lowerer.type_layouts.get(first_ty).?;
+    try std.testing.expectEqual(first_layout, lowerer.type_layouts.get(second_ty).?);
+
+    const probe_ty = try lowerer.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = probe_name, .source_decl = 42 },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = backing_ty, .use = .inspectable },
+            .declared_order = declared_order,
+        },
+    });
+    try std.testing.expectEqual(first_layout, try lowerer.layoutOfType(probe_ty));
+    try std.testing.expectEqual(first_ty, lowerer.layout_owner_types.get(probe_ty).?);
+}
+
+test "named layout index reuses only representation-equivalent instantiations" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xC3} ** 32));
+    const first_name = try solved.lifted.names.internTypeName("First");
+    const equivalent_name = try solved.lifted.names.internTypeName("Equivalent");
+    const different_name = try solved.lifted.names.internTypeName("Different");
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    const first_u8 = try lowerer.types.add(.{ .primitive = .u8 });
+    const equivalent_u8 = try lowerer.types.add(.{ .primitive = .u8 });
+    const different_u64 = try lowerer.types.add(.{ .primitive = .u64 });
+    const first_args = try lowerer.types.addSpan(&.{first_u8});
+    const equivalent_args = try lowerer.types.addSpan(&.{equivalent_u8});
+    const different_args = try lowerer.types.addSpan(&.{different_u64});
+
+    const first_ty = try lowerer.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 42 },
+            .kind = .nominal,
+            .args = first_args,
+            .backing = .{ .ty = first_u8, .use = .inspectable },
+        },
+    });
+    const equivalent_ty = try lowerer.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            // A source declaration identifies the type, so display-name text is
+            // intentionally absent from the shallow representation key.
+            .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 42 },
+            .kind = .nominal,
+            .args = equivalent_args,
+            .backing = .{ .ty = equivalent_u8, .use = .inspectable },
+        },
+    });
+    const different_ty = try lowerer.types.add(.{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = different_name, .source_decl = 42 },
+            .kind = .nominal,
+            .args = different_args,
+            .backing = .{ .ty = different_u64, .use = .inspectable },
+        },
+    });
+
+    const first_layout = try lowerer.layoutOfType(first_ty);
+    const equivalent_layout = try lowerer.layoutOfType(equivalent_ty);
+    try std.testing.expectEqual(first_layout, equivalent_layout);
+    try std.testing.expectEqual(first_ty, lowerer.layout_owner_types.get(equivalent_ty).?);
+
+    const different_layout = try lowerer.layoutOfType(different_ty);
+    try std.testing.expect(first_layout != different_layout);
+    try std.testing.expect(lowerer.layout_owner_types.get(different_ty) == null);
+
+    // All three types share the shallow key. The distinct U64 representation is
+    // rejected by the deep comparison rather than incorrectly reusing U8.
+    const key = Lowerer.namedRepresentationKey(lowerer.types.get(first_ty).named);
+    try std.testing.expectEqual(@as(usize, 3), lowerer.named_layout_index.get(key).?.items.len);
+}
+
+test "named layout index reuses structurally equivalent recursive types" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xD3} ** 32));
+    const first_name = try solved.lifted.names.internTypeName("FirstRecursive");
+    const equivalent_name = try solved.lifted.names.internTypeName("EquivalentRecursive");
+    const next_name = try solved.lifted.names.internRecordFieldLabel("next");
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    const first_ty = try lowerer.types.add(.zst);
+    const equivalent_ty = try lowerer.types.add(.zst);
+    const first_box = try lowerer.types.add(.{ .box = first_ty });
+    const equivalent_box = try lowerer.types.add(.{ .box = equivalent_ty });
+    const first_fields = try lowerer.types.addFields(&.{
+        .{ .name = next_name, .ty = first_box, .default = null },
+    });
+    const equivalent_fields = try lowerer.types.addFields(&.{
+        .{ .name = next_name, .ty = equivalent_box, .default = null },
+    });
+    const first_backing = try lowerer.types.add(.{ .record = first_fields });
+    const equivalent_backing = try lowerer.types.add(.{ .record = equivalent_fields });
+
+    lowerer.types.set(first_ty, .{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 43 },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = first_backing, .use = .inspectable },
+        },
+    });
+    lowerer.types.set(equivalent_ty, .{
+        .named = .{
+            .named_type = .{ .module = .{}, .ty = undefined },
+            .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 43 },
+            .kind = .nominal,
+            .args = .empty(),
+            .backing = .{ .ty = equivalent_backing, .use = .inspectable },
+        },
+    });
+
+    const first_layout = try lowerer.layoutOfType(first_ty);
+    const equivalent_layout = try lowerer.layoutOfType(equivalent_ty);
+    try std.testing.expectEqual(first_layout, equivalent_layout);
+    try std.testing.expectEqual(first_ty, lowerer.layout_owner_types.get(equivalent_ty).?);
+
+    const key = Lowerer.namedRepresentationKey(lowerer.types.get(first_ty).named);
+    try std.testing.expectEqual(@as(usize, 2), lowerer.named_layout_index.get(key).?.items.len);
+}
+
+test "named layout index applies backing metadata by named type policy" {
+    const allocator = std.testing.allocator;
+
+    var solved = emptySolvedProgramForTest(allocator);
+    defer solved.deinit();
+
+    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xD4} ** 32));
+    const type_name = try solved.lifted.names.internTypeName("MetadataPolicy");
+
+    var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
+    defer lowerer.deinit();
+
+    const backing_ty = try lowerer.types.add(.{ .primitive = .u8 });
+    const Case = struct {
+        kind: MonoType.NamedKind,
+        owner: ?check.StaticDispatchRegistry.BuiltinOwner,
+        expect_reuse: bool,
+    };
+    const cases = [_]Case{
+        .{ .kind = .nominal, .owner = null, .expect_reuse = false },
+        .{ .kind = .alias, .owner = null, .expect_reuse = true },
+        .{ .kind = .nominal, .owner = .fields, .expect_reuse = true },
+        .{ .kind = .nominal, .owner = .parse_tag_union_spec, .expect_reuse = true },
+    };
+
+    var visited = std.AutoHashMap(u64, void).init(allocator);
+    defer visited.deinit();
+
+    for (cases, 0..) |case, case_index| {
+        const source_decl: u32 = @intCast(100 + case_index);
+        const lhs_ty = try lowerer.types.add(.{
+            .named = .{
+                .named_type = .{ .module = .{}, .ty = undefined },
+                .def = .{ .module = module_identity, .type_name = type_name, .source_decl = source_decl },
+                .kind = case.kind,
+                .builtin_owner = case.owner,
+                .args = .empty(),
+                .backing = .{
+                    .ty = backing_ty,
+                    .use = .inspectable,
+                    .authority = .checked_public,
+                },
+            },
+        });
+        const rhs_ty = try lowerer.types.add(.{
+            .named = .{
+                .named_type = .{ .module = .{}, .ty = undefined },
+                .def = .{ .module = module_identity, .type_name = type_name, .source_decl = source_decl },
+                .kind = case.kind,
+                .builtin_owner = case.owner,
+                .args = .empty(),
+                .backing = .{
+                    .ty = backing_ty,
+                    .use = .runtime_layout_only,
+                    .authority = .generated_private,
+                },
+            },
+        });
+
+        const lhs_key = Lowerer.namedRepresentationKey(lowerer.types.get(lhs_ty).named);
+        const rhs_key = Lowerer.namedRepresentationKey(lowerer.types.get(rhs_ty).named);
+        try std.testing.expectEqual(case.expect_reuse, NamedRepresentationKeyContext.eql(.{}, lhs_key, rhs_key));
+        try std.testing.expectEqual(case.expect_reuse, lhs_key.backing_use == null);
+        try std.testing.expectEqual(case.expect_reuse, lhs_key.backing_authority == null);
+        try std.testing.expectEqual(case.expect_reuse, rhs_key.backing_use == null);
+        try std.testing.expectEqual(case.expect_reuse, rhs_key.backing_authority == null);
+
+        visited.clearRetainingCapacity();
+        try std.testing.expectEqual(case.expect_reuse, try lowerer.representationTypesEquivalent(lhs_ty, rhs_ty, &visited));
+
+        const lhs_layout = try lowerer.layoutOfType(lhs_ty);
+        const rhs_layout = try lowerer.layoutOfType(rhs_ty);
+        if (case.expect_reuse) {
+            try std.testing.expectEqual(lhs_layout, rhs_layout);
+            try std.testing.expectEqual(lhs_ty, lowerer.layout_owner_types.get(rhs_ty).?);
+        } else {
+            // The physical primitive layout happens to match, but the metadata
+            // policy prevents this from being an indexed reuse.
+            try std.testing.expectEqual(lhs_layout, rhs_layout);
+            try std.testing.expect(lowerer.layout_owner_types.get(rhs_ty) == null);
+        }
+    }
 }
 
 test "direct LIR lower declarations are referenced" {

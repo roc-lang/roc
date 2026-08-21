@@ -71,6 +71,8 @@ pub const TargetConfig = struct {
     checked_module_state: CheckedModuleState = .complete,
     inline_mode: InlineMode = .none,
     inline_expects: InlineExpectMode = .run,
+    /// Whether ARC may consume a dead Box lender while unboxing.
+    consume_dead_boxes: bool = false,
     /// Allow `List.map` to reuse a unique input list's allocation when the
     /// input and output element layouts are interchangeable. Optimized builds
     /// enable this; dev builds and compile-time evaluation leave it off so
@@ -635,6 +637,7 @@ fn finishLoweredOutput(
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = lowered.lir_result.root_procs.items,
         .specialize = target.inline_mode != .none,
+        .consume_dead_boxes = target.consume_dead_boxes,
     });
     if (target.timing) |timing| timing.finish(arc_started_ns, .arc);
 
