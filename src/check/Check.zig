@@ -2940,11 +2940,23 @@ fn recordHoistPatternValidationCandidate(
     pattern: CIR.Pattern.Idx,
     expr: CIR.Expr.Idx,
     hoist_position: HoistPosition,
+    blocking_stmt_region: ?Region,
 ) Allocator.Error!void {
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr) return;
     if (builtin.mode == .Debug) std.debug.assert(completed.hoist_position == hoist_position);
-    if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
+    if (!completed.top_level_equivalent) return;
+    if (!completed.hoist_position.allowsSelection()) {
+        if (completed.hoist_position == .suppressed) {
+            if (blocking_stmt_region) |blocking_region| {
+                self.problems.markPendingStaticExhaustivenessComptimeBlocked(
+                    .{ .destructure_pattern = pattern },
+                    blocking_region,
+                );
+            }
+        }
+        return;
+    }
 
     try self.hoist_deferred_roots.append(self.gpa, .{ .pattern_validation = .{
         .validation = .{
@@ -19016,6 +19028,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
     var does_fx = false;
     var diverges = false;
     var blocks_later_hoists = false;
+    var blocking_stmt_region: ?Region = null;
     var warn_unreachable = false;
     const base_statement_expected = expected.forStatement();
     for (0..statements.span.len) |stmt_offset| {
@@ -19135,7 +19148,7 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 if (decl_pattern_result.isEstablished()) {
                     const needs_comptime_validation = try self.checkDestructureExhaustiveness(decl_stmt.pattern, decl_stmt.expr, decl_expr_var, env, stmt_region);
                     if (needs_comptime_validation) {
-                        try self.recordHoistPatternValidationCandidate(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
+                        try self.recordHoistPatternValidationCandidate(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position, blocking_stmt_region);
                     }
                     try self.recordHoistPatternProvenance(decl_stmt.pattern, decl_stmt.expr, expectation.hoist_position);
                 }
@@ -19442,6 +19455,9 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                 statement_blocks_later_hoists = true;
                 diverges = true;
             },
+        }
+        if (statement_blocks_later_hoists and blocking_stmt_region == null) {
+            blocking_stmt_region = stmt_region;
         }
         blocks_later_hoists = statement_blocks_later_hoists or blocks_later_hoists;
     }
