@@ -13,19 +13,24 @@ match list {
 # EXPECTED
 POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
 # PROBLEMS
-── ✗ polymorphic value ───────────────────────── list_destructure_scoping.md:1:1
-
-This top-level value still has an unresolved polymorphic type.
-
-match list {
-    [first] => first
-    [first, second] => first + second
-}
-
-Its type is:
-a where [a.plus : a, a -> a]
-Add an annotation or use this value in a way that fixes its concrete type.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Polymorphic Value")
+		(region (start 1 1) (end 4 2))
+		(headline
+			(reflow "This top-level value still has an unresolved polymorphic type."))
+		(document
+			(source-region (file "list_destructure_scoping.md") (start 1 1) (end 4 2) (annotation error) (line-text "match list {\n    [first] => first\n    [first, second] => first + second\n}"))
+			(line-break)
+			(line-break)
+			(reflow "Its type is:")
+			(line-break)
+			(annotated code-block "a where [a.plus : a, a -> a]")
+			(line-break)
+			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

@@ -207,825 +207,1247 @@ DECLARATION HAS NO VALUE - fuzz_crash_020.md:116:1:116:13
 MISSING METHOD - fuzz_crash_020.md:105:55:105:66
 MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 # PROBLEMS
-── ✗ missing match arrow ─────────────────────────────── fuzz_crash_020.md:52:16
-
-I was parsing a match branch, and I expected `=>` before the branch body.
-
-match a {lue  {
-              ^
-
-Add => after the pattern or guard.
-
-For example:
-    Err(msg) => crash msg
-
-I reached the end of the file before this construct was complete.
-
-── ✗ missing match arrow ──────────────────────────────── fuzz_crash_020.md:58:4
-
-I was parsing a match branch, and I expected `=>` before the branch body.
-
-1 "for" => 20[1, ] # t
-^
-
-Add => after the pattern or guard.
-
-For example:
-    Err(msg) => crash msg
-
-I reached the end of the file before this construct was complete.
-
-── ✗ missing match arrow ──────────────────────────────── fuzz_crash_020.md:59:3
-
-I was parsing a match branch, and I expected `=>` before the branch body.
-
-ment
-^
-
-Add => after the pattern or guard.
-
-For example:
-    Err(msg) => crash msg
-
-I reached the end of the file before this construct was complete.
-
-── ✗ missing match arrow ─────────────────────────────── fuzz_crash_020.md:60:16
-
-I was parsing a match branch, and I expected `=>` before the branch body.
-
-[1, 2, 3,est]123
-             ^
-
-Add => after the pattern or guard.
-
-For example:
-    Err(msg) => crash msg
-
-I reached the end of the file before this construct was complete.
-
-── ✗ missing match arrow ──────────────────────────────── fuzz_crash_020.md:62:5
-
-I was parsing a match branch, and I expected `=>` before the branch body.
-
-] 23
-  ^
-
-Add => after the pattern or guard.
-
-For example:
-    Err(msg) => crash msg
-
-I reached the end of the file before this construct was complete.
-
-── ✗ missing match arrow ──────────────────────────────── fuzz_crash_020.md:63:7
-
-I was parsing a match branch, and I expected `=>` before the branch body.
-
-3.1 314
-    ^
-
-Add => after the pattern or guard.
-
-For example:
-    Err(msg) => crash msg
-
-I reached the end of the file before this construct was complete.
-
-── ✗ missing match arrow ─────────────────────────────── fuzz_crash_020.md:66:12
-
-I was parsing a match branch, and I expected `=>` before the branch body.
-
-(1, 2, 3)123
-         ^
-
-Add => after the pattern or guard.
-
-For example:
-    Err(msg) => crash msg
-
-I reached the end of the file before this construct was complete.
-
-── ✗ expected record accessor ─────────────────────────── fuzz_crash_020.md:83:2
-
-I was parsing access after `.`, and I expected a field name or tuple index.
-
-...
-^^^
-
-Required record access uses .name, optional record access uses .?name, and
-tuple access uses .0. Accessor names must be lowercase and adjacent to their
-punctuation.
-
-For example:
-    person.name
-    maybe_person.?name
-    pair.0
-
-I found ... here.
-
-── ✗ mod not found ──────────────────────────────────── fuzz_crash_020.md:6:1
-
-The mod Stdot was not found in this Roc project.
-
-import Stdot
-        exposing [ #tem
-Cust]
-
-── ✗ mod not found ─────────────────────────────────── fuzz_crash_020.md:10:1
-
-The mod Bae was not found in this Roc project.
-
-import Bae as Gooe
-^^^^^^^^^^^^^^^^^^
-
-── ✗ mod not found ─────────────────────────────────── fuzz_crash_020.md:11:1
-
-The mod Ba was not found in this Roc project.
-
-import
-    Ba
-
-── ✗ undeclared type ─────────────────────────────────── fuzz_crash_020.md:13:13
-
-The type Lis is not declared in this scope.
-
-Map(a, b) : Lis, (ab) -> List(b)
-            ^^^
-
-── ✗ undeclared type variable ────────────────────────── fuzz_crash_020.md:13:19
-
-The type variable ab is not declared in this scope.
-
-Map(a, b) : Lis, (ab) -> List(b)
-                  ^^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ undeclared type variable ─────────────────────────── fuzz_crash_020.md:19:4
-
-The type variable ab is not declared in this scope.
-
-(ab) -> # row
- ^^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ undeclared type variable ────────────────────────── fuzz_crash_020.md:20:12
-
-The type variable b is not declared in this scope.
-
-List(   b ) #z)
-        ^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ undeclared type ─────────────────────────────────── fuzz_crash_020.md:24:15
-
-The type O is not declared in this scope.
-
-Som : { foo : O, bar : g }
-              ^
-
-── ✗ undeclared type variable ────────────────────────── fuzz_crash_020.md:24:24
-
-The type variable g is not declared in this scope.
-
-Som : { foo : O, bar : g }
-                       ^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ undeclared type ──────────────────────────────────── fuzz_crash_020.md:37:7
-
-The type U6 is not declared in this scope.
-
-one : U6
-      ^^
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:40:5
-
-Nothing is named num in this scope.
-
-if num {
-   ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:42:4
-
-Nothing is named s in this scope.
-
-s exp0
-^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:42:6
-
-Nothing is named exp0 in this scope.
-
-s exp0
-  ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:45:3
-
-Nothing is named r in this scope.
-
-r
-^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:53:2
-
-Nothing is named x in this scope.
-
-x
-^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ─────────────────────────────────── fuzz_crash_020.md:52:11
-
-Variable lue is defined here and then never used:
-
-match a {lue  {
-         ^^^
-
-If you don't need this variable, prefix it with an underscore like _lue to
-suppress this warning.
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:55:11
-
-Nothing is named x in this scope.
-
-Blue=> {x
-        ^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ──────────────────────────────────── fuzz_crash_020.md:57:2
-
-Variable er is defined here and then never used:
-
-er #ent
-^^
-
-If you don't need this variable, prefix it with an underscore like _er to
-suppress this warning.
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:59:3
-
-Nothing is named ment in this scope.
-
-ment
-^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ─────────────────────────────────── fuzz_crash_020.md:60:12
-
-Variable est is defined here and then never used:
-
-[1, 2, 3,est]123
-         ^^^
-
-If you don't need this variable, prefix it with an underscore like _est to
-suppress this warning.
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:72:2
-
-Nothing is named nt in this scope.
-
-nt
-^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ undeclared type ──────────────────────────────────── fuzz_crash_020.md:74:9
-
-The type Listlt is not declared in this scope.
-
-main! : Listlt({}, _)
-        ^^^^^^
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:78:9
-
-Nothing is named blaue in this scope.
-
-expect blaue
-       ^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ unrecognized syntax ──────────────────────────────── fuzz_crash_020.md:83:2
-
-I don't recognize this syntax.
-
-...
-^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:86:9
-
-Nothing is named ke in this scope.
-
-)crash ke"Unr!" #)
-       ^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:87:11
-
-Nothing is named d in this scope.
-
-i= "H, ${d}"
-         ^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:92:11
-
-Nothing is named list in this scope.
-
-for n in list {
-         ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:93:2
-
-Nothing is named line! in this scope.
-
-line!("Ag ${n} to ${er}")
-^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:94:3
-
-Nothing is named ber in this scope.
-
-ber + n
-^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:96:34
-
-Nothing is named tag in this scope.
-
-rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-                                ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:96:47
-
-Nothing is named world in this scope.
-
-rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-                                             ^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:96:54
-
-Nothing is named ned in this scope.
-
-rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-                                                    ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ● duplicate definition ─────────────────────────────── fuzz_crash_020.md:97:2
-
-The name t is being redeclared here:
-
-t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-^
-
-In this scope, t was already defined in fuzz_crash_020.md:88:1:
-
-t = [
-^
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:97:21
-
-Nothing is named tag in this scope.
-
-t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-                   ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:97:30
-
-Nothing is named nd in this scope.
-
-t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-                            ^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ invalid assignment to itself ────────────────────── fuzz_crash_020.md:97:34
-
-The value t is assigned to itself, which would cause an infinite loop at
-runtime.
-
-t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-                                ^
-
-Only functions can reference themselves (for recursion). For non-function
-values, the right-hand side must be fully computable without referring to the
-value being assigned.
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_020.md:98:2
-
-Nothing is named m in this scope.
-
-m (
-^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────────────────────── fuzz_crash_020.md:100:11
-
-Nothing is named ag1 in this scope.
-
-"World",ag1,
-        ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:102:4
-
-Nothing is named ne in this scope.
-
-(ne, tuple),
- ^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:102:8
-
-Nothing is named tuple in this scope.
-
-(ne, tuple),
-     ^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:105:2
-
-Nothing is named b in this scope.
-
-b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────────────────────── fuzz_crash_020.md:105:55
-
-Nothing is named e_fn in this scope.
-
-b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-                                                     ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────────────────────── fuzz_crash_020.md:105:60
-
-Nothing is named arg1 in this scope.
-
-b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-                                                          ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:108:4
-
-Nothing is named r in this scope.
-
-r(nu) # xpr
-^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:108:6
-
-Nothing is named nu in this scope.
-
-r(nu) # xpr
-  ^^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ──────────────────────────────────── fuzz_crash_020.md:76:2
-
-Variable w is defined here and then never used:
-
-w = "d"
-^
-
-If you don't need this variable, prefix it with an underscore like _w to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────── fuzz_crash_020.md:87:2
-
-Variable i is defined here and then never used:
-
-i= "H, ${d}"
-^
-
-If you don't need this variable, prefix it with an underscore like _i to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────── fuzz_crash_020.md:96:2
-
-Variable rd is defined here and then never used:
-
-rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
-^^
-
-If you don't need this variable, prefix it with an underscore like _rd to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────── fuzz_crash_020.md:97:2
-
-Variable t is defined here and then never used:
-
-t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-^
-
-If you don't need this variable, prefix it with an underscore like _t to
-suppress this warning.
-
-── ✗ undeclared type ─────────────────────────────────── fuzz_crash_020.md:116:5
-
-The type V is not declared in this scope.
-
-t : V((a,c))
-    ^
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:119:2
-
-Nothing is named foo in this scope.
-
-foo == 1
-^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:120:1
-
-Nothing is named h in this scope.
-
-h == foo
-^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_020.md:120:6
-
-Nothing is named foo in this scope.
-
-h == foo
-     ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ exposed but not defined ───────────────────────────── fuzz_crash_020.md:2:6
-
-The mod header says that main! is exposed, but it is not defined anywhere in
-this mod.
-
-app [main!] { pf: platform "c" }
-     ^^^^^
-
-You can fix this by either defining main! in this mod, or by removing it
-from the list of exposed values.
-
-── ✗ too few args ─────────────────────────────────────── fuzz_crash_020.md:17:3
-
-The type List expects 1 argument, but got 0 instead.
-
-List( #rg
-),
-
-── ● declaration has no value ─────────────────────────── fuzz_crash_020.md:22:1
-
-This declaration has a type annotation but no implementation.
-
-line : ( # Cm
-) # Co
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ─────────────────────────── fuzz_crash_020.md:37:1
-
-This declaration has a type annotation but no implementation.
-
-one : U6
-^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ✗ missing method ───────────────────────────────────── fuzz_crash_020.md:39:2
-
-This from_numeral method is being called on a value whose type doesn't have
-that method.
-
-1
-^
-
-The value's type, which does not have a method named from_numeral, is:
-
-    {}
-
-── ✗ missing method ───────────────────────────────────── fuzz_crash_020.md:58:6
-
-This from_quote method is being called on a value whose type doesn't have that
-method.
-
-1 "for" => 20[1, ] # t
-  ^^^^^
-
-The value's type, which does not have a method named from_quote, is:
-
-    [Blue, ..]
-
-── ✗ type mismatch ───────────────────────────────────── fuzz_crash_020.md:52:17
-
-The fifth branch of this match does not match the previous ones.
-
-match a {lue  {
-x
-    }
-    Blue=> {x
-        }
-er #ent
-        1 "for" => 20[1, ] # t
-    ment
-    [1, 2, 3,est]123
-    [
-    ] 23
-    3.1 314
-    3.14 | 6.28 => 314
-    (1, ) => 123
-    (1, 2, 3)123
-    {  } => 12
-    Ok(123) => 12
-}
-
-This fifth branch is trying to match:
-
-    List(f)
-      where [
-        f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
-        f.is_eq : f, f -> Bool,
-      ]
-
-But the expression between the match parenthesis has the type:
-
-    [Blue, ..]
-
-These can never match! Either the pattern or expression has a problem.
-
-── ● declaration has no value ─────────────────────────── fuzz_crash_020.md:74:1
-
-This declaration has a type annotation but no implementation.
-
-main! : Listlt({}, _)
-^^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ────────────────────────── fuzz_crash_020.md:113:1
-
-This declaration has a type annotation but no implementation.
-
-y : {}
-^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ✗ missing method ──────────────────────────────────── fuzz_crash_020.md:86:11
-
-This from_quote method is being called on a value whose type doesn't have that
-method.
-
-)crash ke"Unr!" #)
-         ^^^^^^
-
-The value's type, which does not have a method named from_quote, is:
-
-    {}
-
-── ✗ reference has no value ───────────────────────────── fuzz_crash_020.md:89:3
-
-This refers to a declaration that has a type annotation but no implementation,
-so there is no value here to use.
-
-one(er,   ), 456, # two
-^^^
-
-Give that declaration a value body, or stop referring to it here.
-
-── ✗ type mismatch ────────────────────────────────────── fuzz_crash_020.md:98:4
-
-This expression produces a value, but it's not being used.
-
-m (
-    123,
-    "World",ag1,
-    O, # nt
-    (ne, tuple),
-    [1, 2, 3],
-)
-
-It has the type:
-
-    (f, j, Error, [O, ..], (Error, Error), List(l))
-      where [
-        f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
-        j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),
-        l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]),
-      ]
-
-Since this expression is used as a statement, it must evaluate to {}.
-If you don't need the value, you can ignore it with _ =.
-
-── ✗ type mismatch ───────────────────────────────────── fuzz_crash_020.md:105:2
-
-This expression produces a value, but it's not being used.
-
-b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-
-    Bool
-
-Since this expression is used as a statement, it must evaluate to {}.
-If you don't need the value, you can ignore it with _ =.
-
-── ✗ type mismatch ───────────────────────────────────── fuzz_crash_020.md:93:22
-
-This expression is used in an unexpected way.
-
-line!("Ag ${n} to ${er}")
-                    ^^
-
-It has the type:
-
-    Dec
-
-But you are trying to use it as:
-
-    Str
-
-── ● declaration has no value ────────────────────────── fuzz_crash_020.md:116:1
-
-This declaration has a type annotation but no implementation.
-
-t : V((a,c))
-^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ✗ missing method ─────────────────────────────────── fuzz_crash_020.md:105:55
-
-This is trying to dispatch a method named od on an unresolved type variable,
-but unresolved type variables have no methods.
-
-b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-                                                     ^^^^^^^^^^^
-
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
-
-── ✗ missing method ─────────────────────────────────── fuzz_crash_020.md:105:55
-
-This is trying to dispatch a method named ned on an unresolved type variable,
-but unresolved type variables have no methods.
-
-b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-                                                     ^^^^^^^^^^^^^^^^^
-
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Match Arrow")
+		(region (start 52 16) (end 52 16))
+		(headline
+			(reflow "I was parsing a match branch, and I expected `=>` before the branch body."))
+		(document
+			(reflow "Add ")
+			(annotated code "=>")
+			(reflow " after the pattern or guard.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Err(msg) => crash msg")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "I reached the end of the file before this construct was complete.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 52 16) (end 52 16) (annotation error) (line-text "\tmatch a {lue  {"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Match Arrow")
+		(region (start 58 4) (end 58 4))
+		(headline
+			(reflow "I was parsing a match branch, and I expected `=>` before the branch body."))
+		(document
+			(reflow "Add ")
+			(annotated code "=>")
+			(reflow " after the pattern or guard.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Err(msg) => crash msg")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "I reached the end of the file before this construct was complete.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 58 4) (end 58 4) (annotation error) (line-text "\t\t\t1\t\"for\" => 20[1, ] # t"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Match Arrow")
+		(region (start 59 3) (end 59 3))
+		(headline
+			(reflow "I was parsing a match branch, and I expected `=>` before the branch body."))
+		(document
+			(reflow "Add ")
+			(annotated code "=>")
+			(reflow " after the pattern or guard.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Err(msg) => crash msg")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "I reached the end of the file before this construct was complete.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 59 3) (end 59 3) (annotation error) (line-text "\t\tment"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Match Arrow")
+		(region (start 60 16) (end 60 16))
+		(headline
+			(reflow "I was parsing a match branch, and I expected `=>` before the branch body."))
+		(document
+			(reflow "Add ")
+			(annotated code "=>")
+			(reflow " after the pattern or guard.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Err(msg) => crash msg")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "I reached the end of the file before this construct was complete.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 60 16) (end 60 16) (annotation error) (line-text "\t\t[1, 2, 3,est]123"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Match Arrow")
+		(region (start 62 5) (end 62 5))
+		(headline
+			(reflow "I was parsing a match branch, and I expected `=>` before the branch body."))
+		(document
+			(reflow "Add ")
+			(annotated code "=>")
+			(reflow " after the pattern or guard.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Err(msg) => crash msg")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "I reached the end of the file before this construct was complete.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 62 5) (end 62 5) (annotation error) (line-text "\t\t] 23"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Match Arrow")
+		(region (start 63 7) (end 63 7))
+		(headline
+			(reflow "I was parsing a match branch, and I expected `=>` before the branch body."))
+		(document
+			(reflow "Add ")
+			(annotated code "=>")
+			(reflow " after the pattern or guard.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Err(msg) => crash msg")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "I reached the end of the file before this construct was complete.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 63 7) (end 63 7) (annotation error) (line-text "\t\t3.1 314"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Match Arrow")
+		(region (start 66 12) (end 66 12))
+		(headline
+			(reflow "I was parsing a match branch, and I expected `=>` before the branch body."))
+		(document
+			(reflow "Add ")
+			(annotated code "=>")
+			(reflow " after the pattern or guard.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Err(msg) => crash msg")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "I reached the end of the file before this construct was complete.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 66 12) (end 66 12) (annotation error) (line-text "\t\t(1, 2, 3)123"))))
+	(report
+		(severity runtime_error)
+		(title "Expected Record Accessor")
+		(region (start 83 2) (end 83 5))
+		(headline
+			(reflow "I was parsing access after `.`, and I expected a field name or tuple index."))
+		(document
+			(reflow "Required record access uses ")
+			(annotated code ".name")
+			(reflow ", optional record access uses ")
+			(annotated code ".?name")
+			(reflow ", and tuple access uses ")
+			(annotated code ".0")
+			(reflow ". Accessor names must be lowercase and adjacent to their punctuation.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "person.name")
+			(line-break)
+			(indent 1)
+			(text "maybe_person.?name")
+			(line-break)
+			(indent 1)
+			(text "pair.0")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "...")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 83 2) (end 83 5) (annotation error) (line-text "\t..."))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 6 1) (end 8 6))
+		(headline
+			(text "The mod ")
+			(annotated code "Stdot")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 6 1) (end 8 6) (annotation error) (line-text "import Stdot\n\t\texposing [ #tem\nCust]"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 10 1) (end 10 19))
+		(headline
+			(text "The mod ")
+			(annotated code "Bae")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 10 1) (end 10 19) (annotation error) (line-text "import Bae as Gooe"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 11 1) (end 12 4))
+		(headline
+			(text "The mod ")
+			(annotated code "Ba")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 11 1) (end 12 4) (annotation error) (line-text "import\n\tBa"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 13 13) (end 13 16))
+		(headline
+			(reflow "The type ")
+			(annotated code "Lis")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 13 13) (end 13 16) (annotation error) (line-text "Map(a, b) : Lis, (ab) -> List(b)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 13 19) (end 13 21))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "ab")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 13 19) (end 13 21) (annotation error) (line-text "Map(a, b) : Lis, (ab) -> List(b)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 19 4) (end 19 6))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "ab")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 19 4) (end 19 6) (annotation error) (line-text "\t\t(ab) -> # row"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 20 12) (end 20 13))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "b")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 20 12) (end 20 13) (annotation error) (line-text "\t\t\tList(\t\t\tb\t) #z)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 24 15) (end 24 16))
+		(headline
+			(reflow "The type ")
+			(annotated code "O")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 24 15) (end 24 16) (annotation error) (line-text "Som : { foo : O, bar : g }"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 24 24) (end 24 25))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "g")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 24 24) (end 24 25) (annotation error) (line-text "Som : { foo : O, bar : g }"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 37 7) (end 37 9))
+		(headline
+			(reflow "The type ")
+			(annotated code "U6")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 37 7) (end 37 9) (annotation error) (line-text "one : U6"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 40 5) (end 40 8))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "num")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 40 5) (end 40 8) (annotation error) (line-text "\tif num {"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 42 4) (end 42 5))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "s")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 42 4) (end 42 5) (annotation error) (line-text "\t\t\ts exp0"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 42 6) (end 42 10))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "exp0")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 42 6) (end 42 10) (annotation error) (line-text "\t\t\ts exp0"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 45 3) (end 45 4))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "r")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 45 3) (end 45 4) (annotation error) (line-text "\t\tr"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 53 2) (end 53 3))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "x")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 53 2) (end 53 3) (annotation error) (line-text "\tx"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 52 11) (end 52 14))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "lue")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_lue")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 52 11) (end 52 14) (annotation error) (line-text "\tmatch a {lue  {"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 55 11) (end 55 12))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "x")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 55 11) (end 55 12) (annotation error) (line-text "\t\tBlue=> {x"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 57 2) (end 57 4))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "er")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_er")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 57 2) (end 57 4) (annotation error) (line-text "\ter #ent"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 59 3) (end 59 7))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "ment")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 59 3) (end 59 7) (annotation error) (line-text "\t\tment"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 60 12) (end 60 15))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "est")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_est")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 60 12) (end 60 15) (annotation error) (line-text "\t\t[1, 2, 3,est]123"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 72 2) (end 72 4))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "nt")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 72 2) (end 72 4) (annotation error) (line-text "\tnt"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 74 9) (end 74 15))
+		(headline
+			(reflow "The type ")
+			(annotated code "Listlt")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 74 9) (end 74 15) (annotation error) (line-text "main! : Listlt({}, _)"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 78 9) (end 78 14))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "blaue")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 78 9) (end 78 14) (annotation error) (line-text "\texpect blaue"))))
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 83 2) (end 83 5))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 83 2) (end 83 5) (annotation error) (line-text "\t..."))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 86 9) (end 86 11))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "ke")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 86 9) (end 86 11) (annotation error) (line-text "\t)crash ke\"Unr!\" #)"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 87 11) (end 87 12))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "d")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 87 11) (end 87 12) (annotation error) (line-text "\ti= \"H, ${d}\""))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 92 11) (end 92 15))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "list")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 92 11) (end 92 15) (annotation error) (line-text "\tfor n in list {"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 93 2) (end 93 7))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "line!")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 93 2) (end 93 7) (annotation error) (line-text "\tline!(\"Ag ${n} to ${er}\")"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 94 3) (end 94 6))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "ber")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 94 3) (end 94 6) (annotation error) (line-text "\t\tber + n"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 96 34) (end 96 37))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "tag")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 96 34) (end 96 37) (annotation error) (line-text "\trd = { foo: 123, bar: \"H\", baz: tag, qux: Ok(world),ned }"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 96 47) (end 96 52))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "world")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 96 47) (end 96 52) (annotation error) (line-text "\trd = { foo: 123, bar: \"H\", baz: tag, qux: Ok(world),ned }"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 96 54) (end 96 57))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "ned")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 96 54) (end 96 57) (annotation error) (line-text "\trd = { foo: 123, bar: \"H\", baz: tag, qux: Ok(world),ned }"))))
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 97 2) (end 97 3))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "t")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 97 2) (end 97 3) (annotation error) (line-text "\tt = (123, \"World\", tag, O, (nd, t), [1, 2, 3])"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "t")
+			(reflow " was already defined in ")
+			(source-location
+				(file "fuzz_crash_020.md")
+				(line 88)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 88 1) (end 88 2) (annotation dim) (line-text "t = ["))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 97 21) (end 97 24))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "tag")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 97 21) (end 97 24) (annotation error) (line-text "\tt = (123, \"World\", tag, O, (nd, t), [1, 2, 3])"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 97 30) (end 97 32))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "nd")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 97 30) (end 97 32) (annotation error) (line-text "\tt = (123, \"World\", tag, O, (nd, t), [1, 2, 3])"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Assignment To Itself")
+		(region (start 97 34) (end 97 35))
+		(headline
+			(reflow "The value ")
+			(annotated symbol-unqualified "t")
+			(reflow " is assigned to itself, which would cause an infinite loop at runtime."))
+		(document
+			(reflow "Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 97 34) (end 97 35) (annotation error) (line-text "\tt = (123, \"World\", tag, O, (nd, t), [1, 2, 3])"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 98 2) (end 98 3))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "m")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 98 2) (end 98 3) (annotation error) (line-text "\tm ("))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 100 11) (end 100 14))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "ag1")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 100 11) (end 100 14) (annotation error) (line-text "\t\t\"World\",ag1,"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 102 4) (end 102 6))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "ne")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 102 4) (end 102 6) (annotation error) (line-text "\t\t(ne, tuple),"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 102 8) (end 102 13))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "tuple")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 102 8) (end 102 13) (annotation error) (line-text "\t\t(ne, tuple),"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 105 2) (end 105 3))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "b")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 105 2) (end 105 3) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 105 55) (end 105 59))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "e_fn")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 105 55) (end 105 59) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 105 60) (end 105 64))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "arg1")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 105 60) (end 105 64) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 108 4) (end 108 5))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "r")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 108 4) (end 108 5) (annotation error) (line-text "\t\t\tr(nu) # xpr"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 108 6) (end 108 8))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "nu")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 108 6) (end 108 8) (annotation error) (line-text "\t\t\tr(nu) # xpr"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 76 2) (end 76 3))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "w")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_w")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 76 2) (end 76 3) (annotation error) (line-text "\tw = \"d\""))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 87 2) (end 87 3))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "i")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_i")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 87 2) (end 87 3) (annotation error) (line-text "\ti= \"H, ${d}\""))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 96 2) (end 96 4))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "rd")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_rd")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 96 2) (end 96 4) (annotation error) (line-text "\trd = { foo: 123, bar: \"H\", baz: tag, qux: Ok(world),ned }"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 97 2) (end 97 3))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "t")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_t")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 97 2) (end 97 3) (annotation error) (line-text "\tt = (123, \"World\", tag, O, (nd, t), [1, 2, 3])"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 116 5) (end 116 6))
+		(headline
+			(reflow "The type ")
+			(annotated code "V")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 116 5) (end 116 6) (annotation error) (line-text "t : V((a,c))"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 119 2) (end 119 5))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "foo")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 119 2) (end 119 5) (annotation error) (line-text "\tfoo == 1"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 120 1) (end 120 2))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "h")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 120 1) (end 120 2) (annotation error) (line-text "h == foo"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 120 6) (end 120 9))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "foo")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_020.md") (start 120 6) (end 120 9) (annotation error) (line-text "h == foo"))))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 2 6) (end 2 11))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "main!")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 2 6) (end 2 11) (annotation error) (line-text "app [main!] { pf: platform \"c\" }"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "main!")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Too Few Args")
+		(region (start 17 3) (end 18 4))
+		(headline
+			(reflow "The type")
+			(reflow " ")
+			(annotated type "List")
+			(reflow " ")
+			(reflow "expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument,")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "0")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 17 3) (end 18 4) (annotation error) (line-text "\t\tList( #rg\n\t\t),"))))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 22 1) (end 23 2))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 22 1) (end 23 2) (annotation error) (line-text "line : ( # Cm\n) # Co"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 37 1) (end 37 9))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 37 1) (end 37 9) (annotation error) (line-text "one : U6"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 39 2) (end 39 3))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 39 2) (end 39 3) (annotation error) (line-text "\t1"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_numeral")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 58 6) (end 58 11))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_quote")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 58 6) (end 58 11) (annotation error) (line-text "\t\t\t1\t\"for\" => 20[1, ] # t"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_quote")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 52 2) (end 69 3))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "fifth")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "does not match the previous ones."))
+		(document
+			(source-underlines
+				(display (file "fuzz_crash_020.md") (start 52 2) (end 69 3) (annotation dim) (line-text "\tmatch a {lue  {\n\tx\n\t\t}\n\t\tBlue=> {x\n\t\t\t}\n\ter #ent\n\t\t\t1\t\"for\" => 20[1, ] # t\n\t\tment\n\t\t[1, 2, 3,est]123\n\t\t[\n\t\t] 23\n\t\t3.1 314\n\t\t3.14 | 6.28 => 314\n\t\t(1, ) => 123\n\t\t(1, 2, 3)123\n\t\t{ \t} => 12\n\t\tOk(123) => 12\n\t}"))
+				(underline (start 58 17) (end 58 22) (annotation error)))
+			(line-break)
+			(reflow "This")
+			(reflow " ")
+			(reflow "fifth")
+			(reflow " ")
+			(reflow "branch is trying to match:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(f)")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    f.is_eq : f, f -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "  ]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the expression between the")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "parenthesis has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "These can never match! Either the pattern or expression has a problem.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 74 1) (end 74 22))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 74 1) (end 74 22) (annotation error) (line-text "main! : Listlt({}, _)"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 113 1) (end 113 7))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 113 1) (end 113 7) (annotation error) (line-text "y : {}"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 86 11) (end 86 17))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_quote")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 86 11) (end 86 17) (annotation error) (line-text "\t)crash ke\"Unr!\" #)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_quote")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Reference Has No Value")
+		(region (start 89 3) (end 89 6))
+		(headline
+			(reflow "This refers to a declaration that has a type annotation but no implementation, so there is no value here to use."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 89 3) (end 89 6) (annotation error) (line-text "\t\tone(er, \t\t),\t456, # two"))
+			(line-break)
+			(line-break)
+			(reflow "Give that declaration a value body, or stop referring to it here.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 98 4) (end 104 3))
+		(headline
+			(reflow "This expression produces a value, but it's not being used."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 98 4) (end 104 3) (annotation error) (line-text "\tm (\n\t\t123,\n\t\t\"World\",ag1,\n\t\tO, # nt\n\t\t(ne, tuple),\n\t\t[1, 2, 3],\n\t)"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(f, j, Error, [O, ..], (Error, Error), List(l))")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Since this expression is used as a statement, it must evaluate to")
+			(reflow " ")
+			(annotated code "{}")
+			(reflow ".")
+			(line-break)
+			(reflow "If you don't need the value, you can ignore it with")
+			(reflow " ")
+			(annotated code "_ =")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 105 2) (end 105 54))
+		(headline
+			(reflow "This expression produces a value, but it's not being used."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 105 2) (end 105 54) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Bool")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Since this expression is used as a statement, it must evaluate to")
+			(reflow " ")
+			(annotated code "{}")
+			(reflow ".")
+			(line-break)
+			(reflow "If you don't need the value, you can ignore it with")
+			(reflow " ")
+			(annotated code "_ =")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 93 22) (end 93 24))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 93 22) (end 93 24) (annotation error) (line-text "\tline!(\"Ag ${n} to ${er}\")"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 116 1) (end 116 13))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 116 1) (end 116 13) (annotation error) (line-text "t : V((a,c))"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 105 55) (end 105 66))
+		(headline
+			(reflow "This is trying to dispatch a method named")
+			(reflow " ")
+			(annotated code "od")
+			(reflow " ")
+			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 105 55) (end 105 66) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 105 55) (end 105 72))
+		(headline
+			(reflow "This is trying to dispatch a method named")
+			(reflow " ")
+			(annotated code "ned")
+			(reflow " ")
+			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 105 55) (end 105 72) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

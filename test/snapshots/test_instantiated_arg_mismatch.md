@@ -15,17 +15,25 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 # PROBLEMS
-── ✗ type mismatch ────────────────────── test_instantiated_arg_mismatch.md:5:14
-
-This string literal is being used where a non-string type is needed.
-
-pair(42, "hello")
-         ^^^^^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 5 14) (end 5 21))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "test_instantiated_arg_mismatch.md") (start 5 14) (end 5 21) (annotation error) (line-text "    pair(42, \"hello\")"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,

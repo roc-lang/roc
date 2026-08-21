@@ -13,27 +13,43 @@ main = Json.utf8
 DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
 NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
 # PROBLEMS
-── ● duplicate definition ─────────────────────────────── can_import_json.md:1:1
-
-The name Json is being redeclared here:
-
-import json.Json
-^^^^^^^^^^^^^^^^
-
-In this scope, Json was already defined in can_import_json.md:1:1:
-
-import json.Json
-^
-
-── ✗ name not in scope ────────────────────────────────── can_import_json.md:3:8
-
-Nothing is named utf8 in this scope.
-
-main = Json.utf8
-       ^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 1 1) (end 1 17))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "Json")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "can_import_json.md") (start 1 1) (end 1 17) (annotation error) (line-text "import json.Json"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "Json")
+			(reflow " was already defined in ")
+			(source-location
+				(file "can_import_json.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "can_import_json.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 3 8) (end 3 17))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "utf8")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "can_import_json.md") (start 3 8) (end 3 17) (annotation error) (line-text "main = Json.utf8")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

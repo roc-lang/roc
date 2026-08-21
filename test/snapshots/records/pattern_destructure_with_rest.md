@@ -15,33 +15,52 @@ NAME NOT IN SCOPE - pattern_destructure_with_rest.md:1:7:1:13
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
-── ✗ name not in scope ──────────────────── pattern_destructure_with_rest.md:1:7
-
-Nothing is named person in this scope.
-
-match person {
-      ^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ does not exist ────────────────────── pattern_destructure_with_rest.md:2:33
-
-Str.len does not exist.
-
-{ first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
-                            ^^^^^^^
-
-Str is in scope, but it has no associated len.
-
-── ✗ does not exist ────────────────────── pattern_destructure_with_rest.md:2:55
-
-Str.len does not exist.
-
-{ first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)
-                                                  ^^^^^^^
-
-Str is in scope, but it has no associated len.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 1 7) (end 1 13))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "person")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "pattern_destructure_with_rest.md") (start 1 7) (end 1 13) (annotation error) (line-text "match person {"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 2 33) (end 2 40))
+		(headline
+			(annotated code "Str.len")
+			(reflow " does not exist."))
+		(document
+			(annotated code "Str")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "len")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "pattern_destructure_with_rest.md") (start 2 33) (end 2 40) (annotation error) (line-text "    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 2 55) (end 2 62))
+		(headline
+			(annotated code "Str.len")
+			(reflow " does not exist."))
+		(document
+			(annotated code "Str")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "len")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "pattern_destructure_with_rest.md") (start 2 55) (end 2 62) (annotation error) (line-text "    { first_name, ..others } => Str.len(first_name) > Str.len(others.last_name)")))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

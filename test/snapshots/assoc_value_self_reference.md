@@ -12,18 +12,22 @@ SelfRef := [].{
 # EXPECTED
 INVALID ASSIGNMENT TO ITSELF - assoc_value_self_reference.md:2:16:2:24
 # PROBLEMS
-── ✗ invalid assignment to itself ─────────── assoc_value_self_reference.md:2:16
-
-The value with_uri is assigned to itself, which would cause an infinite loop at
-runtime.
-
-with_uri = with_uri
-           ^^^^^^^^
-
-Only functions can reference themselves (for recursion). For non-function
-values, the right-hand side must be fully computable without referring to the
-value being assigned.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Assignment To Itself")
+		(region (start 2 16) (end 2 24))
+		(headline
+			(reflow "The value ")
+			(annotated symbol-unqualified "with_uri")
+			(reflow " is assigned to itself, which would cause an infinite loop at runtime."))
+		(document
+			(reflow "Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.")
+			(line-break)
+			(line-break)
+			(source-region (file "assoc_value_self_reference.md") (start 2 16) (end 2 24) (annotation error) (line-text "    with_uri = with_uri")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,CloseSquare,Dot,OpenCurly,

@@ -13,17 +13,29 @@ describe = |value| value.to_str()
 # EXPECTED
 NOT A WHERE ALIAS - where_alias_not_a_where_alias.md:3:29:3:37
 # PROBLEMS
-── ✗ not a where alias ─────────────────── where_alias_not_a_where_alias.md:3:29
-
-A where clause can only name a where alias, but Wrapper is a type.
-
-describe : a -> Str where [a.Wrapper]
-                            ^^^^^^^^
-
-A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
-[a.Sortable]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Not a Where Alias")
+		(region (start 3 29) (end 3 37))
+		(headline
+			(reflow "A where clause can only name a where alias, but")
+			(reflow " ")
+			(annotated type "Wrapper")
+			(reflow " ")
+			(reflow "is a type."))
+		(document
+			(source-region (file "where_alias_not_a_where_alias.md") (start 3 29) (end 3 37) (annotation error) (line-text "describe : a -> Str where [a.Wrapper]"))
+			(line-break)
+			(reflow "A where alias names a set of method constraints, declared like")
+			(reflow " ")
+			(annotated code "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]")
+			(reflow " ")
+			(reflow "and written in a where clause as")
+			(reflow " ")
+			(annotated code "where [a.Sortable]"))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,

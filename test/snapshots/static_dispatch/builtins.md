@@ -10,13 +10,18 @@ main! = |_| True.not()
 # EXPECTED
 DOES NOT EXIST - builtins.md:1:13:1:21
 # PROBLEMS
-── ✗ does not exist ─────────────────────────────────────────── builtins.md:1:13
-
-True.not does not exist.
-
-main! = |_| True.not()
-            ^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 1 13) (end 1 21))
+		(headline
+			(annotated symbol-unqualified "True.not")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "builtins.md") (start 1 13) (end 1 21) (annotation error) (line-text "main! = |_| True.not()")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,

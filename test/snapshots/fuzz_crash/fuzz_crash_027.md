@@ -233,814 +233,1266 @@ MISSING METHOD - fuzz_crash_027.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 # PROBLEMS
-── ✗ leading zero ──────────────────────────────────────────────────────────────
-
-Numbers cannot have leading zeros.
-
-── ✗ unclosed string ─────────────────────────────────── fuzz_crash_027.md:118:8
-
-This string is missing a closing quote.
-
-crash "Unreachtement
-      ^^^^^^^^^^^^^^
-
-── ✗ type application needs parentheses ───────────────── fuzz_crash_027.md:40:5
-
-I was parsing a type annotation, and I found a type argument without
-parentheses.
-
-Maya) : [ #
-    ^
-
-Roc type applications use parentheses around their arguments. Write List(U8),
-not List U8.
-
-For example:
-    List(U8)
-
-I found ) here.
-This closes the current construct, so the parser was looking for the missing
-item before it.
-
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_027.md:40:7
-
-I was parsing a statement, and this token cannot start a statement here.
-
-Maya) : [ #
-      ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found : here.
-
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_027.md:40:9
-
-I was parsing a statement, and this token cannot start a statement here.
-
-Maya) : [ #
-        ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found [ here.
-
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_027.md:41:1
-
-I was parsing a statement, and this token cannot start a statement here.
-
-] #se
-^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found ] here.
-This closes the current construct, so the parser was looking for the missing
-item before it.
-
-── ✗ expected record accessor ────────────────────────── fuzz_crash_027.md:110:2
-
-I was parsing access after `.`, and I expected a field name or tuple index.
-
-...
-^^^
-
-Required record access uses .name, optional record access uses .?name, and
-tuple access uses .0. Accessor names must be lowercase and adjacent to their
-punctuation.
-
-For example:
-    person.name
-    maybe_person.?name
-    pair.0
-
-I found ... here.
-
-── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:124:3
-
-I was parsing an expression, and this token cannot start an expression here.
-
-e[, # afarg
-  ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found , here.
-A comma separates items, but there must be a valid item on both sides of it.
-
-── ✗ expected list separator ─────────────────────────── fuzz_crash_027.md:125:3
-
-I was parsing a list expression, and I expected `,` or `]`.
-
-), 456, # ee
-^
-
-Separate list elements with commas and close the list with ].
-
-For example:
-    [1, 2, 3]
-
-I found ) here.
-This closes the current construct, so the parser was looking for the missing
-item before it.
-
-── ✗ expected call argument end ──────────────────────── fuzz_crash_027.md:126:2
-
-I was parsing function or method call arguments, and I expected `)`.
-
-]
-^
-
-Function call arguments go inside parentheses and are separated with commas.
-
-For example:
-    add(1, 2)
-
-I found ] here.
-This closes the current construct, so the parser was looking for the missing
-item before it.
-
-── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:131:9
-
-I was parsing an expression, and this token cannot start an expression here.
-
-record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-       ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found = here.
-
-── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:132:8
-
-I was parsing an expression, and this token cannot start an expression here.
-
-tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-      ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found = here.
-
-── ✗ unexpected expression syntax ───────────────────── fuzz_crash_027.md:133:10
-
-I was parsing an expression, and this token cannot start an expression here.
-
-m_tuple = (
-        ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found = here.
-
-── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:141:8
-
-I was parsing an expression, and this token cannot start an expression here.
-
-bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-      ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found = here.
-
-── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:142:8
-
-I was parsing an expression, and this token cannot start an expression here.
-
-stale = some_fn(arg1)?.statod()?.ned()?.recd?
-      ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found = here.
-
-── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:148:1
-
-I was parsing an expression, and this token cannot start an expression here.
-
-} # Commenl decl
-^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found } here.
-This closes the current construct, so the parser was looking for the missing
-item before it.
-
-── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:150:7
-
-I was parsing an expression, and this token cannot start an expression here.
-
-empty : {}
-      ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found : here.
-
-── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:151:7
-
-I was parsing an expression, and this token cannot start an expression here.
-
-empty = {}
-      ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found = here.
-
-── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:153:7
-
-I was parsing an expression, and this token cannot start an expression here.
-
-tuple : Value((a, b, c))
-      ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found : here.
-
-── ✗ unexpected expression syntax ────────────────────── fuzz_crash_027.md:155:1
-
-I was parsing an expression, and this token cannot start an expression here.
-
-expect {
-^^^^^^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found expect here.
-That word is reserved by Roc, so it cannot be used as a name in this position.
-
-── ✗ expected list separator ─────────────────────────── fuzz_crash_027.md:160:1
-
-I was parsing a list expression, and I expected `,` or `]`.
-
-
-^
-
-Separate list elements with commas and close the list with ].
-
-For example:
-    [1, 2, 3]
-
-I reached the end of the file before this construct was complete.
-
-── ✗ expected closing brace ──────────────────────────── fuzz_crash_027.md:160:1
-
-I was parsing a block expression, and I expected `}` before the file ended.
-
-
-^
-
-Close the block after its final statement or expression.
-
-For example:
-    {
-        answer = 42
-        answer
-    }
-
-I reached the end of the file before this construct was complete.
-
-── ✗ mod not found ──────────────────────────────────── fuzz_crash_027.md:6:1
-
-The mod Stdot was not found in this Roc project.
-
-import Stdot
-        exposing [ #tem
-        ] # Cose
-
-── ✗ mod not found ─────────────────────────────────── fuzz_crash_027.md:12:1
-
-The mod Bae was not found in this Roc project.
-
-import Bae as Gooe
-^^^^^^^^^^^^^^^^^^
-
-── ✗ mod not found ─────────────────────────────────── fuzz_crash_027.md:13:1
-
-The mod Ba was not found in this Roc project.
-
-import
-    Ba
-
-── ✗ undeclared type ──────────────────────────────────── fuzz_crash_027.md:26:8
-
-The type Bar is not declared in this scope.
-
-Foo : (Bar, Baz)
-       ^^^
-
-── ✗ undeclared type ─────────────────────────────────── fuzz_crash_027.md:26:13
-
-The type Baz is not declared in this scope.
-
-Foo : (Bar, Baz)
-            ^^^
-
-── ✗ undeclared type ──────────────────────────────────── fuzz_crash_027.md:29:2
-
-The type Bar is not declared in this scope.
-
-Bar, #
-^^^
-
-── ✗ undeclared type ──────────────────────────────────── fuzz_crash_027.md:30:2
-
-The type Baz is not declared in this scope.
-
-Baz, #m
-^^^
-
-── ✗ undeclared type ─────────────────────────────────── fuzz_crash_027.md:32:19
-
-The type Ok is not declared in this scope.
-
-Some(a) : { foo : Ok(a), bar : g }
-                  ^^
-
-── ✗ undeclared type variable ────────────────────────── fuzz_crash_027.md:32:32
-
-The type variable g is not declared in this scope.
-
-Some(a) : { foo : Ok(a), bar : g }
-                               ^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ undeclared type ──────────────────────────────────── fuzz_crash_027.md:34:8
-
-The type Som is not declared in this scope.
-
-bar : Som# Afld
-      ^^^
-
-── ✗ undeclared type ──────────────────────────────────── fuzz_crash_027.md:38:8
-
-The type Som is not declared in this scope.
-
-bar : Som
-      ^^^
-
-── ✗ undeclared type ─────────────────────────────────── fuzz_crash_027.md:43:11
-
-The type Maybe is not declared in this scope.
-
-Func(a) : Maybe(a), a -> Maybe(a)
-          ^^^^^
-
-── ✗ undeclared type ─────────────────────────────────── fuzz_crash_027.md:43:26
-
-The type Maybe is not declared in this scope.
-
-Func(a) : Maybe(a), a -> Maybe(a)
-                         ^^^^^
-
-── ✗ empty tuple not allowed ──────────────────────────── fuzz_crash_027.md:52:1
-
-I am part way through parsing this tuple, but it is empty.
-
-() #r
-^^
-
-If you want to represent nothing, try using an empty record: {}.
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_027.md:65:4
-
-Nothing is named x in this scope.
-
-x x
-^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_027.md:65:6
-
-Nothing is named x in this scope.
-
-x x
-  ^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_027.md:71:7
-
-Nothing is named ment in this scope.
-
-=> ment
-   ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ───────────────────────────────────── fuzz_crash_027.md:1:1
-
-Variable rest is defined here and then never used:
-
-# Thnt!
-^
-
-If you don't need this variable, prefix it with an underscore like _rest to
-suppress this warning.
-
-── ✗ not implemented ──────────────────────────────────── fuzz_crash_027.md:74:7
-
-This feature is not yet implemented: alternatives pattern outside match
-expression.
-
-[1, 2 | 5, 3, .. as rest] => 123
-    ^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want
-to help improve Roc's error messages!
-
-── ● unused variable ───────────────────────────────────── fuzz_crash_027.md:1:1
-
-Variable rest is defined here and then never used:
-
-# Thnt!
-^
-
-If you don't need this variable, prefix it with an underscore like _rest to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────── fuzz_crash_027.md:76:1
-
-Variable ist is defined here and then never used:
-
-ist
-^^^
-
-If you don't need this variable, prefix it with an underscore like _ist to
-suppress this warning.
-
-── ✗ not implemented ──────────────────────────────────── fuzz_crash_027.md:81:7
-
-This feature is not yet implemented: alternatives pattern outside match
-expression.
-
-(1, 2 | 5, 3) => 123
-    ^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want
-to help improve Roc's error messages!
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_027.md:82:37
-
-Nothing is named add in this scope.
-
-{ foo: 1, bar: 2, ..rest } => 12->add(34)
-                                  ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:82:21
-
-Variable rest is defined here and then never used:
-
-{ foo: 1, bar: 2, ..rest } => 12->add(34)
-                  ^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _rest to
-suppress this warning.
-
-── ✗ not implemented ─────────────────────────────────── fuzz_crash_027.md:89:18
-
-This feature is not yet implemented: alternatives pattern outside match
-expression.
-
-{ foo: 1, bar: 2 | 7 } => 12
-               ^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want
-to help improve Roc's error messages!
-
-── ● unused variable ──────────────────────────────────── fuzz_crash_027.md:62:2
-
-Variable b is defined here and then never used:
-
-b,
-^
-
-If you don't need this variable, prefix it with an underscore like _b to
-suppress this warning.
-
-── ✗ name not in scope ────────────────────────────────── fuzz_crash_027.md:97:2
-
-Nothing is named blah in this scope.
-
-blah == 1 # Commnt
-^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ undeclared type ─────────────────────────────────── fuzz_crash_027.md:99:14
-
-The type String is not declared in this scope.
-
-main! : List(String) -> Try({}, _)
-             ^^^^^^
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_027.md:103:9
-
-Nothing is named blah in this scope.
-
-expect blah == 1
-       ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ unrecognized syntax ─────────────────────────────── fuzz_crash_027.md:110:2
-
-I don't recognize this syntax.
-
-...
-^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-── ✗ name not in scope ───────────────────────────────── fuzz_crash_027.md:114:2
-
-Nothing is named some_func in this scope.
-
-some_func(
-^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ unrecognized syntax ───────────────────────────────── fuzz_crash_027.md:1:1
-
-I don't recognize this syntax.
-
-# Thnt!
-^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:104:2
-
-Variable tag is defined here and then never used:
-
-tag = Blue
-^^^
-
-If you don't need this variable, prefix it with an underscore like _tag to
-suppress this warning.
-
-── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:119:2
-
-Variable tag_with is defined here and then never used:
-
-tag_with = Ok(number)
-^^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _tag_with to
-suppress this warning.
-
-── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:120:2
-
-Variable ited is defined here and then never used:
-
-ited = "Hello, ${world}"
-^^^^
-
-If you don't need this variable, prefix it with an underscore like _ited to
-suppress this warning.
-
-── ● unused variable ─────────────────────────────────── fuzz_crash_027.md:121:2
-
-Variable list is defined here and then never used:
-
-list = [
-^^^^
-
-If you don't need this variable, prefix it with an underscore like _list to
-suppress this warning.
-
-── ✗ too few args ─────────────────────────────────────── fuzz_crash_027.md:21:3
-
-The type List expects 1 argument, but got 0 instead.
-
-List( #rg
-),
-
-── ● declaration has no value ─────────────────────────── fuzz_crash_027.md:28:1
-
-This declaration has a type annotation but no implementation.
-
-line : ( # Cpen
-    Bar, #
-    Baz, #m
-) # Co
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ✗ type mismatch ────────────────────────────────────── fuzz_crash_027.md:50:5
-
-This if condition must evaluate to a Bool – either True or False.
-
-if num {
-   ^^^
-
-It is:
-
-    U64
-
-But I need this to be a Bool value.
-
-── ✗ type mismatch ───────────────────────────────────── fuzz_crash_027.md:64:17
-
-The lue binding in the second pattern of the first branch of this match does
-not match the same binding in the first pattern.
-
-    match a {lue | Red => {
-            x x
-        }
-        Blue  => 1
-        "foo" => # ent
-00
-        "foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-            => ment
-
-
-        [1, 2 | 5, 3, .. as rest] => 123
-        [
-ist
-        ] => 123
-        3.14 => 314
-        3.14 | 6.28 => 314
-        (1, 2, 3) => 123
-        (1, 2 | 5, 3) => 123
-        { foo: 1, bar: 2, ..rest } => 12->add(34)
-        { # Afrd open
-            foo #
-                : #ue
-                    1, # Aftd field
-            bar: 2,
-            ..} => 12
-        { foo: 1, bar: 2 | 7 } => 12
-        {
-            foo: 1,
-            } => 12
-        Ok(123) => 121000
-    }
-
-In the second pattern, lue is:
-
-    [Red, ..]
-
-But in the first pattern, lue is:
-
-    [Red, ..]
-
-A name shared across | patterns in the same match branch must have one
-compatible type.
-
-── ✗ missing method ───────────────────────────────────── fuzz_crash_027.md:68:3
-
-This from_quote method is being called on a value whose type doesn't have that
-method.
-
-"foo" => # ent
-^^^^^
-
-The value's type, which does not have a method named from_quote, is:
-
-    [Blue, Red, ..]
-
-── ✗ missing method ───────────────────────────────────── fuzz_crash_027.md:70:3
-
-This from_quote method is being called on a value whose type doesn't have that
-method.
-
-"foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-^^^^^
-
-The value's type, which does not have a method named from_quote, is:
-
-    [Blue, Red, ..]
-
-── ✗ type mismatch ───────────────────────────────────── fuzz_crash_027.md:64:22
-
-The fifth branch of this match does not match the previous ones.
-
-    match a {lue | Red => {
-            x x
-        }
-        Blue  => 1
-        "foo" => # ent
-00
-        "foo" | "bar" => 20[1, 2, 3, .. as rest] # Aftet
-            => ment
-
-
-        [1, 2 | 5, 3, .. as rest] => 123
-        [
-ist
-        ] => 123
-        3.14 => 314
-        3.14 | 6.28 => 314
-        (1, 2, 3) => 123
-        (1, 2 | 5, 3) => 123
-        { foo: 1, bar: 2, ..rest } => 12->add(34)
-        { # Afrd open
-            foo #
-                : #ue
-                    1, # Aftd field
-            bar: 2,
-            ..} => 12
-        { foo: 1, bar: 2 | 7 } => 12
-        {
-            foo: 1,
-            } => 12
-        Ok(123) => 121000
-    }
-
-This fifth branch is trying to match:
-
-    List(d)
-      where [
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        d.is_eq : d, d -> Bool,
-      ]
-
-But the expression between the match parenthesis has the type:
-
-    [Blue, Red, ..]
-
-These can never match! Either the pattern or expression has a problem.
-
-── ✗ too few args ────────────────────────────────────── fuzz_crash_027.md:111:2
-
-The match_time function expects 2 arguments, but it got 1 instead.
-
-match_time(
-    ..., #
-)
-
-The match_time function has the type:
-
-    [Blue, Red, ..], _arg -> Error
-
-Are there any missing commas?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Leading Zero")
+		(headline
+			(reflow "Numbers cannot have leading zeros."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Unclosed String")
+		(region (start 118 8) (end 118 22))
+		(headline
+			(reflow "This string is missing a closing quote."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 118 8) (end 118 22) (annotation error) (line-text "\tcrash \"Unreachtement"))))
+	(report
+		(severity runtime_error)
+		(title "Type Application Needs Parentheses")
+		(region (start 40 5) (end 40 6))
+		(headline
+			(reflow "I was parsing a type annotation, and I found a type argument without parentheses."))
+		(document
+			(reflow "Roc type applications use parentheses around their arguments. Write ")
+			(annotated code "List(U8)")
+			(reflow ", not ")
+			(annotated code "List U8")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(U8)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ")")
+			(text " here.")
+			(line-break)
+			(reflow "This closes the current construct, so the parser was looking for the missing item before it.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 40 5) (end 40 6) (annotation error) (line-text "Maya) : [ #"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 40 7) (end 40 8))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ":")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 40 7) (end 40 8) (annotation error) (line-text "Maya) : [ #"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 40 9) (end 40 10))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "[")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 40 9) (end 40 10) (annotation error) (line-text "Maya) : [ #"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 41 1) (end 41 2))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "]")
+			(text " here.")
+			(line-break)
+			(reflow "This closes the current construct, so the parser was looking for the missing item before it.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 41 1) (end 41 2) (annotation error) (line-text "] #se"))))
+	(report
+		(severity runtime_error)
+		(title "Expected Record Accessor")
+		(region (start 110 2) (end 110 5))
+		(headline
+			(reflow "I was parsing access after `.`, and I expected a field name or tuple index."))
+		(document
+			(reflow "Required record access uses ")
+			(annotated code ".name")
+			(reflow ", optional record access uses ")
+			(annotated code ".?name")
+			(reflow ", and tuple access uses ")
+			(annotated code ".0")
+			(reflow ". Accessor names must be lowercase and adjacent to their punctuation.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "person.name")
+			(line-break)
+			(indent 1)
+			(text "maybe_person.?name")
+			(line-break)
+			(indent 1)
+			(text "pair.0")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "...")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 110 2) (end 110 5) (annotation error) (line-text "\t..."))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 124 3) (end 124 4))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ",")
+			(text " here.")
+			(line-break)
+			(reflow "A comma separates items, but there must be a valid item on both sides of it.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 124 3) (end 124 4) (annotation error) (line-text "e[, # afarg"))))
+	(report
+		(severity runtime_error)
+		(title "Expected List Separator")
+		(region (start 125 3) (end 125 4))
+		(headline
+			(reflow "I was parsing a list expression, and I expected `,` or `]`."))
+		(document
+			(reflow "Separate list elements with commas and close the list with ")
+			(annotated code "]")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[1, 2, 3]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ")")
+			(text " here.")
+			(line-break)
+			(reflow "This closes the current construct, so the parser was looking for the missing item before it.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 125 3) (end 125 4) (annotation error) (line-text "\t\t),\t456, # ee"))))
+	(report
+		(severity runtime_error)
+		(title "Expected Call Argument End")
+		(region (start 126 2) (end 126 3))
+		(headline
+			(reflow "I was parsing function or method call arguments, and I expected `)`."))
+		(document
+			(reflow "Function call arguments go inside parentheses and are separated with commas.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "]")
+			(text " here.")
+			(line-break)
+			(reflow "This closes the current construct, so the parser was looking for the missing item before it.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 126 2) (end 126 3) (annotation error) (line-text "\t]"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 131 9) (end 131 10))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "=")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 131 9) (end 131 10) (annotation error) (line-text "\trecord = { foo: 123, bar: \"Hello\", baz: tag, qux: Ok(world), punned }"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 132 8) (end 132 9))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "=")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 132 8) (end 132 9) (annotation error) (line-text "\ttuple = (123, \"World\", tag, Ok(world), (nested, tuple), [1, 2, 3])"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 133 10) (end 133 11))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "=")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 133 10) (end 133 11) (annotation error) (line-text "\tm_tuple = ("))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 141 8) (end 141 9))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "=")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 141 8) (end 141 9) (annotation error) (line-text "\tbsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 142 8) (end 142 9))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "=")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 142 8) (end 142 9) (annotation error) (line-text "\tstale = some_fn(arg1)?.statod()?.ned()?.recd?"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 148 1) (end 148 2))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "}")
+			(text " here.")
+			(line-break)
+			(reflow "This closes the current construct, so the parser was looking for the missing item before it.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 148 1) (end 148 2) (annotation error) (line-text "} # Commenl decl"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 150 7) (end 150 8))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ":")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 150 7) (end 150 8) (annotation error) (line-text "empty : {}"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 151 7) (end 151 8))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "=")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 151 7) (end 151 8) (annotation error) (line-text "empty = {}"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 153 7) (end 153 8))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ":")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 153 7) (end 153 8) (annotation error) (line-text "tuple : Value((a, b, c))"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 155 1) (end 155 7))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "expect")
+			(text " here.")
+			(line-break)
+			(reflow "That word is reserved by Roc, so it cannot be used as a name in this position.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 155 1) (end 155 7) (annotation error) (line-text "expect {"))))
+	(report
+		(severity runtime_error)
+		(title "Expected List Separator")
+		(region (start 160 1) (end 160 1))
+		(headline
+			(reflow "I was parsing a list expression, and I expected `,` or `]`."))
+		(document
+			(reflow "Separate list elements with commas and close the list with ")
+			(annotated code "]")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[1, 2, 3]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "I reached the end of the file before this construct was complete.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 160 1) (end 160 1) (annotation error) (line-text ""))))
+	(report
+		(severity runtime_error)
+		(title "Expected Closing Brace")
+		(region (start 160 1) (end 160 1))
+		(headline
+			(reflow "I was parsing a block expression, and I expected `}` before the file ended."))
+		(document
+			(reflow "Close the block after its final statement or expression.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{")
+			(line-break)
+			(indent 1)
+			(text "    answer = 42")
+			(line-break)
+			(indent 1)
+			(text "    answer")
+			(line-break)
+			(indent 1)
+			(text "}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "I reached the end of the file before this construct was complete.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 160 1) (end 160 1) (annotation error) (line-text ""))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 6 1) (end 8 4))
+		(headline
+			(text "The mod ")
+			(annotated code "Stdot")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 6 1) (end 8 4) (annotation error) (line-text "import Stdot\n\t\texposing [ #tem\n\t\t] # Cose"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 12 1) (end 12 19))
+		(headline
+			(text "The mod ")
+			(annotated code "Bae")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 12 1) (end 12 19) (annotation error) (line-text "import Bae as Gooe"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 13 1) (end 14 4))
+		(headline
+			(text "The mod ")
+			(annotated code "Ba")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 13 1) (end 14 4) (annotation error) (line-text "import\n\tBa"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 26 8) (end 26 11))
+		(headline
+			(reflow "The type ")
+			(annotated code "Bar")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 26 8) (end 26 11) (annotation error) (line-text "Foo : (Bar, Baz)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 26 13) (end 26 16))
+		(headline
+			(reflow "The type ")
+			(annotated code "Baz")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 26 13) (end 26 16) (annotation error) (line-text "Foo : (Bar, Baz)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 29 2) (end 29 5))
+		(headline
+			(reflow "The type ")
+			(annotated code "Bar")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 29 2) (end 29 5) (annotation error) (line-text "\tBar, #"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 30 2) (end 30 5))
+		(headline
+			(reflow "The type ")
+			(annotated code "Baz")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 30 2) (end 30 5) (annotation error) (line-text "\tBaz, #m"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 32 19) (end 32 21))
+		(headline
+			(reflow "The type ")
+			(annotated code "Ok")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 32 19) (end 32 21) (annotation error) (line-text "Some(a) : { foo : Ok(a), bar : g }"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 32 32) (end 32 33))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "g")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 32 32) (end 32 33) (annotation error) (line-text "Some(a) : { foo : Ok(a), bar : g }"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 34 8) (end 34 11))
+		(headline
+			(reflow "The type ")
+			(annotated code "Som")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 34 8) (end 34 11) (annotation error) (line-text "\tbar : Som# Afld"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 38 8) (end 38 11))
+		(headline
+			(reflow "The type ")
+			(annotated code "Som")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 38 8) (end 38 11) (annotation error) (line-text "\tbar : Som"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 43 11) (end 43 16))
+		(headline
+			(reflow "The type ")
+			(annotated code "Maybe")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 43 11) (end 43 16) (annotation error) (line-text "Func(a) : Maybe(a), a -> Maybe(a)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 43 26) (end 43 31))
+		(headline
+			(reflow "The type ")
+			(annotated code "Maybe")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 43 26) (end 43 31) (annotation error) (line-text "Func(a) : Maybe(a), a -> Maybe(a)"))))
+	(report
+		(severity runtime_error)
+		(title "Empty Tuple Not Allowed")
+		(region (start 52 1) (end 52 3))
+		(headline
+			(reflow "I am part way through parsing this tuple, but it is empty."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 52 1) (end 52 3) (annotation error) (line-text "() #r"))
+			(line-break)
+			(reflow "If you want to represent nothing, try using an empty record: ")
+			(annotated code "{}")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 65 4) (end 65 5))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "x")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 65 4) (end 65 5) (annotation error) (line-text "\t\t\tx x"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 65 6) (end 65 7))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "x")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 65 6) (end 65 7) (annotation error) (line-text "\t\t\tx x"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 71 7) (end 71 11))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "ment")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 71 7) (end 71 11) (annotation error) (line-text "\t\t\t=> ment"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "rest")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_rest")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 1 1) (end 1 1) (annotation error) (line-text "# Thnt!"))))
+	(report
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 74 7) (end 74 12))
+		(headline
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "alternatives pattern outside match expression")
+			(annotation-end)
+			(reflow "."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 74 7) (end 74 12) (annotation error) (line-text "\t\t[1, 2 | 5, 3, .. as rest] => 123"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break)))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "rest")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_rest")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 1 1) (end 1 1) (annotation error) (line-text "# Thnt!"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 76 1) (end 76 4))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "ist")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_ist")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 76 1) (end 76 4) (annotation error) (line-text "ist"))))
+	(report
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 81 7) (end 81 12))
+		(headline
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "alternatives pattern outside match expression")
+			(annotation-end)
+			(reflow "."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 81 7) (end 81 12) (annotation error) (line-text "\t\t(1, 2 | 5, 3) => 123"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break)))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 82 37) (end 82 40))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "add")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 82 37) (end 82 40) (annotation error) (line-text "\t\t{ foo: 1, bar: 2, ..rest } => 12->add(34)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 82 21) (end 82 27))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "rest")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_rest")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 82 21) (end 82 27) (annotation error) (line-text "\t\t{ foo: 1, bar: 2, ..rest } => 12->add(34)"))))
+	(report
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 89 18) (end 89 23))
+		(headline
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "alternatives pattern outside match expression")
+			(annotation-end)
+			(reflow "."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 89 18) (end 89 23) (annotation error) (line-text "\t\t{ foo: 1, bar: 2 | 7 } => 12"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break)))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 62 2) (end 62 3))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "b")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_b")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 62 2) (end 62 3) (annotation error) (line-text "\tb,"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 97 2) (end 97 6))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "blah")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 97 2) (end 97 6) (annotation error) (line-text "\tblah == 1 # Commnt"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 99 14) (end 99 20))
+		(headline
+			(reflow "The type ")
+			(annotated code "String")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 99 14) (end 99 20) (annotation error) (line-text "main! : List(String) -> Try({}, _)"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 103 9) (end 103 13))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "blah")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 103 9) (end 103 13) (annotation error) (line-text "\texpect blah == 1"))))
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 110 2) (end 110 5))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 110 2) (end 110 5) (annotation error) (line-text "\t..."))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 114 2) (end 114 11))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "some_func")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 114 2) (end 114 11) (annotation error) (line-text "\tsome_func("))))
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 1 1) (end 1 1) (annotation error) (line-text "# Thnt!"))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 104 2) (end 104 5))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "tag")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_tag")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 104 2) (end 104 5) (annotation error) (line-text "\ttag = Blue"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 119 2) (end 119 10))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "tag_with")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_tag_with")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 119 2) (end 119 10) (annotation error) (line-text "\ttag_with = Ok(number)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 120 2) (end 120 6))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "ited")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_ited")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 120 2) (end 120 6) (annotation error) (line-text "\tited = \"Hello, ${world}\""))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 121 2) (end 121 6))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "list")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_list")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_027.md") (start 121 2) (end 121 6) (annotation error) (line-text "\tlist = ["))))
+	(report
+		(severity runtime_error)
+		(title "Too Few Args")
+		(region (start 21 3) (end 22 4))
+		(headline
+			(reflow "The type")
+			(reflow " ")
+			(annotated type "List")
+			(reflow " ")
+			(reflow "expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument,")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "0")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 21 3) (end 22 4) (annotation error) (line-text "\t\tList( #rg\n\t\t),"))))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 28 1) (end 31 2))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 28 1) (end 31 2) (annotation error) (line-text "line : ( # Cpen\n\tBar, #\n\tBaz, #m\n) # Co"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 50 5) (end 50 8))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "if")
+			(reflow " ")
+			(reflow "condition must evaluate to a")
+			(reflow " ")
+			(annotated code "Bool")
+			(reflow " ")
+			(reflow "– either")
+			(reflow " ")
+			(annotated code "True")
+			(reflow " ")
+			(reflow "or")
+			(reflow " ")
+			(annotated code "False")
+			(reflow "."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 50 5) (end 50 8) (annotation error) (line-text "\tif num {"))
+			(line-break)
+			(reflow "It is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U64")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But I need this to be a")
+			(reflow " ")
+			(annotated code "Bool")
+			(reflow " ")
+			(reflow "value.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 64 2) (end 94 3))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "lue")
+			(reflow " ")
+			(reflow "binding in the")
+			(reflow " ")
+			(reflow "second")
+			(reflow " ")
+			(reflow "pattern of the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "does not match the same binding in the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "pattern."))
+		(document
+			(source-underlines
+				(display (file "fuzz_crash_027.md") (start 64 2) (end 94 3) (annotation dim) (line-text "\tmatch a {lue | Red => {\n\t\t\tx x\n\t\t}\n\t\tBlue\t\t=> 1\n\t\t\"foo\" => # ent\n00\n\t\t\"foo\" | \"bar\" => 20[1, 2, 3, .. as rest] # Aftet\n\t\t\t=> ment\n\n\n\t\t[1, 2 | 5, 3, .. as rest] => 123\n\t\t[\nist\n\t\t] => 123\n\t\t3.14 => 314\n\t\t3.14 | 6.28 => 314\n\t\t(1, 2, 3) => 123\n\t\t(1, 2 | 5, 3) => 123\n\t\t{ foo: 1, bar: 2, ..rest } => 12->add(34)\n\t\t{ # Afrd open\n\t\t\tfoo #\n\t\t\t\t: #ue\n\t\t\t\t\t1, # Aftd field\n\t\t\tbar: 2,\n\t\t\t..} => 12\n\t\t{ foo: 1, bar: 2 | 7 } => 12\n\t\t{\n\t\t\tfoo: 1,\n\t\t\t} => 12\n\t\tOk(123) => 121000\n\t}"))
+				(underline (start 64 17) (end 64 20) (annotation error)))
+			(line-break)
+			(reflow "In the")
+			(reflow " ")
+			(reflow "second")
+			(reflow " ")
+			(reflow "pattern,")
+			(reflow " ")
+			(annotated code "lue")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Red, ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But in the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "pattern,")
+			(reflow " ")
+			(annotated code "lue")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Red, ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "A name shared across")
+			(reflow " ")
+			(annotated code "|")
+			(reflow " ")
+			(reflow "patterns in the same")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "branch must have one compatible type.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 68 3) (end 68 8))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_quote")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 68 3) (end 68 8) (annotation error) (line-text "\t\t\"foo\" => # ent"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_quote")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, Red, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 70 3) (end 70 8))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_quote")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 70 3) (end 70 8) (annotation error) (line-text "\t\t\"foo\" | \"bar\" => 20[1, 2, 3, .. as rest] # Aftet"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_quote")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, Red, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 64 2) (end 94 3))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "fifth")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "does not match the previous ones."))
+		(document
+			(source-underlines
+				(display (file "fuzz_crash_027.md") (start 64 2) (end 94 3) (annotation dim) (line-text "\tmatch a {lue | Red => {\n\t\t\tx x\n\t\t}\n\t\tBlue\t\t=> 1\n\t\t\"foo\" => # ent\n00\n\t\t\"foo\" | \"bar\" => 20[1, 2, 3, .. as rest] # Aftet\n\t\t\t=> ment\n\n\n\t\t[1, 2 | 5, 3, .. as rest] => 123\n\t\t[\nist\n\t\t] => 123\n\t\t3.14 => 314\n\t\t3.14 | 6.28 => 314\n\t\t(1, 2, 3) => 123\n\t\t(1, 2 | 5, 3) => 123\n\t\t{ foo: 1, bar: 2, ..rest } => 12->add(34)\n\t\t{ # Afrd open\n\t\t\tfoo #\n\t\t\t\t: #ue\n\t\t\t\t\t1, # Aftd field\n\t\t\tbar: 2,\n\t\t\t..} => 12\n\t\t{ foo: 1, bar: 2 | 7 } => 12\n\t\t{\n\t\t\tfoo: 1,\n\t\t\t} => 12\n\t\tOk(123) => 121000\n\t}"))
+				(underline (start 70 22) (end 70 43) (annotation error)))
+			(line-break)
+			(reflow "This")
+			(reflow " ")
+			(reflow "fifth")
+			(reflow " ")
+			(reflow "branch is trying to match:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(d)")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    d.is_eq : d, d -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "  ]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the expression between the")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "parenthesis has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, Red, ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "These can never match! Either the pattern or expression has a problem.")))
+	(report
+		(severity runtime_error)
+		(title "Too Few Args")
+		(region (start 111 2) (end 113 3))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "match_time")
+			(reflow " function expects")
+			(reflow " ")
+			(reflow "2")
+			(reflow " ")
+			(reflow "arguments")
+			(reflow ",")
+			(reflow " ")
+			(reflow "but it got")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 111 2) (end 113 3) (annotation error) (line-text "\tmatch_time(\n\t\t..., #\n\t)"))
+			(line-break)
+			(reflow "The")
+			(reflow " ")
+			(annotated code "match_time")
+			(reflow " function has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, Red, ..], _arg -> Error")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Are there any missing commas?"))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

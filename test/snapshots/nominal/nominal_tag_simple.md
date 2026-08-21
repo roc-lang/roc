@@ -16,21 +16,34 @@ yellow = Color.Yellow
 # EXPECTED
 INVALID NOMINAL TAG - nominal_tag_simple.md:7:10:7:22
 # PROBLEMS
-── ✗ invalid nominal tag ──────────────────────────── nominal_tag_simple.md:7:10
-
-I'm having trouble with this nominal tag.
-
-yellow = Color.Yellow
-         ^^^^^^^^^^^^
-
-The tag is:
-
-    Yellow
-
-But the nominal type needs it to one of:
-
-    [Blue, Green, Red]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Nominal Tag")
+		(region (start 7 10) (end 7 22))
+		(headline
+			(reflow "I'm having trouble with this nominal tag."))
+		(document
+			(source-region (file "nominal_tag_simple.md") (start 7 10) (end 7 22) (annotation error) (line-text "yellow = Color.Yellow"))
+			(line-break)
+			(text "The tag is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Yellow")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "But the nominal type needs it to one of:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, Green, Red]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,

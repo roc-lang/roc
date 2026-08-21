@@ -22,42 +22,63 @@ UNDECLARED TYPE - nominal_import_wildcard.md:3:7:3:12
 UNDECLARED TYPE - nominal_import_wildcard.md:6:8:6:13
 UNDECLARED TYPE - nominal_import_wildcard.md:9:9:9:14
 # PROBLEMS
-── ✗ unexpected statement ────────────────────── nominal_import_wildcard.md:1:13
-
-I was parsing a statement, and this token cannot start a statement here.
-
-import Color.*
-            ^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found .* here.
-
-── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:3:7
-
-The type Color is not declared in this scope.
-
-red : Color
-      ^^^^^
-
-── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:6:8
-
-The type Color is not declared in this scope.
-
-blue : Color
-       ^^^^^
-
-── ✗ undeclared type ──────────────────────────── nominal_import_wildcard.md:9:9
-
-The type Color is not declared in this scope.
-
-green : Color
-        ^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 13) (end 1 15))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ".*")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "nominal_import_wildcard.md") (start 1 13) (end 1 15) (annotation error) (line-text "import Color.*"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 3 7) (end 3 12))
+		(headline
+			(reflow "The type ")
+			(annotated code "Color")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "nominal_import_wildcard.md") (start 3 7) (end 3 12) (annotation error) (line-text "red : Color"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 6 8) (end 6 13))
+		(headline
+			(reflow "The type ")
+			(annotated code "Color")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "nominal_import_wildcard.md") (start 6 8) (end 6 13) (annotation error) (line-text "blue : Color"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 9 9) (end 9 14))
+		(headline
+			(reflow "The type ")
+			(annotated code "Color")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "nominal_import_wildcard.md") (start 9 9) (end 9 14) (annotation error) (line-text "green : Color")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,DotStar,

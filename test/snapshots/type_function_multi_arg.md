@@ -18,59 +18,91 @@ UNEXPECTED STATEMENT - type_function_multi_arg.md:3:40:3:42
 UNEXPECTED STATEMENT - type_function_multi_arg.md:3:42:3:43
 MALFORMED TYPE - type_function_multi_arg.md:3:27:3:39
 # PROBLEMS
-── ✗ expected closing parenthesis ────────────── type_function_multi_arg.md:3:27
-
-I was parsing a parenthesized type, and I expected `)`.
-
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-                          ^
-
-Close the parenthesized type after the final type expression.
-
-For example:
-    (Str -> U64)
-
-I found ( here.
-
-── ✗ unexpected statement ────────────────────── type_function_multi_arg.md:3:40
-
-I was parsing a statement, and this token cannot start a statement here.
-
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-                                       ^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found _c here.
-
-── ✗ unexpected statement ────────────────────── type_function_multi_arg.md:3:42
-
-I was parsing a statement, and this token cannot start a statement here.
-
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-                                         ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found ) here.
-This closes the current construct, so the parser was looking for the missing
-item before it.
-
-── ✗ malformed type ──────────────────────────── type_function_multi_arg.md:3:27
-
-This type annotation is malformed or contains invalid syntax.
-
-curry : (_a, _b -> _c) -> (_a -> _b -> _c)
-                          ^^^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Expected Closing Parenthesis")
+		(region (start 3 27) (end 3 28))
+		(headline
+			(reflow "I was parsing a parenthesized type, and I expected `)`."))
+		(document
+			(reflow "Close the parenthesized type after the final type expression.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(Str -> U64)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "(")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_function_multi_arg.md") (start 3 27) (end 3 28) (annotation error) (line-text "curry : (_a, _b -> _c) -> (_a -> _b -> _c)"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 3 40) (end 3 42))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "_c")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_function_multi_arg.md") (start 3 40) (end 3 42) (annotation error) (line-text "curry : (_a, _b -> _c) -> (_a -> _b -> _c)"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 3 42) (end 3 43))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ")")
+			(text " here.")
+			(line-break)
+			(reflow "This closes the current construct, so the parser was looking for the missing item before it.")
+			(line-break)
+			(line-break)
+			(source-region (file "type_function_multi_arg.md") (start 3 42) (end 3 43) (annotation error) (line-text "curry : (_a, _b -> _c) -> (_a -> _b -> _c)"))))
+	(report
+		(severity runtime_error)
+		(title "Malformed Type")
+		(region (start 3 27) (end 3 39))
+		(headline
+			(reflow "This type annotation is malformed or contains invalid syntax."))
+		(document
+			(source-region (file "type_function_multi_arg.md") (start 3 27) (end 3 39) (annotation error) (line-text "curry : (_a, _b -> _c) -> (_a -> _b -> _c)")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

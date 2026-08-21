@@ -276,669 +276,970 @@ DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 MISSING METHOD - syntax_grab_bag.md:189:26:189:40
 MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
-── ✗ expected record accessor ───────────────────────── syntax_grab_bag.md:154:2
-
-I was parsing access after `.`, and I expected a field name or tuple index.
-
-...
-^^^
-
-Required record access uses .name, optional record access uses .?name, and
-tuple access uses .0. Accessor names must be lowercase and adjacent to their
-punctuation.
-
-For example:
-    person.name
-    maybe_person.?name
-    pair.0
-
-I found ... here.
-
-── ✗ mod not found ────────────────────────────────── syntax_grab_bag.md:16:1
-
-The mod BadName was not found in this Roc project.
-
-import BadName as GoodName
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ mod not found ────────────────────────────────── syntax_grab_bag.md:17:1
-
-The mod BadNameMultiline was not found in this Roc project.
-
-import
-    BadNameMultiline
-        as
-        GoodNameMultiline
-
-── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:36:8
-
-The type Bar is not declared in this scope.
-
-Foo : (Bar, Baz)
-       ^^^
-
-── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:36:13
-
-The type Baz is not declared in this scope.
-
-Foo : (Bar, Baz)
-            ^^^
-
-── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:39:2
-
-The type Bar is not declared in this scope.
-
-Bar, # Comment after pattern tuple item
-^^^
-
-── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:40:2
-
-The type Baz is not declared in this scope.
-
-Baz, # Another after pattern tuple item
-^^^
-
-── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:43:19
-
-The type Ok is not declared in this scope.
-
-Some(a) : { foo : Ok(a), bar : Something }
-                  ^^
-
-── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:43:32
-
-The type Something is not declared in this scope.
-
-Some(a) : { foo : Ok(a), bar : Something }
-                               ^^^^^^^^^
-
-── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:45:8
-
-The type Ok is not declared in this scope.
-
-foo : Ok(a), # After field
-      ^^
-
-── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:46:8
-
-The type Something is not declared in this scope.
-
-bar : Something, # After last field
-      ^^^^^^^^^
-
-── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:52:4
-
-The type Ok is not declared in this scope.
-
-Ok(a), # Comment after pattern record field
-^^
-
-── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:53:8
-
-The type Something is not declared in this scope.
-
-bar : Something, # Another after pattern record field
-      ^^^^^^^^^
-
-── ✗ name not in scope ───────────────────────────────── syntax_grab_bag.md:72:4
-
-Nothing is named some_func in this scope.
-
-some_func() # After debug expr
-^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ─────────────────────────────────── syntax_grab_bag.md:97:3
-
-Variable lower is defined here and then never used:
-
-lower # After pattern comment
-^^^^^
-
-If you don't need this variable, prefix it with an underscore like _lower to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────── syntax_grab_bag.md:1:1
-
-Variable rest is defined here and then never used:
-
-# This is a mod comment!
-^
-
-If you don't need this variable, prefix it with an underscore like _rest to
-suppress this warning.
-
-── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:108:7
-
-This feature is not yet implemented: alternatives pattern outside match
-expression.
-
-[1, 2 | 5, 3, .. as rest] => 123
-    ^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want
-to help improve Roc's error messages!
-
-── ● unused variable ──────────────────────────────────── syntax_grab_bag.md:1:1
-
-Variable rest is defined here and then never used:
-
-# This is a mod comment!
-^
-
-If you don't need this variable, prefix it with an underscore like _rest to
-suppress this warning.
-
-── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:111:4
-
-This feature is not yet implemented: alternatives pattern outside match
-expression.
-
-2 | 5,
-^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want
-to help improve Roc's error messages!
-
-── ● unused variable ──────────────────────────────────── syntax_grab_bag.md:1:1
-
-Variable rest is defined here and then never used:
-
-# This is a mod comment!
-^
-
-If you don't need this variable, prefix it with an underscore like _rest to
-suppress this warning.
-
-── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:120:7
-
-This feature is not yet implemented: alternatives pattern outside match
-expression.
-
-(1, 2 | 5, 3) => 123
-    ^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want
-to help improve Roc's error messages!
-
-── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:121:37
-
-Nothing is named add in this scope.
-
-{ foo: 1, bar: 2, ..rest } => 12->add(34)
-                                  ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ● unused variable ───────────────────────────────── syntax_grab_bag.md:121:21
-
-Variable rest is defined here and then never used:
-
-{ foo: 1, bar: 2, ..rest } => 12->add(34)
-                  ^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _rest to
-suppress this warning.
-
-── ● unused variable ────────────────────────────────── syntax_grab_bag.md:127:4
-
-Variable rest is defined here and then never used:
-
-.. # After spread operator
-    rest, # After last field
-
-If you don't need this variable, prefix it with an underscore like _rest to
-suppress this warning.
-
-── ✗ not implemented ───────────────────────────────── syntax_grab_bag.md:130:18
-
-This feature is not yet implemented: alternatives pattern outside match
-expression.
-
-{ foo: 1, bar: 2 | 7 } => 12
-               ^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want
-to help improve Roc's error messages!
-
-── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:133:9
-
-This feature is not yet implemented: alternatives pattern outside match
-expression.
-
-bar: 2 | 7, # After last record field
-     ^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want
-to help improve Roc's error messages!
-
-── ● unused variable ─────────────────────────────────── syntax_grab_bag.md:82:2
-
-Variable b is defined here and then never used:
-
-b,
-^
-
-If you don't need this variable, prefix it with an underscore like _b to
-suppress this warning.
-
-── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:141:2
-
-Nothing is named blah in this scope.
-
-blah == 1 # Comment after expect statement
-^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ undeclared type ───────────────────────────────── syntax_grab_bag.md:143:14
-
-The type String is not declared in this scope.
-
-main! : List(String) -> Try({}, _)
-             ^^^^^^
-
-── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:147:9
-
-Nothing is named blah in this scope.
-
-expect blah == 1
-       ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ unrecognized syntax ────────────────────────────── syntax_grab_bag.md:154:2
-
-I don't recognize this syntax.
-
-...
-^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
-── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:158:2
-
-Nothing is named some_func in this scope.
-
-some_func(
-^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:175:3
-
-Nothing is named line! in this scope.
-
-Stdout.line!("Adding ${n} to ${number}")
-^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:178:63
-
-Nothing is named punned in this scope.
-
-record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-                                                             ^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:179:42
-
-Nothing is named nested in this scope.
-
-tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-                                        ^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ invalid assignment to itself ──────────────────── syntax_grab_bag.md:179:50
-
-The value tuple is assigned to itself, which would cause an infinite loop at
-runtime.
-
-tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-                                                ^^^^^
-
-Only functions can reference themselves (for recursion). For non-function
-values, the right-hand side must be fully computable without referring to the
-value being assigned.
-
-── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:183:3
-
-Nothing is named tag1 in this scope.
-
-tag1,
-^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:185:4
-
-Nothing is named nested in this scope.
-
-(nested, tuple),
- ^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:188:22
-
-Nothing is named foo in this scope.
-
-bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-                    ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:189:26
-
-Nothing is named some_fn in this scope.
-
-static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-                        ^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:189:34
-
-Nothing is named arg1 in this scope.
-
-static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-                                ^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:190:2
-
-Nothing is named line! in this scope.
-
-Stdout.line!(interpolated)?
-^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:191:2
-
-Nothing is named line! in this scope.
-
-Stdout.line!(
-^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ does not exist ─────────────────────────────────── syntax_grab_bag.md:193:4
-
-Num.toStr does not exist.
-
-Num.toStr(number) # Comment after string interpolation expr
-^^^^^^^^^
-
-── ● unused variable ────────────────────────────────── syntax_grab_bag.md:164:2
-
-Variable tag_with_payload is defined here and then never used:
-
-tag_with_payload = Ok(number)
-^^^^^^^^^^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like
-_tag_with_payload to suppress this warning.
-
-── ● unused variable ────────────────────────────────── syntax_grab_bag.md:178:2
-
-Variable record is defined here and then never used:
-
-record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _record to
-suppress this warning.
-
-── ● unused variable ────────────────────────────────── syntax_grab_bag.md:180:2
-
-Variable multiline_tuple is defined here and then never used:
-
-multiline_tuple = (
-^^^^^^^^^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like
-_multiline_tuple to suppress this warning.
-
-── ● unused variable ────────────────────────────────── syntax_grab_bag.md:188:2
-
-Variable bin_op_result is defined here and then never used:
-
-bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-^^^^^^^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like
-_bin_op_result to suppress this warning.
-
-── ● unused variable ────────────────────────────────── syntax_grab_bag.md:189:2
-
-Variable static_dispatch_style is defined here and then never used:
-
-static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-^^^^^^^^^^^^^^^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like
-_static_dispatch_style to suppress this warning.
-
-── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:201:9
-
-The type Value is not declared in this scope.
-
-tuple : Value((a, b, c))
-        ^^^^^
-
-── ✗ type mismatch ───────────────────────────────────── syntax_grab_bag.md:70:5
-
-This if condition must evaluate to a Bool – either True or False.
-
-if num {
-   ^^^
-
-It is:
-
-    U64
-
-But I need this to be a Bool value.
-
-── ✗ missing method ──────────────────────────────────── syntax_grab_bag.md:99:3
-
-This from_quote method is being called on a value whose type doesn't have that
-method.
-
-"foo" => # After arrow comment
-^^^^^
-
-The value's type, which does not have a method named from_quote, is:
-
-    [Blue, Green, Red, ..]
-
-── ✗ missing method ─────────────────────────────────── syntax_grab_bag.md:101:3
-
-This from_quote method is being called on a value whose type doesn't have that
-method.
-
-"foo" | "bar" => 200
-^^^^^
-
-The value's type, which does not have a method named from_quote, is:
-
-    [Blue, Green, Red, ..]
-
-── ✗ type mismatch ───────────────────────────────────── syntax_grab_bag.md:84:3
-
-The sixth branch of this match does not match the previous ones.
-
-match a {
-    Blue | Green | Red => {
-        x = 12
-        x
-    }
-    Blue # After pattern in alt
-    | # Before pattern in alt
-        Green
-    | Red # After alt pattern
-        => {
-            x = 12
-            x
-        }
-    lower # After pattern comment
-        => 1
-    "foo" => # After arrow comment
-        100
-    "foo" | "bar" => 200
-    [1, 2, 3, .. as rest] # After pattern comment
-        => # After arrow comment
-            123 # After branch comment
-
-    # Just a random comment
-
-    [1, 2 | 5, 3, .. as rest] => 123
-    [
-        1,
-        2 | 5,
-        3,
-        .. # After DoubleDot
-            as # Before alias
-                rest, # After last pattern in list
-    ] => 123
-    3.14 => 314
-    3.14 | 6.28 => 314
-    (1, 2, 3) => 123
-    (1, 2 | 5, 3) => 123
-    { foo: 1, bar: 2, ..rest } => 12->add(34)
-    { # After pattern record open
-        foo # After pattern record field name
-            : # Before pattern record field value
-                1, # After pattern record field
-        bar: 2,
-        .. # After spread operator
-            rest, # After last field
-    } => 12
-    { foo: 1, bar: 2 | 7 } => 12
-    {
-        foo: 1,
-        bar: 2 | 7, # After last record field
-    } => 12
-    Ok(123) => 123
-    Ok(Some(dude)) => dude
-    TwoArgs("hello", Some("world")) => 1000
-}
-
-This sixth branch is trying to match:
-
-    List(d)
-      where [
-        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        d.is_eq : d, d -> Bool,
-      ]
-
-But the expression between the match parenthesis has the type:
-
-    [Blue, Green, Red, ..]
-
-These can never match! Either the pattern or expression has a problem.
-
-── ✗ too few args ───────────────────────────────────── syntax_grab_bag.md:155:2
-
-The match_time function expects 2 arguments, but it got 1 instead.
-
-match_time(
-    ..., # Single args with comment
-)
-
-The match_time function has the type:
-
-    [Blue, Green, Red, ..], _arg -> d
-      where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]
-
-Are there any missing commas?
-
-── ✗ type mismatch ──────────────────────────────────── syntax_grab_bag.md:167:4
-
-The first argument being passed to this function has the wrong type.
-
-add_one(
-    dbg # After dbg in list
-        number, # after dbg expr as arg
-), # Comment one
-
-This argument has the type:
-
-    {}
-
-But add_one needs the first argument to be:
-
-    U64
-
-── ✗ type mismatch ─────────────────────────────────── syntax_grab_bag.md:175:26
-
-This expression is used in an unexpected way.
-
-Stdout.line!("Adding ${n} to ${number}")
-                       ^
-
-It has the type:
-
-    Dec
-
-But you are trying to use it as:
-
-    Str
-
-── ✗ type mismatch ─────────────────────────────────── syntax_grab_bag.md:175:34
-
-This expression is used in an unexpected way.
-
-Stdout.line!("Adding ${n} to ${number}")
-                               ^^^^^^
-
-It has the type:
-
-    Dec
-
-But you are trying to use it as:
-
-    Str
-
-── ● declaration has no value ───────────────────────── syntax_grab_bag.md:201:1
-
-This declaration has a type annotation but no implementation.
-
-tuple : Value((a, b, c))
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ✗ missing method ────────────────────────────────── syntax_grab_bag.md:189:26
-
-This is trying to dispatch a method named static_dispatch_method on an
-unresolved type variable, but unresolved type variables have no methods.
-
-static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-                        ^^^^^^^^^^^^^^
-
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
-
-── ✗ missing method ────────────────────────────────── syntax_grab_bag.md:189:26
-
-This is trying to dispatch a method named next_static_dispatch_method on an
-unresolved type variable, but unresolved type variables have no methods.
-
-static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Expected Record Accessor")
+		(region (start 154 2) (end 154 5))
+		(headline
+			(reflow "I was parsing access after `.`, and I expected a field name or tuple index."))
+		(document
+			(reflow "Required record access uses ")
+			(annotated code ".name")
+			(reflow ", optional record access uses ")
+			(annotated code ".?name")
+			(reflow ", and tuple access uses ")
+			(annotated code ".0")
+			(reflow ". Accessor names must be lowercase and adjacent to their punctuation.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "person.name")
+			(line-break)
+			(indent 1)
+			(text "maybe_person.?name")
+			(line-break)
+			(indent 1)
+			(text "pair.0")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "...")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 154 2) (end 154 5) (annotation error) (line-text "\t..."))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 16 1) (end 16 27))
+		(headline
+			(text "The mod ")
+			(annotated code "BadName")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 16 1) (end 16 27) (annotation error) (line-text "import BadName as GoodName"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 17 1) (end 20 20))
+		(headline
+			(text "The mod ")
+			(annotated code "BadNameMultiline")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 17 1) (end 20 20) (annotation error) (line-text "import\n\tBadNameMultiline\n\t\tas\n\t\tGoodNameMultiline"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 36 8) (end 36 11))
+		(headline
+			(reflow "The type ")
+			(annotated code "Bar")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 36 8) (end 36 11) (annotation error) (line-text "Foo : (Bar, Baz)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 36 13) (end 36 16))
+		(headline
+			(reflow "The type ")
+			(annotated code "Baz")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 36 13) (end 36 16) (annotation error) (line-text "Foo : (Bar, Baz)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 39 2) (end 39 5))
+		(headline
+			(reflow "The type ")
+			(annotated code "Bar")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 39 2) (end 39 5) (annotation error) (line-text "\tBar, # Comment after pattern tuple item"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 40 2) (end 40 5))
+		(headline
+			(reflow "The type ")
+			(annotated code "Baz")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 40 2) (end 40 5) (annotation error) (line-text "\tBaz, # Another after pattern tuple item"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 43 19) (end 43 21))
+		(headline
+			(reflow "The type ")
+			(annotated code "Ok")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 43 19) (end 43 21) (annotation error) (line-text "Some(a) : { foo : Ok(a), bar : Something }"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 43 32) (end 43 41))
+		(headline
+			(reflow "The type ")
+			(annotated code "Something")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 43 32) (end 43 41) (annotation error) (line-text "Some(a) : { foo : Ok(a), bar : Something }"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 45 8) (end 45 10))
+		(headline
+			(reflow "The type ")
+			(annotated code "Ok")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 45 8) (end 45 10) (annotation error) (line-text "\tfoo : Ok(a), # After field"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 46 8) (end 46 17))
+		(headline
+			(reflow "The type ")
+			(annotated code "Something")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 46 8) (end 46 17) (annotation error) (line-text "\tbar : Something, # After last field"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 52 4) (end 52 6))
+		(headline
+			(reflow "The type ")
+			(annotated code "Ok")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 52 4) (end 52 6) (annotation error) (line-text "\t\t\tOk(a), # Comment after pattern record field"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 53 8) (end 53 17))
+		(headline
+			(reflow "The type ")
+			(annotated code "Something")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 53 8) (end 53 17) (annotation error) (line-text "\tbar : Something, # Another after pattern record field"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 72 4) (end 72 13))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "some_func")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 72 4) (end 72 13) (annotation error) (line-text "\t\t\tsome_func() # After debug expr"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 97 3) (end 97 8))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "lower")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_lower")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 97 3) (end 97 8) (annotation error) (line-text "\t\tlower # After pattern comment"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "rest")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_rest")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 1 1) (end 1 1) (annotation error) (line-text "# This is a mod comment!"))))
+	(report
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 108 7) (end 108 12))
+		(headline
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "alternatives pattern outside match expression")
+			(annotation-end)
+			(reflow "."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 108 7) (end 108 12) (annotation error) (line-text "\t\t[1, 2 | 5, 3, .. as rest] => 123"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break)))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "rest")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_rest")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 1 1) (end 1 1) (annotation error) (line-text "# This is a mod comment!"))))
+	(report
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 111 4) (end 111 9))
+		(headline
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "alternatives pattern outside match expression")
+			(annotation-end)
+			(reflow "."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 111 4) (end 111 9) (annotation error) (line-text "\t\t\t2 | 5,"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break)))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "rest")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_rest")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 1 1) (end 1 1) (annotation error) (line-text "# This is a mod comment!"))))
+	(report
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 120 7) (end 120 12))
+		(headline
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "alternatives pattern outside match expression")
+			(annotation-end)
+			(reflow "."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 120 7) (end 120 12) (annotation error) (line-text "\t\t(1, 2 | 5, 3) => 123"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break)))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 121 37) (end 121 40))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "add")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 121 37) (end 121 40) (annotation error) (line-text "\t\t{ foo: 1, bar: 2, ..rest } => 12->add(34)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 121 21) (end 121 27))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "rest")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_rest")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 121 21) (end 121 27) (annotation error) (line-text "\t\t{ foo: 1, bar: 2, ..rest } => 12->add(34)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 127 4) (end 128 9))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "rest")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_rest")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 127 4) (end 128 9) (annotation error) (line-text "\t\t\t.. # After spread operator\n\t\t\t\trest, # After last field"))))
+	(report
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 130 18) (end 130 23))
+		(headline
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "alternatives pattern outside match expression")
+			(annotation-end)
+			(reflow "."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 130 18) (end 130 23) (annotation error) (line-text "\t\t{ foo: 1, bar: 2 | 7 } => 12"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break)))
+	(report
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 133 9) (end 133 14))
+		(headline
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "alternatives pattern outside match expression")
+			(annotation-end)
+			(reflow "."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 133 9) (end 133 14) (annotation error) (line-text "\t\t\tbar: 2 | 7, # After last record field"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break)))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 82 2) (end 82 3))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "b")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_b")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 82 2) (end 82 3) (annotation error) (line-text "\tb,"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 141 2) (end 141 6))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "blah")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 141 2) (end 141 6) (annotation error) (line-text "\tblah == 1 # Comment after expect statement"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 143 14) (end 143 20))
+		(headline
+			(reflow "The type ")
+			(annotated code "String")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 143 14) (end 143 20) (annotation error) (line-text "main! : List(String) -> Try({}, _)"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 147 9) (end 147 13))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "blah")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 147 9) (end 147 13) (annotation error) (line-text "\texpect blah == 1"))))
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 154 2) (end 154 5))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 154 2) (end 154 5) (annotation error) (line-text "\t..."))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 158 2) (end 158 11))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "some_func")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 158 2) (end 158 11) (annotation error) (line-text "\tsome_func("))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 175 3) (end 175 15))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "line!")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 175 3) (end 175 15) (annotation error) (line-text "\t\tStdout.line!(\"Adding ${n} to ${number}\")"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 178 63) (end 178 69))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "punned")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 178 63) (end 178 69) (annotation error) (line-text "\trecord = { foo: 123, bar: \"Hello\", baz: tag, qux: Ok(world), punned }"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 179 42) (end 179 48))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "nested")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 179 42) (end 179 48) (annotation error) (line-text "\ttuple = (123, \"World\", tag, Ok(world), (nested, tuple), [1, 2, 3])"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Assignment To Itself")
+		(region (start 179 50) (end 179 55))
+		(headline
+			(reflow "The value ")
+			(annotated symbol-unqualified "tuple")
+			(reflow " is assigned to itself, which would cause an infinite loop at runtime."))
+		(document
+			(reflow "Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 179 50) (end 179 55) (annotation error) (line-text "\ttuple = (123, \"World\", tag, Ok(world), (nested, tuple), [1, 2, 3])"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 183 3) (end 183 7))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "tag1")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 183 3) (end 183 7) (annotation error) (line-text "\t\ttag1,"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 185 4) (end 185 10))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "nested")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 185 4) (end 185 10) (annotation error) (line-text "\t\t(nested, tuple),"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 188 22) (end 188 25))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "foo")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 188 22) (end 188 25) (annotation error) (line-text "\tbin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 189 26) (end 189 33))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "some_fn")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 33) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 189 34) (end 189 38))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "arg1")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 189 34) (end 189 38) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 190 2) (end 190 14))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "line!")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 190 2) (end 190 14) (annotation error) (line-text "\tStdout.line!(interpolated)?"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 191 2) (end 191 14))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "line!")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 191 2) (end 191 14) (annotation error) (line-text "\tStdout.line!("))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 193 4) (end 193 13))
+		(headline
+			(annotated symbol-unqualified "Num.toStr")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 193 4) (end 193 13) (annotation error) (line-text "\t\t\tNum.toStr(number) # Comment after string interpolation expr"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 164 2) (end 164 18))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "tag_with_payload")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_tag_with_payload")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 164 2) (end 164 18) (annotation error) (line-text "\ttag_with_payload = Ok(number)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 178 2) (end 178 8))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "record")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_record")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 178 2) (end 178 8) (annotation error) (line-text "\trecord = { foo: 123, bar: \"Hello\", baz: tag, qux: Ok(world), punned }"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 180 2) (end 180 17))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "multiline_tuple")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_multiline_tuple")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 180 2) (end 180 17) (annotation error) (line-text "\tmultiline_tuple = ("))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 188 2) (end 188 15))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "bin_op_result")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_bin_op_result")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 188 2) (end 188 15) (annotation error) (line-text "\tbin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 189 2) (end 189 23))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "static_dispatch_style")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_static_dispatch_style")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "syntax_grab_bag.md") (start 189 2) (end 189 23) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 201 9) (end 201 14))
+		(headline
+			(reflow "The type ")
+			(annotated code "Value")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 201 9) (end 201 14) (annotation error) (line-text "tuple : Value((a, b, c))"))))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 70 5) (end 70 8))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "if")
+			(reflow " ")
+			(reflow "condition must evaluate to a")
+			(reflow " ")
+			(annotated code "Bool")
+			(reflow " ")
+			(reflow "– either")
+			(reflow " ")
+			(annotated code "True")
+			(reflow " ")
+			(reflow "or")
+			(reflow " ")
+			(annotated code "False")
+			(reflow "."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 70 5) (end 70 8) (annotation error) (line-text "\tif num {"))
+			(line-break)
+			(reflow "It is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U64")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But I need this to be a")
+			(reflow " ")
+			(annotated code "Bool")
+			(reflow " ")
+			(reflow "value.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 99 3) (end 99 8))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_quote")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 99 3) (end 99 8) (annotation error) (line-text "\t\t\"foo\" => # After arrow comment"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_quote")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, Green, Red, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 101 3) (end 101 8))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_quote")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 101 3) (end 101 8) (annotation error) (line-text "\t\t\"foo\" | \"bar\" => 200"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_quote")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, Green, Red, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 84 2) (end 138 3))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "sixth")
+			(reflow " ")
+			(reflow "branch of this")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "does not match the previous ones."))
+		(document
+			(source-underlines
+				(display (file "syntax_grab_bag.md") (start 84 2) (end 138 3) (annotation dim) (line-text "\tmatch a {\n\t\tBlue | Green | Red => {\n\t\t\tx = 12\n\t\t\tx\n\t\t}\n\t\tBlue # After pattern in alt\n\t\t| # Before pattern in alt\n\t\t\tGreen\n\t\t| Red # After alt pattern\n\t\t\t=> {\n\t\t\t\tx = 12\n\t\t\t\tx\n\t\t\t}\n\t\tlower # After pattern comment\n\t\t\t=> 1\n\t\t\"foo\" => # After arrow comment\n\t\t\t100\n\t\t\"foo\" | \"bar\" => 200\n\t\t[1, 2, 3, .. as rest] # After pattern comment\n\t\t\t=> # After arrow comment\n\t\t\t\t123 # After branch comment\n\n\t\t# Just a random comment\n\n\t\t[1, 2 | 5, 3, .. as rest] => 123\n\t\t[\n\t\t\t1,\n\t\t\t2 | 5,\n\t\t\t3,\n\t\t\t.. # After DoubleDot\n\t\t\t\tas # Before alias\n\t\t\t\t\trest, # After last pattern in list\n\t\t] => 123\n\t\t3.14 => 314\n\t\t3.14 | 6.28 => 314\n\t\t(1, 2, 3) => 123\n\t\t(1, 2 | 5, 3) => 123\n\t\t{ foo: 1, bar: 2, ..rest } => 12->add(34)\n\t\t{ # After pattern record open\n\t\t\tfoo # After pattern record field name\n\t\t\t\t: # Before pattern record field value\n\t\t\t\t\t1, # After pattern record field\n\t\t\tbar: 2,\n\t\t\t.. # After spread operator\n\t\t\t\trest, # After last field\n\t\t} => 12\n\t\t{ foo: 1, bar: 2 | 7 } => 12\n\t\t{\n\t\t\tfoo: 1,\n\t\t\tbar: 2 | 7, # After last record field\n\t\t} => 12\n\t\tOk(123) => 123\n\t\tOk(Some(dude)) => dude\n\t\tTwoArgs(\"hello\", Some(\"world\")) => 1000\n\t}"))
+				(underline (start 102 3) (end 102 24) (annotation error)))
+			(line-break)
+			(reflow "This")
+			(reflow " ")
+			(reflow "sixth")
+			(reflow " ")
+			(reflow "branch is trying to match:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(d)")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    d.is_eq : d, d -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "  ]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the expression between the")
+			(reflow " ")
+			(annotated code "match")
+			(reflow " ")
+			(reflow "parenthesis has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, Green, Red, ..]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "These can never match! Either the pattern or expression has a problem.")))
+	(report
+		(severity runtime_error)
+		(title "Too Few Args")
+		(region (start 155 2) (end 157 3))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "match_time")
+			(reflow " function expects")
+			(reflow " ")
+			(reflow "2")
+			(reflow " ")
+			(reflow "arguments")
+			(reflow ",")
+			(reflow " ")
+			(reflow "but it got")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 155 2) (end 157 3) (annotation error) (line-text "\tmatch_time(\n\t\t..., # Single args with comment\n\t)"))
+			(line-break)
+			(reflow "The")
+			(reflow " ")
+			(annotated code "match_time")
+			(reflow " function has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Blue, Green, Red, ..], _arg -> d")
+			(line-break)
+			(indent 1)
+			(text "  where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Are there any missing commas?")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 167 3) (end 170 4))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument being passed to this function has the wrong type."))
+		(document
+			(source-underlines
+				(display (file "syntax_grab_bag.md") (start 167 3) (end 170 4) (annotation dim) (line-text "\t\tadd_one(\n\t\t\tdbg # After dbg in list\n\t\t\t\tnumber, # after dbg expr as arg\n\t\t), # Comment one"))
+				(underline (start 168 4) (end 169 11) (annotation error)))
+			(line-break)
+			(reflow "This argument has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But")
+			(reflow " ")
+			(annotated code "add_one")
+			(reflow " ")
+			(reflow "needs the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U64")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 175 26) (end 175 27))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 175 26) (end 175 27) (annotation error) (line-text "\t\tStdout.line!(\"Adding ${n} to ${number}\")"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 175 34) (end 175 40))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 175 34) (end 175 40) (annotation error) (line-text "\t\tStdout.line!(\"Adding ${n} to ${number}\")"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 201 1) (end 201 25))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 201 1) (end 201 25) (annotation error) (line-text "tuple : Value((a, b, c))"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 189 26) (end 189 40))
+		(headline
+			(reflow "This is trying to dispatch a method named")
+			(reflow " ")
+			(annotated code "static_dispatch_method")
+			(reflow " ")
+			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 40) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 189 26) (end 189 66))
+		(headline
+			(reflow "This is trying to dispatch a method named")
+			(reflow " ")
+			(annotated code "next_static_dispatch_method")
+			(reflow " ")
+			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 66) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

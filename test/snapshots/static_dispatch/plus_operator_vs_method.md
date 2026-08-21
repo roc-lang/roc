@@ -31,34 +31,83 @@ result2 = c.plus(d)
 MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
 # PROBLEMS
-── ✗ missing method ─────────────────────────── plus_operator_vs_method.md:11:11
-
-The value before this + operator has a type that doesn't have a plus method.
-
-result1 = a + b
-          ^^^^^
-
-The value's type, which does not have a method named plus, is:
-
-    MyType
-
-Hint: The + operator calls a method named plus on the value preceding it,
-passing the value after the operator as the one argument.
-
-── ✗ missing method ─────────────────────────── plus_operator_vs_method.md:21:13
-
-This plus method is being called on a value whose type doesn't have that method.
-
-result2 = c.plus(d)
-            ^^^^
-
-The value's type, which does not have a method named plus, is:
-
-    MyType
-
-Hint: For this to work, the type would need to have a method named plus
-associated with it in the type's declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 11 11) (end 11 16))
+		(headline
+			(reflow "The value before this")
+			(reflow " ")
+			(annotated operator "+")
+			(reflow " ")
+			(reflow "operator has a type that doesn't have a")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "method."))
+		(document
+			(source-region (file "plus_operator_vs_method.md") (start 11 11) (end 11 16) (annotation error) (line-text "result1 = a + b"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "plus")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "MyType")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The")
+			(reflow " ")
+			(annotated operator "+")
+			(reflow " ")
+			(reflow "operator calls a method named")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "on the value preceding it, passing the value after the operator as the one argument.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 21 13) (end 21 17))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "plus_operator_vs_method.md") (start 21 13) (end 21 17) (annotation error) (line-text "result2 = c.plus(d)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "plus")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "MyType")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,CloseCurly,

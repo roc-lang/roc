@@ -10,13 +10,17 @@ type=expr
 # EXPECTED
 UNCLOSED STRING - parse_unclosed_string.md:1:1:1:7
 # PROBLEMS
-── ✗ unclosed string ────────────────────────────── parse_unclosed_string.md:1:1
-
-This string is missing a closing quote.
-
-"hello
-^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unclosed String")
+		(region (start 1 1) (end 1 7))
+		(headline
+			(reflow "This string is missing a closing quote."))
+		(document
+			(source-region (file "parse_unclosed_string.md") (start 1 1) (end 1 7) (annotation error) (line-text "\"hello")))))
+~~~
 # TOKENS
 ~~~zig
 StringStart,StringPart,StringEnd,

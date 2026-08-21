@@ -12,18 +12,22 @@ main = x
 # EXPECTED
 INVALID ASSIGNMENT TO ITSELF - generalize_alias_self_reference.md:1:5:1:6
 # PROBLEMS
-── ✗ invalid assignment to itself ─────── generalize_alias_self_reference.md:1:5
-
-The value x is assigned to itself, which would cause an infinite loop at
-runtime.
-
-x = x
-    ^
-
-Only functions can reference themselves (for recursion). For non-function
-values, the right-hand side must be fully computable without referring to the
-value being assigned.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Assignment To Itself")
+		(region (start 1 5) (end 1 6))
+		(headline
+			(reflow "The value ")
+			(annotated symbol-unqualified "x")
+			(reflow " is assigned to itself, which would cause an infinite loop at runtime."))
+		(document
+			(reflow "Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.")
+			(line-break)
+			(line-break)
+			(source-region (file "generalize_alias_self_reference.md") (start 1 5) (end 1 6) (annotation error) (line-text "x = x")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,

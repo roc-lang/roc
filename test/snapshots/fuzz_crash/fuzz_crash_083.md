@@ -15,44 +15,80 @@ TYPE PARAMETER CONFLICT - fuzz_crash_083.md:2:6:2:7
 UNDECLARED TYPE VARIABLE - fuzz_crash_083.md:2:12:2:13
 TOO MANY ARGS - fuzz_crash_083.md:3:11:3:18
 # PROBLEMS
-── ✗ where clause not allowed in type declaration ──────── fuzz_crash_083.md:1:1
-
-You cannot define a where clause inside a type declaration.
-
-A(a) : a where [a.a1 : (a, a) -> Str]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ type parameter conflict ───────────────────────────── fuzz_crash_083.md:2:6
-
-The type parameter b in type C conflicts with another declaration.
-
-C(b, b) : (a, b)
-     ^
-
-Type parameters must have unique names within their scope.
-
-
-But b was already declared in fuzz_crash_083.md:2:3:
-
-C(b, b) : (a, b)
-  ^
-
-── ✗ undeclared type variable ─────────────────────────── fuzz_crash_083.md:2:12
-
-The type variable a is not declared in this scope.
-
-C(b, b) : (a, b)
-           ^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ too many args ────────────────────────────────────── fuzz_crash_083.md:3:11
-
-The type C expects 1 argument, but got 2 instead.
-
-D(a, b) : C(a, b)
-          ^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Where Clause Not Allowed In Type Declaration")
+		(region (start 1 1) (end 1 38))
+		(headline
+			(text "You cannot define a ")
+			(annotated code "where")
+			(reflow " clause inside a type declaration."))
+		(document
+			(source-region (file "fuzz_crash_083.md") (start 1 1) (end 1 38) (annotation error) (line-text "A(a) : a where [a.a1 : (a, a) -> Str]"))))
+	(report
+		(severity runtime_error)
+		(title "Type Parameter Conflict")
+		(region (start 2 6) (end 2 7))
+		(headline
+			(text "The type parameter ")
+			(annotated symbol-unqualified "b")
+			(text " in type ")
+			(annotated symbol-unqualified "C")
+			(text " conflicts with another declaration."))
+		(document
+			(reflow "Type parameters must have unique names within their scope.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_083.md") (start 2 6) (end 2 7) (annotation error) (line-text "C(b, b) : (a, b)"))
+			(line-break)
+			(text "But ")
+			(annotated symbol-unqualified "b")
+			(text " was already declared in ")
+			(source-location
+				(file "fuzz_crash_083.md")
+				(line 2)
+				(column 3))
+			(text ":")
+			(line-break)
+			(source-region (file "fuzz_crash_083.md") (start 2 3) (end 2 4) (annotation dim) (line-text "C(b, b) : (a, b)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 2 12) (end 2 13))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "a")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_083.md") (start 2 12) (end 2 13) (annotation error) (line-text "C(b, b) : (a, b)"))))
+	(report
+		(severity runtime_error)
+		(title "Too Many Args")
+		(region (start 3 11) (end 3 18))
+		(headline
+			(reflow "The type")
+			(reflow " ")
+			(annotated type "C")
+			(reflow " ")
+			(reflow "expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument,")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "2")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "fuzz_crash_083.md") (start 3 11) (end 3 18) (annotation error) (line-text "D(a, b) : C(a, b)")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,LowerIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpArrow,UpperIdent,CloseSquare,

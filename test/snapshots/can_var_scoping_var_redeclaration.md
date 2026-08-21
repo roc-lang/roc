@@ -18,18 +18,30 @@ result = redeclareTest({})
 # EXPECTED
 DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
 # PROBLEMS
-── ● duplicate definition ───────────── can_var_scoping_var_redeclaration.md:4:2
-
-The name x_ is being redeclared here:
-
-var x_ = 10 # Redeclare var - should warn but proceed
-^^^^^^^^^^^
-
-In this scope, x_ was already defined in can_var_scoping_var_redeclaration.md:3:2:
-
-var x_ = 5
-^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 4 2) (end 4 13))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "x_")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "can_var_scoping_var_redeclaration.md") (start 4 2) (end 4 13) (annotation error) (line-text "\tvar x_ = 10 # Redeclare var - should warn but proceed"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "x_")
+			(reflow " was already defined in ")
+			(source-location
+				(file "can_var_scoping_var_redeclaration.md")
+				(line 3)
+				(column 2))
+			(reflow ":")
+			(line-break)
+			(source-region (file "can_var_scoping_var_redeclaration.md") (start 3 2) (end 3 12) (annotation dim) (line-text "\tvar x_ = 5")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,

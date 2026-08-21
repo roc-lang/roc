@@ -10,17 +10,25 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_nested_heterogeneous.md:1:12:1:19
 # PROBLEMS
-── ✗ type mismatch ─────────────────────── can_list_nested_heterogeneous.md:1:12
-
-This string literal is being used where a non-string type is needed.
-
-[[], [1], ["hello"]]
-           ^^^^^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 12) (end 1 19))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "can_list_nested_heterogeneous.md") (start 1 12) (end 1 19) (annotation error) (line-text "[[], [1], [\"hello\"]]"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenSquare,OpenSquare,CloseSquare,Comma,OpenSquare,Int,CloseSquare,Comma,OpenSquare,StringStart,StringPart,StringEnd,CloseSquare,CloseSquare,

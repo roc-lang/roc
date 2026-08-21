@@ -11,27 +11,46 @@ foo = if tru 0
 NAME NOT IN SCOPE - expr_if_missing_else.md:1:10:1:13
 MISSING METHOD - expr_if_missing_else.md:1:14:1:15
 # PROBLEMS
-── ✗ name not in scope ──────────────────────────── expr_if_missing_else.md:1:10
-
-Nothing is named tru in this scope.
-
-foo = if tru 0
-         ^^^
-
-Is it misspelled, or is there an import missing?
-
-── ✗ missing method ─────────────────────────────── expr_if_missing_else.md:1:14
-
-This from_numeral method is being called on a value whose type doesn't have
-that method.
-
-foo = if tru 0
-             ^
-
-The value's type, which does not have a method named from_numeral, is:
-
-    {}
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 1 10) (end 1 13))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "tru")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "expr_if_missing_else.md") (start 1 10) (end 1 13) (annotation error) (line-text "foo = if tru 0"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 1 14) (end 1 15))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "expr_if_missing_else.md") (start 1 14) (end 1 15) (annotation error) (line-text "foo = if tru 0"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_numeral")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,KwIf,LowerIdent,Int,

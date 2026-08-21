@@ -15,21 +15,34 @@ expect f(["a"]) == "x"
 # EXPECTED
 TYPE MISMATCH - unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12:3:17
 # PROBLEMS
-── ✗ type mismatch ─ unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12
-
-This expression is used in an unexpected way.
-
-"<tr>${inner}</tr>"
-       ^^^^^
-
-It has the type:
-
-    List(b) where [b.from_interpolation : Str, Iter((_field, Str)) -> b]
-
-But you are trying to use it as:
-
-    Str
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 3 12) (end 3 17))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "unannotated_list_interpolation_type_mismatch_issue_10109.md") (start 3 12) (end 3 17) (annotation error) (line-text "    \"<tr>${inner}</tr>\""))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(b) where [b.from_interpolation : Str, Iter((_field, Str)) -> b]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But you are trying to use it as:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,

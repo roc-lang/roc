@@ -30,36 +30,51 @@ UNUSED VARIABLE - rigid_var_instantiation.md:10:5:10:8
 UNUSED VARIABLE - rigid_var_instantiation.md:13:5:13:8
 UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 # PROBLEMS
-── ● unused variable ─────────────────────────── rigid_var_instantiation.md:10:5
-
-Variable num is defined here and then never used:
-
-num = identity(42)
-^^^
-
-If you don't need this variable, prefix it with an underscore like _num to
-suppress this warning.
-
-── ● unused variable ─────────────────────────── rigid_var_instantiation.md:13:5
-
-Variable str is defined here and then never used:
-
-str = identity("hello")
-^^^
-
-If you don't need this variable, prefix it with an underscore like _str to
-suppress this warning.
-
-── ● unused variable ─────────────────────────── rigid_var_instantiation.md:16:5
-
-Variable lst is defined here and then never used:
-
-lst = identity([1, 2, 3])
-^^^
-
-If you don't need this variable, prefix it with an underscore like _lst to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 10 5) (end 10 8))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "num")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_num")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "rigid_var_instantiation.md") (start 10 5) (end 10 8) (annotation error) (line-text "    num = identity(42)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 13 5) (end 13 8))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "str")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_str")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "rigid_var_instantiation.md") (start 13 5) (end 13 8) (annotation error) (line-text "    str = identity(\"hello\")"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 16 5) (end 16 8))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "lst")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_lst")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "rigid_var_instantiation.md") (start 16 5) (end 16 8) (annotation error) (line-text "    lst = identity([1, 2, 3])")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

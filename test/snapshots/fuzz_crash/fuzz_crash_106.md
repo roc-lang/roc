@@ -13,21 +13,29 @@ UPPERCASE BASE - :0:0:0:0
 MISPLACED CARRIAGE RETURN - :0:0:0:0
 INVALID TUPLE ACCESS - fuzz_crash_106.md:1:3:1:9
 # PROBLEMS
-── ✗ uppercase base ────────────────────────────────────────────────────────────
-
-Number base prefixes must be lowercase (0x, 0o, 0b).
-
-── ✗ misplaced carriage return ─────────────────────────────────────────────────
-
-Carriage return characters (\r) are not allowed in Roc source code.
-
-── ✗ invalid tuple access ──────────────────────────────── fuzz_crash_106.md:1:3
-
-This value is not a tuple, so it has no .0 element.
-
-a=0O0\r.0
-  ^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Uppercase Base")
+		(headline
+			(reflow "Number base prefixes must be lowercase (0x, 0o, 0b)."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Misplaced Carriage Return")
+		(headline
+			(reflow "Carriage return characters (\\r) are not allowed in Roc source code."))
+		(document))
+	(report
+		(severity runtime_error)
+		(title "Invalid Tuple Access")
+		(region (start 1 3) (end 1 9))
+		(headline
+			(reflow "This value is not a tuple, so it has no .0 element."))
+		(document
+			(source-region (file "fuzz_crash_106.md") (start 1 3) (end 1 9) (annotation error) (line-text "a=0O0\r.0")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,DotInt,

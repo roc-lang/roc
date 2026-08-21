@@ -58,161 +58,235 @@ NOT A WHERE ALIAS - everything.md:20:25:20:27
 DECLARATION HAS NO VALUE - everything.md:20:1:20:28
 NON EXHAUSTIVE MATCH - everything.md:29:2:34:3
 # PROBLEMS
-── ✗ where clause not allowed in type declaration ──────────── everything.md:6:1
-
-You cannot define a where clause inside a type declaration.
-
-A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ where clause not allowed in type declaration ──────────── everything.md:8:1
-
-You cannot define a where clause inside a type declaration.
-
-B(b) : b where [b.b1 : (b, b) -> Str, b.b2 : (b, b) -> Str]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ● unused variable ─────────────────────────────────────── everything.md:30:10
-
-Variable b is defined here and then never used:
-
-Z1((a, b)) => a
-       ^
-
-If you don't need this variable, prefix it with an underscore like _b to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────────── everything.md:31:9
-
-Variable b is defined here and then never used:
-
-Z2(a, b) => a
-      ^
-
-If you don't need this variable, prefix it with an underscore like _b to
-suppress this warning.
-
-── ● unused variable ─────────────────────────────────────── everything.md:32:11
-
-Variable b is defined here and then never used:
-
-Z3({ a, b }) => a
-        ^
-
-If you don't need this variable, prefix it with an underscore like _b to
-suppress this warning.
-
-── ● unused variable ─────────────────────────────────────── everything.md:33:10
-
-Variable b is defined here and then never used:
-
-Z4([a, b]) => a
-       ^
-
-If you don't need this variable, prefix it with an underscore like _b to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────────── everything.md:23:2
-
-Variable h1 is defined here and then never used:
-
-h1 = { h11: x, h12: x, h13: { h131: x, h132: y } }
-^^
-
-If you don't need this variable, prefix it with an underscore like _h1 to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────────── everything.md:24:2
-
-Variable h2 is defined here and then never used:
-
-h2 = h(x, y)
-^^
-
-If you don't need this variable, prefix it with an underscore like _h2 to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────────── everything.md:25:2
-
-Variable h3 is defined here and then never used:
-
-h3 = A(x, y)
-^^
-
-If you don't need this variable, prefix it with an underscore like _h3 to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────────── everything.md:26:2
-
-Variable h4 is defined here and then never used:
-
-h4 = [x, y]
-^^
-
-If you don't need this variable, prefix it with an underscore like _h4 to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────────── everything.md:27:2
-
-Variable h5 is defined here and then never used:
-
-h5 = (x, y)
-^^
-
-If you don't need this variable, prefix it with an underscore like _h5 to
-suppress this warning.
-
-── ✗ not a where alias ───────────────────────────────────── everything.md:20:20
-
-A where clause can only name a where alias, but A is a type.
-
-g : e -> e where [e.A, e.B]
-                   ^^
-
-A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
-[a.Sortable]
-
-── ✗ not a where alias ───────────────────────────────────── everything.md:20:25
-
-A where clause can only name a where alias, but B is a type.
-
-g : e -> e where [e.A, e.B]
-                        ^^
-
-A where alias names a set of method constraints, declared like a.Sortable :
-where [a.compare : a -> [LT, EQ, GT]] and written in a where clause as where
-[a.Sortable]
-
-── ● declaration has no value ─────────────────────────────── everything.md:20:1
-
-This declaration has a type annotation but no implementation.
-
-g : e -> e where [e.A, e.B]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ✗ non exhaustive match ─────────────────────────────────── everything.md:29:2
-
-This match expression doesn't cover all possible cases.
-
-match x {
-    Z1((a, b)) => a
-    Z2(a, b) => a
-    Z3({ a, b }) => a
-    Z4([a, b]) => a
-}
-
-The value being matched on has type:
-        [Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]
-
-Missing patterns:
-        Z4 []
-
-Hint: Add branches to handle these cases, or use _ to match anything.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Where Clause Not Allowed In Type Declaration")
+		(region (start 6 1) (end 6 60))
+		(headline
+			(text "You cannot define a ")
+			(annotated code "where")
+			(reflow " clause inside a type declaration."))
+		(document
+			(source-region (file "everything.md") (start 6 1) (end 6 60) (annotation error) (line-text "A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]"))))
+	(report
+		(severity runtime_error)
+		(title "Where Clause Not Allowed In Type Declaration")
+		(region (start 8 1) (end 8 60))
+		(headline
+			(text "You cannot define a ")
+			(annotated code "where")
+			(reflow " clause inside a type declaration."))
+		(document
+			(source-region (file "everything.md") (start 8 1) (end 8 60) (annotation error) (line-text "B(b) : b where [b.b1 : (b, b) -> Str, b.b2 : (b, b) -> Str]"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 30 10) (end 30 11))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "b")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_b")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "everything.md") (start 30 10) (end 30 11) (annotation error) (line-text "\t\tZ1((a, b)) => a"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 31 9) (end 31 10))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "b")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_b")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "everything.md") (start 31 9) (end 31 10) (annotation error) (line-text "\t\tZ2(a, b) => a"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 32 11) (end 32 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "b")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_b")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "everything.md") (start 32 11) (end 32 12) (annotation error) (line-text "\t\tZ3({ a, b }) => a"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 33 10) (end 33 11))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "b")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_b")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "everything.md") (start 33 10) (end 33 11) (annotation error) (line-text "\t\tZ4([a, b]) => a"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 23 2) (end 23 4))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "h1")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_h1")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "everything.md") (start 23 2) (end 23 4) (annotation error) (line-text "\th1 = { h11: x, h12: x, h13: { h131: x, h132: y } }"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 24 2) (end 24 4))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "h2")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_h2")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "everything.md") (start 24 2) (end 24 4) (annotation error) (line-text "\th2 = h(x, y)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 25 2) (end 25 4))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "h3")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_h3")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "everything.md") (start 25 2) (end 25 4) (annotation error) (line-text "\th3 = A(x, y)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 26 2) (end 26 4))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "h4")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_h4")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "everything.md") (start 26 2) (end 26 4) (annotation error) (line-text "\th4 = [x, y]"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 27 2) (end 27 4))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "h5")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_h5")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "everything.md") (start 27 2) (end 27 4) (annotation error) (line-text "\th5 = (x, y)"))))
+	(report
+		(severity runtime_error)
+		(title "Not a Where Alias")
+		(region (start 20 20) (end 20 22))
+		(headline
+			(reflow "A where clause can only name a where alias, but")
+			(reflow " ")
+			(annotated type "A")
+			(reflow " ")
+			(reflow "is a type."))
+		(document
+			(source-region (file "everything.md") (start 20 20) (end 20 22) (annotation error) (line-text "g : e -> e where [e.A, e.B]"))
+			(line-break)
+			(reflow "A where alias names a set of method constraints, declared like")
+			(reflow " ")
+			(annotated code "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]")
+			(reflow " ")
+			(reflow "and written in a where clause as")
+			(reflow " ")
+			(annotated code "where [a.Sortable]")))
+	(report
+		(severity runtime_error)
+		(title "Not a Where Alias")
+		(region (start 20 25) (end 20 27))
+		(headline
+			(reflow "A where clause can only name a where alias, but")
+			(reflow " ")
+			(annotated type "B")
+			(reflow " ")
+			(reflow "is a type."))
+		(document
+			(source-region (file "everything.md") (start 20 25) (end 20 27) (annotation error) (line-text "g : e -> e where [e.A, e.B]"))
+			(line-break)
+			(reflow "A where alias names a set of method constraints, declared like")
+			(reflow " ")
+			(annotated code "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]")
+			(reflow " ")
+			(reflow "and written in a where clause as")
+			(reflow " ")
+			(annotated code "where [a.Sortable]")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 20 1) (end 20 28))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "everything.md") (start 20 1) (end 20 28) (annotation error) (line-text "g : e -> e where [e.A, e.B]"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity runtime_error)
+		(title "Non Exhaustive Match")
+		(region (start 29 2) (end 34 3))
+		(headline
+			(reflow "This match expression doesn't cover all possible cases."))
+		(document
+			(source-region (file "everything.md") (start 29 2) (end 34 3) (annotation error) (line-text "\tmatch x {\n\t\tZ1((a, b)) => a\n\t\tZ2(a, b) => a\n\t\tZ3({ a, b }) => a\n\t\tZ4([a, b]) => a\n\t}"))
+			(line-break)
+			(reflow "The value being matched on has type:")
+			(line-break)
+			(text "        ")
+			(annotated type "[Z1((c, _field)), Z2(c, _d), Z3({ a: c, b: _field }), Z4(List(c))]")
+			(line-break)
+			(line-break)
+			(reflow "Missing patterns:")
+			(line-break)
+			(text "    ")
+			(annotation-start code-block)
+			(indent 1)
+			(text "Z4 []")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Hint: Add branches to handle these cases, or use")
+			(reflow " ")
+			(annotated keyword "_")
+			(reflow " ")
+			(reflow "to match anything."))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,

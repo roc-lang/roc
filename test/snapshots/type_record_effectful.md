@@ -19,15 +19,22 @@ main! = |_| {}
 # EXPECTED
 NAME NOT IN SCOPE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
-── ✗ name not in scope ──────────────────────────── type_record_effectful.md:7:5
-
-Nothing is named line! in this scope.
-
-Stdout.line!(person.name)
-^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 7 5) (end 7 17))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "line!")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "type_record_effectful.md") (start 7 5) (end 7 17) (annotation error) (line-text "    Stdout.line!(person.name)")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -18,21 +18,48 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 # PROBLEMS
-── ✗ type mismatch ────────────────────── test_instantiated_return_crash.md:6:26
-
-The first argument being passed to this function has the wrong type.
-
-needs_string = |f| f(["hello"])
-                     ^^^^^^^^^
-
-This argument has the type:
-
-    List(b) where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]
-
-But f needs the first argument to be:
-
-    Str
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 6 24) (end 6 36))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument being passed to this function has the wrong type."))
+		(document
+			(source-underlines
+				(display (file "test_instantiated_return_crash.md") (start 6 24) (end 6 36) (annotation dim) (line-text "    needs_string = |f| f([\"hello\"])"))
+				(underline (start 6 26) (end 6 35) (annotation error)))
+			(line-break)
+			(reflow "This argument has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(b) where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But")
+			(reflow " ")
+			(annotated code "f")
+			(reflow " ")
+			(reflow "needs the")
+			(reflow " ")
+			(reflow "first")
+			(reflow " ")
+			(reflow "argument to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,

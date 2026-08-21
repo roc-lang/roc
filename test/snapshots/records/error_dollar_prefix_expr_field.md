@@ -10,16 +10,24 @@ type=expr
 # EXPECTED
 INVALID RECORD FIELD NAME - error_dollar_prefix_expr_field.md:1:3:1:8
 # PROBLEMS
-── ✗ invalid record field name ─────────── error_dollar_prefix_expr_field.md:1:3
-
-Record field names cannot start with a dollar sign.
-
-{ $name: "Ada" }
-  ^^^^^
-
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Record Field Name")
+		(region (start 1 3) (end 1 8))
+		(headline
+			(reflow "Record field names cannot start with a dollar sign."))
+		(document
+			(reflow "Names that start with ")
+			(annotated code "$")
+			(reflow " are reassignable variables declared with the ")
+			(annotated code "var")
+			(reflow " keyword, so they cannot be used as record field names.")
+			(line-break)
+			(line-break)
+			(source-region (file "error_dollar_prefix_expr_field.md") (start 1 3) (end 1 8) (annotation error) (line-text "{ $name: \"Ada\" }")))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,CloseCurly,

@@ -12,21 +12,30 @@ t=|(0|(#\r))|0
 MISPLACED CARRIAGE RETURN - :0:0:0:0
 NOT IMPLEMENTED - fuzz_crash_084.md:1:5:1:11
 # PROBLEMS
-── ✗ misplaced carriage return ─────────────────────────────────────────────────
-
-Carriage return characters (\r) are not allowed in Roc source code.
-
-── ✗ not implemented ───────────────────────────────────── fuzz_crash_084.md:1:5
-
-This feature is not yet implemented: alternatives pattern outside match
-expression.
-
-t=|(0|(#\r))|0
-    ^^^^^^
-
-This error doesn't have a proper diagnostic report yet. Let us know if you want
-to help improve Roc's error messages!
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Misplaced Carriage Return")
+		(headline
+			(reflow "Carriage return characters (\\r) are not allowed in Roc source code."))
+		(document))
+	(report
+		(severity fatal)
+		(title "Not Implemented")
+		(region (start 1 5) (end 1 11))
+		(headline
+			(reflow "This feature is not yet implemented: ")
+			(annotation-start emphasis)
+			(text "alternatives pattern outside match expression")
+			(annotation-end)
+			(reflow "."))
+		(document
+			(source-region (file "fuzz_crash_084.md") (start 1 5) (end 1 11) (annotation error) (line-text "t=|(0|(#\r))|0"))
+			(line-break)
+			(reflow "This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!")
+			(line-break))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,NoSpaceOpenRound,Int,OpBar,NoSpaceOpenRound,CloseRound,CloseRound,OpBar,Int,

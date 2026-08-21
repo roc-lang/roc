@@ -10,16 +10,23 @@ f=||{var c:[]}
 # EXPECTED
 UNUSED VARIABLE - fmt_var_in_record_field.md:1:6:1:14
 # PROBLEMS
-── ● unused variable ──────────────────────────── fmt_var_in_record_field.md:1:6
-
-Variable c is defined here and then never used:
-
-f=||{var c:[]}
-     ^^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _c to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 1 6) (end 1 14))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "c")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_c")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fmt_var_in_record_field.md") (start 1 6) (end 1 14) (annotation error) (line-text "f=||{var c:[]}")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,OpBar,OpenCurly,KwVar,LowerIdent,OpColon,OpenSquare,CloseSquare,CloseCurly,

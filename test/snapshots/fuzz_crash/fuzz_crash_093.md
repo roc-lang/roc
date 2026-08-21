@@ -10,15 +10,21 @@ d=(0||())
 # EXPECTED
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_093.md:1:7:1:9
 # PROBLEMS
-── ✗ empty tuple not allowed ───────────────────────────── fuzz_crash_093.md:1:7
-
-I am part way through parsing this tuple, but it is empty.
-
-d=(0||())
-      ^^
-
-If you want to represent nothing, try using an empty record: {}.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Empty Tuple Not Allowed")
+		(region (start 1 7) (end 1 9))
+		(headline
+			(reflow "I am part way through parsing this tuple, but it is empty."))
+		(document
+			(source-region (file "fuzz_crash_093.md") (start 1 7) (end 1 9) (annotation error) (line-text "d=(0||())"))
+			(line-break)
+			(reflow "If you want to represent nothing, try using an empty record: ")
+			(annotated code "{}")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,Int,OpBar,OpBar,NoSpaceOpenRound,CloseRound,CloseRound,

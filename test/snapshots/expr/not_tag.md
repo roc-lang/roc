@@ -10,17 +10,33 @@ type=expr
 # EXPECTED
 MISSING METHOD - not_tag.md:1:1:1:8
 # PROBLEMS
-── ✗ missing method ───────────────────────────────────────────── not_tag.md:1:1
-
-This not method is being called on a value whose type doesn't have that method.
-
-!(C(2))
-^^^^^^^
-
-The value's type, which does not have a method named not, is:
-
-    [C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 1 1) (end 1 8))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "not")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "not_tag.md") (start 1 1) (end 1 8) (annotation error) (line-text "!(C(2))"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "not")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpBang,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,Int,CloseRound,CloseRound,

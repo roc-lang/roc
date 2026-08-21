@@ -17,14 +17,23 @@ type=expr
 # EXPECTED
 UNCONDITIONAL CONDITION - single_field_record_in_if_branch.md:3:5:3:9
 # PROBLEMS
-── ● unconditional condition ─────────── single_field_record_in_if_branch.md:3:5
-
-This if condition is known at compile time, so this conditional will always
-make the same choice.
-
-if True {
-   ^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unconditional Condition")
+		(region (start 3 5) (end 3 9))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(reflow "if condition")
+			(reflow " ")
+			(reflow "is known at compile time, so")
+			(reflow " ")
+			(reflow "this conditional will always make the same choice."))
+		(document
+			(source-region (file "single_field_record_in_if_branch.md") (start 3 5) (end 3 9) (annotation warning) (line-text "\tif True {")))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,

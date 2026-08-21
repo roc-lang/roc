@@ -14,21 +14,34 @@ Wrap :: { a : U8, b : U8 }.{
 # EXPECTED
 INVALID NOMINAL RECORD - issue_10195_nominal_record_update_rewrapped.md:4:22:4:47
 # PROBLEMS
-── ✗ invalid nominal record ─ issue_10195_nominal_record_update_rewrapped.md:4:22
-
-I'm having trouble with this nominal type that wraps a record.
-
-inc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The record I found is:
-
-    Wrap
-
-But the nominal type expects:
-
-    { a: U8, b: U8 }
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Nominal Record")
+		(region (start 4 22) (end 4 47))
+		(headline
+			(reflow "I'm having trouble with this nominal type that wraps a record."))
+		(document
+			(source-region (file "issue_10195_nominal_record_update_rewrapped.md") (start 4 22) (end 4 47) (annotation error) (line-text "\tinc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }"))
+			(line-break)
+			(text "The record I found is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Wrap")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "But the nominal type expects:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ a: U8, b: U8 }")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpDoubleColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Dot,OpenCurly,

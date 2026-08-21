@@ -23,15 +23,22 @@ main! = process!(42)
 # EXPECTED
 NAME NOT IN SCOPE - function_no_annotation.md:9:21:9:33
 # PROBLEMS
-── ✗ name not in scope ────────────────────────── function_no_annotation.md:9:21
-
-Nothing is named line! in this scope.
-
-print_number! = |n| Stdout.line!(n)
-                    ^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 9 21) (end 9 33))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "line!")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "function_no_annotation.md") (start 9 21) (end 9 33) (annotation error) (line-text "print_number! = |n| Stdout.line!(n)")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

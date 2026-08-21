@@ -15,17 +15,42 @@ type=expr
 # EXPECTED
 TOO MANY ARGS - test_instantiation_arity_mismatch.md:5:5:5:19
 # PROBLEMS
-── ✗ too many args ──────────────────── test_instantiation_arity_mismatch.md:5:5
-
-The identity function expects 1 argument, but it got 2 instead.
-
-identity(1, 2)
-^^^^^^^^^^^^^^
-
-The identity function has the type:
-
-    (a, b) -> (a, b)
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Too Many Args")
+		(region (start 5 5) (end 5 19))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "identity")
+			(reflow " function expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument")
+			(reflow ",")
+			(reflow " ")
+			(reflow "but it got")
+			(reflow " ")
+			(reflow "2")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "test_instantiation_arity_mismatch.md") (start 5 5) (end 5 19) (annotation error) (line-text "    identity(1, 2)"))
+			(line-break)
+			(reflow "The")
+			(reflow " ")
+			(annotated code "identity")
+			(reflow " function has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(a, b) -> (a, b)")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,

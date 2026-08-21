@@ -21,18 +21,33 @@ main = {
 # EXPECTED
 MISSING METHOD - StructuralMethodError.md:11:7:11:12
 # PROBLEMS
-── ✗ missing method ────────────────────────────── StructuralMethodError.md:11:7
-
-This greet method is being called on a value whose type doesn't have that
-method.
-
-x.greet()
-  ^^^^^
-
-The value's type, which does not have a method named greet, is:
-
-    {}
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 11 7) (end 11 12))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "greet")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "StructuralMethodError.md") (start 11 7) (end 11 12) (annotation error) (line-text "    x.greet()"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "greet")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{}")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,CloseCurly,Dot,OpenCurly,

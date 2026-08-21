@@ -10,17 +10,25 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - list_type_err.md:1:8:1:15
 # PROBLEMS
-── ✗ type mismatch ──────────────────────────────────────── list_type_err.md:1:8
-
-This string literal is being used where a non-string type is needed.
-
-[1, 2, "hello"]
-       ^^^^^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 8) (end 1 15))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "list_type_err.md") (start 1 8) (end 1 15) (annotation error) (line-text "[1, 2, \"hello\"]"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,Int,Comma,StringStart,StringPart,StringEnd,CloseSquare,

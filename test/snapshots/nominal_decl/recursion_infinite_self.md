@@ -14,32 +14,50 @@ t = T.((t, 1))
 INVALID ASSIGNMENT TO ITSELF - recursion_infinite_self.md:4:9:4:10
 INVALID RECURSIVE TYPE - recursion_infinite_self.md:1:1:1:14
 # PROBLEMS
-── ✗ invalid assignment to itself ─────────────── recursion_infinite_self.md:4:9
-
-The value t is assigned to itself, which would cause an infinite loop at
-runtime.
-
-t = T.((t, 1))
-        ^
-
-Only functions can reference themselves (for recursion). For non-function
-values, the right-hand side must be fully computable without referring to the
-value being assigned.
-
-── ✗ invalid recursive type ───────────────────── recursion_infinite_self.md:1:1
-
-The nominal type T refers to itself in a way that would make it infinite.
-
-T := (T, U64)
-^^^^^^^^^^^^^
-
-Its definition is:
-
-    (T, U64)
-
-Hint: Recursion in a nominal type is only allowed inside a tag union payload or
-record field—for example ConsList(a) := [Nil, Cons(a, ConsList(a))].
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Assignment To Itself")
+		(region (start 4 9) (end 4 10))
+		(headline
+			(reflow "The value ")
+			(annotated symbol-unqualified "t")
+			(reflow " is assigned to itself, which would cause an infinite loop at runtime."))
+		(document
+			(reflow "Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.")
+			(line-break)
+			(line-break)
+			(source-region (file "recursion_infinite_self.md") (start 4 9) (end 4 10) (annotation error) (line-text "t = T.((t, 1))"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Recursive Type")
+		(region (start 1 1) (end 1 14))
+		(headline
+			(reflow "The nominal type")
+			(reflow " ")
+			(annotated type "T")
+			(reflow " ")
+			(reflow "refers to itself in a way that would make it infinite."))
+		(document
+			(source-region (file "recursion_infinite_self.md") (start 1 1) (end 1 14) (annotation error) (line-text "T := (T, U64)"))
+			(line-break)
+			(reflow "Its definition is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(T, U64)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Recursion in a nominal type is only allowed inside a tag union payload or record field—for example")
+			(reflow " ")
+			(annotated code "ConsList(a) := [Nil, Cons(a, ConsList(a))]")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,

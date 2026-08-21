@@ -15,16 +15,23 @@ handleSuccess = |res| "success"
 # EXPECTED
 UNUSED VARIABLE - nominal_associated_in_patterns.md:6:18:6:21
 # PROBLEMS
-── ● unused variable ──────────────────── nominal_associated_in_patterns.md:6:18
-
-Variable res is defined here and then never used:
-
-handleSuccess = |res| "success"
-                 ^^^
-
-If you don't need this variable, prefix it with an underscore like _res to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 6 18) (end 6 21))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "res")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_res")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "nominal_associated_in_patterns.md") (start 6 18) (end 6 21) (annotation error) (line-text "handleSuccess = |res| \"success\"")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

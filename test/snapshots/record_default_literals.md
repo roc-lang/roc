@@ -23,30 +23,37 @@ bad_list = {}
 DEFAULT VALUE MUST BE A LITERAL - record_default_literals.md:7:23:7:26
 DEFAULT VALUE NOT CONCRETE - record_default_literals.md:10:32:10:34
 # PROBLEMS
-── ✗ default value must be a literal ─────────── record_default_literals.md:7:23
-
-The default value for the a field is not a literal.
-
-bad_ref : { a : U8 ?? ten }
-                      ^^^
-
-A field default (??) is materialized by the compiler at every construction site
-that omits the field, so it must be a literal: a number, an interpolation-free
-string, a tag, or a list, record, or tuple built only from literals. Anything
-that refers to another value could form an evaluation cycle the compiler will
-not chase.
-
-── ✗ default value not concrete ─────────────── record_default_literals.md:10:32
-
-The default value for the items field does not have a concrete type.
-
-Pair(x) : { items : List(x) ?? [] }
-                               ^^
-
-A default is evaluated once at compile time and filled in wherever construction
-omits the field, so it must have exactly one runtime representation. Annotate
-the field (or the default) with a concrete type.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Default Value Must Be A Literal")
+		(region (start 7 23) (end 7 26))
+		(headline
+			(reflow "The default value for the ")
+			(annotated record-field "a")
+			(reflow " field is not a literal."))
+		(document
+			(source-region (file "record_default_literals.md") (start 7 23) (end 7 26) (annotation error) (line-text "bad_ref : { a : U8 ?? ten }"))
+			(line-break)
+			(reflow "A field default (")
+			(annotated code "??")
+			(reflow ") is materialized by the compiler at every construction site that omits the field, so it must be a literal: a number, an interpolation-free string, a tag, or a list, record, or tuple built only from literals. Anything that refers to another value could form an evaluation cycle the compiler will not chase.")))
+	(report
+		(severity runtime_error)
+		(title "Default Value Not Concrete")
+		(region (start 10 32) (end 10 34))
+		(headline
+			(reflow "The default value for the")
+			(reflow " ")
+			(annotated code "items")
+			(reflow " ")
+			(reflow "field does not have a concrete type."))
+		(document
+			(source-region (file "record_default_literals.md") (start 10 32) (end 10 34) (annotation error) (line-text "Pair(x) : { items : List(x) ?? [] }"))
+			(line-break)
+			(reflow "A default is evaluated once at compile time and filled in wherever construction omits the field, so it must have exactly one runtime representation. Annotate the field (or the default) with a concrete type."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,Int,Comma,LowerIdent,OpColon,UpperIdent,OpDoubleQuestion,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,Comma,UpperIdent,CloseSquare,OpDoubleQuestion,UpperIdent,NoSpaceOpenRound,Int,CloseRound,CloseCurly,

@@ -47,61 +47,89 @@ INVALID NUMBER - number_literal_suffixes.md:15:12:15:20
 INVALID NUMBER - number_literal_suffixes.md:16:12:16:20
 INVALID NUMBER - number_literal_suffixes.md:17:12:17:21
 # PROBLEMS
-── ✗ invalid number ─────────────────────────── number_literal_suffixes.md:13:12
-
-This number literal does not fit in the inferred type.
-
-u8Neg:   -123.U8,
-         ^^^^^^^
-
-The inferred type is:
-
-    U8
-
-── ✗ invalid number ─────────────────────────── number_literal_suffixes.md:14:12
-
-This number literal does not fit in the inferred type.
-
-u16Neg:  -123.U16,
-         ^^^^^^^^
-
-The inferred type is:
-
-    U16
-
-── ✗ invalid number ─────────────────────────── number_literal_suffixes.md:15:12
-
-This number literal does not fit in the inferred type.
-
-u32Neg:  -123.U32,
-         ^^^^^^^^
-
-The inferred type is:
-
-    U32
-
-── ✗ invalid number ─────────────────────────── number_literal_suffixes.md:16:12
-
-This number literal does not fit in the inferred type.
-
-u64Neg:  -123.U64,
-         ^^^^^^^^
-
-The inferred type is:
-
-    U64
-
-── ✗ invalid number ─────────────────────────── number_literal_suffixes.md:17:12
-
-This number literal does not fit in the inferred type.
-
-u128Neg: -123.U128,
-         ^^^^^^^^^
-
-The inferred type is:
-
-    U128
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 13 12) (end 13 19))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "number_literal_suffixes.md") (start 13 12) (end 13 19) (annotation error) (line-text "  u8Neg:   -123.U8,"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U8")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 14 12) (end 14 20))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "number_literal_suffixes.md") (start 14 12) (end 14 20) (annotation error) (line-text "  u16Neg:  -123.U16,"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U16")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 15 12) (end 15 20))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "number_literal_suffixes.md") (start 15 12) (end 15 20) (annotation error) (line-text "  u32Neg:  -123.U32,"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U32")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 16 12) (end 16 20))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "number_literal_suffixes.md") (start 16 12) (end 16 20) (annotation error) (line-text "  u64Neg:  -123.U64,"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U64")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 17 12) (end 17 21))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "number_literal_suffixes.md") (start 17 12) (end 17 21) (annotation error) (line-text "  u128Neg: -123.U128,"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U128")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,

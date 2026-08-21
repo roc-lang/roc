@@ -11,26 +11,41 @@ x }
 # EXPECTED
 UNEXPECTED ASSOCIATED EXPRESSION - nominal_associated_with_final_expression.md:2:1:2:2
 # PROBLEMS
-── ✗ unexpected associated expression ─ nominal_associated_with_final_expression.md:2:1
-
-I was parsing associated items for a nominal type, and I found a plain final
-expression.
-
-x }
-^
-
-Associated item blocks can contain associated types and values. Remove the
-trailing expression or turn it into a named associated value.
-
-For example:
-    Id := U64 implements [
-        zero = @Id 0
-    ]
-
-I found x here.
-Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Associated Expression")
+		(region (start 2 1) (end 2 2))
+		(headline
+			(reflow "I was parsing associated items for a nominal type, and I found a plain final expression."))
+		(document
+			(reflow "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Id := U64 implements [")
+			(line-break)
+			(indent 1)
+			(text "    zero = @Id 0")
+			(line-break)
+			(indent 1)
+			(text "]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "x")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.")
+			(line-break)
+			(line-break)
+			(source-region (file "nominal_associated_with_final_expression.md") (start 2 1) (end 2 2) (annotation error) (line-text "x }")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,CloseSquare,Dot,OpenCurly,LowerIdent,OpAssign,Int,

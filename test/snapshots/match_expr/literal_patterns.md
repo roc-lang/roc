@@ -17,37 +17,63 @@ UNCONDITIONAL CONDITION - literal_patterns.md:1:7:1:13
 MISSING METHOD - literal_patterns.md:5:5:5:7
 TYPE MISMATCH - literal_patterns.md:3:13:3:20
 # PROBLEMS
-── ● unconditional condition ─────────────────────────── literal_patterns.md:1:7
-
-This match value is known at compile time, so this match will always inspect
-the same value.
-
-match Answer {
-      ^^^^^^
-
-── ✗ missing method ──────────────────────────────────── literal_patterns.md:5:5
-
-This from_numeral method is being called on a value whose type doesn't have
-that method.
-
-10 => 4
-^^
-
-The value's type, which does not have a method named from_numeral, is:
-
-    [Answer, Greeting, Zero, ..]
-
-── ✗ type mismatch ──────────────────────────────────── literal_patterns.md:3:13
-
-This string literal is being used where a non-string type is needed.
-
-Zero => "hello"
-        ^^^^^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unconditional Condition")
+		(region (start 1 7) (end 1 13))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(reflow "match value")
+			(reflow " ")
+			(reflow "is known at compile time, so")
+			(reflow " ")
+			(reflow "this match will always inspect the same value."))
+		(document
+			(source-region (file "literal_patterns.md") (start 1 7) (end 1 13) (annotation warning) (line-text "match Answer {"))))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 5 5) (end 5 7))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "literal_patterns.md") (start 5 5) (end 5 7) (annotation error) (line-text "    10 => 4"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_numeral")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Answer, Greeting, Zero, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 3 13) (end 3 20))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "literal_patterns.md") (start 3 13) (end 3 20) (annotation error) (line-text "    Zero => \"hello\""))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,UpperIdent,OpenCurly,

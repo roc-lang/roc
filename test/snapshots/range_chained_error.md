@@ -10,14 +10,21 @@ r = 1..<5..<10
 # EXPECTED
 CHAINED RANGE - range_chained_error.md:1:5:1:15
 # PROBLEMS
-── ✗ chained range ────────────────────────────────── range_chained_error.md:1:5
-
-Range operators can't be chained. Write a single range instead, like a..<b or
-a..=b.
-
-r = 1..<5..<10
-    ^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Chained Range")
+		(region (start 1 5) (end 1 15))
+		(headline
+			(reflow "Range operators can't be chained. Write a single range instead, like ")
+			(annotated code "a..<b")
+			(reflow " or ")
+			(annotated code "a..=b")
+			(reflow "."))
+		(document
+			(source-region (file "range_chained_error.md") (start 1 5) (end 1 15) (annotation error) (line-text "r = 1..<5..<10")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Int,OpDoubleDotLessThan,Int,OpDoubleDotLessThan,Int,

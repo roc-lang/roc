@@ -18,23 +18,33 @@ main =
 UNDECLARED TYPE - nominal_type_origin_mismatch.md:3:17:3:23
 UNUSED VARIABLE - nominal_type_origin_mismatch.md:4:18:4:19
 # PROBLEMS
-── ✗ undeclared type ────────────────────── nominal_type_origin_mismatch.md:3:17
-
-The type Person is not declared in this scope.
-
-expectsPerson : Person -> Str
-                ^^^^^^
-
-── ● unused variable ────────────────────── nominal_type_origin_mismatch.md:4:18
-
-Variable p is defined here and then never used:
-
-expectsPerson = |p| "Got a person"
-                 ^
-
-If you don't need this variable, prefix it with an underscore like _p to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 3 17) (end 3 23))
+		(headline
+			(reflow "The type ")
+			(annotated code "Person")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "nominal_type_origin_mismatch.md") (start 3 17) (end 3 23) (annotation error) (line-text "expectsPerson : Person -> Str"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 4 18) (end 4 19))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "p")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_p")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "nominal_type_origin_mismatch.md") (start 4 18) (end 4 19) (annotation error) (line-text "expectsPerson = |p| \"Got a person\"")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

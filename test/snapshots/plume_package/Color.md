@@ -83,140 +83,251 @@ MISSING METHOD - Color.md:53:12:53:26
 MISSING METHOD - Color.md:47:26:47:32
 MISSING METHOD - Color.md:48:32:48:38
 # PROBLEMS
-── ● unused variable ───────────────────────────────────────────── Color.md:21:5
-
-Variable is_char_in_hex_range is defined here and then never used:
-
-is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
-^^^^^^^^^^^^^^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like
-_is_char_in_hex_range to suppress this warning.
-
-── ✗ does not exist ───────────────────────────────────────────── Color.md:41:34
-
-Num.to_str does not exist.
-
-Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-                             ^^^^^^^^^^
-
-── ✗ does not exist ───────────────────────────────────────────── Color.md:41:52
-
-Num.to_str does not exist.
-
-Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-                                               ^^^^^^^^^^
-
-── ✗ does not exist ───────────────────────────────────────────── Color.md:41:70
-
-Num.to_str does not exist.
-
-Color.RGB(r, g, b) => "rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})"
-                                                                 ^^^^^^^^^^
-
-── ✗ does not exist ───────────────────────────────────────────── Color.md:42:39
-
-Num.to_str does not exist.
-
-Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-                                  ^^^^^^^^^^
-
-── ✗ does not exist ───────────────────────────────────────────── Color.md:42:57
-
-Num.to_str does not exist.
-
-Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-                                                    ^^^^^^^^^^
-
-── ✗ does not exist ───────────────────────────────────────────── Color.md:42:75
-
-Num.to_str does not exist.
-
-Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-                                                                      ^^^^^^^^^^
-
-── ✗ does not exist ───────────────────────────────────────────── Color.md:42:93
-
-Num.to_str does not exist.
-
-Color.RGBA(r, g, b, a) => "rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})"
-                                                                                        ^^^^^^^^^^
-
-── ✗ missing method ───────────────────────────────────────────── Color.md:13:17
-
-This to_frac method is being called on a value whose type doesn't have that
-method.
-
-rounded = a.to_frac() / 255.0
-            ^^^^^^^
-
-The value's type, which does not have a method named to_frac, is:
-
-    U8
-
-Hint: For this to work, the type would need to have a method named to_frac
-associated with it in the type's declaration.
-
-── ✗ missing method ───────────────────────────────────────────── Color.md:26:19
-
-This is_char_in_hex_range method is being called on a value whose type doesn't
-have that method.
-
-a.is_char_in_hex_range()
-  ^^^^^^^^^^^^^^^^^^^^
-
-The value's type, which does not have a method named is_char_in_hex_range, is:
-
-    U8
-
-Hint: For this to work, the type would need to have a method named
-is_char_in_hex_range associated with it in the type's declaration.
-
-── ✗ missing method ───────────────────────────────────────────── Color.md:53:12
-
-This is_named_color method is being called on a value whose type doesn't have
-that method.
-
-if str.is_named_color()
-       ^^^^^^^^^^^^^^
-
-The value's type, which does not have a method named is_named_color, is:
-
-    Str
-
-Hint: For this to work, the type would need to have a method named
-is_named_color associated with it in the type's declaration.
-
-── ✗ missing method ───────────────────────────────────────────── Color.md:47:26
-
-This to_str method is being called on a value whose type doesn't have that
-method.
-
-expect rgb(124, 56, 245).to_str() == "rgb(124, 56, 245)"
-                         ^^^^^^
-
-The value's type, which does not have a method named to_str, is:
-
-    Color
-
-Hint: For this to work, the type would need to have a method named to_str
-associated with it in the type's declaration.
-
-── ✗ missing method ───────────────────────────────────────────── Color.md:48:32
-
-This to_str method is being called on a value whose type doesn't have that
-method.
-
-expect rgba(124, 56, 245, 255).to_str() == "rgba(124, 56, 245, 1.0)"
-                               ^^^^^^
-
-The value's type, which does not have a method named to_str, is:
-
-    Color
-
-Hint: For this to work, the type would need to have a method named to_str
-associated with it in the type's declaration.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 21 5) (end 21 25))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "is_char_in_hex_range")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_is_char_in_hex_range")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "Color.md") (start 21 5) (end 21 25) (annotation error) (line-text "    is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 41 34) (end 41 44))
+		(headline
+			(annotated symbol-unqualified "Num.to_str")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "Color.md") (start 41 34) (end 41 44) (annotation error) (line-text "    Color.RGB(r, g, b) => \"rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})\""))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 41 52) (end 41 62))
+		(headline
+			(annotated symbol-unqualified "Num.to_str")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "Color.md") (start 41 52) (end 41 62) (annotation error) (line-text "    Color.RGB(r, g, b) => \"rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})\""))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 41 70) (end 41 80))
+		(headline
+			(annotated symbol-unqualified "Num.to_str")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "Color.md") (start 41 70) (end 41 80) (annotation error) (line-text "    Color.RGB(r, g, b) => \"rgb(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)})\""))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 42 39) (end 42 49))
+		(headline
+			(annotated symbol-unqualified "Num.to_str")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "Color.md") (start 42 39) (end 42 49) (annotation error) (line-text "    Color.RGBA(r, g, b, a) => \"rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})\""))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 42 57) (end 42 67))
+		(headline
+			(annotated symbol-unqualified "Num.to_str")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "Color.md") (start 42 57) (end 42 67) (annotation error) (line-text "    Color.RGBA(r, g, b, a) => \"rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})\""))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 42 75) (end 42 85))
+		(headline
+			(annotated symbol-unqualified "Num.to_str")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "Color.md") (start 42 75) (end 42 85) (annotation error) (line-text "    Color.RGBA(r, g, b, a) => \"rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})\""))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 42 93) (end 42 103))
+		(headline
+			(annotated symbol-unqualified "Num.to_str")
+			(reflow " does not exist."))
+		(document
+			(source-region (file "Color.md") (start 42 93) (end 42 103) (annotation error) (line-text "    Color.RGBA(r, g, b, a) => \"rgba(${Num.to_str(r)}, ${Num.to_str(g)}, ${Num.to_str(b)}, ${Num.to_str(a)})\""))))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 13 17) (end 13 24))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "to_frac")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "Color.md") (start 13 17) (end 13 24) (annotation error) (line-text "    rounded = a.to_frac() / 255.0"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "to_frac")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U8")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "to_frac")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 26 19) (end 26 39))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "is_char_in_hex_range")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "Color.md") (start 26 19) (end 26 39) (annotation error) (line-text "                a.is_char_in_hex_range()"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "is_char_in_hex_range")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U8")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "is_char_in_hex_range")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 53 12) (end 53 26))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "is_named_color")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "Color.md") (start 53 12) (end 53 26) (annotation error) (line-text "    if str.is_named_color()"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "is_named_color")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "is_named_color")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 47 26) (end 47 32))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "to_str")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "Color.md") (start 47 26) (end 47 32) (annotation error) (line-text "expect rgb(124, 56, 245).to_str() == \"rgb(124, 56, 245)\""))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "to_str")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Color")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "to_str")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration.")))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 48 32) (end 48 38))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "to_str")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "Color.md") (start 48 32) (end 48 38) (annotation error) (line-text "expect rgba(124, 56, 245, 255).to_str() == \"rgba(124, 56, 245, 1.0)\""))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "to_str")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Color")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "to_str")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,

@@ -312,7 +312,11 @@ fn generateAllReports(
     return reports;
 }
 
-/// Render reports to PROBLEMS section format (markdown and HTML)
+/// Render reports to PROBLEMS section format (markdown and HTML).
+/// The markdown side is the canonical S-expression form (see
+/// src/reporting/report_sexpr.zig), so ordinary snapshots capture diagnostic
+/// semantics independent of any renderer; renderer output is pinned by
+/// `type=reporting` snapshots instead.
 fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array_list.Managed(reporting.Report)) error{WriteFailed}!void {
     // HTML PROBLEMS section
     if (output.html_writer) |writer| {
@@ -328,12 +332,13 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array
         }
         log("reported NIL problems", .{});
     } else {
-        // Render all reports in order using the plain terminal layout.
-        for (reports.items) |*report| {
-            reporting.renderReportToPlain(report, &output.md_writer.writer, reporting.ReportingConfig.initMarkdown()) catch |err| {
-                std.debug.panic("Failed to render report: {s}", .{@errorName(err)});
-            };
+        try output.begin_code_block("clojure");
+        writeReportsSExpr(output.gpa, reports.items, &output.md_writer.writer) catch |err| {
+            std.debug.panic("Failed to render canonical report S-expression: {s}", .{@errorName(err)});
+        };
+        try output.end_code_block();
 
+        for (reports.items) |*report| {
             if (output.html_writer) |writer| {
                 try writer.writer.writeAll("                    <div class=\"problem\">");
                 report.render(&writer.writer, .markdown) catch |err| {
@@ -350,6 +355,16 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array
             \\
         );
     }
+}
+
+/// Serialize reports into their canonical S-expression form and write it,
+/// followed by a trailing newline.
+fn writeReportsSExpr(gpa: Allocator, reports: []const reporting.Report, writer: *std.Io.Writer) (Allocator.Error || error{WriteFailed})!void {
+    var tree = SExprTree.init(gpa);
+    defer tree.deinit();
+    try reporting.pushReportsToSExprTree(reports, &tree);
+    try tree.toStringPretty(writer, .skip_linecol);
+    try writer.writeAll("\n");
 }
 
 /// For snapshot files, the EXPECTED `file` field is just the basename.
@@ -893,6 +908,7 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
                 .mono,
                 .dev_object,
                 .docs,
+                .reporting,
                 => "file",
             };
             const meta = Meta{
@@ -971,7 +987,7 @@ fn processSnapshotContent(
 
     // Map snapshot node type to parse mode
     const parse_mode: single_module.ParseMode = switch (content.meta.node_type) {
-        .file, .mono, .package, .platform, .app, .snippet => .file,
+        .file, .mono, .package, .platform, .app, .snippet, .reporting => .file,
         .expr => .expr,
         .statement => .statement,
         .header => .header,
@@ -1006,8 +1022,8 @@ fn processSnapshotContent(
         .file, .package, .platform, .app => {
             // All file types that use canonicalizeFile() will use the combined function below
         },
-        .snippet, .mono => {
-            // Snippet and mono tests are full modules
+        .snippet, .mono, .reporting => {
+            // Snippet, mono, and reporting tests are full modules
             const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
 
             const roc_ctx = CoreCtx.default(allocator, allocator, app_io);
@@ -1055,6 +1071,7 @@ fn processSnapshotContent(
                 .mono,
                 .dev_object,
                 .docs,
+                .reporting,
                 => unreachable,
             }
             if (content.meta.include_canonicalize_diagnostics) {
@@ -1073,7 +1090,7 @@ fn processSnapshotContent(
     // don't call canonicalizeFile.
     const needs_evaluation_order = switch (content.meta.node_type) {
         .expr, .statement, .mono => true,
-        .file, .package, .platform, .app, .snippet, .repl, .header, .dev_object, .docs => false,
+        .file, .package, .platform, .app, .snippet, .repl, .header, .dev_object, .docs, .reporting => false,
     };
 
     if (needs_evaluation_order and can_ir.evaluation_order == null) {
@@ -1183,7 +1200,7 @@ fn processSnapshotContent(
             );
             break :blk checker;
         },
-        .snippet, .statement, .header, .expr, .mono => blk: {
+        .snippet, .statement, .header, .expr, .mono, .reporting => blk: {
             // For snippet/statement/header/expr/mono tests, type check the already-canonicalized IR
             // Note: .expr and .mono can reach here if canonicalizeExpr returned null (error during canonicalization)
             var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
@@ -1304,7 +1321,11 @@ fn processSnapshotContent(
     try generateMetaSection(&output, &content);
     try generateSourceSection(&output, &content);
 
-    if (content.meta.node_type == .mono) {
+    if (content.meta.node_type == .reporting) {
+        // Reporting tests: every user-facing rendering of the same reports
+        success = try generateExpectedSection(&output, output_path, &content, &generated_reports, config) and success;
+        try generateReportingSections(&output, &generated_reports);
+    } else if (content.meta.node_type == .mono) {
         // Mono tests: MONO and FORMATTED come right after SOURCE
         try generateMonoSection(&output, can_ir, Can.CanonicalizedExpr.maybe_expr_get_idx(maybe_expr_idx), output_path, config);
         try generateFormattedSection(&output, &content, parse_ast);
@@ -1663,6 +1684,7 @@ pub const NodeType = enum {
     mono,
     dev_object,
     docs,
+    reporting,
 
     pub const HEADER = "header";
     pub const EXPR = "expr";
@@ -1676,6 +1698,7 @@ pub const NodeType = enum {
     pub const MONO = "mono";
     pub const DEV_OBJECT = "dev_object";
     pub const DOCS_TYPE = "docs";
+    pub const REPORTING = "reporting";
 
     fn fromString(str: []const u8) Error!NodeType {
         if (std.mem.eql(u8, str, HEADER)) return .header;
@@ -1690,6 +1713,7 @@ pub const NodeType = enum {
         if (std.mem.eql(u8, str, MONO)) return .mono;
         if (std.mem.eql(u8, str, DEV_OBJECT)) return .dev_object;
         if (std.mem.eql(u8, str, DOCS_TYPE)) return .docs;
+        if (std.mem.eql(u8, str, REPORTING)) return .reporting;
         return Error.InvalidNodeType;
     }
 
@@ -1707,6 +1731,7 @@ pub const NodeType = enum {
             .mono => "mono",
             .dev_object => "dev_object",
             .docs => "docs",
+            .reporting => "reporting",
         };
     }
 };
@@ -1840,6 +1865,14 @@ const Meta = struct {
         );
         try std.testing.expectEqualStrings(meta.description, "Hello world");
         try std.testing.expectEqual(meta.node_type, .header);
+    }
+    test "Meta.fromString - desc and reporting type" {
+        const meta = try Meta.fromString(
+            \\description=Hello world
+            \\type=reporting
+        );
+        try std.testing.expectEqualStrings(meta.description, "Hello world");
+        try std.testing.expectEqual(meta.node_type, .reporting);
     }
     test "Meta.fromString - desc and invalid type" {
         const meta = Meta.fromString(
@@ -2174,6 +2207,60 @@ fn generateProblemsSection(output: *DualOutput, reports: *const std.array_list.M
     try output.end_section();
 }
 
+/// Generate the renderer sections for a `type=reporting` snapshot: the
+/// canonical S-expression (REPORT) plus each user-facing renderer's output
+/// (CLI, MARKDOWN, HTML, LSP), all rendered from the same semantic reports.
+/// These snapshots are where renderer-specific layout, wrapping, and markup
+/// are pinned; ordinary snapshots capture only the canonical form.
+fn generateReportingSections(output: *DualOutput, reports: *const std.array_list.Managed(reporting.Report)) error{WriteFailed}!void {
+    try output.begin_section("REPORT");
+    if (reports.items.len == 0) {
+        try output.md_writer.writer.writeAll("NIL\n");
+    } else {
+        try output.begin_code_block("clojure");
+        writeReportsSExpr(output.gpa, reports.items, &output.md_writer.writer) catch |err| {
+            std.debug.panic("Failed to render canonical report S-expression: {s}", .{@errorName(err)});
+        };
+        try output.end_code_block();
+    }
+    try output.end_section();
+
+    const RendererSection = struct {
+        name: []const u8,
+        language: []const u8,
+        render: *const fn (*const reporting.Report, *std.Io.Writer, reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})!void,
+        config: reporting.ReportingConfig,
+    };
+    const renderer_sections = [_]RendererSection{
+        .{ .name = "CLI", .language = "text", .render = reporting.renderReportToPlain, .config = reporting.ReportingConfig.initColorTerminal() },
+        .{ .name = "MARKDOWN", .language = "markdown", .render = reporting.renderReportToMarkdown, .config = reporting.ReportingConfig.initMarkdown() },
+        .{ .name = "HTML", .language = "html", .render = reporting.renderReportToHtml, .config = reporting.ReportingConfig.initHtml() },
+        .{ .name = "LSP", .language = "text", .render = reporting.renderReportToLsp, .config = reporting.ReportingConfig.initLsp() },
+    };
+
+    for (renderer_sections) |section| {
+        try output.begin_section(section.name);
+        if (reports.items.len == 0) {
+            try output.md_writer.writer.writeAll("NIL\n");
+        } else {
+            try output.begin_code_block(section.language);
+            for (reports.items) |*report| {
+                section.render(report, &output.md_writer.writer, section.config) catch |err| {
+                    std.debug.panic("Failed to render report for {s} section: {s}", .{ section.name, @errorName(err) });
+                };
+            }
+            // Not every renderer ends its output with a newline; make sure the
+            // closing fence starts on its own line.
+            const writer = &output.md_writer.writer;
+            if (writer.end == 0 or writer.buffer[writer.end - 1] != '\n') {
+                try writer.writeAll("\n");
+            }
+            try output.end_code_block();
+        }
+        try output.end_section();
+    }
+}
+
 /// Generate TOKENS section for both markdown and HTML
 pub fn generateTokensSection(output: *DualOutput, parse_ast: *AST, _: *const Content, module_env: *ModuleEnv, linecol_mode: LineColMode) (Allocator.Error || error{WriteFailed})!void {
     try output.begin_section("TOKENS");
@@ -2303,6 +2390,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .dev_object, .docs => unreachable, // Handled separately
+        .reporting => unreachable, // Reporting snapshots have no PARSE section
     }
 
     // Only generate section if we have content on the stack
@@ -2373,6 +2461,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
             try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
         .dev_object, .docs => unreachable, // Handled separately
+        .reporting => unreachable, // Reporting snapshots have no FORMATTED section
     }
 
     const is_changed = !std.mem.eql(u8, formatted.written(), content.source);
@@ -5835,6 +5924,8 @@ test "no Builtin module leaks in snapshots" {
     // This test searches all snapshot files for the string "Builtin" (case-sensitive)
     // to detect any leaks. We use case-sensitive search because lowercase "builtin"
     // appears in harmless contexts like "(builtin)" annotations in debug output.
+    // The report title "Builtin Type Shadowed" is legitimate user-facing wording
+    // (it talks about builtin types, not the Builtin module) and is exempt.
 
     const allocator = std.testing.allocator;
 
@@ -5889,9 +5980,16 @@ fn searchDirectoryForBuiltin(
                     const content = try dir.readFileAlloc(std.testing.io, entry.name, allocator, .limited(10 * 1024 * 1024));
                     defer allocator.free(content);
 
-                    // Search for "Builtin" (case-sensitive)
-                    if (std.mem.find(u8, content, "Builtin")) |_| {
+                    // Search for "Builtin" (case-sensitive), ignoring the
+                    // legitimate "Builtin Type Shadowed" report title.
+                    var search_start: usize = 0;
+                    while (std.mem.findPos(u8, content, search_start, "Builtin")) |index| {
+                        if (std.mem.startsWith(u8, content[index..], "Builtin Type Shadowed")) {
+                            search_start = index + "Builtin Type Shadowed".len;
+                            continue;
+                        }
                         try files_with_builtin.append(try allocator.dupe(u8, full_path));
+                        break;
                     }
                 }
             },

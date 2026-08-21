@@ -19,27 +19,33 @@ multiplyInts : I64, I64 -> I64
 EXPOSED BUT NOT DEFINED - platform_int.md:7:16:7:48
 DECLARATION HAS NO VALUE - platform_int.md:9:1:9:31
 # PROBLEMS
-── ✗ exposed but not defined ────────────────────────────── platform_int.md:7:16
-
-The mod header says that multiplyInts is exposed, but it is not defined
-anywhere in this mod.
-
-provides { "roc_multiplyInts": multiplyInts }
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-You can fix this by either defining multiplyInts in this mod, or by removing
-it from the list of exposed values.
-
-── ● declaration has no value ────────────────────────────── platform_int.md:9:1
-
-This declaration has a type annotation but no implementation.
-
-multiplyInts : I64, I64 -> I64
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 7 16) (end 7 48))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "multiplyInts")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform_int.md") (start 7 16) (end 7 48) (annotation error) (line-text "    provides { \"roc_multiplyInts\": multiplyInts }"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "multiplyInts")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 9 1) (end 9 31))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "platform_int.md") (start 9 1) (end 9 31) (annotation error) (line-text "multiplyInts : I64, I64 -> I64"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

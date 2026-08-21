@@ -19,24 +19,32 @@ package # Comment after keyword
 MOD NOT FOUND - package_header_nonempty_multiline_6.md:4:3:4:11
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_6.md:3:3:3:12
 # PROBLEMS
-── ✗ mod not found ─────────────── package_header_nonempty_multiline_6.md:4:3
-
-The mod SomeType was not found in this Roc project.
-
-SomeType, # Comment after last exposed item
-^^^^^^^^
-
-── ✗ exposed but not defined ──────── package_header_nonempty_multiline_6.md:3:3
-
-The mod header says that something is exposed, but it is not defined
-anywhere in this mod.
-
-something, # Comment after exposed item
-^^^^^^^^^
-
-You can fix this by either defining something in this mod, or by removing it
-from the list of exposed values.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 4 3) (end 4 11))
+		(headline
+			(text "The mod ")
+			(annotated code "SomeType")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "package_header_nonempty_multiline_6.md") (start 4 3) (end 4 11) (annotation error) (line-text "\t\tSomeType, # Comment after last exposed item"))))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 3 3) (end 3 12))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "something")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "package_header_nonempty_multiline_6.md") (start 3 3) (end 3 12) (annotation error) (line-text "\t\tsomething, # Comment after exposed item"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "something")
+			(reflow " in this mod, or by removing it from the list of exposed values."))))
+~~~
 # TOKENS
 ~~~zig
 KwPackage,

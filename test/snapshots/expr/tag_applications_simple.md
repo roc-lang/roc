@@ -21,19 +21,36 @@ type=expr
 # EXPECTED
 MISSING METHOD - tag_applications_simple.md:2:10:2:12
 # PROBLEMS
-── ✗ missing method ──────────────────────────── tag_applications_simple.md:2:10
-
-This from_numeral method is being called on a value whose type doesn't have
-that method.
-
-Some(42),
-     ^^
-
-The value's type, which does not have a method named from_numeral, is:
-
-    [Ok([Just(a), ..]), ..]
-      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 2 10) (end 2 12))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "tag_applications_simple.md") (start 2 10) (end 2 12) (annotation error) (line-text "    Some(42),"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_numeral")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Ok([Just(a), ..]), ..]")
+			(line-break)
+			(indent 1)
+			(text "  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenSquare,

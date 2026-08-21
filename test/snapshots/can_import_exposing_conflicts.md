@@ -18,18 +18,30 @@ main = {
 # EXPECTED
 DUPLICATE DEFINITION - can_import_exposing_conflicts.md:1:1:1:34
 # PROBLEMS
-── ● duplicate definition ───────────────── can_import_exposing_conflicts.md:1:1
-
-The name Json is being redeclared here:
-
-import json.Json exposing [parse]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-In this scope, Json was already defined in can_import_exposing_conflicts.md:1:1:
-
-import json.Json exposing [parse]
-^
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Duplicate Definition")
+		(region (start 1 1) (end 1 34))
+		(headline
+			(reflow "The name ")
+			(annotated symbol-unqualified "Json")
+			(reflow " is being redeclared here:"))
+		(document
+			(source-region (file "can_import_exposing_conflicts.md") (start 1 1) (end 1 34) (annotation error) (line-text "import json.Json exposing [parse]"))
+			(line-break)
+			(reflow "In this scope, ")
+			(annotated symbol-unqualified "Json")
+			(reflow " was already defined in ")
+			(source-location
+				(file "can_import_exposing_conflicts.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "can_import_exposing_conflicts.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [parse]")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,LowerIdent,CloseSquare,

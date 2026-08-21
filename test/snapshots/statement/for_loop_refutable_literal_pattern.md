@@ -13,19 +13,32 @@ main! = |_args| {
 # EXPECTED
 NON EXHAUSTIVE DESTRUCTURE - for_loop_refutable_literal_pattern.md:2:9:2:10
 # PROBLEMS
-── ✗ non exhaustive destructure ────── for_loop_refutable_literal_pattern.md:2:9
-
-This destructuring pattern doesn't cover all possible cases.
-
-for 1 in [1, 2] {}
-    ^
-
-The value being destructured has type:
-        Dec
-
-Missing patterns:
-        _
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Non Exhaustive Destructure")
+		(region (start 2 9) (end 2 10))
+		(headline
+			(reflow "This destructuring pattern doesn't cover all possible cases."))
+		(document
+			(source-region (file "for_loop_refutable_literal_pattern.md") (start 2 9) (end 2 10) (annotation error) (line-text "    for 1 in [1, 2] {}"))
+			(line-break)
+			(reflow "The value being destructured has type:")
+			(line-break)
+			(text "        ")
+			(annotated type "Dec")
+			(line-break)
+			(line-break)
+			(reflow "Missing patterns:")
+			(line-break)
+			(text "    ")
+			(annotation-start code-block)
+			(indent 1)
+			(text "_")
+			(annotation-end)
+			(line-break))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,NamedUnderscore,OpBar,OpenCurly,
