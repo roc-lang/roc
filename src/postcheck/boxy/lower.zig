@@ -458,6 +458,26 @@ fn resolveNestedConstFn(
     worker: Plan.WorkerPlanId,
     nested: anytype,
 ) ResolvedWorker {
+    // A default-root-qualified stored function's site lives in the declaring
+    // module (resolved by content identity) and belongs to no checked
+    // procedure template, so its worker resolves without a template identity
+    //—exactly like `resolveNestedExprWorker`'s default-root branch
+    // (design.md "Defaulted Fields").
+    if (nested.default_root) |identity| {
+        const module = procedureModuleByIdentity(modules, &identity.bytes);
+        const expr_id = checkedLambdaExprForNestedFn(module, nested);
+        return .{
+            .worker = worker,
+            .module_key = module.key,
+            .module = module,
+            .template_ref = null,
+            .template = null,
+            .body = .{ .checked_expr = .{
+                .body_id = null,
+                .root_expr = expr_id,
+            } },
+        };
+    }
     const module = procedureModuleByKey(modules, .{ .bytes = names.procTemplateModuleDigest(nested.owner).bytes });
     const expr_id = checkedLambdaExprForNestedFn(module, nested);
     const template = module.checked_procedure_templates.get(nested.owner.template);
@@ -474,6 +494,20 @@ fn resolveNestedConstFn(
     };
 }
 
+fn procedureModuleByIdentity(modules: Common.CheckedModules, identity: *const [32]u8) ProcedureModuleView {
+    const root = rootProcedureModule(modules);
+    if (procedureModuleIdentityMatches(root, identity)) return root;
+    for (modules.imports) |imported| {
+        const view = procedureModuleFromImport(imported);
+        if (procedureModuleIdentityMatches(view, identity)) return view;
+    }
+    for (modules.root.relation_modules) |relation| {
+        const view = procedureModuleFromImport(relation);
+        if (procedureModuleIdentityMatches(view, identity)) return view;
+    }
+    boxyLowerInvariant("stored default-root function's declaring module was absent from boxy lowering");
+}
+
 fn resolveNestedExprWorker(
     modules: Common.CheckedModules,
     worker: Plan.WorkerPlanId,
@@ -483,7 +517,6 @@ fn resolveNestedExprWorker(
     const site = nestedProcSiteForExpr(module, expr_ref.expr) orelse {
         boxyLowerInvariant("nested callable worker source had no nested procedure site");
     };
-    const template = module.checked_procedure_templates.get(site.owner_template.template);
     const expr = module.checked_bodies.expr(expr_ref.expr);
     const root_expr = if (expr.data == .lambda)
         expr_ref.expr
@@ -491,12 +524,20 @@ fn resolveNestedExprWorker(
         expr.data.closure.lambda
     else
         boxyLowerInvariant("nested callable worker source did not point at a lambda or closure");
+    // A default-root site (a lambda inside a defaulted-field expression,
+    // design.md "Defaulted Fields") belongs to no checked procedure template;
+    // its worker resolves with no template identity, exactly like the
+    // template-optional consumers expect.
+    const template_ref: ?names.ProcedureTemplateRef = switch (site.owner) {
+        .template => |template| template,
+        .default_root => null,
+    };
     return .{
         .worker = worker,
         .module_key = module.key,
         .module = module,
-        .template_ref = site.owner_template,
-        .template = template,
+        .template_ref = template_ref,
+        .template = if (template_ref) |ref| module.checked_procedure_templates.get(ref.template) else null,
         .body = .{ .checked_expr = .{
             .body_id = null,
             .root_expr = root_expr,
@@ -517,7 +558,15 @@ fn checkedLambdaExprForNestedFn(
 ) checked.CheckedExprId {
     for (module.nested_proc_sites.sites) |site| {
         if (site.site != nested.site) continue;
-        if (!names.procedureTemplateRefEql(site.owner_template, nested.owner)) continue;
+        switch (site.owner) {
+            .template => |site_owner| {
+                if (nested.default_root != null) continue;
+                if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+            },
+            // A default-root-qualified stored function matches the declaring
+            // module's default-root site (design.md "Defaulted Fields").
+            .default_root => if (nested.default_root == null) continue,
+        }
         const expr_id = site.checked_expr orelse
             boxyLowerInvariant("stored nested function had no checked expression site");
         const expr = module.checked_bodies.expr(expr_id);
@@ -11728,6 +11777,7 @@ const ProcBodyBuilder = struct {
     descriptor_locals: []?LIR.LocalId,
     descriptor_local_reps: []?Plan.TypeRepId,
     descriptor_bound: []bool,
+    descriptor_evidence_bound: []bool,
     descriptor_slots: []?LIR.LocalId,
     descriptor_slot_reps: []?Plan.TypeRepId,
     descriptor_rep_bindings: std.ArrayList(DescriptorRepBinding),
@@ -11865,6 +11915,17 @@ const ProcBodyBuilder = struct {
         rep: Plan.TypeRepId,
         local: LIR.LocalId,
         bound: bool,
+        /// True only when the boundness was established by binding the
+        /// requirement to evidence (`markDescriptorRequirementBoundForRep`):
+        /// an entry hidden descriptor argument/capture, a prologue-rebuilt
+        /// argument root, or a snapshot-scoped call/pattern-boundary bind
+        /// whose initializer is prepended above every observer. A local
+        /// marked bound by a mid-body descriptor write
+        /// (`markDescriptorLocalBound`) does NOT set this: lowering visits
+        /// statements in reverse execution order, so such a mark can be
+        /// visible while lowering an earlier-executing statement even though
+        /// the write has not happened yet at that point at runtime.
+        evidence_bound: bool,
     };
 
     const LocalDescriptorEnvironmentBinding = struct {
@@ -11948,6 +12009,7 @@ const ProcBodyBuilder = struct {
         locals: []?LIR.LocalId,
         local_reps: []?Plan.TypeRepId,
         bound: []bool,
+        evidence_bound: []bool,
         slots: []?LIR.LocalId,
         slot_reps: []?Plan.TypeRepId,
         rep_bindings: []DescriptorRepBinding,
@@ -11957,6 +12019,7 @@ const ProcBodyBuilder = struct {
             allocator.free(self.locals);
             allocator.free(self.local_reps);
             allocator.free(self.bound);
+            allocator.free(self.evidence_bound);
             allocator.free(self.slots);
             allocator.free(self.slot_reps);
             allocator.free(self.rep_bindings);
@@ -12033,6 +12096,7 @@ const ProcBodyBuilder = struct {
             .descriptor_locals = &.{},
             .descriptor_local_reps = &.{},
             .descriptor_bound = &.{},
+            .descriptor_evidence_bound = &.{},
             .descriptor_slots = &.{},
             .descriptor_slot_reps = &.{},
             .descriptor_rep_bindings = .empty,
@@ -12078,6 +12142,7 @@ const ProcBodyBuilder = struct {
         self.parent.allocator.free(self.dictionary_locals);
         self.parent.allocator.free(self.descriptor_slot_reps);
         self.parent.allocator.free(self.descriptor_slots);
+        self.parent.allocator.free(self.descriptor_evidence_bound);
         self.parent.allocator.free(self.descriptor_bound);
         self.parent.allocator.free(self.descriptor_local_reps);
         self.parent.allocator.free(self.descriptor_locals);
@@ -17129,16 +17194,28 @@ const ProcBodyBuilder = struct {
             .imported_hosted,
             => |template| .{ .procedure_template = template },
             .nested => |nested| blk: {
-                const module = procedureModuleByKey(self.parent.modules, .{
-                    .bytes = names.procTemplateModuleDigest(nested.owner).bytes,
-                });
+                // A default-root-qualified stored function resolves its site
+                // in the declaring module (by content identity) against the
+                // `.default_root` owner (design.md "Defaulted Fields").
+                const module = if (nested.default_root) |identity|
+                    procedureModuleByIdentity(self.parent.modules, &identity.bytes)
+                else
+                    procedureModuleByKey(self.parent.modules, .{
+                        .bytes = names.procTemplateModuleDigest(nested.owner).bytes,
+                    });
                 var site_expr: ?checked.CheckedExprId = null;
                 for (module.nested_proc_sites.sites) |site| {
-                    if (site.site == nested.site and names.procedureTemplateRefEql(site.owner_template, nested.owner)) {
-                        site_expr = site.checked_expr orelse
-                            boxyLowerInvariant("stored nested function had no checked expression site");
-                        break;
+                    if (site.site != nested.site) continue;
+                    switch (site.owner) {
+                        .template => |site_owner| {
+                            if (nested.default_root != null) continue;
+                            if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+                        },
+                        .default_root => if (nested.default_root == null) continue,
                     }
+                    site_expr = site.checked_expr orelse
+                        boxyLowerInvariant("stored nested function had no checked expression site");
+                    break;
                 }
                 break :blk .{ .nested_expr = .{
                     .module = module.key,
@@ -21345,10 +21422,11 @@ const ProcBodyBuilder = struct {
         record_expr: checked.CheckedExprId,
         record_ty: checked.CheckedTypeId,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const rep_id = self.repForType(record_ty);
-        return try self.lowerRecordRepInto(target, record_expr, rep_id, expr_fields, null, next);
+        return try self.lowerRecordRepInto(target, record_expr, rep_id, expr_fields, unset_fields, null, next);
     }
 
     fn lowerEmptyRecordInto(
@@ -21362,7 +21440,7 @@ const ProcBodyBuilder = struct {
         if (self.parent.plan.representations.items[@intFromEnum(rep_id)].kind == .empty_record) {
             return try self.assignZst(target, next);
         }
-        return try self.lowerRecordRepInto(target, record_expr, rep_id, &.{}, null, next);
+        return try self.lowerRecordRepInto(target, record_expr, rep_id, &.{}, &.{}, null, next);
     }
 
     const RecordExtension = struct {
@@ -21376,6 +21454,7 @@ const ProcBodyBuilder = struct {
         record_expr: checked.CheckedExprId,
         rep_id: Plan.TypeRepId,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         extension: ?RecordExtension,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -21383,9 +21462,9 @@ const ProcBodyBuilder = struct {
         switch (rep.kind) {
             .record,
             .record_unbound,
-            => return try self.lowerRecordPayloadInto(target, record_expr, rep_id, rep, expr_fields, extension, next),
-            .dynamic => return try self.lowerDynamicRecordInto(target, record_expr, rep_id, rep, expr_fields, extension, next),
-            .alias => return try self.lowerRecordRepInto(target, record_expr, self.requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, extension, next),
+            => return try self.lowerRecordPayloadInto(target, record_expr, rep_id, rep, expr_fields, unset_fields, extension, next),
+            .dynamic => return try self.lowerDynamicRecordInto(target, record_expr, rep_id, rep, expr_fields, unset_fields, extension, next),
+            .alias => return try self.lowerRecordRepInto(target, record_expr, self.requiredSingleChild(rep_id, .alias_backing).rep, expr_fields, unset_fields, extension, next),
             .nominal => |kind| switch (kind) {
                 .transparent,
                 .opaque_nominal,
@@ -21394,7 +21473,7 @@ const ProcBodyBuilder = struct {
                     const backing = self.requiredSingleChild(rep_id, .nominal_backing);
                     const backing_local = try self.addFrameLocalForRep(backing.rep);
                     const assign = try self.assignRepresentationBoundary(target, backing_local, rep_id, backing.rep, next);
-                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, extension, assign);
+                    return try self.lowerRecordRepInto(backing_local, record_expr, backing.rep, expr_fields, unset_fields, extension, assign);
                 },
             },
             .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
@@ -21408,6 +21487,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         rep: Plan.TypeRepresentation,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         extension: ?RecordExtension,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -21438,6 +21518,9 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(source_field_kinds);
         const field_sources = try self.parent.allocator.alloc(RecordPayloadFieldSource, field_count);
         defer self.parent.allocator.free(field_sources);
+        const unset_matched = try self.parent.allocator.alloc(bool, unset_fields.len);
+        defer self.parent.allocator.free(unset_matched);
+        @memset(unset_matched, false);
 
         var layout_index: usize = 0;
         const rep_field_view = procedureModuleById(self.parent.modules, rep.source_type.module);
@@ -21467,6 +21550,23 @@ const ProcBodyBuilder = struct {
                         source_field_target_reps[source_index] = child.rep;
                         source_field_kinds[source_index] = child.record_field_kind.tag;
                         field_sources[layout_index] = .expr;
+                    } else if (self.recordUnsetFieldIndex(unset_fields, rep_field_view, label)) |unset_index| {
+                        // An UNSET field (`label: _`) constructs the slot's
+                        // Missing tag even under an update—never copied from
+                        // the extension (design.md "In Progress: Unsetting an
+                        // Optional Field").
+                        if (child.record_field_kind.tag != .optional) {
+                            boxyLowerInvariant("record expression unset field was not optional after checking");
+                        }
+                        const local = try self.addFrameLocal(field_layout);
+                        field_locals[layout_index] = local;
+                        descriptor_fields[layout_index] = .{
+                            .local = local,
+                            .target_rep = child.rep,
+                            .source_rep = child.rep,
+                        };
+                        field_sources[layout_index] = .{ .missing_optional = child.rep };
+                        unset_matched[unset_index] = true;
                     } else if (extension) |ext| {
                         const local = try self.addFrameLocal(field_layout);
                         field_locals[layout_index] = local;
@@ -21523,6 +21623,11 @@ const ProcBodyBuilder = struct {
         for (source_field_locals) |maybe_local| {
             if (maybe_local == null) {
                 boxyLowerInvariant("record expression had a field outside its checked type representation");
+            }
+        }
+        for (unset_matched) |matched| {
+            if (!matched) {
+                boxyLowerInvariant("record expression had an unset field outside its checked type representation");
             }
         }
 
@@ -21673,6 +21778,9 @@ const ProcBodyBuilder = struct {
         field_type: Plan.CheckedTypeIdentity,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        // Per-specialization materialization (design.md "Defaulted Fields"):
+        // lower the declaring module's archived checked default expression
+        // into the omitted field's slot—no archived constant, no root.
         const origin = default.origin() orelse
             boxyLowerInvariant("defaulted record field carried no declaring module identity");
         const origin_hash = self.module.canonical_names.moduleIdentityBytes(origin);
@@ -21680,15 +21788,64 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("defaulted record field's declaring module was absent from boxy lowering");
         const default_expr = declaring_module.checked_bodies.defaultExpr(default.expr_node) orelse
             boxyLowerInvariant("defaulted record field's expression was not archived");
-        const root = declaring_module.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr) orelse
-            boxyLowerInvariant("defaulted record field's expression had no compile-time root");
-        const node = switch (root.payload) {
-            .const_node => |node| node,
-            .pending => boxyLowerInvariant("pending field-default root reached runtime boxy lowering"),
-            .fn_value, .discarded, .expect => boxyLowerInvariant("field-default root did not contain constant data"),
-        };
-        const type_module = procedureModuleById(self.parent.modules, field_type.module);
-        return try self.restoreConstNodeInto(target, declaring_module, type_module, node, field_type.ty, next);
+        const default_ty = declaring_module.checked_bodies.expr(default_expr).ty;
+        const expr_rep = self.repForModuleType(declaring_module, default_ty);
+        const field_rep = self.repForTypeRef(field_type);
+        const value_local = try self.addFrameLocalForRep(expr_rep);
+        const assign = try self.assignRepresentationBoundaryConsumingSource(target, value_local, field_rep, expr_rep, next);
+        return try self.lowerModuleExprInto(declaring_module, value_local, default_expr, assign);
+    }
+
+    /// Lower a closed checked expression that belongs to `expr_module` into
+    /// a local of this procedure: a scoped module-context swap, the boxy
+    /// mirror of monotype lowering's view swap. The per-lambda contextual
+    /// rep mapping is neutralized for the duration—its pattern ids are
+    /// meaningless against the swapped module's stores, and a closed
+    /// expression has no lambda context.
+    ///
+    /// Binder state is swapped to fresh empty arrays for the duration
+    /// (`ensureBinderLocals` re-sizes them lazily against the swapped
+    /// module), mirroring `lowerRuntimeCallableEvalExprInto`. This is
+    /// required even when `expr_module` is the current module: the caller's
+    /// binder arrays index the caller's pattern binders, and boxy binder
+    /// slots are write-once, so a second materialization of the same closed
+    /// expression in one procedure body must not see the first's bindings.
+    /// Saving to stack locals lets nested materializations (a default whose
+    /// expression constructs another defaulted nominal) stack naturally.
+    fn lowerModuleExprInto(
+        self: *ProcBodyBuilder,
+        expr_module: ProcedureModuleView,
+        target: LIR.LocalId,
+        expr_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const previous_module = self.module;
+        const previous_binder_locals = self.binder_locals;
+        const previous_binder_reps = self.binder_reps;
+        const previous_lambda_arg_patterns = self.lambda_arg_patterns;
+        const previous_lambda_arg_binding_locals = self.lambda_arg_binding_locals;
+        const previous_lambda_arg_worker_reps = self.lambda_arg_worker_reps;
+        const previous_current_lambda = self.current_lambda;
+
+        self.module = expr_module;
+        self.binder_locals = &.{};
+        self.binder_reps = &.{};
+        self.lambda_arg_patterns = &.{};
+        self.lambda_arg_binding_locals = &.{};
+        self.lambda_arg_worker_reps = &.{};
+        self.current_lambda = null;
+        defer {
+            self.parent.allocator.free(self.binder_reps);
+            self.parent.allocator.free(self.binder_locals);
+            self.module = previous_module;
+            self.binder_locals = previous_binder_locals;
+            self.binder_reps = previous_binder_reps;
+            self.lambda_arg_patterns = previous_lambda_arg_patterns;
+            self.lambda_arg_binding_locals = previous_lambda_arg_binding_locals;
+            self.lambda_arg_worker_reps = previous_lambda_arg_worker_reps;
+            self.current_lambda = previous_current_lambda;
+        }
+        return try self.lowerExprInto(target, expr_id, next);
     }
 
     fn moduleForIdentityHash(
@@ -21715,6 +21872,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         rep: Plan.TypeRepresentation,
         expr_fields: []const checked.CheckedRecordExprField,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
         extension: ?RecordExtension,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -21738,6 +21896,7 @@ const ProcBodyBuilder = struct {
             rep_id,
             rep,
             expr_fields,
+            unset_fields,
             extension,
             try self.prependOptionalDescriptorMaterialization(payload_desc_info.materialize, assign_box),
         );
@@ -21755,13 +21914,13 @@ const ProcBodyBuilder = struct {
             const ext_expr = self.module.checked_bodies.expr(ext);
             const ext_rep = self.repForType(ext_expr.ty);
             const ext_local = try self.addFrameLocalForRep(ext_rep);
-            const continuation = try self.lowerRecordRepInto(target, record_expr, self.repForType(record_ty), record.fields, .{
+            const continuation = try self.lowerRecordRepInto(target, record_expr, self.repForType(record_ty), record.fields, record.unsets, .{
                 .local = ext_local,
                 .rep = ext_rep,
             }, next);
             return try self.lowerExprInto(ext_local, ext, continuation);
         }
-        return try self.lowerRecordInto(target, record_expr, record_ty, record.fields, next);
+        return try self.lowerRecordInto(target, record_expr, record_ty, record.fields, record.unsets, next);
     }
 
     fn reserveBlockBindings(self: *ProcBodyBuilder, statements: []const checked.CheckedStatementId) Allocator.Error!void {
@@ -31819,12 +31978,14 @@ const ProcBodyBuilder = struct {
             self.descriptor_local_reps[desc_index] == null or
             self.descriptor_local_reps[desc_index].? == identity_rep)
         {
-            const preserves_bound = self.descriptor_locals[desc_index] == local and
-                self.descriptor_local_reps[desc_index] == identity_rep and
-                self.descriptor_bound[desc_index];
+            const preserves = self.descriptor_locals[desc_index] == local and
+                self.descriptor_local_reps[desc_index] == identity_rep;
+            const preserves_bound = preserves and self.descriptor_bound[desc_index];
+            const preserves_evidence = preserves and self.descriptor_evidence_bound[desc_index];
             self.descriptor_locals[desc_index] = local;
             self.descriptor_local_reps[desc_index] = identity_rep;
             self.descriptor_bound[desc_index] = preserves_bound;
+            self.descriptor_evidence_bound[desc_index] = preserves_evidence;
             return;
         }
 
@@ -31835,6 +31996,7 @@ const ProcBodyBuilder = struct {
                 .rep = identity_rep,
                 .local = local,
                 .bound = existing.local == local and existing.bound,
+                .evidence_bound = existing.local == local and existing.evidence_bound,
             };
             return;
         }
@@ -31843,6 +32005,7 @@ const ProcBodyBuilder = struct {
             .rep = identity_rep,
             .local = local,
             .bound = false,
+            .evidence_bound = false,
         });
     }
 
@@ -31855,10 +32018,12 @@ const ProcBodyBuilder = struct {
         const desc_index = @intFromEnum(desc);
         if (desc_index < self.descriptor_local_reps.len and self.descriptor_local_reps[desc_index] == identity_rep) {
             self.descriptor_bound[desc_index] = true;
+            self.descriptor_evidence_bound[desc_index] = true;
             return;
         }
         if (self.descriptorRepBindingIndex(desc, identity_rep)) |index| {
             self.descriptor_rep_bindings.items[index].bound = true;
+            self.descriptor_rep_bindings.items[index].evidence_bound = true;
             return;
         }
         boxyLowerInvariant("boxy descriptor bound marker had no representation-local binding");
@@ -34366,11 +34531,48 @@ const ProcBodyBuilder = struct {
             if (desc_ref.localOrNull()) |desc_local| {
                 try self.recordDescriptorLocalTemplate(
                     desc_local,
-                    try self.descriptorMaterializationForExactRep(rep_id),
+                    try self.boundaryDescriptorLocalTemplate(rep_id, desc_local),
                 );
             }
         }
         return local;
+    }
+
+    /// The initializer template for a fresh call-boundary descriptor local.
+    /// When this worker already holds the representation's descriptor
+    /// requirement in an evidence-bound local—a hidden descriptor argument
+    /// (or prologue-rebuilt argument root) carrying the checker's dispatch
+    /// evidence for the value's type—that explicit descriptor is the value's
+    /// runtime type and seeds the boundary local. Only a representation whose
+    /// requirement holds no evidence in this worker falls back to its exact
+    /// static template. Without this precedence a value produced *into* the
+    /// boundary local (a numeric literal in a generic worker) would be
+    /// described by an erased static template even though the caller passed
+    /// the concrete descriptor.
+    ///
+    /// The evidence-bound query (not plain boundness) is load-bearing: a
+    /// binding whose local was merely marked bound by a mid-body descriptor
+    /// write (a call output or set-local transfer in a LATER-executing
+    /// statement, still visible here because lowering runs in reverse
+    /// execution order) must not seed this template—the copy it would emit
+    /// executes before that write and would read an uninitialized descriptor.
+    fn boundaryDescriptorLocalTemplate(
+        self: *ProcBodyBuilder,
+        rep_id: Plan.TypeRepId,
+        desc_local: LIR.LocalId,
+    ) Allocator.Error!DescriptorMaterialization {
+        const identity_rep = self.parent.descriptorIdentityRep(rep_id);
+        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+        if (rep.descriptor) |requirement| {
+            if (self.descriptorBindingIsEvidenceBoundForRep(identity_rep)) {
+                if (self.descriptorLocalForRequirementAndRepOrNull(requirement, identity_rep)) |bound| {
+                    if (bound != desc_local) {
+                        return .{ .desc = .{ .local = bound } };
+                    }
+                }
+            }
+        }
+        return try self.descriptorMaterializationForExactRep(rep_id);
     }
 
     fn addFrameLocalForRuntimeRep(
@@ -34475,12 +34677,15 @@ const ProcBodyBuilder = struct {
         errdefer self.parent.allocator.free(self.descriptor_local_reps);
         self.descriptor_bound = try self.parent.allocator.alloc(bool, self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_bound);
+        self.descriptor_evidence_bound = try self.parent.allocator.alloc(bool, self.parent.plan.descriptors.items.len);
+        errdefer self.parent.allocator.free(self.descriptor_evidence_bound);
         self.descriptor_slots = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_slots);
         self.descriptor_slot_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, self.parent.plan.descriptors.items.len);
         @memset(self.descriptor_locals, null);
         @memset(self.descriptor_local_reps, null);
         @memset(self.descriptor_bound, false);
+        @memset(self.descriptor_evidence_bound, false);
         @memset(self.descriptor_slots, null);
         @memset(self.descriptor_slot_reps, null);
     }
@@ -34557,6 +34762,32 @@ const ProcBodyBuilder = struct {
         return false;
     }
 
+    /// Like `descriptorBindingIsBoundForRep`, but true only when the binding
+    /// was bound as *evidence* (`markDescriptorRequirementBoundForRep`) rather
+    /// than by a mid-body descriptor write (`markDescriptorLocalBound`).
+    /// Evidence binds are either established in the worker prologue or inside
+    /// a descriptor-binding snapshot window whose initializer is prepended
+    /// above everything lowered while the bind is visible, so an evidence
+    /// binding's local is always initialized at runtime before any code that
+    /// observed the bind executes. Write marks carry no such ordering
+    /// guarantee: lowering visits statements in reverse execution order, so a
+    /// write mark from a later-executing statement stays visible while
+    /// earlier-executing statements are lowered.
+    fn descriptorBindingIsEvidenceBoundForRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) bool {
+        const identity_rep = self.descriptorStorageRep(rep_id);
+        const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
+        const desc = rep.descriptor orelse return true;
+        const desc_index = @intFromEnum(desc);
+        if (desc_index < self.descriptor_evidence_bound.len and self.descriptor_evidence_bound[desc_index]) {
+            if (desc_index >= self.descriptor_local_reps.len) return false;
+            if (self.descriptor_local_reps[desc_index] == identity_rep) return true;
+        }
+        for (self.descriptor_rep_bindings.items) |binding| {
+            if (binding.desc == desc and binding.rep == identity_rep) return binding.evidence_bound;
+        }
+        return false;
+    }
+
     fn dictionaryLocalForRequirementOrNull(
         self: *const ProcBodyBuilder,
         dict: Plan.DictionaryRequirementId,
@@ -34580,6 +34811,8 @@ const ProcBodyBuilder = struct {
         errdefer self.parent.allocator.free(local_reps);
         const bound = try self.parent.allocator.dupe(bool, self.descriptor_bound);
         errdefer self.parent.allocator.free(bound);
+        const evidence_bound = try self.parent.allocator.dupe(bool, self.descriptor_evidence_bound);
+        errdefer self.parent.allocator.free(evidence_bound);
         const slots = try self.parent.allocator.dupe(?LIR.LocalId, self.descriptor_slots);
         errdefer self.parent.allocator.free(slots);
         const slot_reps = try self.parent.allocator.dupe(?Plan.TypeRepId, self.descriptor_slot_reps);
@@ -34589,6 +34822,7 @@ const ProcBodyBuilder = struct {
             .locals = locals,
             .local_reps = local_reps,
             .bound = bound,
+            .evidence_bound = evidence_bound,
             .slots = slots,
             .slot_reps = slot_reps,
             .rep_bindings = rep_bindings,
@@ -34600,6 +34834,7 @@ const ProcBodyBuilder = struct {
         if (snapshot.locals.len != self.descriptor_locals.len or
             snapshot.local_reps.len != self.descriptor_local_reps.len or
             snapshot.bound.len != self.descriptor_bound.len or
+            snapshot.evidence_bound.len != self.descriptor_evidence_bound.len or
             snapshot.slots.len != self.descriptor_slots.len or
             snapshot.slot_reps.len != self.descriptor_slot_reps.len)
         {
@@ -34608,6 +34843,7 @@ const ProcBodyBuilder = struct {
         @memcpy(self.descriptor_locals, snapshot.locals);
         @memcpy(self.descriptor_local_reps, snapshot.local_reps);
         @memcpy(self.descriptor_bound, snapshot.bound);
+        @memcpy(self.descriptor_evidence_bound, snapshot.evidence_bound);
         @memcpy(self.descriptor_slots, snapshot.slots);
         @memcpy(self.descriptor_slot_reps, snapshot.slot_reps);
         self.descriptor_rep_bindings.items.len = snapshot.rep_bindings.len;
@@ -36350,6 +36586,23 @@ const ProcBodyBuilder = struct {
         return found;
     }
 
+    fn recordUnsetFieldIndex(
+        self: *const ProcBodyBuilder,
+        unset_fields: []const check.CanonicalNames.RecordFieldLabelId,
+        label_view: ProcedureModuleView,
+        label: @TypeOf(@as(checked.CheckedRecordExprField, undefined).label),
+    ) ?usize {
+        var found: ?usize = null;
+        for (unset_fields, 0..) |unset_label, index| {
+            if (!self.recordFieldNameMatches(self.module, unset_label, label_view, label)) continue;
+            if (found != null) {
+                boxyLowerInvariant("record expression contained the same unset field label more than once");
+            }
+            found = index;
+        }
+        return found;
+    }
+
     fn recordEqualityFieldCount(children: []const Plan.RepChild) u16 {
         var count: usize = 0;
         for (children) |child| {
@@ -38017,7 +38270,7 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
     var nested_sites = [_]checked.NestedProcSite{
         .{
             .site = @enumFromInt(fixtureTableIndex(0)),
-            .owner_template = template_ref,
+            .owner = .{ .template = template_ref },
             .lexical_scope = .root,
             .evidence_source = .inherited,
             .evidence = .{},
@@ -43324,6 +43577,7 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -43855,6 +44109,7 @@ test "boxy lowerer emits record construction in layout order after source-order 
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -43973,6 +44228,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 1 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = @enumFromInt(2),
         } },
     });
@@ -44120,6 +44376,7 @@ test "boxy lowerer emits record field access using layout field index" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -44487,6 +44744,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -44675,6 +44933,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });
@@ -44875,6 +45134,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
             .fields = .{ .start = 0, .len = 2 },
+            .unsets = .{ .start = 0, .len = 0 },
             .ext = null,
         } },
     });

@@ -2106,6 +2106,7 @@ fn nestedSpecIdentity(
             .owner_template = @intFromEnum(nested.owner.template),
             .owner_fn_digest = .{ .bytes = context_hasher.finalResult() },
             .site = @intFromEnum(nested.site),
+            .default_root_module = nested.default_root,
         } },
         .method_scope = moduleDigestFromId(method_scope),
         .source_fn_ty_digest = source_fn_key,
@@ -4130,6 +4131,7 @@ const Builder = struct {
         body_ctx.frozen_sealed_emission = source_ctx.frozen_sealed_emission;
         body_ctx.frozen_type_finals = source_ctx.frozen_type_finals;
         body_ctx.frozen_codec_calls = source_ctx.frozen_codec_calls;
+        body_ctx.frozen_field_defaults = source_ctx.frozen_field_defaults;
         defer body_ctx.deinit();
         if (lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
         const root_node = try body_ctx.instNode(template.checked_fn_root);
@@ -5614,6 +5616,10 @@ const Builder = struct {
                 defer body_draft.deinit();
                 var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, templateForConstFnDef(fn_value.fn_def), graph, &body_draft);
                 defer fn_ctx.deinit();
+                // A default-root stored function restores in default
+                // materialization mode: `fn_view` is the declaring module and
+                // the site resolves against its `.default_root` owner.
+                fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
                 fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(fn_value);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 const draft = FinalBodyOutputGuard.begin(self);
@@ -5702,6 +5708,7 @@ const Builder = struct {
         expr_id: checked.CheckedExprId,
         context_fn_key: names.TypeDigest,
         local_proc_context_digest: ?names.TypeDigest,
+        in_default_expr: bool,
     ) Allocator.Error!Ast.NestedFn {
         const address = NestedSiteAddress.from(view.key, owner, expr_id);
         const site = if (self.nested_site_cache.get(address)) |cached|
@@ -5709,15 +5716,38 @@ const Builder = struct {
         else blk: {
             for (view.nested_proc_sites.sites) |candidate| {
                 if (candidate.checked_expr == null or candidate.checked_expr.? != expr_id) continue;
-                if (!names.procedureTemplateRefEql(candidate.owner_template, owner)) continue;
+                // A default-root site (a lambda/closure inside a defaulted-field
+                // expression) is matched only while materializing a default; it
+                // has no owning template, so the requesting context's owner
+                // does not participate. A template-owned site is matched only
+                // by its own template.
+                switch (candidate.owner) {
+                    .template => |site_owner| {
+                        if (in_default_expr) continue;
+                        if (!names.procedureTemplateRefEql(site_owner, owner)) continue;
+                    },
+                    .default_root => if (!in_default_expr) continue,
+                }
                 try self.nested_site_cache.put(address, candidate.site);
                 break :blk candidate.site;
             }
             Common.invariant("nested function expression reached Monotype without a checked nested function site");
         };
+        const raw_site = @intFromEnum(site);
+        if (raw_site >= view.nested_proc_sites.sites.len) {
+            Common.invariant("nested function site id was outside the CheckedModule procedure-site table");
+        }
         return .{
             .owner = owner,
             .site = site,
+            // A default-root site belongs to no template; the produced
+            // reference carries the declaring module's content identity so a
+            // stored function value built from it stays resolvable outside
+            // materialization context (const-store restore).
+            .default_root = switch (view.nested_proc_sites.sites[raw_site].owner) {
+                .template => null,
+                .default_root => .{ .bytes = view.module_identity.stable_hash },
+            },
             .context_fn_key = context_fn_key,
             .local_proc_context_digest = local_proc_context_digest,
         };
@@ -6030,10 +6060,23 @@ const Builder = struct {
         const root_node = try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
             try nested_ctx.graph.unify(root_node, try nested_ctx.lowerExprTypeNode(expr_id));
-            try nested_ctx.instantiateTemplateDispatchRelations(
-                nested_ctx.view.templates.get(nested_ctx.owner_template.template),
-                scope,
-            );
+            const raw_site = @intFromEnum(nested.site);
+            if (raw_site >= nested_ctx.view.nested_proc_sites.sites.len) {
+                Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
+            }
+            switch (nested_ctx.view.nested_proc_sites.sites[raw_site].owner) {
+                .template => try nested_ctx.instantiateTemplateDispatchRelations(
+                    nested_ctx.view.templates.get(nested_ctx.owner_template.template),
+                    scope,
+                ),
+                // A default-root site has no owning template, and by the
+                // parameter-constraint judgment (design.md "Defaulted
+                // Fields") a default is checked at its concrete field type:
+                // there is no enclosing scheme whose relations could apply.
+                // The default's own dispatch relations flow through its
+                // collected default-root evidence spans.
+                .default_root => {},
+            }
         }
         const request_contains_generated_private = try nested_ctx.graph.containsGeneratedPrivate(request_fn_node);
         if (request_contains_generated_private) {
@@ -6674,6 +6717,9 @@ const Builder = struct {
             var frozen_codec_calls = try ctx.sealedPreparedCodecCallsForBoundary(boundary.expr, sealer);
             defer frozen_codec_calls.deinit(self.allocator);
             ctx.frozen_codec_calls = &frozen_codec_calls;
+            var frozen_field_defaults = try ctx.sealedPreparedFieldDefaultsForBoundary(boundary.expr, sealer);
+            defer frozen_field_defaults.deinit(self.allocator);
+            ctx.frozen_field_defaults = &frozen_field_defaults;
 
             const callable_ty = try sealer.sealNode(boundary.callable_node);
             const callable = self.functionShape(callable_ty, "deferred structural serialization callable was not a function");
@@ -6743,6 +6789,9 @@ const Builder = struct {
             var frozen_codec_calls = try ctx.sealedPreparedCodecCallsForBoundary(boundary.expr, sealer);
             defer frozen_codec_calls.deinit(self.allocator);
             ctx.frozen_codec_calls = &frozen_codec_calls;
+            var frozen_field_defaults = try ctx.sealedPreparedFieldDefaultsForBoundary(boundary.expr, sealer);
+            defer frozen_field_defaults.deinit(self.allocator);
+            ctx.frozen_field_defaults = &frozen_field_defaults;
 
             const callable = try graph.functionNodes(boundary.callable_node);
             var checked_arg_storage: [checked.IntrinsicId.max_callsite_arity]checked.CheckedExprId = undefined;
@@ -7405,7 +7454,15 @@ const Builder = struct {
 
     fn moduleForConstFnDef(self: *Builder, fn_def: anytype) ModuleView {
         return switch (fn_def) {
-            .nested => |nested| self.moduleForDigest(names.procTemplateModuleDigest(nested.owner)),
+            // A default-root-qualified nested function's site lives in the
+            // DECLARING module (resolved by content identity, like every
+            // defaults-machinery lookup); a template-owned site lives in its
+            // owner template's module.
+            .nested => |nested| if (nested.default_root) |identity|
+                self.moduleForIdentityHash(&identity.bytes) orelse
+                    Common.invariant("stored default-root function's declaring module was not present in the lowering input")
+            else
+                self.moduleForDigest(names.procTemplateModuleDigest(nested.owner)),
             .parser_runtime => |runtime| self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner)),
             .encoder_for_runtime => |runtime| self.moduleForDigest(names.procTemplateModuleDigest(runtime.owner)),
             .local_template,
@@ -7445,6 +7502,7 @@ const Builder = struct {
                 template.fn_def = .{ .nested = .{
                     .owner = nested.owner,
                     .site = nested.site,
+                    .default_root = nested.default_root,
                     .context_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key),
                     .local_proc_context_digest = nested.local_proc_context_digest,
                 } };
@@ -7461,6 +7519,7 @@ const Builder = struct {
             .nested => |nested| .{ .nested = .{
                 .owner = nested.owner,
                 .site = nested.site,
+                .default_root = nested.default_root,
                 .context_fn_key = nested.context_fn_key,
                 .local_proc_context_digest = nested.local_proc_context_digest,
             } },
@@ -8080,6 +8139,7 @@ const Builder = struct {
         defer body_draft.deinit();
         var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), graph, &body_draft);
         defer fn_ctx.deinit();
+        fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
         fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(fn_value);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
         fn_ctx.current_fn_key = switch (fn_value.fn_def) {
@@ -10448,6 +10508,11 @@ const DraftNestedFamilyAddress = struct {
     owner_template: u32,
     owner_fn_key: [32]u8,
     site: u32,
+    /// Explicitly tagged default-root qualifier: the site id is relative to
+    /// the declaring module's site table, so a default-root site's family
+    /// carries that module's content identity (zeros under `false`).
+    default_root: bool,
+    default_root_module: [32]u8,
     method_scope: [32]u8,
     source_fn_key: [32]u8,
 
@@ -10458,6 +10523,8 @@ const DraftNestedFamilyAddress = struct {
             .owner_template = @intFromEnum(nested.owner.template),
             .owner_fn_key = nested.context_fn_key.bytes,
             .site = @intFromEnum(nested.site),
+            .default_root = nested.default_root != null,
+            .default_root_module = if (nested.default_root) |identity| identity.bytes else @splat(0),
             .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
@@ -10790,6 +10857,51 @@ const FrozenPreparedCodecCalls = struct {
     }
 };
 
+/// One `??` field-default value pre-lowered while the specialization graph
+/// still accepted relations (design.md "Defaulted Fields"): the default is a
+/// checked expression, and checked-expression lowering is relation
+/// production, so it must happen in Phase A. Phase-B parser emission consumes
+/// the finished draft expression and may not lower another checked default.
+const DraftPreparedFieldDefault = struct {
+    boundary_expr: DraftExprId,
+    default: Type.FieldDefault,
+    field_node: NodeId,
+    value: DraftExprId,
+};
+
+const FrozenPreparedFieldDefault = struct {
+    default: Type.FieldDefault,
+    field_ty: Type.TypeId,
+    value: DraftExprId,
+    consumed: bool = false,
+};
+
+/// Frozen Phase-B lookup from a sealed defaulted-field demand to its
+/// pre-lowered value expression. Each prepared value is one draft expression
+/// tree, so each entry satisfies exactly one generated consumption.
+const FrozenPreparedFieldDefaults = struct {
+    entries: []FrozenPreparedFieldDefault,
+
+    fn take(
+        self: *FrozenPreparedFieldDefaults,
+        default: Type.FieldDefault,
+        field_ty: Type.TypeId,
+    ) ?DraftExprId {
+        for (self.entries) |*entry| {
+            if (entry.consumed) continue;
+            if (!std.meta.eql(entry.default, default)) continue;
+            if (entry.field_ty != field_ty) continue;
+            entry.consumed = true;
+            return entry.value;
+        }
+        return null;
+    }
+
+    fn deinit(self: *FrozenPreparedFieldDefaults, allocator: Allocator) void {
+        allocator.free(self.entries);
+    }
+};
+
 const DraftDeferredInspect = struct {
     view: ModuleView,
     method_scope: ModuleView,
@@ -11066,6 +11178,14 @@ const DraftStringLiteral = struct {
     len: u32,
 };
 
+/// Draft-side source file table entry: module display name plus the
+/// coordinator's package-qualified module identity (see
+/// `base.SourceFileEntry`).
+const DraftSourceFile = struct {
+    name: DraftSpan(u8),
+    qualified_name: DraftSpan(u8),
+};
+
 const DraftPackedListLiteral = struct {
     literal: DraftStringLiteralId,
     len: u32,
@@ -11153,6 +11273,7 @@ const BodyDraftStore = struct {
     deferred_structural_serializations: std.ArrayList(DraftDeferredStructuralSerialization),
     deferred_callsite_intrinsics: std.ArrayList(DraftDeferredCallsiteIntrinsic),
     prepared_codec_calls: std.ArrayList(DraftPreparedCodecCall),
+    prepared_field_defaults: std.ArrayList(DraftPreparedFieldDefault),
     local_proc_contexts: std.ArrayList(LocalProcContext),
     deferred_inspects: std.ArrayList(DraftDeferredInspect),
     prepared_inspect_methods: std.ArrayList(DraftPreparedInspectMethod),
@@ -11195,7 +11316,7 @@ const BodyDraftStore = struct {
     runtime_schema_requests: std.ArrayList(DraftRuntimeSchemaRequest),
     comptime_sites: std.ArrayList(DraftComptimeSite),
     branch_regions: std.ArrayList(base.Region),
-    source_files: std.ArrayList(DraftSpan(u8)),
+    source_files: std.ArrayList(DraftSourceFile),
     source_file_ids: std.AutoHashMap(u32, u32),
     local_names: std.ArrayList(DraftSpan(u8)),
     source_text_bytes: std.ArrayList(u8),
@@ -11232,6 +11353,7 @@ const BodyDraftStore = struct {
             .deferred_structural_serializations = .empty,
             .deferred_callsite_intrinsics = .empty,
             .prepared_codec_calls = .empty,
+            .prepared_field_defaults = .empty,
             .local_proc_contexts = .empty,
             .deferred_inspects = .empty,
             .prepared_inspect_methods = .empty,
@@ -11355,6 +11477,7 @@ const BodyDraftStore = struct {
         self.deferred_structural_serializations.deinit(self.allocator);
         self.deferred_callsite_intrinsics.deinit(self.allocator);
         self.prepared_codec_calls.deinit(self.allocator);
+        self.prepared_field_defaults.deinit(self.allocator);
         self.deferred_structural_eqs.deinit(self.allocator);
         self.deferred_const_uses.deinit(self.allocator);
         self.active_callable_eval_bindings.deinit(self.allocator);
@@ -11802,17 +11925,24 @@ const BodyDraftStore = struct {
         return .{ .start = start, .len = @intCast(text.len) };
     }
 
-    fn addSourceFile(self: *BodyDraftStore, name: []const u8) Allocator.Error!u32 {
+    fn addSourceFile(self: *BodyDraftStore, name: []const u8, qualified_name: []const u8) Allocator.Error!u32 {
         const id: u32 = @intCast(self.source_files.items.len);
         const text = try self.addSourceText(name);
-        try self.source_files.append(self.allocator, text);
+        const qualified_text = try self.addSourceText(qualified_name);
+        try self.source_files.append(self.allocator, .{
+            .name = text,
+            .qualified_name = qualified_text,
+        });
         return id;
     }
 
-    fn sourceFileIdFor(self: *BodyDraftStore, module_idx: u32, name: []const u8) Allocator.Error!u32 {
-        const gop = try self.source_file_ids.getOrPut(module_idx);
+    fn sourceFileIdFor(self: *BodyDraftStore, view: ModuleView) Allocator.Error!u32 {
+        const gop = try self.source_file_ids.getOrPut(view.module_identity.module_idx);
         if (!gop.found_existing) {
-            gop.value_ptr.* = try self.addSourceFile(name);
+            gop.value_ptr.* = try self.addSourceFile(
+                view.module_env.module_name,
+                view.module_env.qualifiedModuleName(),
+            );
         }
         return gop.value_ptr.*;
     }
@@ -11891,9 +12021,12 @@ const BodyDraftStore = struct {
         emit_defs: ?[]const bool,
         emit_nested_defs: ?[]const bool,
     ) Allocator.Error!void {
-        for (self.source_files.items, 0..) |span, index| {
+        for (self.source_files.items, 0..) |file, index| {
             if (!ids.retained(.source_files, index)) continue;
-            _ = try program.addSourceFile(self.sourceText(span));
+            _ = try program.addSourceFile(.{
+                .name = self.sourceText(file.name),
+                .qualified_name = self.sourceText(file.qualified_name),
+            });
         }
 
         for (self.string_literals.items, 0..) |literal, index| {
@@ -13107,6 +13240,14 @@ const BodyContext = struct {
     typed_binders: TypedBinders,
     local_proc_contexts: std.AutoHashMap(DraftLocalProcAddress, DraftLocalProcContextId),
     restored_local_proc_scope: ?RestoredLocalProcScope = null,
+    /// True while this context lowers a defaulted-field expression (design.md
+    /// "Defaulted Fields"). Checking records nested-function sites for
+    /// default expressions under the `.default_root` owner (they belong to no
+    /// procedure template), so site resolution must know it is inside a
+    /// default's inlined materialization rather than the consuming template's
+    /// own body. Set and restored by `defaultedFieldValueAtCell`; inherited by
+    /// child contexts created within the materialization.
+    in_default_expr: bool = false,
     /// This specialization's type solver, shared by every instantiation
     /// context created while lowering the same specialization.
     graph: *InstGraph,
@@ -13174,6 +13315,10 @@ const BodyContext = struct {
     /// Phase-B structural serialization may consume these sealed requests but
     /// may not instantiate or lower another checked callable.
     frozen_codec_calls: ?*const FrozenPreparedCodecCalls = null,
+    /// Exact `??` field-default values pre-lowered before the graph froze.
+    /// Phase-B structural parser emission consumes these finished draft
+    /// expressions; it may not lower another checked default expression.
+    frozen_field_defaults: ?*FrozenPreparedFieldDefaults = null,
     /// Exact checker-authored contract for the structural codec currently
     /// being prepared, plus the live constructor and shape cells it denotes.
     active_codec_contract: ?struct {
@@ -13705,7 +13850,7 @@ const BodyContext = struct {
         var ctx = try initBodyState(allocator, builder, view, owner_template, graph, draft);
         errdefer ctx.deinit();
         ctx.method_scope = method_scope;
-        ctx.source_file_id = try draft.sourceFileIdFor(view.module_identity.module_idx, view.module_env.module_name);
+        ctx.source_file_id = try draft.sourceFileIdFor(view);
         return ctx;
     }
 
@@ -15086,6 +15231,7 @@ const BodyContext = struct {
         self.frozen_sealed_emission = parent.frozen_sealed_emission;
         self.frozen_type_finals = parent.frozen_type_finals;
         self.frozen_codec_calls = parent.frozen_codec_calls;
+        self.frozen_field_defaults = parent.frozen_field_defaults;
     }
 
     const CallableBodyDemandScope = struct {
@@ -15161,6 +15307,7 @@ const BodyContext = struct {
         child.runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         child.function_entry_demand_guards = self.function_entry_demand_guards;
         child.restored_local_proc_scope = self.restored_local_proc_scope;
+        child.in_default_expr = self.in_default_expr;
         child.specialization_dispatch_crashes = self.specialization_dispatch_crashes;
         child.owns_specialization_dispatch_crashes = false;
         child.borrowed_specialization_dispatch_divergence = self.specializationDispatchDivergence();
@@ -16106,6 +16253,17 @@ const BodyContext = struct {
         checked_ty: checked.CheckedTypeId,
         mono_ty: Type.TypeId,
     ) Allocator.Error!void {
+        // The graph cross-check can only run while relations are producing.
+        // Only a context explicitly marked as sealed-emission skips it: the
+        // frozen-graph boundary emitters (deferred structural serialization
+        // and callsite intrinsics, e.g. a generated parser body
+        // materializing a field default per specialization—design.md
+        // "Defaulted Fields") lower sealed expressions whose produced type
+        // every call site verifies with its `sameType` invariant. Any other
+        // frozen-phase caller is a bug and fails loudly inside
+        // `constrainTypeToMono` (the graph's relation-production
+        // requirement) instead of silently losing the cross-check.
+        if (self.frozen_sealed_emission) return;
         try self.constrainTypeToMono(checked_ty, mono_ty);
     }
 
@@ -17140,22 +17298,17 @@ const BodyContext = struct {
             .expect,
             .numeral_conversion,
             .quote_conversion,
-            .field_default,
             => saved_source_region_override,
         };
         const body = if (root.literalConversionKind() != null) blk: {
             const ret_ty = try self.activeTypeFromCell(ret_cell);
             break :blk try self.lowerNumeralRootBody(wrapper.body_expr, ret_ty);
         } else switch (root.kind) {
-            // A field default's root body is an ordinary pure expression
-            // (design.md "Defaulted Fields"); it lowers through the general
-            // comptime-root path.
             .constant,
             .hoisted_constant,
             .hoisted_validation,
             .callable_binding,
             .expect,
-            .field_default,
             => try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell),
             .numeral_conversion,
             .quote_conversion,
@@ -17286,6 +17439,13 @@ const BodyContext = struct {
         if (!names.procedureTemplateRefEql(chain.scope.owner, self.owner_template)) {
             Common.invariant("stored function evidence belonged to a different checked template");
         }
+        // A default-root nested function instantiates no owner-template
+        // dispatch relations (design.md "Defaulted Fields"): the default has
+        // no enclosing scheme, so its relations flow entirely through the
+        // default evidence spans. The chain owner above is the template that
+        // RECORDED the materialization, while `self.view` is the declaring
+        // module—its template table does not contain that owner.
+        if (self.in_default_expr) return;
         if (chain.parent) |parent| try self.replayStoredEvidenceRelations(parent.*);
         const template = self.view.templates.get(self.owner_template.template);
         switch (chain.scope.lexical) {
@@ -18462,6 +18622,7 @@ const BodyContext = struct {
                 // inline slots (design.md "Defaulted Fields").
                 return try self.lowerRecordExprAtNode(expr_id, .{
                     .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                    .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
                     .ext = @as(?checked.CheckedExprId, null),
                 }, expr_node, &.{});
             },
@@ -18744,6 +18905,7 @@ const BodyContext = struct {
             // fields demanded this produces the empty record constructor.
             .empty_record => return try self.lowerRecordExpr(.{
                 .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
                 .ext = @as(?checked.CheckedExprId, null),
             }, ty, &.{}),
             .str => |segments| try self.lowerStr(segments),
@@ -19565,6 +19727,7 @@ const BodyContext = struct {
         body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
         body_ctx.frozen_type_finals = self.frozen_type_finals;
         body_ctx.frozen_codec_calls = self.frozen_codec_calls;
+        body_ctx.frozen_field_defaults = self.frozen_field_defaults;
         defer body_ctx.deinit();
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.builder.program.types, &self.builder.program.names);
         body_ctx.owner_context_fn_key = root_fn_key;
@@ -19621,6 +19784,7 @@ const BodyContext = struct {
         body_ctx.frozen_sealed_emission = self.frozen_sealed_emission;
         body_ctx.frozen_type_finals = self.frozen_type_finals;
         body_ctx.frozen_codec_calls = self.frozen_codec_calls;
+        body_ctx.frozen_field_defaults = self.frozen_field_defaults;
         defer body_ctx.deinit();
         const root_fn_key = view.types.rootKey(wrapper.checked_fn_root);
         body_ctx.owner_context_fn_key = root_fn_key;
@@ -27722,7 +27886,7 @@ const BodyContext = struct {
         );
         const previous_view = self.view;
         const previous_source_file_id = self.source_file_id;
-        const local_source_file_id = try self.draft.sourceFileIdFor(local_view.module_identity.module_idx, local_view.module_env.module_name);
+        const local_source_file_id = try self.draft.sourceFileIdFor(local_view);
         self.view = local_view;
         self.source_file_id = local_source_file_id;
         defer {
@@ -27754,6 +27918,7 @@ const BodyContext = struct {
             local.expr,
             context_fn_key,
             try self.localProcContextsDigest(),
+            self.in_default_expr,
         );
         const requested_evidence = if (local.dispatch_scope) |scope|
             try enterEvidenceScope(self.builder, context.evidence, scope, local.expr, evidence)
@@ -29989,9 +30154,12 @@ const BodyContext = struct {
             Common.invariant("stored checked function did not contain an explicit evidence root frame");
         }
         const retained_evidence = try self.materializeConstFnEvidence(fn_value);
-        const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
+        _ = self.builder.moduleForConstFnDef(fn_value.fn_def);
         const checked_template = templateForConstFnDef(fn_value.fn_def);
-        _ = fn_view.templates.get(checked_template.template);
+        // The recording owner template lives in its OWN module (for a
+        // default-root stored function, the fn's module is the declaring
+        // module, not the owner's).
+        _ = self.builder.moduleForDigest(names.procTemplateModuleDigest(checked_template)).templates.get(checked_template.template);
         const fn_def = try self.builder.constFnDefToMono(fn_value.fn_def);
         if (fn_value.captures.len != 0) {
             return try self.restoreCapturingConstFnAtNode(
@@ -30034,6 +30202,7 @@ const BodyContext = struct {
                     self.graph,
                     self.draft,
                 );
+                fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
                 fn_ctx.evidence = retained_evidence;
                 fn_ctx.inheritFrozenEmissionContext(self);
                 defer fn_ctx.deinit();
@@ -30087,6 +30256,7 @@ const BodyContext = struct {
             self.graph,
             self.draft,
         );
+        fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
         fn_ctx.evidence = retained_evidence;
         fn_ctx.inheritFrozenEmissionContext(self);
         defer fn_ctx.deinit();
@@ -30253,9 +30423,12 @@ const BodyContext = struct {
             Common.invariant("stored checked function did not contain an explicit evidence root frame");
         }
         const retained_evidence = try self.materializeConstFnEvidence(fn_value);
-        const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
+        _ = self.builder.moduleForConstFnDef(fn_value.fn_def);
         const checked_template = templateForConstFnDef(fn_value.fn_def);
-        _ = fn_view.templates.get(checked_template.template);
+        // The recording owner template lives in its OWN module (for a
+        // default-root stored function, the fn's module is the declaring
+        // module, not the owner's).
+        _ = self.builder.moduleForDigest(names.procTemplateModuleDigest(checked_template)).templates.get(checked_template.template);
         if (fn_value.captures.len != 0) {
             return try self.restoreCapturingConstFn(store_view, fn_value, template, ty, retained_evidence, static_data_const_locator);
         }
@@ -30278,6 +30451,7 @@ const BodyContext = struct {
             .nested => |nested| {
                 const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
                 var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
+                fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
                 fn_ctx.evidence = retained_evidence;
                 fn_ctx.inheritFrozenEmissionContext(self);
                 defer fn_ctx.deinit();
@@ -30323,6 +30497,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
+        fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
         fn_ctx.evidence = retained_evidence;
         fn_ctx.inheritFrozenEmissionContext(self);
         defer fn_ctx.deinit();
@@ -32017,6 +32192,7 @@ const BodyContext = struct {
                     .empty_record => {
                         break :blk try self.lowerRecordConstructorAtNode(checked_expr, .{
                             .fields = @as([]const checked.CheckedRecordExprField, &.{}),
+                            .unsets = @as([]const check.CanonicalNames.RecordFieldLabelId, &.{}),
                             .ext = @as(?checked.CheckedExprId, null),
                         }, expected_node);
                     },
@@ -32533,31 +32709,103 @@ const BodyContext = struct {
         return try self.defaultedFieldValueAt(self.builder.program.names.moduleIdentityBytes(default.module), default.expr_node, field_ty);
     }
 
-    /// Restore a default from its declaring module, including during local root finalization.
+    /// Materialize a default by lowering its declaring module's archived
+    /// checked expression at the construction site's field monotype—
+    /// per-specialization materialization (design.md "Defaulted Fields").
+    /// There is no archived VALUE and no cross-root ordering: the inlined
+    /// expression evaluates as part of whatever body consumes it (a comptime
+    /// root's evaluation, or a runtime body). A foreign default lowers under
+    /// a scoped view swap, mirroring `lowerDraftLocalProcAtNode`.
     fn defaultedFieldValueAt(
         self: *BodyContext,
         origin_hash: *const [32]u8,
         expr_node: u32,
         field_ty: Type.TypeId,
     ) Allocator.Error!?DraftExprId {
-        const declaring_view = if (moduleViewIdentityMatches(self.view, origin_hash))
-            self.view
-        else
-            self.builder.moduleForIdentityHash(origin_hash) orelse
-                Common.invariant("defaulted field's declaring module was not present in the lowering input");
+        return try self.defaultedFieldValueAtCell(origin_hash, expr_node, .{ .sealed = field_ty });
+    }
+
+    /// Cell-typed core of `defaultedFieldValueAt`: Phase-A codec preparation
+    /// materializes a default at a live graph-node cell, while construction
+    /// sites materialize at a sealed field monotype.
+    fn defaultedFieldValueAtCell(
+        self: *BodyContext,
+        origin_hash: *const [32]u8,
+        expr_node: u32,
+        field_cell: DraftTypeCell,
+    ) Allocator.Error!?DraftExprId {
+        if (moduleViewIdentityMatches(self.view, origin_hash)) {
+            const default_expr = self.view.bodies.defaultExpr(expr_node) orelse
+                Common.invariant("defaulted field's default expression was not archived");
+            // Each materialization is its own instantiation of the checked
+            // default expression: two construction sites in one body may
+            // demand different specializations, so they must not share the
+            // consuming body's memoized checked-type nodes (`instNode`
+            // caches by checked identity per context). Same mechanism as
+            // the foreign branch below, minus the module swap.
+            const previous_instantiation = self.instantiation;
+            self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
+            const previous_in_default_expr = self.in_default_expr;
+            self.in_default_expr = true;
+            // The default is a closed expression: it binds nothing from the
+            // consuming body, so it gets fresh binder state even in its own
+            // module (the same rule boxy's `lowerModuleExprInto` applies).
+            // Without this, a second materialization of the same default in
+            // one body would capture the first's (or the consuming body's)
+            // lexical binder entries into its local-procedure declaration
+            // contexts and trip the one-context-per-binder invariant.
+            const previous_binders = self.binders;
+            const previous_typed_binders = self.typed_binders;
+            self.binders = try BinderMap.init(self.allocator, self.view.bodies.patternBinderCount());
+            self.typed_binders = TypedBinders.init(self.allocator);
+            defer {
+                self.binders.deinit();
+                self.typed_binders.deinit();
+                self.binders = previous_binders;
+                self.typed_binders = previous_typed_binders;
+                self.in_default_expr = previous_in_default_expr;
+                self.instantiation.deinit();
+                self.instantiation = previous_instantiation;
+            }
+            return try self.lowerExprAtTypeCell(default_expr, field_cell);
+        }
+        const declaring_view = self.builder.moduleForIdentityHash(origin_hash) orelse
+            Common.invariant("defaulted field's declaring module was not present in the lowering input");
         const default_expr = declaring_view.bodies.defaultExpr(expr_node) orelse
             Common.invariant("defaulted field's default expression was not archived");
-        // Local roots may still be pending; imported roots must be finalized.
-        if (declaring_view.compile_time_roots.lookupFieldDefaultRootByExpr(default_expr)) |root| {
-            switch (root.payload) {
-                .const_node => |node| return try self.restoreConstNodeAtType(declaring_view, declaring_view, node, field_ty),
-                .pending, .fn_value, .discarded, .expect => {},
-            }
+
+        const previous_view = self.view;
+        const previous_source_file_id = self.source_file_id;
+        const previous_instantiation = self.instantiation;
+        self.view = declaring_view;
+        self.source_file_id = try self.draft.sourceFileIdFor(declaring_view);
+        // Checked-type lookups validate instantiation-context ownership, so
+        // the foreign expression gets its own context, exactly like a
+        // foreign nominal backing instantiation.
+        self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), declaring_view.key.bytes);
+        defer {
+            self.instantiation.deinit();
+            self.instantiation = previous_instantiation;
+            self.view = previous_view;
+            self.source_file_id = previous_source_file_id;
         }
-        if (!moduleViewIdentityMatches(self.view, origin_hash)) {
-            Common.invariant("imported defaulted field's default constant was not finalized");
+        // The default is a closed expression: it binds nothing from the
+        // consuming body, so foreign lowering gets fresh binder state
+        // exactly like a cross-module local procedure.
+        const previous_binders = self.binders;
+        const previous_typed_binders = self.typed_binders;
+        self.binders = try BinderMap.init(self.allocator, declaring_view.bodies.patternBinderCount());
+        self.typed_binders = TypedBinders.init(self.allocator);
+        const previous_in_default_expr = self.in_default_expr;
+        self.in_default_expr = true;
+        defer {
+            self.in_default_expr = previous_in_default_expr;
+            self.binders.deinit();
+            self.typed_binders.deinit();
+            self.binders = previous_binders;
+            self.typed_binders = previous_typed_binders;
         }
-        return try self.lowerExprAtType(default_expr, field_ty);
+        return try self.lowerExprAtTypeCell(default_expr, field_cell);
     }
 
     /// The explicit `??` identity carried by a field in `record_ty`.
@@ -33197,7 +33445,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         if (record.ext) |ext| {
             const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext);
-            const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len);
+            const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
                 const name = try self.builder.recordFieldName(self.view, field.label);
@@ -33226,10 +33474,40 @@ const BodyContext = struct {
                     },
                 };
             }
+            // An UNSET field becomes an explicitly listed update field whose
+            // value is the slot's Missing tag—the same construction an
+            // omitted optional field uses (design.md "In Progress: Unsetting
+            // an Optional Field"). The backend keeps copying unlisted slots
+            // and writing listed ones.
+            for (record.unsets, 0..) |label, unset_index| {
+                const name = try self.builder.recordFieldName(self.view, label);
+                const target_field = self.builder.recordField(ty, name);
+                if (self.monotypeFieldKindTag(target_field) != .optional) {
+                    Common.invariant("record update unset field was not optional after checking");
+                }
+                fields[record.fields.len + unset_index] = .{
+                    .name = name,
+                    .value = try self.optionalSlotMissingExpr(target_field.ty),
+                };
+            }
             return try self.addExpr(.{ .ty = ty, .data = .{ .record_update = .{
                 .base = base_expr,
                 .fields = try self.addFieldExprSpan(fields),
             } } });
+        }
+
+        // The closed constructor never lists unset fields explicitly—an
+        // unset optional slot is constructed by the omitted-optional arm
+        // below—but every unset label must still name an OPTIONAL field in
+        // the row, the same validation the update arm above applies. Without
+        // it, an unset of a defaulted field would silently take the
+        // defaulted arm and materialize the default, diverging from boxy
+        // lowering (which panics on the same input).
+        for (record.unsets) |label| {
+            const name = try self.builder.recordFieldName(self.view, label);
+            if (self.monotypeFieldKindTag(self.builder.recordField(ty, name)) != .optional) {
+                Common.invariant("record constructor unset field was not optional after checking");
+            }
         }
 
         const target_fields = switch (self.builder.shapeContent(ty)) {
@@ -33344,7 +33622,7 @@ const BodyContext = struct {
         if (record.ext) |ext| {
             const base_expr = self.preLoweredChildAt(pre_lowered, ext) orelse
                 Common.invariant("record graph update lost its pre-lowered base child");
-            const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len);
+            const fields = try self.allocator.alloc(DraftFieldExpr, record.fields.len + record.unsets.len);
             defer self.allocator.free(fields);
             for (record.fields, 0..) |field, index| {
                 const name = try self.builder.recordFieldName(self.view, field.label);
@@ -33364,6 +33642,26 @@ const BodyContext = struct {
                 else
                     pre;
                 fields[index] = .{ .name = name, .value = value };
+            }
+            // An UNSET field becomes an explicitly listed update field whose
+            // value is the slot's Missing tag—the same construction an
+            // omitted optional field uses (design.md "In Progress: Unsetting
+            // an Optional Field"). The backend keeps copying unlisted slots
+            // and writing listed ones. The Missing tag is constructed at the
+            // slot's own graph node, so unset fields keep the checked
+            // representation and take no part in witness selection below.
+            for (record.unsets, 0..) |label, unset_index| {
+                const name = try self.builder.recordFieldName(self.view, label);
+                const field_kind = try self.graph.recordConstructionFieldKind(record_node, name);
+                if (field_kind != .optional) {
+                    Common.invariant("record graph update unset field was not optional after checking");
+                }
+                fields[record.fields.len + unset_index] = .{
+                    .name = name,
+                    .value = try self.optionalSlotMissingExprAtNode(
+                        try self.graph.recordConstructionFieldNode(record_node, name),
+                    ),
+                };
             }
             // An updated field's producer-authored child can carry a
             // representation distinct from the checked-public field slot, so
@@ -33411,6 +33709,18 @@ const BodyContext = struct {
                 .base = base_expr,
                 .fields = try self.addFieldExprSpan(fields),
             } });
+        }
+
+        // Same unset validation as the closed constructor in
+        // `lowerRecordExpr` (and the graph update arm above): an unset label
+        // must name an OPTIONAL field in the row; the omitted-optional arm
+        // below then constructs its Missing slot. Without this, an unset of
+        // a defaulted field would silently materialize the default.
+        for (record.unsets) |label| {
+            const name = try self.builder.recordFieldName(self.view, label);
+            if ((try self.graph.recordConstructionFieldKind(record_node, name)) != .optional) {
+                Common.invariant("record graph constructor unset field was not optional after checking");
+            }
         }
 
         const target_fields = (try self.graph.recordConstructionNodes(record_node)).fields;
@@ -33833,6 +34143,7 @@ const BodyContext = struct {
             expr_id,
             self.current_fn_key,
             try self.localProcContextsDigest(),
+            self.in_default_expr,
         );
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
@@ -33963,6 +34274,7 @@ const BodyContext = struct {
             expr_id,
             self.current_fn_key,
             try self.localProcContextsDigest(),
+            self.in_default_expr,
         );
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
@@ -33998,9 +34310,12 @@ const BodyContext = struct {
             Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
         }
         const site = self.view.nested_proc_sites.sites[raw_site];
-        if (!names.procedureTemplateRefEql(site.owner_template, self.owner_template) or
-            site.checked_expr == null or site.checked_expr.? != expr_id)
-        {
+        const owner_matches = switch (site.owner) {
+            .template => |site_owner| !self.in_default_expr and
+                names.procedureTemplateRefEql(site_owner, self.owner_template),
+            .default_root => self.in_default_expr,
+        };
+        if (!owner_matches or site.checked_expr == null or site.checked_expr.? != expr_id) {
             Common.invariant("nested function site did not match its checked expression owner");
         }
 
@@ -35656,13 +35971,34 @@ const BodyContext = struct {
         }
         const expected_head: LexicalDispatchScope = switch (fn_value.fn_def) {
             .nested => |nested| blk: {
+                // A default-root-qualified stored function's site lives in
+                // the DECLARING module (resolved by content identity); the
+                // evidence frames themselves stay validated against the
+                // recording owner template's module above, exactly as they
+                // were captured during materialization (design.md "Defaulted
+                // Fields"—const-store restore is the second sanctioned
+                // resolver of default-root sites).
+                const site_view = if (nested.default_root != null)
+                    self.builder.moduleForConstFnDef(fn_value.fn_def)
+                else
+                    owner_view;
                 const raw_site = @intFromEnum(nested.site);
-                if (raw_site >= owner_view.nested_proc_sites.sites.len) {
+                if (raw_site >= site_view.nested_proc_sites.sites.len) {
                     Common.invariant("stored nested function referenced an unknown checked site");
                 }
-                const site = owner_view.nested_proc_sites.sites[raw_site];
-                if (!names.procedureTemplateRefEql(site.owner_template, owner)) {
-                    Common.invariant("stored nested function site belonged to a different checked template");
+                const site = site_view.nested_proc_sites.sites[raw_site];
+                switch (site.owner) {
+                    .template => |site_owner| {
+                        if (nested.default_root != null) {
+                            Common.invariant("stored default-root function referenced a template-owned checked site");
+                        }
+                        if (!names.procedureTemplateRefEql(site_owner, owner)) {
+                            Common.invariant("stored nested function site belonged to a different checked template");
+                        }
+                    },
+                    .default_root => if (nested.default_root == null) {
+                        Common.invariant("stored nested function referenced a default-root checked site without a default-root qualifier");
+                    },
                 }
                 break :blk switch (site.lexical_scope) {
                     .root => .root,
@@ -39940,6 +40276,36 @@ const BodyContext = struct {
         return false;
     }
 
+    /// Phase-A relation production for one `??` field default reachable from
+    /// a deferred codec boundary's shape: lower the checked default
+    /// expression at the field's inline value node while the graph still
+    /// accepts relations, and record the finished draft expression for
+    /// Phase-B parser emission to consume (mirrors `prepareCustomCodecCall`).
+    fn prepareDefaultedFieldValue(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        default: Type.FieldDefault,
+        field_node: NodeId,
+    ) Allocator.Error!bool {
+        for (self.draft.prepared_field_defaults.items) |prepared| {
+            if (prepared.boundary_expr != boundary_expr) continue;
+            if (!std.meta.eql(prepared.default, default)) continue;
+            if (self.graph.sameClass(prepared.field_node, field_node)) return false;
+        }
+        const value = (try self.defaultedFieldValueAtCell(
+            self.builder.program.names.moduleIdentityBytes(default.module),
+            default.expr_node,
+            DraftTypeCell.fromGraphNode(field_node),
+        )) orelse Common.invariant("structural parser field default had no archived expression");
+        try self.draft.prepared_field_defaults.append(self.allocator, .{
+            .boundary_expr = boundary_expr,
+            .default = default,
+            .field_node = field_node,
+            .value = value,
+        });
+        return true;
+    }
+
     fn prepareStructuralCodecCallsAtNode(
         self: *BodyContext,
         boundary_expr: DraftExprId,
@@ -40051,6 +40417,24 @@ const BodyContext = struct {
             });
         }
         return try FrozenPreparedCodecCalls.init(self.allocator, try out.toOwnedSlice(self.allocator));
+    }
+
+    fn sealedPreparedFieldDefaultsForBoundary(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        sealer: *GraphTypeFinals,
+    ) Allocator.Error!FrozenPreparedFieldDefaults {
+        var out = std.ArrayList(FrozenPreparedFieldDefault).empty;
+        errdefer out.deinit(self.allocator);
+        for (self.draft.prepared_field_defaults.items) |prepared| {
+            if (prepared.boundary_expr != boundary_expr) continue;
+            try out.append(self.allocator, .{
+                .default = prepared.default,
+                .field_ty = try sealer.sealNode(prepared.field_node),
+                .value = prepared.value,
+            });
+        }
+        return .{ .entries = try out.toOwnedSlice(self.allocator) };
     }
 
     fn resolvedPreparedCodecCallsForBoundary(
@@ -42060,8 +42444,14 @@ const BodyContext = struct {
                         boundary_callable_node,
                     ) or added;
                 }
-                for (fields) |field|
+                for (fields) |field| {
+                    if (kind == .parser) {
+                        if (field.default) |default| {
+                            added = try self.prepareDefaultedFieldValue(boundary_expr, default, field.ty) or added;
+                        }
+                    }
                     added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, field.ty, boundary_callable_node, seen) or added;
+                }
             },
             .tag_union => {
                 if (kind == .encoder) {
@@ -42226,7 +42616,16 @@ const BodyContext = struct {
             Common.invariant("record finish field local type differed from defaulted field type");
         }
 
-        const default_field = (try self.defaultedFieldValueFromMonoDefault(default, field_ty)) orelse
+        // Materializing a default lowers a checked expression, which is
+        // relation production. Phase-B (frozen) emission therefore consumes
+        // the value prepared while the graph still accepted relations;
+        // Phase-A generation lowers it directly.
+        const default_field = if (self.frozen_sealed_emission) blk: {
+            const prepared = self.frozen_field_defaults orelse
+                Common.invariant("frozen parser emission had no prepared field-default table");
+            break :blk prepared.take(default, field_ty) orelse
+                Common.invariant("frozen parser emission demanded an unprepared defaulted-field value");
+        } else (try self.defaultedFieldValueFromMonoDefault(default, field_ty)) orelse
             Common.invariant("defaulted record parse finish had no archived default to materialize");
         const present_field = try self.localExpr(payload_local, payload_ty);
         const presence_word = recordPresenceWordIndex(field_index);
@@ -48141,7 +48540,13 @@ const BodyContext = struct {
         var site: ?checked.NestedProcSite = null;
         for (view.nested_proc_sites.sites) |candidate| {
             if (candidate.checked_expr == null or candidate.checked_expr.? != expr) continue;
-            if (!names.procedureTemplateRefEql(candidate.owner_template, self.owner_template)) continue;
+            switch (candidate.owner) {
+                .template => |site_owner| {
+                    if (self.in_default_expr) continue;
+                    if (!names.procedureTemplateRefEql(site_owner, self.owner_template)) continue;
+                },
+                .default_root => if (!self.in_default_expr) continue,
+            }
             if (site != null) Common.invariant("restored local procedure matched multiple checked nested sites");
             site = candidate;
         }
@@ -50285,6 +50690,18 @@ fn ownerTemplateForConstFnDef(fn_def: anytype) names.ProcTemplate {
     };
 }
 
+/// Whether a stored function definition names a default-root site (a lambda
+/// inside a defaulted-field expression, design.md "Defaulted Fields").
+/// Restore contexts for such functions run in default-materialization mode:
+/// `in_default_expr` set, view swapped to the declaring module, and no
+/// owner-template dispatch relations instantiated.
+fn constFnDefIsDefaultRoot(fn_def: anytype) bool {
+    return switch (fn_def) {
+        .nested => |nested| nested.default_root != null,
+        .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => false,
+    };
+}
+
 fn templateForConstFnDef(fn_def: check.ConstStore.FnDef) names.ProcTemplate {
     return switch (fn_def) {
         .local_template,
@@ -50299,9 +50716,22 @@ fn templateForConstFnDef(fn_def: check.ConstStore.FnDef) names.ProcTemplate {
 }
 
 fn checkedNestedSite(view: ModuleView, nested: anytype) checked.NestedProcSite {
+    // A default-root-qualified stored function names the declaring module's
+    // default root as the site owner; `view` is already that module
+    // (`moduleForConstFnDef` resolves it by content identity), so the match
+    // is by site id against the `.default_root` owner (design.md "Defaulted
+    // Fields"—const-store restore is the second sanctioned resolver of
+    // default-root sites, after live default materialization).
+    const wants_default_root = nested.default_root != null;
     for (view.nested_proc_sites.sites) |site| {
         if (site.site != nested.site) continue;
-        if (!names.procedureTemplateRefEql(site.owner_template, nested.owner)) continue;
+        switch (site.owner) {
+            .template => |site_owner| {
+                if (wants_default_root) continue;
+                if (!names.procedureTemplateRefEql(site_owner, nested.owner)) continue;
+            },
+            .default_root => if (!wants_default_root) continue,
+        }
         return site;
     }
     Common.invariant("stored nested function referenced a missing checked nested site");
@@ -51474,7 +51904,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         .{ .padding = ty },
     });
     const site = try draft.addComptimeSite(.if_, base.Region.zero(), null, &.{base.Region.zero()});
-    const source_file = try draft.addSourceFile("module.roc");
+    const source_file = try draft.addSourceFile("module.roc", "test.module.roc");
     try draft.setLocalName(local, "value");
     const record_pat = try draft.addPat(.{ .ty = ty, .data = .{ .record = destruct_span } });
     const str_pat = try draft.addPat(.{ .ty = ty, .data = .{ .str_pattern = .{

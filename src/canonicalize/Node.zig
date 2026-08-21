@@ -67,6 +67,7 @@ pub const Tag = enum {
     expr_record,
     expr_empty_record,
     record_field,
+    record_unset_field,
     record_destruct,
     expr_field_access,
     field_access_segment,
@@ -230,7 +231,7 @@ pub const Tag = enum {
     diag_open_ext_not_allowed_in_type_decl,
     diag_unnamed_field_not_allowed_in_structural_record,
     diag_optional_field_cannot_have_default,
-    diag_record_default_not_literal,
+    diag_record_default_reference_cycle,
     diag_type_module_missing_matching_type,
     diag_type_module_has_alias_not_nominal,
     diag_default_app_missing_main,
@@ -290,6 +291,8 @@ pub const Tag = enum {
     diag_deprecated_number_suffix,
     diag_range_op_chained,
     diag_unnamed_field_cannot_have_default,
+    diag_default_not_allowed_in_structural_record,
+    diag_default_not_allowed_on_local_type_decl,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
@@ -410,6 +413,7 @@ pub const Payload = extern union {
 
     // === Other payloads ===
     record_field: RecordField,
+    record_unset_field: RecordUnsetField,
     record_destruct: RecordDestruct,
     match_branch: MatchBranch,
     match_branch_pattern: MatchBranchPattern,
@@ -621,7 +625,8 @@ pub const Payload = extern union {
 
     pub const ExprRecord = extern struct {
         fields_ext_idx: u32, // Index into span_with_node_data: (fields.start, fields.len, ext_value)
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        unsets_span2_idx: u32, // Index into span2_data: (unsets.start, unsets.len)
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const ExprTag = extern struct {
@@ -1064,6 +1069,11 @@ pub const Payload = extern union {
         name: u32,
         expr: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+
+    pub const RecordUnsetField = extern struct {
+        name: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const RecordDestruct = extern struct {

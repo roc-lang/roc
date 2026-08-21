@@ -1,3 +1,3 @@
 FieldKinds := [].{
-    Config : { text : Str ?? "a\"b" }
+    Config := { text : Str ?? "a\"b" }
 }

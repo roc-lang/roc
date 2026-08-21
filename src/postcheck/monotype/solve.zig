@@ -828,7 +828,7 @@ pub const InstGraph = struct {
         return null;
     }
 
-    fn acceptsRelationMutation(self: *const InstGraph) bool {
+    pub fn acceptsRelationMutation(self: *const InstGraph) bool {
         return self.relation_state == .producing;
     }
 

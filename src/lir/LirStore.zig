@@ -78,6 +78,13 @@ pattern_ids: GuardedList.List(LirPatternId, "LirStore.pattern_ids"),
 /// zero-copy from a LIR image.
 source_file_bytes: GuardedList.List(u8, "LirStore.source_file_bytes"),
 source_file_ends: GuardedList.List(u32, "LirStore.source_file_ends"),
+/// Package-qualified module identity per source file table entry (e.g.
+/// `pf.Utils`), flattened exactly like `source_file_bytes`/`source_file_ends`.
+/// Module identity comparisons ("does this failed statement belong to the
+/// finalized module?") must use these, never the display names: two packages
+/// may both contain a module with the same bare name.
+source_file_qualified_bytes: GuardedList.List(u8, "LirStore.source_file_qualified_bytes"),
+source_file_qualified_ends: GuardedList.List(u32, "LirStore.source_file_qualified_ends"),
 /// Source location per statement, parallel to `cf_stmts`. Reference-count
 /// statements always record `SourceLoc.none`; they have no source counterpart.
 cf_stmt_locs: GuardedList.List(base.SourceLoc, "LirStore.cf_stmt_locs"),
@@ -126,6 +133,8 @@ pub fn init(allocator: Allocator) Self {
         .pattern_ids = .empty,
         .source_file_bytes = .empty,
         .source_file_ends = .empty,
+        .source_file_qualified_bytes = .empty,
+        .source_file_qualified_ends = .empty,
         .cf_stmt_locs = .empty,
         .cf_stmt_regions = .empty,
         .cf_stmt_inline_scopes = .empty,
@@ -158,6 +167,8 @@ pub fn deinit(self: *Self) void {
     self.pattern_ids.deinit(self.allocator);
     self.source_file_bytes.deinit(self.allocator);
     self.source_file_ends.deinit(self.allocator);
+    self.source_file_qualified_bytes.deinit(self.allocator);
+    self.source_file_qualified_ends.deinit(self.allocator);
     self.cf_stmt_locs.deinit(self.allocator);
     self.cf_stmt_regions.deinit(self.allocator);
     self.cf_stmt_inline_scopes.deinit(self.allocator);
@@ -224,11 +235,14 @@ fn setProcDebugNameIndex(self: *Self, id: LirProcSpecId, string: base.StringLite
 }
 
 /// Copies the source file table from a lowering stage's program.
-pub fn setSourceFiles(self: *Self, files: []const []const u8) Allocator.Error!void {
+pub fn setSourceFiles(self: *Self, files: []const base.SourceFileEntry) Allocator.Error!void {
     std.debug.assert(self.source_file_ends.len() == 0);
+    std.debug.assert(self.source_file_qualified_ends.len() == 0);
     for (files) |file| {
-        try self.source_file_bytes.appendSlice(self.allocator, file);
+        try self.source_file_bytes.appendSlice(self.allocator, file.name);
         try self.source_file_ends.append(self.allocator, @intCast(self.source_file_bytes.len()));
+        try self.source_file_qualified_bytes.appendSlice(self.allocator, file.qualified_name);
+        try self.source_file_qualified_ends.append(self.allocator, @intCast(self.source_file_qualified_bytes.len()));
     }
 }
 
@@ -237,11 +251,20 @@ pub fn sourceFileCount(self: *const Self) u32 {
     return @intCast(self.source_file_ends.len());
 }
 
-/// Name of one source file table entry.
+/// Display name of one source file table entry.
 pub fn sourceFileName(self: *const Self, file: u32) []const u8 {
     const end = self.source_file_ends.get(file);
     const start = if (file == 0) 0 else self.source_file_ends.get(file - 1);
     return self.source_file_bytes.unsafeRawItemsForView()[start..end];
+}
+
+/// Package-qualified module identity of one source file table entry. Use
+/// this (not `sourceFileName`) whenever a location's owning module is
+/// compared against another module: bare names collide across packages.
+pub fn sourceFileQualifiedName(self: *const Self, file: u32) []const u8 {
+    const end = self.source_file_qualified_ends.get(file);
+    const start = if (file == 0) 0 else self.source_file_qualified_ends.get(file - 1);
+    return self.source_file_qualified_bytes.unsafeRawItemsForView()[start..end];
 }
 
 /// Source location of a statement.
@@ -879,4 +902,28 @@ pub fn procNeedsStackProbe(self: *const Self, layouts: *const layout.Store, proc
     if (self.localSpanNeedsStackProbe(layouts, proc.frame_locals)) return true;
     if (lir_defs.layoutNeedsStackProbe(layouts, proc.ret_layout)) return true;
     return false;
+}
+
+test "source file table stores display and package-qualified names per entry" {
+    const gpa = std.testing.allocator;
+    var store = Self.init(gpa);
+    defer store.deinit();
+
+    // Two modules with the SAME bare name from different packages must stay
+    // distinguishable through their qualified names: the provenance
+    // comparison in compile-time failure reporting matches by qualified
+    // identity, never by display name.
+    try store.setSourceFiles(&.{
+        .{ .name = "Cfg", .qualified_name = "app.Cfg" },
+        .{ .name = "Cfg", .qualified_name = "pf.Cfg" },
+        .{ .name = "Utils", .qualified_name = "app.Utils" },
+    });
+
+    try std.testing.expectEqual(@as(u32, 3), store.sourceFileCount());
+    try std.testing.expectEqualStrings("Cfg", store.sourceFileName(0));
+    try std.testing.expectEqualStrings("Cfg", store.sourceFileName(1));
+    try std.testing.expectEqualStrings("Utils", store.sourceFileName(2));
+    try std.testing.expectEqualStrings("app.Cfg", store.sourceFileQualifiedName(0));
+    try std.testing.expectEqualStrings("pf.Cfg", store.sourceFileQualifiedName(1));
+    try std.testing.expectEqualStrings("app.Utils", store.sourceFileQualifiedName(2));
 }

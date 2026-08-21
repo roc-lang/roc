@@ -1,6 +1,7 @@
 //! Lambda Solved IR to Lambda Mono IR.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
@@ -71,7 +72,7 @@ pub fn run(
     string_literals = undefined;
     const_fn_evidence = undefined;
     const_fn_evidence_frames = undefined;
-    program.source_files = Ast.ProgramList([]const u8, "source_files").fromArrayList(owned.lifted.takeSourceFiles());
+    program.source_files = Ast.ProgramList(base.SourceFileEntry, "source_files").fromArrayList(owned.lifted.takeSourceFiles());
     program.static_data_values = Ast.ProgramList(Ast.StaticDataValue, "static_data_values").fromArrayList(owned.lifted.takeStaticDataValues());
     errdefer program.deinit();
 

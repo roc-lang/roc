@@ -37,6 +37,7 @@ SEH = "SEH" # Structured Exception Handling
 ser = "ser" # Part of the word "serializing"
 sigfault = "sigfault"
 typ = "typ" # Common internal abbreviation for type
+wrold = "wrold" # Deliberate typo fixture: pins the "did you mean `world`?" suggestion
 WRONLY = "WRONLY" # File open mode
 
 [default.extend-identifiers]

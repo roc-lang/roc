@@ -123,8 +123,17 @@ pub const HostedFn = struct {
 
 /// Nested function site inside an owner function template.
 pub const NestedFn = struct {
+    /// Checked template that lexically recorded the site: the site's owning
+    /// template, or—when `default_root` is set—the template whose body
+    /// materialized the defaulted-field expression containing the site.
     owner: names.ProcTemplate,
     site: names.ProcSiteId,
+    /// Set iff `site` is a DEFAULT-ROOT site (a lambda/closure inside a
+    /// defaulted-field expression, design.md "Defaulted Fields"): the
+    /// declaring module's 32-byte content identity. `site` indexes THAT
+    /// module's `nested_proc_sites` table, where the site's owner is
+    /// `.default_root` (the site belongs to no procedure template).
+    default_root: ?names.ModuleContentIdentity = null,
     context_fn_key: names.TypeDigest,
     /// Digest of every local-procedure declaration context visible inside this
     /// nested function. ConstStore restoration combines it with the restored
@@ -196,6 +205,10 @@ pub const CallableIdentity = union(enum(u8)) {
         owner_template: u32,
         owner_fn_digest: names.TypeDigest,
         site: u32,
+        /// Set iff `site` is a default-root site: the declaring module's
+        /// content identity (the site id is relative to THAT module's site
+        /// table, so the identity must participate in the callable identity).
+        default_root_module: ?names.ModuleContentIdentity = null,
     },
     hosted: HostedId,
     generated: GeneratedId,
@@ -366,6 +379,12 @@ fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
             writeBytes(hasher, "nested");
             writeProcTemplate(hasher, nested.owner);
             writeU32(hasher, @intFromEnum(nested.site));
+            if (nested.default_root) |identity| {
+                writeBytes(hasher, "default_root");
+                writeBytes(hasher, &identity.bytes);
+            } else {
+                writeBytes(hasher, "no_default_root");
+            }
             writeBytes(hasher, &nested.context_fn_key.bytes);
             if (nested.local_proc_context_digest) |digest| {
                 writeBytes(hasher, "local_proc_contexts");
@@ -1062,7 +1081,7 @@ pub const ProgramView = struct {
     runtime_schema_requests: []const RuntimeSchemaRequest,
     static_data_values: []const StaticDataValue,
     comptime_sites: []const ComptimeSite,
-    source_files: []const []const u8,
+    source_files: []const base.SourceFileEntry,
     expr_locs: []const base.SourceLoc,
     expr_regions: []const base.Region,
     stmt_locs: []const base.SourceLoc,
@@ -1245,9 +1264,9 @@ pub const ProgramBuilder = struct {
     runtime_schema_requests: ProgramList(RuntimeSchemaRequest, "runtime_schema_requests"),
     static_data_values: ProgramList(StaticDataValue, "static_data_values"),
     comptime_sites: ProgramList(ComptimeSite, "comptime_sites"),
-    /// Source file table for `SourceLoc.file` indices (module display names,
-    /// owned by this program).
-    source_files: ProgramList([]const u8, "source_files"),
+    /// Source file table for `SourceLoc.file` indices (module display and
+    /// package-qualified names, owned by this program).
+    source_files: ProgramList(base.SourceFileEntry, "source_files"),
     /// Source location per expression, parallel to `exprs`.
     expr_locs: ProgramList(base.SourceLoc, "expr_locs"),
     /// Checked source region per expression, parallel to `exprs`.
@@ -1322,7 +1341,10 @@ pub const ProgramBuilder = struct {
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
         self.expr_locs.deinit(self.allocator);
-        for (self.source_files.unsafeRawItemsForView()) |file| self.allocator.free(file);
+        for (self.source_files.unsafeRawItemsForView()) |file| {
+            self.allocator.free(file.name);
+            self.allocator.free(file.qualified_name);
+        }
         self.source_files.deinit(self.allocator);
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             self.allocator.free(site.branch_regions);
@@ -1604,13 +1626,19 @@ pub const ProgramBuilder = struct {
         return self.proc_debug_names.get(symbol);
     }
 
-    /// Register a source file (module display name) and return its index for
-    /// `SourceLoc.file`. Callers deduplicate; this always appends.
-    pub fn addSourceFile(self: *ProgramBuilder, name: []const u8) std.mem.Allocator.Error!u32 {
+    /// Register a source file (module display name plus package-qualified
+    /// module identity) and return its index for `SourceLoc.file`. Callers
+    /// deduplicate; this always appends.
+    pub fn addSourceFile(self: *ProgramBuilder, file: base.SourceFileEntry) std.mem.Allocator.Error!u32 {
         const id: u32 = @intCast(self.source_files.len());
-        const owned = try self.allocator.dupe(u8, name);
-        errdefer self.allocator.free(owned);
-        try self.source_files.append(self.allocator, owned);
+        const owned_name = try self.allocator.dupe(u8, file.name);
+        errdefer self.allocator.free(owned_name);
+        const owned_qualified = try self.allocator.dupe(u8, file.qualified_name);
+        errdefer self.allocator.free(owned_qualified);
+        try self.source_files.append(self.allocator, .{
+            .name = owned_name,
+            .qualified_name = owned_qualified,
+        });
         return id;
     }
 

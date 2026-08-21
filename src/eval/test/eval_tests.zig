@@ -24,8 +24,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: omitted at construction materializes the default",
         .source_kind = .module,
         .source =
-        \\my_record : { hello : Str, count : U8 ?? 10 }
-        \\my_record = { hello: "hi" }
+        \\MyRecord := { hello : Str, count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ hello: "hi" }
         \\
         \\main = my_record.count
         ,
@@ -35,8 +37,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: supplied value wins over the default",
         .source_kind = .module,
         .source =
-        \\my_record : { count : U8 ?? 10 }
-        \\my_record = { count: 5 }
+        \\MyRecord := { count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ count: 5 }
         \\
         \\main = my_record.count
         ,
@@ -46,8 +50,8 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: supplied literal does not adopt a default identity",
         .source_kind = .module,
         .source =
-        \\A : { x : U64 ?? 3 }
-        \\B : { x : U64 ?? 4 }
+        \\A := { x : U64 ?? 3 }
+        \\B := { x : U64 ?? 4 }
         \\
         \\fa : A -> U64
         \\fa = |r| r.x
@@ -55,23 +59,18 @@ const core_tests = [_]TestCase{
         \\fb : B -> U64
         \\fb = |r| r.x
         \\
-        \\main = {
-        \\    lit = { x: 7 }
-        \\    annotated : { x : U64 }
-        \\    annotated = { x: 7 }
-        \\    fa(lit) + fb(lit) + fa(annotated) + fb(annotated)
-        \\}
+        \\main = fa(A.{ x: 7 }) + fb(B.{ x: 7 }) + fa(A.{}) + fb(B.{})
         ,
-        .expected = .{ .inspect_str = "28" },
+        .expected = .{ .inspect_str = "21" },
     },
     .{
-        .name = "defaulted record field: alias-carried default materializes",
+        .name = "defaulted record field: nominal-carried default materializes",
         .source_kind = .module,
         .source =
-        \\Cfg : { retries : U8 ?? 3, verbose : U8 ?? 0 }
+        \\Cfg := { retries : U8 ?? 3, verbose : U8 ?? 0 }
         \\
         \\cfg : Cfg
-        \\cfg = { verbose: 1 }
+        \\cfg = Cfg.{ verbose: 1 }
         \\
         \\main = cfg.retries + cfg.verbose
         ,
@@ -81,21 +80,23 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: empty literal materializes the default",
         .source_kind = .module,
         .source =
-        \\x : { a : U8 ?? 10 }
-        \\x = {}
+        \\X := { a : U8 ?? 10 }
+        \\
+        \\x : X
+        \\x = X.{}
         \\
         \\main = x.a
         ,
         .expected = .{ .inspect_str = "10" },
     },
     .{
-        .name = "defaulted record field: empty literal materializes every alias-carried default",
+        .name = "defaulted record field: empty literal materializes every nominal-carried default",
         .source_kind = .module,
         .source =
-        \\Cfg : { retries : U8 ?? 3, verbose : U8 ?? 40 }
+        \\Cfg := { retries : U8 ?? 3, verbose : U8 ?? 40 }
         \\
         \\cfg : Cfg
-        \\cfg = {}
+        \\cfg = Cfg.{}
         \\
         \\main = cfg.retries + cfg.verbose
         ,
@@ -105,8 +106,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: empty literal in a function body materializes the default",
         .source_kind = .module,
         .source =
-        \\make : U8 -> { a : U8 ?? 10 }
-        \\make = |_n| {}
+        \\R := { a : U8 ?? 10 }
+        \\
+        \\make : U8 -> R
+        \\make = |_n| R.{}
         \\
         \\main = make(1).a + make(2).a
         ,
@@ -116,8 +119,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: partial literal in a function body keeps supplied and defaults omitted",
         .source_kind = .module,
         .source =
-        \\make : U8 -> { supplied : U8 ?? 1, defaulted : U8 ?? 7 }
-        \\make = |n| { supplied: n }
+        \\R := { supplied : U8 ?? 1, defaulted : U8 ?? 7 }
+        \\
+        \\make : U8 -> R
+        \\make = |n| R.{ supplied: n }
         \\
         \\main = make(30).supplied + make(30).defaulted
         ,
@@ -129,9 +134,11 @@ const core_tests = [_]TestCase{
         .source =
         \\T1 := [].{}
         \\
+        \\C := { x : U8 ?? 3, y : U8 ?? 4 }
+        \\
         \\expect {
-        \\    c : { x : U8 ?? 3, y : U8 ?? 4 }
-        \\    c = {}
+        \\    c : C
+        \\    c = C.{}
         \\    c.x == 3
         \\}
         \\
@@ -139,6 +146,185 @@ const core_tests = [_]TestCase{
         \\main = 0
         ,
         .expected = .{ .inspect_str = "0" },
+    },
+    .{
+        .name = "defaulted record field: default calling an unannotated generic procedure materializes",
+        .source_kind = .module,
+        .source =
+        \\compute = |n| n * 3 + 1
+        \\
+        \\Cfg := { count : U8 ?? compute(4) }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\main = cfg.count
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
+        .name = "defaulted record field: default calling an annotated procedure materializes",
+        .source_kind = .module,
+        .source =
+        \\compute : U8 -> U8
+        \\compute = |n| n * 3 + 1
+        \\
+        \\Cfg := { count : U8 ?? compute(4) }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\main = cfg.count
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
+        .name = "defaulted record field: default calling a polymorphic identity materializes",
+        .source_kind = .module,
+        .source =
+        \\identity = |x| x
+        \\
+        \\Cfg := { count : U8 ?? identity(4) }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\main = cfg.count
+        ,
+        .expected = .{ .inspect_str = "4" },
+    },
+    .{
+        .name = "defaulted record field: immediately-invoked lambda default materializes",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { a : U8 ?? (|n| n + 1)(4) }
+        \\
+        \\x : Cfg
+        \\x = Cfg.{}
+        \\
+        \\main = x.a
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "defaulted record field: default calling a local block binding materializes",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { a : U8 ?? { f = |n| n + 1
+        \\                     f(4) } }
+        \\
+        \\x : Cfg
+        \\x = Cfg.{}
+        \\
+        \\main = x.a
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        .name = "defaulted record field: local-binding default materializes at two sites in one body",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { a : U8 ?? { f = |n| n + 1
+        \\                     f(4) } }
+        \\
+        \\use : U8
+        \\use = {
+        \\    x = Cfg.{}
+        \\    y = Cfg.{}
+        \\    x.a + y.a
+        \\}
+        \\
+        \\main = use
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        // A fn-typed default materialized into a comptime-finalized constant
+        // stores a default-root nested function in the ConstStore; the call
+        // exercises the const-store restore path for default-root sites
+        // (design.md "Defaulted Fields").
+        .name = "defaulted record field: fn-typed default restores through a comptime constant",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { f : U8 -> U8 ?? |n| n + 5 }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\call : U8 -> U8
+        \\call = |n| {
+        \\    g = cfg.f
+        \\    g(n)
+        \\}
+        \\
+        \\main = call(1)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        // Same restore path with a closure: the default's lambda captures a
+        // default-expression-local binding, so the stored function carries
+        // captures restored from the ConstStore.
+        .name = "defaulted record field: fn-typed default with a default-local capture restores through a comptime constant",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { f : U8 -> U8 ?? { k = 5
+        \\                           |n| n + k } }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\call : U8 -> U8
+        \\call = |n| {
+        \\    g = cfg.f
+        \\    g(n)
+        \\}
+        \\
+        \\main = call(1)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        // A fn-typed comptime constant whose stored value IS the default's
+        // lambda (callable binding payload), restored when the binding is
+        // called at runtime.
+        .name = "defaulted record field: fn-typed default restores as a callable comptime binding",
+        .source_kind = .module,
+        .source =
+        \\Cfg := { f : U8 -> U8 ?? |n| n + 5 }
+        \\
+        \\g : U8 -> U8
+        \\g = Cfg.{}.f
+        \\
+        \\call : U8 -> U8
+        \\call = |n| g(n)
+        \\
+        \\main = call(1)
+        ,
+        .expected = .{ .inspect_str = "6" },
+    },
+    .{
+        // Cross-module: the consuming module's comptime constant stores a
+        // function whose default-root site lives in the DECLARING module;
+        // restore resolves that module by content identity.
+        .name = "defaulted record field: foreign fn-typed default restores through a comptime constant",
+        .source_kind = .module,
+        .imports = &.{.{ .name = "Cfg", .source = "Cfg := { f : U8 -> U8 ?? |n| n + 5 }\n" }},
+        .source =
+        \\import Cfg
+        \\
+        \\cfg : Cfg.Cfg
+        \\cfg = Cfg.Cfg.{}
+        \\
+        \\call : U8 -> U8
+        \\call = |n| {
+        \\    g = cfg.f
+        \\    g(n)
+        \\}
+        \\
+        \\main = call(1)
+        ,
+        .expected = .{ .inspect_str = "6" },
     },
     .{
         .name = "optional record field: supplied at construction and .? hits",
@@ -235,8 +421,10 @@ const core_tests = [_]TestCase{
         .name = "optional record field: required, defaulted, and optional slots in one record (omitting sides)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
-        \\r = { req: 1 }
+        \\R := { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\
+        \\r : R
+        \\r = R.{ req: 1 }
         \\
         \\main = r.req + r.def + (r.?opt ?? 100)
         ,
@@ -246,8 +434,10 @@ const core_tests = [_]TestCase{
         .name = "optional record field: required, defaulted, and optional slots in one record (all supplied)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
-        \\r = { req: 1, def: 2, opt: 3 }
+        \\R := { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\
+        \\r : R
+        \\r = R.{ req: 1, def: 2, opt: 3 }
         \\
         \\main = r.req + r.def + (r.?opt ?? 100)
         ,
@@ -432,6 +622,54 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "33" },
     },
     .{
+        .name = "unset record field: update unsets a present slot while siblings and base survive",
+        .source_kind = .module,
+        .source =
+        \\r : { keep : U8, gone ?: U8 }
+        \\r = { keep: 7, gone: 4 }
+        \\
+        \\s : { keep : U8, gone ?: U8 }
+        \\s = { ..r, gone: _ }
+        \\
+        \\main = {
+        \\    unset_result = match s.?gone {
+        \\        Ok(_) => 0
+        \\        Err(MissingField) => 33
+        \\    }
+        \\    unset_result + s.keep + (r.?gone ?? 0)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "44" },
+    },
+    .{
+        .name = "unset record field: construction unset starts the slot missing",
+        .source_kind = .module,
+        .source =
+        \\r : { keep : U8, gone ?: U8 }
+        \\r = { keep: 2, gone: _ }
+        \\
+        \\main = (r.?gone ?? 30) + r.keep
+        ,
+        .expected = .{ .inspect_str = "32" },
+    },
+    .{
+        .name = "unset record field: unset slot can be re-set by a later update",
+        .source_kind = .module,
+        .source =
+        \\r : { a ?: U8 }
+        \\r = { a: 4 }
+        \\
+        \\cleared : { a ?: U8 }
+        \\cleared = { ..r, a: _ }
+        \\
+        \\restored : { a ?: U8 }
+        \\restored = { ..cleared, a: 9 }
+        \\
+        \\main = (cleared.?a ?? 20) + (restored.?a ?? 0)
+        ,
+        .expected = .{ .inspect_str = "29" },
+    },
+    .{
         .name = "optional record field: chain result passed to a function expecting Try",
         .source_kind = .module,
         .source =
@@ -472,13 +710,13 @@ const core_tests = [_]TestCase{
         .name = "optional record field: record update copies unmentioned optional and defaulted slots verbatim",
         .source_kind = .module,
         .source =
-        \\Rec : { req : U8, def : U8 ?? 10, name ?: Str }
+        \\Rec := { req : U8, def : U8 ?? 10, name ?: Str }
         \\
         \\base1 : Rec
-        \\base1 = { req: 1, name: Str.repeat("amy", 9) }
+        \\base1 = Rec.{ req: 1, name: Str.repeat("amy", 9) }
         \\
         \\base2 : Rec
-        \\base2 = { req: 1 }
+        \\base2 = Rec.{ req: 1 }
         \\
         \\main = {
         \\    u1 = { ..base1, req: 2 }
@@ -730,8 +968,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: annotated list literal materializes the default for omitting elements",
         .source_kind = .module,
         .source =
-        \\xs : List({ a : U8 ?? 7 })
-        \\xs = [{ a: 1 }, {}]
+        \\Cfg := { a : U8 ?? 7 }
+        \\
+        \\xs : List(Cfg)
+        \\xs = [Cfg.{ a: 1 }, Cfg.{}]
         \\
         \\main = List.map(xs, |r| r.a)
         ,
@@ -774,8 +1014,10 @@ const core_tests = [_]TestCase{
         .name = "optional record field: inspect of required+defaulted+optional record (omitting sides)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
-        \\r = { req: 1 }
+        \\R := { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\
+        \\r : R
+        \\r = R.{ req: 1 }
         \\
         \\main = r
         ,
@@ -785,8 +1027,10 @@ const core_tests = [_]TestCase{
         .name = "optional record field: inspect of required+defaulted+optional record (all supplied)",
         .source_kind = .module,
         .source =
-        \\r : { req : U8, def : U8 ?? 10, opt ?: U8 }
-        \\r = { req: 1, def: 2, opt: 3 }
+        \\R := { req : U8, def : U8 ?? 10, opt ?: U8 }
+        \\
+        \\r : R
+        \\r = R.{ req: 1, def: 2, opt: 3 }
         \\
         \\main = r
         ,
@@ -857,8 +1101,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: heap Str default materializes from the empty literal",
         .source_kind = .module,
         .source =
-        \\x : { greeting : Str ?? "this default greeting string is long" }
-        \\x = {}
+        \\X := { greeting : Str ?? "this default greeting string is long" }
+        \\
+        \\x : X
+        \\x = X.{}
         \\
         \\main = Str.concat(x.greeting, "!")
         ,
@@ -868,29 +1114,29 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: record-literal default materializes",
         .source_kind = .module,
         .source =
-        \\Cfg : { pos : { x : U8, y : U8 } ?? { x: 3, y: 4 } }
+        \\Cfg := { pos : { x : U8, y : U8 } ?? { x: 3, y: 4 } }
         \\
         \\c : Cfg
-        \\c = {}
+        \\c = Cfg.{}
         \\
         \\main = c.pos.x + c.pos.y
         ,
         .expected = .{ .inspect_str = "7" },
     },
     .{
-        .name = "defaulted record field: alias-carried list default materializes at two sites",
+        .name = "defaulted record field: nominal-carried list default materializes at two sites",
         .source_kind = .module,
         .source =
-        \\Cfg : { xs : List(U8) ?? [1, 2, 3] }
+        \\Cfg := { xs : List(U8) ?? [1, 2, 3] }
         \\
         \\a : Cfg
-        \\a = {}
+        \\a = Cfg.{}
         \\
         \\b : Cfg
-        \\b = { xs: [5] }
+        \\b = Cfg.{ xs: [5] }
         \\
         \\d : Cfg
-        \\d = {}
+        \\d = Cfg.{}
         \\
         \\main = List.len(a.xs) + List.len(b.xs) + List.len(d.xs)
         ,
@@ -904,8 +1150,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: tag-literal default materializes",
         .source_kind = .module,
         .source =
-        \\x : { a : [None, Some(U8)] ?? Some(9) }
-        \\x = {}
+        \\X := { a : [None, Some(U8)] ?? Some(9) }
+        \\
+        \\x : X
+        \\x = X.{}
         \\
         \\main = x.a
         ,
@@ -915,8 +1163,10 @@ const core_tests = [_]TestCase{
         .name = "defaulted record field: negated-numeral default materializes",
         .source_kind = .module,
         .source =
-        \\x : { a : I8 ?? -10 }
-        \\x = {}
+        \\X := { a : I8 ?? -10 }
+        \\
+        \\x : X
+        \\x = X.{}
         \\
         \\main = x.a + 1
         ,
@@ -931,8 +1181,10 @@ const core_tests = [_]TestCase{
         \\    from_numeral = |numeral| Ok(Value(numeral.digits_before_pt().len()))
         \\}
         \\
-        \\config : { size : MyNum ?? 5 }
-        \\config = {}
+        \\Config := { size : MyNum ?? 5 }
+        \\
+        \\config : Config
+        \\config = Config.{}
         \\
         \\main = match config.size {
         \\    Value(size) => size
@@ -949,8 +1201,10 @@ const core_tests = [_]TestCase{
         \\    from_quote = |str| Ok(Tag(str))
         \\}
         \\
-        \\config : { label : Tag ?? "hello" }
-        \\config = {}
+        \\Config := { label : Tag ?? "hello" }
+        \\
+        \\config : Config
+        \\config = Config.{}
         \\
         \\main = match config.label {
         \\    Tag(label) => label
@@ -967,8 +1221,10 @@ const core_tests = [_]TestCase{
         \\    from_numeral = |_numeral| Err(InvalidNumeral("Picky rejects this default"))
         \\}
         \\
-        \\config : { value : Picky ?? 5 }
-        \\config = {}
+        \\Config := { value : Picky ?? 5 }
+        \\
+        \\config : Config
+        \\config = Config.{}
         \\
         \\main = config.value
         ,
@@ -3742,23 +3998,96 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "3" },
     },
     .{
-        .name = "defaulted record field: imported alias default survives required access",
+        .name = "defaulted record field: imported nominal default survives required access",
         .source_kind = .module,
         .source =
-        \\import ConfigMod
+        \\import Cfg
         \\
-        \\main = ConfigMod.get_count!({ name: "Roc" })
+        \\main = Cfg.get_count!(Cfg.{ name: "Roc" })
         ,
         .imports = &.{.{
-            .name = "ConfigMod",
+            .name = "Cfg",
             .source =
-            \\Cfg : { count : U8 ?? 10, name : Str }
-            \\
-            \\get_count! : Cfg -> U8
-            \\get_count! = |cfg| cfg.count
+            \\Cfg := { count : U8 ?? 10, name : Str }.{
+            \\  get_count! : Cfg -> U8
+            \\  get_count! = |cfg| cfg.count
+            \\}
             ,
         }},
         .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "defaulted record field: imported default referencing a private def of its module",
+        .source_kind = .module,
+        .source =
+        \\import Cfg
+        \\
+        \\main = Cfg.get_count(Cfg.{ name: "Roc" })
+        ,
+        .imports = &.{.{
+            .name = "Cfg",
+            .source =
+            \\Cfg := { count : U8 ?? base_count + 2, name : Str }.{
+            \\  get_count : Cfg -> U8
+            \\  get_count = |cfg| cfg.count
+            \\}
+            \\
+            \\base_count : U8
+            \\base_count = 40
+            ,
+        }},
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "defaulted record field: pure call default computed at an omitting construction",
+        .source_kind = .module,
+        .source =
+        \\compute : U8 -> U8
+        \\compute = |n| n * 3 + 1
+        \\
+        \\Cfg := { count : U8 ?? compute(4), name : Str }
+        \\
+        \\make : Str -> Cfg
+        \\make = |name| Cfg.{ name: name }
+        \\
+        \\main = make("a").count
+        ,
+        .expected = .{ .inspect_str = "13" },
+    },
+    .{
+        .name = "defaulted record field: parametric default specializes per instantiation",
+        .source_kind = .module,
+        .source =
+        \\Pair(x) := { items : List(x) ?? [], label : Str }
+        \\
+        \\bytes : Pair(U8)
+        \\bytes = Pair.{ label: "b" }
+        \\
+        \\words : Pair(Str)
+        \\words = Pair.{ label: "w" }
+        \\
+        \\main = List.len(bytes.items) + List.len(words.items) + Str.count_utf8_bytes(bytes.label) + Str.count_utf8_bytes(words.label)
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        // Each materialization gets its own instantiation context: two
+        // specializations of one parametric default in a single body must
+        // not collide on a memoized checked-type node.
+        .name = "defaulted record field: two specializations of one parametric default in one body",
+        .source_kind = .module,
+        .source =
+        \\Pair(x) := { items : List(x) ?? [], label : Str }
+        \\
+        \\main = {
+        \\    bytes : Pair(U8)
+        \\    bytes = Pair.{ label: "b" }
+        \\    words : Pair(Str)
+        \\    words = Pair.{ label: "w" }
+        \\    List.len(List.append(bytes.items, 7)) * 10 + List.len(List.append(words.items, "s"))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "11" },
     },
     .{
         .name = "inspect: lambda list param calling List.append",

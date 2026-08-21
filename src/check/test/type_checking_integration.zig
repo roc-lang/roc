@@ -495,6 +495,379 @@ test "check type - record - opt - field supplied with wrong type" {
     );
 }
 
+test "check type - record - opt - absent field infers as optional" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record = { hello : "world", world : _ }
+    ;
+    // The optional field's type still applies when it is supplied: Str vs U8.
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
+        \\{ hello: Str, world ?: _field }
+    );
+}
+
+test "check type - record - opt - absent field unifies with optional field anno" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world ?: U8 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world", world : _ }
+    ;
+    // The optional field's type still applies when it is supplied: Str vs U8.
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
+        \\MyRecord
+    );
+}
+
+test "check type - record - opt - unset field unifies with optional field anno" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world ?: U8 }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "world", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = { ..my_record_a, world: _  }
+    ;
+    // The optional field's type still applies when it is supplied: Str vs U8.
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record_b" } },
+        \\MyRecord
+    );
+}
+
+test "check type - record - opt - unset field errors if presence mismatch" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world : U8 }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "world", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = { ..my_record_a, world: _  }
+    ;
+    // The base field's kind resolved `required`, so the unset is rejected by
+    // the judgment (design.md "In Progress: Unsetting an Optional Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Unset Of Required Field**
+        \\The `world` field is required, but it is being unset as if it were optional.
+        \\```roc
+        \\my_record_b = { ..my_record_a, world: _  }
+        \\```
+        \\                               ^^^^^^^^
+        \\
+        \\Unsetting a field selects the missing state of an optional field—but a required field is always present, so there is no missing state to select. You cannot change whether a field is required or optional here. To get a record without this field, construct a new record that omits it.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - unset of defaulted field rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord := { hello : Str, world : U8 ?? 7 }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = MyRecord.{ hello : "world", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = { ..my_record_a, world: _  }
+    ;
+    // The base field's kind resolved `defaulted`: an inline slot with no
+    // missing state, so the unset is rejected with the construction hint
+    // (design.md "In Progress: Unsetting an Optional Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Unset Of Defaulted Field**
+        \\The `world` field has a default value, but it is being unset as if it were optional.
+        \\```roc
+        \\my_record_b = { ..my_record_a, world: _  }
+        \\```
+        \\                               ^^^^^^^^
+        \\
+        \\A defaulted field always has a value, so there is no missing state to select. If you want the field to take its default, construct a new record that omits the field instead.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - unset of missing field is a mismatch" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world ?: U8 }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "world", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = { ..my_record_a, wrold: _  }
+    ;
+    // Typo'd field name against a closed base row: the kind-flexible probe
+    // must NOT be absorbed (a concrete `optional` demand would be), so this
+    // is an ordinary missing-field mismatch (design.md "In Progress:
+    // Unsetting an Optional Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This record does not have a `wrold` field.
+        \\```roc
+        \\my_record_b = { ..my_record_a, wrold: _  }
+        \\```
+        \\                  ^^^^^^^^^^^
+        \\
+        \\This is often due to a typo. The most similar fields are:
+        \\
+        \\    - `world`
+        \\    - `hello`
+        \\
+        \\So maybe `wrold` should be `world`?
+        \\
+        \\__Note:__ You cannot add new fields to a record with the record update syntax.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - mixed set and unset in one update" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world ?: U8 }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "a", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = { ..my_record_a, hello: "b", world: _ }
+    ;
+    // Each mentioned field runs its own probe against the base, then one
+    // wholesale base ~ result unify: the set field checks at the payload
+    // type, the unset field selects the missing state, and the result type
+    // equals the base type (design.md "In Progress: Unsetting an Optional
+    // Field").
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record_b" } },
+        \\MyRecord
+    );
+}
+
+test "check type - record - opt - unset pins an undetermined base kind to optional" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record_a = { world: 15 }
+        \\
+        \\my_record_b = { ..my_record_a, world: _ }
+    ;
+    // The base literal's field kind is still flex when the unset probes it.
+    // An unset is presence-evidence for optionality, so the judgment pins
+    // the kind to `optional` (before the literal defaulting sweep could
+    // commit `required`), and BOTH records carry `world ?:` (design.md "In
+    // Progress: Unsetting an Optional Field").
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record_b" } },
+        \\{ world ?: Dec }
+    );
+}
+
+test "check type - record - opt - unset through generalized function accepted at optional row" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world ?: U8 }
+        \\
+        \\unset_world = |r| { ..r, world: _ }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "a", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = unset_world(my_record_a)
+    ;
+    // The unset's kind evidence is judged at the lambda's generalization
+    // boundary: the still-flex kind pins to `optional` BEFORE the scheme
+    // forms, so the scheme's row carries `world ?:` and instantiates
+    // cleanly at an optional caller row (design.md "In Progress: Unsetting
+    // an Optional Field").
+    try checkTypesModule(source, .{ .pass = .{ .def = "my_record_b" } },
+        \\MyRecord
+    );
+}
+
+test "check type - record - opt - unset through generalized function rejects required row" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world : U8 }
+        \\
+        \\unset_world = |r| { ..r, world: _ }
+        \\
+        \\my_record_a : MyRecord
+        \\my_record_a = { hello : "a", world : 15 }
+        \\
+        \\my_record_b : MyRecord
+        \\my_record_b = unset_world(my_record_a)
+    ;
+    // The scheme's row committed `world ?:` at the lambda's generalization
+    // boundary, so instantiating it at a row whose `world` is required is
+    // an ordinary call-site mismatch—the judgment cannot be escaped through
+    // generalization (design.md "In Progress: Unsetting an Optional
+    // Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\The first argument being passed to this function has the wrong type.
+        \\```roc
+        \\my_record_b = unset_world(my_record_a)
+        \\```
+        \\                          ^^^^^^^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    MyRecord
+        \\
+        \\But `unset_world` needs the first argument to be:
+        \\
+        \\    { world ?: U8, .. }
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - construction unset rejected by required annotation" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello : Str, world : U8 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world", world : _ }
+    ;
+    // A construction unset joins the literal row with a flex kind; the
+    // annotation pins that kind `required`, and the judgment rejects the
+    // unset through the same path as updates (design.md "In Progress:
+    // Unsetting an Optional Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Unset Of Required Field**
+        \\The `world` field is required, but it is being unset as if it were optional.
+        \\```roc
+        \\my_record = { hello : "world", world : _ }
+        \\```
+        \\                               ^^^^^^^^^
+        \\
+        \\Unsetting a field selects the missing state of an optional field—but a required field is always present, so there is no missing state to select. You cannot change whether a field is required or optional here. To get a record without this field, construct a new record that omits it.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - construction unset rejected by defaulted annotation" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord := { hello : Str, world : U8 ?? 7 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ hello : "world", world : _ }
+    ;
+    // Same judgment as above with the kind pinned `defaulted`: an unset
+    // cannot select a missing state the inline slot does not have
+    // (design.md "In Progress: Unsetting an Optional Field").
+    try checkTypesModule(source, .fail_with,
+        \\**Unset Of Defaulted Field**
+        \\The `world` field has a default value, but it is being unset as if it were optional.
+        \\```roc
+        \\my_record = MyRecord.{ hello : "world", world : _ }
+        \\```
+        \\                                        ^^^^^^^^^
+        \\
+        \\A defaulted field always has a value, so there is no missing state to select. If you want the field to take its default, construct a new record that omits the field instead.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - required field where optional expected rejected (presence is invariant)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyReq : { hello : Str, world : U8 }
+        \\MyOpt : { hello : Str, world ?: U8 }
+        \\
+        \\req_record : MyReq
+        \\req_record = { hello : "a", world : 15 }
+        \\
+        \\opt_record : MyOpt
+        \\opt_record = req_record
+    ;
+    // Presence is INVARIANT: a committed `required` kind does NOT subsume
+    // into an `optional` demand (`required ~ optional` is a mismatch in
+    // both directions—the two kinds have different runtime slot layouts).
+    // There is no "a required field can be used where an optional one is
+    // expected" rule; only a still-FLEX kind (creation semantics) can join
+    // an optional row.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\```roc
+        \\opt_record = req_record
+        \\```
+        \\             ^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    MyReq
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    MyOpt
+        \\
+        \\**Hint:** The `world` field is optional, so it may be missing. It cannot be used as if it is always present—access it with `.?` instead.
+        \\
+        \\
+    );
+}
+
+test "check type - record - opt - optional field where required expected rejected (presence is invariant)" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyReq : { hello : Str, world : U8 }
+        \\MyOpt : { hello : Str, world ?: U8 }
+        \\
+        \\opt_record : MyOpt
+        \\opt_record = { hello : "a", world : 15 }
+        \\
+        \\req_record : MyReq
+        \\req_record = opt_record
+    ;
+    // The mirror of the invariance test above: a committed `optional` kind
+    // does not subsume into a `required` demand either.
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\```roc
+        \\req_record = opt_record
+        \\```
+        \\             ^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    MyOpt
+        \\
+        \\But the annotation says it should be:
+        \\
+        \\    MyReq
+        \\
+        \\**Hint:** The `world` field is optional here, so it may be missing—but I expected a record whose `world` field is always present.
+        \\
+        \\
+    );
+}
+
 test "check type - record - opt - direct access rejected" {
     const source =
         \\main! = |_| {}
@@ -909,14 +1282,17 @@ test "check type - record - default - list literal absorbs omitted defaulted fie
     const source =
         \\main! = |_| {}
         \\
-        \\xs : List({ a : U8 ?? 7 })
-        \\xs = [{ a: 1 }, {}]
+        \\Cfg := { a : U8 ?? 7 }
+        \\
+        \\xs : List(Cfg)
+        \\xs = [Cfg.{ a: 1 }, Cfg.{}]
     ;
     // Same as the optional-kind list test above, for the `defaulted` kind:
-    // the annotation-seeded element accumulator lets `{}` absorb `a` as a
-    // defaulted slot (constructed missing; reads materialize 7).
+    // each nominal construction's backing literal absorbs `a` as a defaulted
+    // slot (constructed missing; reads materialize 7), and the elements mix
+    // because one declaration is one default identity.
     try checkTypesModule(source, .{ .pass = .{ .def = "xs" } },
-        \\List({ a: U8 ?? 7 })
+        \\List(Cfg)
     );
 }
 
@@ -1029,8 +1405,10 @@ test "check type - record - default - construction may omit, access is direct" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { hello: Str, count: U8 ?? 10 }
-        \\my_record = { hello: "hi" }
+        \\MyRecord := { hello : Str, count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ hello: "hi" }
         \\
         \\use_it : U8
         \\use_it = my_record.count
@@ -1048,15 +1426,18 @@ test "check type - record - default - rendered type shows the default" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { count: U8 ?? 10 }
-        \\my_record = {}
+        \\MyRecord := { count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{}
     ;
-    // A defaulted field renders its default's source snippet when the
-    // default was declared in this module (design.md "Defaulted Fields")—
-    // both for discoverability and so default-identity mismatches render
-    // distinguishable types.
+    // A nominal-backed value renders as its nominal name; the backing row's
+    // `?? <default>` rendering (discoverability + distinguishable identity
+    // mismatches) is pinned by the snapshot type sections
+    // (test/snapshots/record_default_expressions.md), since structural rows can
+    // no longer carry defaults from source (design.md "Defaulted Fields").
     try checkTypesModule(source, .{ .pass = .{ .def = "my_record" } },
-        \\{ count: U8 ?? 10 }
+        \\MyRecord
     );
 }
 
@@ -1064,8 +1445,10 @@ test "check type - record - default - supplied value wins over default" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { count: U8 ?? 10 }
-        \\my_record = { count: 5 }
+        \\MyRecord := { count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ count: 5 }
         \\
         \\use_it : U8
         \\use_it = my_record.count
@@ -1079,18 +1462,23 @@ test "check type - record - default - defaulted flows where required expected" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { count: U8 ?? 10 }
-        \\my_record = {}
+        \\MyRecord := { count : U8 ?? 10 }
         \\
-        \\needs_count : { count: U8 } -> U8
-        \\needs_count = |r| r.count
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{}
+        \\
+        \\updated : MyRecord
+        \\updated = { ..my_record, count: 5 }
         \\
         \\use_it : U8
-        \\use_it = needs_count(my_record)
+        \\use_it = updated.count
     ;
-    // required ~ defaulted merges to required: both use the same inline
-    // layout, and this already-constructed value has no omission site that
-    // needs to retain the default identity.
+    // required ~ defaulted merges to required: a supplied update field has
+    // creation semantics, so updating a defaulted slot checks the value at
+    // the inline type without adopting or conflicting with the default
+    // identity. (The structural-flow direction of this merge is pinned at
+    // the unify level—structural rows can no longer carry defaults from
+    // source.)
     try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
         \\U8
     );
@@ -1100,8 +1488,8 @@ test "check type - record - default - supplied literal does not adopt a default 
     const source =
         \\main! = |_| {}
         \\
-        \\A : { x : U64 ?? 3 }
-        \\B : { x : U64 ?? 4 }
+        \\A := { x : U64 ?? 3 }
+        \\B := { x : U64 ?? 4 }
         \\
         \\fa : A -> U64
         \\fa = |r| r.x
@@ -1109,13 +1497,14 @@ test "check type - record - default - supplied literal does not adopt a default 
         \\fb : B -> U64
         \\fb = |r| r.x
         \\
-        \\result = {
-        \\    lit = { x: 7 }
-        \\    annotated : { x : U64 }
-        \\    annotated = { x: 7 }
-        \\    fa(lit) + fb(lit) + fa(annotated) + fb(annotated)
-        \\}
+        \\result = fa(A.{ x: 7 }) + fb(B.{ x: 7 }) + fa(A.{}) + fb(B.{})
     ;
+    // Two nominal types defaulting the same-shaped field differently coexist
+    // freely: a supplied construction field checks at the inline type without
+    // adopting a default identity, and each omission materializes its own
+    // type's default. (The original structural form of this test—one literal
+    // flowing to both defaulted types—is not constructible post-restriction;
+    // that merge direction is pinned at the unify level.)
     try checkTypesModule(source, .{ .pass = .{ .def = "result" } },
         \\U64
     );
@@ -1125,8 +1514,10 @@ test "check type - record - default - default must match field type" {
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { count: U8 ?? "hi" }
-        \\my_record = {}
+        \\MyRecord := { count : U8 ?? "hi" }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{}
     ;
     // The default expression is typed against the field's annotated type
     // where the annotation is materialized. (`.fail_first`: the mismatch can
@@ -1139,8 +1530,10 @@ test "check type - record - default - optional access on defaulted field rejecte
     const source =
         \\main! = |_| {}
         \\
-        \\my_record : { count: U8 ?? 10 }
-        \\my_record = {}
+        \\MyRecord := { count : U8 ?? 10 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{}
         \\
         \\use_it = my_record.?count ?? 3
     ;
@@ -1256,133 +1649,343 @@ fn resolveOnlyFieldKindContent(test_env: *TestEnv, def_name: []const u8) error{ 
     return error.TestUnexpectedResult;
 }
 
-test "check type - record - default - type-decl default referencing a def is rejected at Can" {
+test "check type - record - default - def-referencing default checks against the field type" {
     const source =
         \\main! = |_| {}
         \\
-        \\Cfg : { a: U8 ?? foo }
+        \\Cfg := { a: U8 ?? foo }
         \\
         \\foo = 10
         \\
         \\other : U64
         \\other = foo
     ;
-    // A default must be a closed literal (design.md "Defaulted Fields"): the
-    // reference to `foo` is rejected at canonicalization and the default
-    // dropped, so the checker never sees it—`other` freely pins
-    // `foo := U64` with no U8-typed default to conflict with.
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
-    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+    // A default is any pure expression, typed at finalize against an
+    // instantiated copy of its field type. `other` pins `foo : U64`, so the
+    // U8 field's default mismatches—through the reference, not a literal.
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - record - default - type-decl default referencing a def is the closed alias gap" {
+test "check type - record - default - def-referencing default is accepted" {
     const source =
         \\main! = |_| {}
         \\
-        \\Cfg : { a: U8 ?? foo }
+        \\Cfg := { a: U8 ?? foo }
         \\
         \\foo : U8
         \\foo = 10
         \\
         \\c : Cfg
-        \\c = { a: 1 }
+        \\c = Cfg.{ a: 1 }
         \\
         \\use_it = c.a
     ;
-    // THIS is the alias-mediated gap the literal-only rule closes by
-    // construction: a def-referencing default carried by a type declaration
-    // could form an evaluation cycle through any value annotated with the
-    // alias, a shape the deleted def-dependency demand edges never followed
-    // (they stopped at alias lookups). The reference is rejected at
-    // canonicalization; the rest of the module still checks (the default is
-    // dropped, and `c` supplies the now-required field).
+    // The heir of the old "alias-mediated gap" scenario: a def-referencing
+    // default is now legal, and the cycle it COULD form is what the
+    // canonicalization cycle pass and the checker's dispatch residue judge
+    // (design.md "Defaulted Fields"). No cycle here: `foo` never touches
+    // `Cfg`, so everything checks cleanly.
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
+    try test_env.assertCanErrors(&.{});
     try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - effectful default via type decl rejected at Can as non-literal" {
+test "check type - record - default - effectful default via type decl rejected at finalize" {
     const source =
         \\main! = |_| {}
         \\
         \\eff! : {} => U8
         \\eff! = |_| 5
         \\
-        \\Cfg : { a: U8 ?? eff!({}) }
+        \\Cfg := { a: U8 ?? eff!({}) }
         \\
         \\c : Cfg
-        \\c = { a: 1 }
+        \\c = Cfg.{ a: 1 }
     ;
-    // A call is not a literal, so an effectful default can no longer reach
-    // the checker: it is rejected at canonicalization and the default
-    // dropped. The finalize-time purity judgment (`Effectful Default Value`)
-    // remains as a cheap backstop invariant but is unreachable from source.
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
-    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+    // The LIVE purity judgment (design.md "Defaulted Fields"): the compiler
+    // materializes a default at every omitting construction site, so an
+    // effectful default is rejected at finalize—even though every
+    // construction in this module supplies the field.
+    try checkTypesModule(source, .fail_first, "Effectful Default Value");
 }
 
-test "check type - record - default - parametric default rejected (review H6)" {
+test "check type - record - default - parametric default accepted (review H6)" {
     const source =
         \\main! = |_| {}
         \\
-        \\Pair(x) : { items: List(x) ?? [] }
+        \\Pair(x) := { items: List(x) ?? [] }
         \\
         \\p : Pair(U8)
-        \\p = {}
+        \\p = Pair.{}
     ;
-    // A default is evaluated once at compile time: a non-concrete default
-    // type has no single runtime representation, so it is rejected instead
-    // of panicking at cross-module construction (design.md "Defaulted
-    // Fields"). `[]` IS a literal—it passes the canonicalization literal
-    // judgment (pinned in optional_field_test.zig)—so concreteness must
-    // stay a separate finalize-time judgment.
-    try checkTypesModule(source, .fail_first, "Default Value Not Concrete");
+    // Defaults materialize PER SPECIALIZATION (design.md "Defaulted
+    // Fields"): a parametric field lowers its default at each site's
+    // monotype, so `?? []` on `List(x)` is legal and `Pair(U8)` gets a
+    // `List(U8)` default.
+    try checkTypesModule(source, .{ .pass = .{ .def = "p" } },
+        \\Pair(U8)
+    );
 }
 
-test "check type - record - default - concrete literal cannot default a parametric field" {
+test "check type - record - default - parametric literal default rejected" {
     const source =
         \\main! = |_| {}
         \\
-        \\Config(a) : { value: a ?? 0 }
+        \\Config(a) := { value: a ?? 0 }
         \\
         \\config : Config(Str)
-        \\config = {}
+        \\config = Config.{}
     ;
-    try checkTypesModule(source, .fail_first, "Default Value Not Concrete");
+    // The default EXPRESSION may be polymorphic (`?? []` is pinned accepted
+    // above), but this default hangs a `from_numeral` constraint on the
+    // parameter `a`, and defaults are OBLIGATION-FREE: type declarations
+    // carry no where clauses and none are inferred, so there is nowhere the
+    // requirement could live (design.md "Defaulted Fields").
+    try checkTypesModule(source, .fail_first, "Default Constrains A Type Parameter");
 }
 
-test "check type - record - default - indirect self-reference cycle rejected at Can as non-literal" {
+test "check type - record - default - constrained helper call carries the constraint" {
     const source =
         \\main! = |_| {}
         \\
-        \\x : { a: U8 ?? helper }
-        \\x = { a: 1 }
+        \\zero : {} -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+        \\zero = |_| 0
+        \\
+        \\Config(a) := { value : a ?? zero({}) }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // A CALL of a where-constrained helper: the constraint arrives through
+    // `zero`'s instantiated scheme rather than a literal written in the
+    // default, and the constraint-based judgment sees both identically (the
+    // constraint parks on the same parameter copy).
+    try checkTypesModule(source, .fail_with,
+        \\**Default Constrains A Type Parameter**
+        \\The default value for the `value` field requires the type parameter `a` to have a `from_numeral` method.
+        \\```roc
+        \\Config(a) := { value : a ?? zero({}) }
+        \\```
+        \\                            ^^^^^^^^
+        \\
+        \\A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - unannotated numeral reference carries the constraint" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\zero = 0
+        \\
+        \\Config(a) := { value : a ?? zero }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // An UNANNOTATED top-level numeral def generalizes with its
+    // `from_numeral` constraint still pending (it is not boundary-defaulted
+    // before defaults are checked), so referencing it from a default smuggles
+    // the same constraint as writing the literal inline—and the judgment
+    // rejects both identically.
+    try checkTypesModule(source, .fail_with,
+        \\**Default Constrains A Type Parameter**
+        \\The default value for the `value` field requires the type parameter `a` to have a `from_numeral` method.
+        \\```roc
+        \\Config(a) := { value : a ?? zero }
+        \\```
+        \\                            ^^^^
+        \\
+        \\A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - internal numeral on concrete field accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Config := { value : U8 ?? 1 + 2 }
+        \\
+        \\config : Config
+        \\config = Config.{}
+    ;
+    // Internal numeral constraints discharge against the concrete field
+    // type (or default normally); they never touch a declaration
+    // parameter, so the parameter-constraint judgment stays silent.
+    try checkTypesModule(source, .{ .pass = .{ .def = "config" } },
+        \\Config
+    );
+}
+
+test "check type - record - default - unconstrained generic helper on parametric field accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\id = |x| x
+        \\
+        \\Config(a) := { items : List(a) ?? id([]) }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // A helper whose scheme carries no dispatch constraints demands nothing
+    // of the parameter: unconstrained parametricity stays legal.
+    try checkTypesModule(source, .{ .pass = .{ .def = "config" } },
+        \\Config(Str)
+    );
+}
+
+test "check type - record - default - structurally pinning list default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Config(a) := { value : a ?? [] }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // The structural-pin arm of the judgment (formerly an empirical panic:
+    // postcheck "instantiation unified a List with a non-List type"): `[]`
+    // unifies the parameter's copy with `List(elem)`, silently deciding `a`
+    // for every specialization. No dispatch constraint is involved—the
+    // parked and deferred evidence are both empty—so only the copy's
+    // resolution to structure can convict, with the method-less wording.
+    try checkTypesModule(source, .fail_with,
+        \\**Default Constrains A Type Parameter**
+        \\The default value for the `value` field forces the type parameter `a` to a concrete type.
+        \\```roc
+        \\Config(a) := { value : a ?? [] }
+        \\```
+        \\                            ^^
+        \\
+        \\A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - structurally pinning record default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Config(a) := { value : a ?? {} }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // Same structural pin through a record literal: `{}` forces the
+    // parameter's copy to record structure.
+    try checkTypesModule(source, .fail_first, "Default Constrains A Type Parameter");
+}
+
+test "check type - record - default - structurally pinning function default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Config(a) := { value : a ?? (|x| x) }
+        \\
+        \\config : Config(Str)
+        \\config = Config.{}
+    ;
+    // Same structural pin through a function value: the lambda forces the
+    // parameter's copy to function structure.
+    try checkTypesModule(source, .fail_first, "Default Constrains A Type Parameter");
+}
+
+test "check type - record - default - parameter-aliasing default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Pair(a, b) := { pair : (List(a), List(b)) ?? (|x| (x, x))([]) }
+        \\
+        \\p : Pair(U8, Str)
+        \\p = Pair.{}
+    ;
+    // The parameter-aliasing arm of the judgment (formerly an empirical
+    // panic: postcheck "instantiation unified two different primitive
+    // types"): duplicating one `[]` into both tuple slots unifies the
+    // copies of `a` and `b` WITH EACH OTHER without pinning either, so
+    // every per-parameter rule passes (the merged root is still flex and
+    // unconstrained)—only the pairwise shared-root judgment can convict,
+    // naming both parameters.
+    try checkTypesModule(source, .fail_with,
+        \\**Default Constrains A Type Parameter**
+        \\The default value for the `pair` field forces the type parameters `a` and `b` to be the same type.
+        \\```roc
+        \\Pair(a, b) := { pair : (List(a), List(b)) ?? (|x| (x, x))([]) }
+        \\```
+        \\                                             ^^^^^^^^^^^^^^^^
+        \\
+        \\A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.
+        \\
+        \\
+    );
+}
+
+test "check type - record - default - block-local parameter-aliasing default rejected" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Pair(a, b) := { pair : (List(a), List(b)) ?? {
+        \\    same = []
+        \\    (same, same)
+        \\} }
+        \\
+        \\p : Pair(U8, Str)
+        \\p = Pair.{}
+    ;
+    // Same aliasing through a block-local binding: `same` is one list var
+    // used in both tuple slots, merging the copies of `a` and `b`.
+    try checkTypesModule(source, .fail_first, "Default Constrains A Type Parameter");
+}
+
+test "check type - record - default - independent parametric tuple default accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Pair(a, b) := { pair : (List(a), List(b)) ?? ([], []) }
+        \\
+        \\p : Pair(U8, Str)
+        \\p = Pair.{}
+    ;
+    // Two INDEPENDENT parametric literals demand nothing: each `[]` is its
+    // own list var, so both parameter copies stay flex and unmerged—
+    // unconstrained parametricity stays legal per slot.
+    try checkTypesModule(source, .{ .pass = .{ .def = "p" } },
+        \\Pair(U8, Str)
+    );
+}
+
+test "check type - record - default - indirect reference that never omits is accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\X := { a: U8 ?? helper }
+        \\
+        \\x : X
+        \\x = X.{ a: 1 }
         \\
         \\helper = x.a
     ;
-    // This indirect cycle—the default references `helper`, whose body
-    // reads the very field the default fills—used to be caught by
-    // def-dependency demand edges from annotation defaults. With defaults
-    // restricted to closed literals, the reference itself is rejected at
-    // canonicalization: the cycle can never form, and the demand-edge
-    // machinery is gone. The default is dropped, so `x` supplies the
-    // now-required field and no def cycle or type problem remains.
+    // The default references `helper`, which reads the very field the
+    // default fills—but through a construction that SUPPLIES the field, so
+    // no materialization cycle exists and the cycle pass accepts it
+    // (design.md "Defaulted Fields"; the omitting variant is pinned as a
+    // rejection in src/canonicalize/test/optional_field_test.zig).
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
+    try test_env.assertCanErrors(&.{});
     try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - omitted recursive default is rejected" {
+test "check type - record - default - omitted recursive default is rejected at Can" {
     const source =
         \\main! = |_| {}
         \\
@@ -1391,11 +1994,309 @@ test "check type - record - default - omitted recursive default is rejected" {
         \\root : Node
         \\root = Node.{}
     ;
-    // `Node.{}` is syntactically a closed literal, but constructing it omits
-    // `next` and therefore materializes this same default again. The checker
-    // must reject that explicit default-materialization cycle before the
-    // checked module reaches postcheck lowering.
-    try checkTypesModule(source, .fail_first, "Recursive Default Value");
+    // `Node.{}` inside the default omits `next` and therefore materializes
+    // this same default again: a pure omission self-edge, caught by the
+    // canonicalization cycle pass now that omission sites are explicit
+    // nominal constructions (the checker's residue only judges edges CAN
+    // cannot see). The default is dropped, `next` degrades to required, and
+    // the follow-on missing-field type error on `root` is expected—only the
+    // CAN error set is asserted here.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{"Default Value Cycle"});
+}
+
+test "check type - record - default - dispatch-mediated cycle is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { x : U8 ?? go(Cfg.{ x: 1 }) }.{
+        \\    make = |_cfg| Cfg.{}.x
+        \\}
+        \\
+        \\go = |c| c.make()
+    ;
+    // The cycle threads through an edge canonicalization CANNOT see: the
+    // default references `go` (a CAN-visible reference edge), but `go`
+    // dispatches on its PARAMETER (`c.make()`), and the argument
+    // `Cfg.{ x: 1 }` supplies `x`, so CAN records no omission edge either.
+    // Only constraint discharge resolves `make`—whose body's `Cfg.{}` omits
+    // `x`—so the checker's residue walk must close the cycle: the site's
+    // constraint var inside `go`'s generalized body is joined to the
+    // discharged copy through the recorded scheme-use pairs (the site var
+    // itself never equals the instantiation's var; generalization copies it
+    // per use).
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "check type - record - default - function-valued default referencing a def is accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { n : U8 ?? 0, mk : (U8 -> Cfg) ?? make }
+        \\
+        \\make : U8 -> Cfg
+        \\make = |x| Cfg.{ n: x }
+    ;
+    // Materializing `mk`'s default only creates the `make` function value—
+    // its body is NOT evaluated at materialization, so the omission of `mk`
+    // inside that body is no edge and there is no cycle. The residue walk
+    // follows canonicalization's DefaultCycles rule: a lambda reached as a
+    // VALUE does not walk its body (CAN pins the same acceptance in
+    // src/canonicalize/test/optional_field_test.zig).
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+}
+
+test "check type - record - default - value-position lambda default with omission accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { n : U8 ?? 0, mk : ({} -> Cfg) ?? (|{}| Cfg.{}) }
+    ;
+    // The default IS a lambda value whose body omits both fields:
+    // materialization creates the closure without running the body, so no
+    // cycle exists and the walk must not descend the value-position body.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+}
+
+test "check type - record - default - immediately-invoked lambda cycle behind dispatch is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { x : U8 ?? go(Cfg.{ x: 1 }) }.{
+        \\    make = |_cfg| (|{}| Cfg.{}.x)({})
+        \\}
+        \\
+        \\go = |c| c.make()
+    ;
+    // The dispatch-mediated shape above, with the omitting construction
+    // moved inside an immediately-invoked lambda in `make`'s body: CAN sees
+    // neither the dispatch edge nor the IIFE it guards, so only the
+    // checker's walk can close the cycle—the stamped target's body is
+    // INVOKED (so it walks), and the direct-callee lambda inside it is
+    // invoked too (so its body walks to the omission). If either invoked
+    // position were treated as a value, this cycle would be missed.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "check type - record - default - cycle through a default-local binding is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Loop := { a : U8 ?? { f = |_| Loop.{}.a
+        \\                      f({}) } }
+        \\
+        \\x : Loop
+        \\x = Loop.{}
+    ;
+    // The invoked callee resolves to a binding LOCAL to the default
+    // expression itself (a block statement), not to a top-level def:
+    // canonicalization's DefaultCycles pass does not map default-local
+    // binders, so the residue walk must record block-statement pattern
+    // bindings encountered during the walk and follow an invoked lookup
+    // into the bound lambda's body, where `Loop.{}` omits `a` and closes
+    // the cycle. Without the local-binding edge this materialization
+    // diverges at compile time instead of being rejected.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "check type - record - default - acyclic default-local binding is accepted" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { a : U8 ?? { f = |n| n + 1
+        \\                     f(4) } }
+        \\
+        \\x : Cfg
+        \\x = Cfg.{}
+    ;
+    // The rejected side's acyclic twin: the local binding's lambda body
+    // reaches no omitting construction, so following the invoked
+    // local-binding edge must not manufacture a cycle.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+}
+
+test "check type - record - default - call through def reference is CAN's cycle" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Loop := { a : U8 ?? go({}) }
+        \\
+        \\go = |_| Loop.{}.a
+    ;
+    // The callee is a name-resolvable REFERENCE, but the call still
+    // evaluates `go`'s body at materialization, and that body's `Loop.{}`
+    // omits `a`: invoked-ness follows the reference to the def's body. The
+    // whole path is name-resolvable, so canonicalization's DefaultCycles
+    // pass owns it (its invoked-flavored def nodes; positive pin in
+    // src/canonicalize/test/optional_field_test.zig): CAN reports the
+    // cycle and drops the default, so the checker's residue never sees it.
+    // The follow-on missing-field type error on `go`'s now-required `a` is
+    // expected—only the CAN error set is asserted here. The residue keeps
+    // owning invoked-ness where the invocation is dispatch-mediated (see
+    // the dispatch/IIFE tests above).
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{"Default Value Cycle"});
+    for (test_env.checker.problems.problems.items) |problem| {
+        try std.testing.expect(problem != .recursive_default_value);
+    }
+}
+
+test "check type - record - default - higher-order argument cycle is CAN's" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\X := { a : U8 ?? apply(make) }
+        \\
+        \\apply = |g| g({})
+        \\
+        \\make = |_| X.{}.a
+    ;
+    // `apply` calls its PARAMETER—an edge no walk can name-resolve—but the
+    // conservative argument rule treats every argument of a walked call as
+    // invoked, so `make`'s body walks in canonicalization's DefaultCycles
+    // pass and the whole cycle is name-resolvable: CAN reports it and drops
+    // the default before the checker's residue runs (positive pin in
+    // src/canonicalize/test/optional_field_test.zig). Only the CAN error
+    // set is asserted; follow-on type errors from the now-required field
+    // are expected.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{"Default Value Cycle"});
+    for (test_env.checker.problems.problems.items) |problem| {
+        try std.testing.expect(problem != .recursive_default_value);
+    }
+}
+
+test "check type - record - default - cycle through a def-body block binding is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Loop := { a : U8 ?? f({}) }
+        \\
+        \\f = {
+        \\    g = |_| Loop.{}.a
+        \\    g
+        \\}
+    ;
+    // Invoked-ness flows through the called def's block RESULT position,
+    // where the final expression is a lookup of a binding LOCAL to that
+    // def's body: canonicalization's DefaultCycles pass maps only top-level
+    // binders, so the invoked lookup of `g` is terminal there and CAN
+    // accepts. The residue walk owns it: the invoked `.e_block` arm records
+    // the block's statement bindings BEFORE its final expression drains (the
+    // value walk has not popped the block yet), so the invoked lookup
+    // resolves to `g`'s lambda, whose body's `Loop.{}` omits `a` and closes
+    // the cycle.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "check type - record - default - associated-value-mediated cycle is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Alias : Cfg
+        \\
+        \\Cfg := { x : U8 ?? Alias.fallback }.{
+        \\    fallback = Cfg.{}.x
+        \\}
+    ;
+    // The default references the associated value through a local ALIAS of
+    // the declaring type: `Alias.fallback` canonicalizes to
+    // `e_lookup_associated_local` (a direct `Cfg.fallback` resolves in
+    // scope and is CAN's cycle). Canonicalization CANNOT resolve the alias
+    // form to its target def—resolution follows transparent aliases
+    // through the type store (`resolveAssociatedLookup` in
+    // src/check/Check.zig), which only exists after checking—so the
+    // lookup is terminal in DefaultCycles and CAN accepts. The checker's
+    // residue walk owns the edge: checking rewrites the lookup to
+    // `e_lookup_associated_resolved`, and the walk's value arm follows the
+    // same-module target def into `fallback`'s body, whose `Cfg.{}` omits
+    // `x` and closes the cycle.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
+}
+
+test "check type - record - default - invoked associated-value cycle is check's residue" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Alias : Cfg
+        \\
+        \\Cfg := { x : U8 ?? Alias.mk({}) }.{
+        \\    mk = |_| Cfg.{}.x
+        \\}
+    ;
+    // The invoked twin of the test above: the default CALLS the associated
+    // value through the alias, so only invoked-ness reaches the lambda's
+    // body (a lambda reached as a value does not walk its body). CAN still
+    // cannot resolve the aliased associated callee, so the checker's
+    // residue walk must follow the invoked resolved reference into `mk`'s
+    // body, where `Cfg.{}` omits `x` and closes the cycle.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{});
+    try std.testing.expectEqual(1, test_env.checker.problems.problems.items.len);
+    try std.testing.expectEqualStrings(
+        "recursive_default_value",
+        @tagName(test_env.checker.problems.problems.items[0]),
+    );
 }
 
 test "check type - record - default - nested omitted defaults terminate" {
@@ -1413,120 +2314,124 @@ test "check type - record - default - nested omitted defaults terminate" {
     try checkTypesModule(source, .{ .pass = .{ .def = "value" } }, "U8");
 }
 
-test "check type - record - default - module-constant default rejected at Can as non-literal" {
+test "check type - record - default - module-constant default accepted and materialized" {
     const source =
         \\main! = |_| {}
         \\
         \\ten : U8
         \\ten = 10
         \\
-        \\x : { a: U8 ?? ten }
-        \\x = { a: 1 }
+        \\X := { a: U8 ?? ten }
+        \\
+        \\x : X
+        \\x = X.{}
         \\
         \\use_it = x.a
     ;
-    // Even a benign, non-cycling reference to a module constant is rejected:
-    // the literal-only rule is judged on the default's shape at
-    // canonicalization, not on whether a cycle actually forms—that is what
-    // lets the checker drop the reference-cycle machinery outright.
+    // A non-cycling reference to a module constant is an ordinary pure
+    // default: accepted, typed against the field, and materialized at the
+    // omitting construction (runtime value pinned in eval tests).
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
+    try test_env.assertCanErrors(&.{});
     try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - effectful default rejected at Can as non-literal" {
+test "check type - record - default - pure call default accepted" {
     const source =
         \\main! = |_| {}
         \\
-        \\get_default! : {} => U8
-        \\get_default! = |_| 5
+        \\get_default : {} -> U8
+        \\get_default = |_| 5
         \\
-        \\my_record : { count: U8 ?? get_default!({}) }
-        \\my_record = { count: 1 }
+        \\MyRecord := { count: U8 ?? get_default({}) }
+        \\
+        \\my_record : MyRecord
+        \\my_record = MyRecord.{ count: 1 }
     ;
-    // A call is not a literal—effectful or not—so the rejection happens
-    // at canonicalization, before purity is even a question. The
-    // finalize-time `Effectful Default Value` judgment stays as a backstop
-    // invariant but is unreachable from source.
+    // A PURE call is a legal default; only effectful defaults are rejected
+    // (the finalize-time purity judgment, pinned above).
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertCanErrors(&.{"Default Value Must Be A Literal"});
+    try test_env.assertCanErrors(&.{});
     try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - separately written defaults do not merge" {
+test "check type - record - default - structural default rejected at Can (was: separately written defaults)" {
     const source =
         \\main! = |_| {}
         \\
         \\a : { x: U8 ?? 1 }
-        \\a = {}
+        \\a = { x: 1 }
         \\
         \\b : { x: U8 ?? 2 }
-        \\b = {}
+        \\b = { x: 2 }
         \\
         \\lst = [a, b]
     ;
-    // Two separately written defaults are two default identities even when
-    // the rest of the shape matches; merging them would leave no coherent
-    // default for construction sites (design.md "Defaulted Fields"). The
-    // report renders both defaults and points at both declarations.
-    try checkTypesModule(source, .fail_with,
-        \\**Type Mismatch**
-        \\The two elements in this list have incompatible types.
-        \\```roc
-        \\lst = [a, b]
-        \\```
-        \\          ^
-        \\
-        \\The first element has this type:
-        \\
-        \\    { x: U8 ?? 1 }
-        \\
-        \\However, the second element has this type:
-        \\
-        \\    { x: U8 ?? 2 }
-        \\
-        \\All elements in a list must have compatible types.
-        \\__Note:__ You can wrap each element in a tag to make them compatible.
-        \\To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-        \\**Hint:** The `x` field has a `??` default in both types, but they are two DIFFERENT defaults—two separately written defaults never merge, even when their values look the same. To share one default, declare the record type once (e.g. as a type alias) and annotate both values with it.
-        \\One default is declared here:
-        \\```roc
-        \\b : { x: U8 ?? 2 }
-        \\```
-        \\               ^
-        \\
-        \\And the other is declared here:
-        \\```roc
-        \\a : { x: U8 ?? 1 }
-        \\```
-        \\               ^
-        \\
-        \\
-        \\
-    );
+    // Post-restriction, a structural row cannot carry a `??` default, so the
+    // separately-written-defaults conflict this test used to pin is no
+    // longer constructible from source: both annotations reject at
+    // canonicalization and the defaults drop (the fields degrade to plain
+    // required and are supplied, so `lst` then checks—`a` and `b` are the
+    // same shape). The
+    // Incompatible Defaults report and the `defaulted(d1) ~ defaulted(d2)`
+    // unify rule remain as identity-skew invariants, pinned at the unify
+    // level (unify_test "different default identities still mismatch") and
+    // rendered by report.zig's snapshot divert. Full report text for this
+    // rejection is pinned in test/snapshots/record_default_structural_rejected.md.
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{
+        "Default Not Allowed In Structural Record",
+        "Default Not Allowed In Structural Record",
+    });
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
 }
 
-test "check type - record - default - alias-shared default is one identity" {
+test "check type - record - default - inline annotation default rejected at Can (was: incompatible defaults via annotation)" {
     const source =
         \\main! = |_| {}
         \\
-        \\Cfg : { x: U8 ?? 1 }
+        \\a : { x: U8 ?? 1 }
+        \\a = { x: 1 }
+        \\
+        \\b : { x: U8 ?? 2 }
+        \\b = a
+    ;
+    // Same as above through the annotation context: both inline defaults
+    // reject at canonicalization, the defaults drop, and `b = a` then
+    // checks (same required shape).
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertCanErrors(&.{
+        "Default Not Allowed In Structural Record",
+        "Default Not Allowed In Structural Record",
+    });
+    try std.testing.expectEqual(0, test_env.checker.problems.problems.items.len);
+}
+
+test "check type - record - default - nominal-shared default is one identity" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Cfg := { x: U8 ?? 1 }
         \\
         \\a : Cfg
-        \\a = {}
+        \\a = Cfg.{}
         \\
         \\b : Cfg
-        \\b = {}
+        \\b = Cfg.{}
         \\
         \\lst = [a, b]
     ;
-    // One written default is one identity: both annotations instantiate the
-    // same declaration, so the defaulted kinds carry equal identities and
-    // the values mix freely.
+    // One written default is one identity: both constructions instantiate
+    // the same declaration, so the defaulted kinds carry equal identities
+    // and the values mix freely.
     try checkTypesModule(source, .{ .pass = .{ .def = "lst" } },
         \\List(Cfg)
     );

@@ -1501,7 +1501,7 @@ pub fn scanParsedHeader(
     const kind: HeaderKind = switch (header) {
         .app => |a| blk: {
             const platform_field = ast.store.getRecordField(a.platform_idx);
-            if (platform_field.value) |value_expr| {
+            if (platform_field.value.asSupplied()) |value_expr| {
                 const platform_expr = ast.store.getExpr(value_expr);
                 if (platform_expr == .string) {
                     const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
@@ -1581,7 +1581,7 @@ fn appendPackagesCollection(
             if (idx == skip) continue;
         }
         const field = ast.store.getRecordField(idx);
-        const value_expr = field.value orelse continue;
+        const value_expr = field.value.asSupplied() orelse continue;
         const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
         try appendScannedDep(allocator, deps, ast.resolve(field.name), spec, false);
     }

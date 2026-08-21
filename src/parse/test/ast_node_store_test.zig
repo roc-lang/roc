@@ -1130,6 +1130,35 @@ test "NodeStore rejects optional index sentinel overflow in release builds" {
     }));
 }
 
+test "NodeStore round trip - expression record field value states" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 4);
+    defer store.deinit();
+
+    const fields = [_]AST.RecordField{
+        .{
+            .name = 1,
+            .value = .{ .supplied = @enumFromInt(2) },
+            .region = .{ .start = 1, .end = 3 },
+        },
+        .{
+            .name = 4,
+            .value = .punned,
+            .region = .{ .start = 4, .end = 5 },
+        },
+        .{
+            .name = 6,
+            .value = .unset,
+            .region = .{ .start = 6, .end = 8 },
+        },
+    };
+
+    for (fields) |field| {
+        const idx = try store.addRecordField(field);
+        try testing.expectEqualDeep(field, store.getRecordField(idx));
+    }
+}
+
 test "NodeStore round trip - annotation record field optional marker" {
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, 4);

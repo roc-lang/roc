@@ -394,7 +394,7 @@ test "long alternating field-access chains canonicalize without recursive path n
 
 test "defaulted record annotation field canonicalizes its default expression" {
     const allocator = std.testing.allocator;
-    const source = "Example : { x : U32, y : U32 ?? 10, z : U32 }";
+    const source = "Example := { x : U32, y : U32 ?? 10, z : U32 }";
 
     var builtin_ctx = try BuiltinTestContext.init(allocator);
     defer builtin_ctx.deinit();
@@ -417,9 +417,9 @@ test "defaulted record annotation field canonicalizes its default expression" {
     const statement_idx = env.store.statementAt(env.type_decls, 0);
     const anno_idx = blk_anno_idx: {
         const scrutinee = env.store.getStatement(statement_idx);
-        if (scrutinee != .s_alias_decl) return error.ExpectedAliasDeclaration;
-        const alias = scrutinee.s_alias_decl;
-        break :blk_anno_idx alias.anno;
+        if (scrutinee != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+        const nominal = scrutinee.s_nominal_decl;
+        break :blk_anno_idx nominal.anno;
     };
     const record = blk_record: {
         const scrutinee = env.store.getTypeAnno(anno_idx);
@@ -461,12 +461,15 @@ test "optional field with default is rejected at canonicalization" {
     try can.canonicalizeFile();
 
     // The `?:` + `??` combination is rejected and the default dropped
-    // (design.md "Defaulted Fields").
+    // (design.md "Defaulted Fields"). PRECEDENCE PIN: even though this alias
+    // is also an illegal position for a default, the more specific shape
+    // conflict wins and exactly one diagnostic fires per offending field.
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
     var found = false;
     for (diagnostics) |diag| {
         if (diag == .optional_field_cannot_have_default) found = true;
+        try std.testing.expect(diag != .default_not_allowed_in_structural_record);
     }
     try std.testing.expect(found);
 
@@ -518,8 +521,12 @@ test "unnamed nominal field with a default reports the padding restriction" {
     try std.testing.expectEqualStrings("Unnamed Field Cannot Have A Default", report.title);
 }
 
-test "local-binding default is rejected as non-literal at canonicalization" {
+test "default in an inline annotation is rejected as structural" {
     const allocator = std.testing.allocator;
+    // Formerly the local-capture non-literal test: under the nominal-only
+    // rule an inline annotation can never carry a `??` at all, so the
+    // local-capture scenario (a default referencing a lambda binding) is
+    // structurally unreachable—nominal declarations are top-level only.
     const source =
         \\f = |n| {
         \\    y : { a : U8 ?? n }
@@ -545,23 +552,96 @@ test "local-binding default is rejected as non-literal at canonicalization" {
 
     try can.canonicalizeFile();
 
-    // A default must be a closed literal; a reference to the lambda
-    // parameter is a name reference and is rejected, dropping the default
-    // (design.md "Defaulted Fields").
+    // The position error fires; the default is dropped before it is
+    // canonicalized.
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
     var found = false;
     for (diagnostics) |diag| {
-        if (diag == .record_default_not_literal) found = true;
+        if (diag == .default_not_allowed_in_structural_record) found = true;
     }
     try std.testing.expect(found);
 }
 
-test "self-referential default is rejected as non-literal at canonicalization" {
+test "default in a type alias is rejected as structural" {
     const allocator = std.testing.allocator;
+    const source = "Cfg : { a : U8 ?? 1 }";
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.len);
+    var report = try env.diagnosticToReport(diagnostics[0], allocator, "Test.roc");
+    defer report.deinit();
+    try std.testing.expectEqualStrings("Default Not Allowed In Structural Record", report.title);
+
+    // The field survives as plain required with no default.
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_alias_decl) return error.ExpectedAliasDeclaration;
+    const anno = env.store.getTypeAnno(statement.s_alias_decl.anno);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), fields.len);
+    const field = env.store.getAnnoRecordField(fields[0]);
+    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), field.default_value);
+}
+
+test "default on a nested record inside a nominal backing is rejected" {
+    const allocator = std.testing.allocator;
+    // Direct fields only: the nested record type is structural even though
+    // it appears inside a nominal declaration's backing.
+    const source = "A := { inner : { x : U8 ?? 1 } }";
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.len);
+    var report = try env.diagnosticToReport(diagnostics[0], allocator, "Test.roc");
+    defer report.deinit();
+    try std.testing.expectEqualStrings("Default Not Allowed In Structural Record", report.title);
+}
+
+test "self-referential default is rejected by the cycle pass" {
+    const allocator = std.testing.allocator;
+    // default(a) -> x (reference) -> X.{} (omission of a) -> default(a).
     const source =
-        \\x : { a : U8 ?? x.a }
-        \\x = {}
+        \\X := { a : U8 ?? x.a }
+        \\
+        \\x : X
+        \\x = X.{}
     ;
 
     var builtin_ctx = try BuiltinTestContext.init(allocator);
@@ -581,22 +661,31 @@ test "self-referential default is rejected as non-literal at canonicalization" {
 
     try can.canonicalizeFile();
 
-    // A self-referential default is a name reference, so the literal-only
-    // judgment rejects it without needing any self-reference tracking
-    // (design.md "Defaulted Fields"). The default is dropped.
+    // The end-of-module cycle pass reports once and drops the default so
+    // check and lowering never see it (design.md "Defaulted Fields").
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
-    var found = false;
+    var found: usize = 0;
     for (diagnostics) |diag| {
-        if (diag == .record_default_not_literal) found = true;
+        if (diag == .record_default_reference_cycle) found += 1;
     }
-    try std.testing.expect(found);
+    try std.testing.expectEqual(@as(usize, 1), found);
+
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const anno = env.store.getTypeAnno(statement.s_nominal_decl.anno);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), fields.len);
+    const field = env.store.getAnnoRecordField(fields[0]);
+    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), field.default_value);
 }
 
-test "type-declaration default referencing a def is rejected as non-literal" {
+test "type-declaration default referencing a def is accepted as a pure expression" {
     const allocator = std.testing.allocator;
     const source =
-        \\Cfg : { a : U8 ?? foo }
+        \\Cfg := { a : U8 ?? foo }
         \\
         \\foo : U8
         \\foo = 10
@@ -619,19 +708,182 @@ test "type-declaration default referencing a def is rejected as non-literal" {
 
     try can.canonicalizeFile();
 
-    // THIS is the alias-mediated gap the literal-only rule closes: a value
-    // annotated `x : Cfg` could cycle through `Cfg`'s default (`foo` reads
-    // `x`), a shape neither the old self-reference judgment (type decls had
-    // no annotated value) nor the def-dependency walk (it never followed
-    // alias lookups) could see. Banning references outright closes the gap
-    // by construction (design.md "Defaulted Fields").
+    // A reference with no path back to the default is not a cycle: the
+    // default survives with its expression (design.md "Defaulted Fields").
     const diagnostics = try env.getDiagnostics();
     defer allocator.free(diagnostics);
-    var found = false;
-    for (diagnostics) |diag| {
-        if (diag == .record_default_not_literal) found = true;
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.len);
+
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const anno = env.store.getTypeAnno(statement.s_nominal_decl.anno);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), fields.len);
+    const field = env.store.getAnnoRecordField(fields[0]);
+    try std.testing.expect(field.default_value != null);
+}
+
+test "construction omitting a defaulted field records an explicit demand edge on the default's references" {
+    const allocator = std.testing.allocator;
+    // `cfg` omits the defaulted field `n`, whose default references `base`,
+    // declared AFTER `cfg`. Materializing `cfg` materializes the default, so
+    // the top-level demand graph must carry the explicit edge cfg -> base
+    // and the evaluation order must place `base` before `cfg` (design.md
+    // "Defaulted Fields": omission edges are explicit, not recovered later).
+    const source =
+        \\Cfg := { n : U8 ?? base }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\base : U8
+        \\base = 40 + 2
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try std.testing.expectEqual(@as(usize, 0), diagnostics.len);
+
+    var cfg_def: ?CIR.Def.Idx = null;
+    var base_def: ?CIR.Def.Idx = null;
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        if (env.store.getExpr(def.expr) == .e_anno_only) continue;
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        const name = env.common.getIdent(pattern.assign.ident);
+        if (std.mem.eql(u8, name, "cfg")) cfg_def = def_idx;
+        if (std.mem.eql(u8, name, "base")) base_def = def_idx;
     }
-    try std.testing.expect(found);
+    const cfg = cfg_def orelse return error.MissingCfgDef;
+    const base_idx = base_def orelse return error.MissingBaseDef;
+
+    const DependencyGraph = @import("../DependencyGraph.zig");
+    try std.testing.expect(DependencyGraph.hasDependency(
+        env.top_level_demand_dependencies.items.items,
+        cfg,
+        base_idx,
+    ));
+
+    // The SCC order must schedule `base` strictly before `cfg`.
+    const eval_order = env.evaluation_order orelse return error.MissingEvaluationOrder;
+    var cfg_group: ?usize = null;
+    var base_group: ?usize = null;
+    for (eval_order.sccs, 0..) |scc, group_index| {
+        for (scc.defs) |def_idx| {
+            if (def_idx == cfg) cfg_group = group_index;
+            if (def_idx == base_idx) base_group = group_index;
+        }
+    }
+    try std.testing.expect(base_group.? < cfg_group.?);
+}
+
+test "def-mediated default cycle is rejected by the cycle pass" {
+    const allocator = std.testing.allocator;
+    // The heir of the old alias-mediated gap: the default references `foo`,
+    // whose body reads a value built by a construction that omits the
+    // field. default(a) -> foo -> cfg_val -> Cfg.{} (omission) -> default(a).
+    const source =
+        \\Cfg := { a : U8 ?? foo }
+        \\
+        \\foo : U8
+        \\foo = cfg_val.a
+        \\
+        \\cfg_val : Cfg
+        \\cfg_val = Cfg.{}
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "mutually cyclic defaults report once and both drop" {
+    const allocator = std.testing.allocator;
+    // default(A.a) -> B.{} omission -> default(B.b) -> A.{} omission ->
+    // default(A.a): one SCC, one report, both defaults dropped.
+    const source =
+        \\A := { a : U8 ?? B.{}.b }
+        \\B := { b : U8 ?? A.{}.a }
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+
+    var decl_index: usize = 0;
+    while (decl_index < 2) : (decl_index += 1) {
+        const statement_idx = env.store.statementAt(env.type_decls, decl_index);
+        const statement = env.store.getStatement(statement_idx);
+        if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+        const anno = env.store.getTypeAnno(statement.s_nominal_decl.anno);
+        if (anno != .record) return error.ExpectedRecordAnnotation;
+        const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+        try std.testing.expectEqual(@as(usize, 1), fields.len);
+        const field = env.store.getAnnoRecordField(fields[0]);
+        try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), field.default_value);
+    }
 }
 
 test "literal defaults of every accepted shape canonicalize with their defaults kept" {
@@ -640,7 +892,7 @@ test "literal defaults of every accepted shape canonicalize with their defaults 
     // negated numeral, interpolation-free string, empty list, tag application
     // of literals, and a record literal of literals.
     const source =
-        \\Example : {
+        \\Example := {
         \\    a : U8 ?? 10,
         \\    b : Str ?? "hi",
         \\    c : I8 ?? -1,
@@ -673,8 +925,8 @@ test "literal defaults of every accepted shape canonicalize with their defaults 
 
     const statement_idx = env.store.statementAt(env.type_decls, 0);
     const statement = env.store.getStatement(statement_idx);
-    if (statement != .s_alias_decl) return error.ExpectedAliasDeclaration;
-    const anno_idx = statement.s_alias_decl.anno;
+    if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const anno_idx = statement.s_nominal_decl.anno;
     const anno = env.store.getTypeAnno(anno_idx);
     if (anno != .record) return error.ExpectedRecordAnnotation;
     const record = anno.record;
@@ -684,4 +936,574 @@ test "literal defaults of every accepted shape canonicalize with their defaults 
         const field = env.store.getAnnoRecordField(field_idx);
         try std.testing.expect(field.default_value != null);
     }
+}
+
+test "default on a block-local nominal declaration is rejected" {
+    const allocator = std.testing.allocator;
+    // A block-local `:=` declaration's default would canonicalize in
+    // function scope and capture `n`, which no other construction site can
+    // supply, and the end-of-module cycle pass only scans top-level
+    // declarations—so the default is rejected outright and dropped.
+    // PRECEDENCE PIN: the declaration IS a nominal backing, so the
+    // structural-record diagnostic must NOT fire; the dedicated local-decl
+    // diagnostic does.
+    const source =
+        \\f = |n| {
+        \\    Cfg := { a : U8 ?? n }
+        \\    g = |{}| Cfg.{}
+        \\    g({})
+        \\}
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .default_not_allowed_on_local_type_decl) found += 1;
+        try std.testing.expect(diag != .default_not_allowed_in_structural_record);
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "default on a block-local opaque declaration is rejected" {
+    const allocator = std.testing.allocator;
+    // Opaque (`::`) declarations share the nominal backing route, so the
+    // block-local restriction applies identically.
+    const source =
+        \\f = |n| {
+        \\    Cfg :: { a : U8 ?? n }
+        \\    g = |{}| Cfg.{}
+        \\    g({})
+        \\}
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag != .default_not_allowed_on_local_type_decl) continue;
+        found += 1;
+        var report = try env.diagnosticToReport(diag, allocator, "Test.roc");
+        defer report.deinit();
+        try std.testing.expectEqualStrings("Default Not Allowed On Local Type Declaration", report.title);
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "self-referential default behind parens is rejected by the cycle pass" {
+    const allocator = std.testing.allocator;
+    // canonicalizeNominalBackingAnno unwraps a parenthesized backing when
+    // ACCEPTING the default, so the cycle pass must unwrap identically when
+    // COLLECTING it—otherwise this cycle would silently leak to check.
+    const source =
+        \\X := ({ a : U8 ?? x.a })
+        \\
+        \\x : X
+        \\x = X.{}
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+
+    // The default is dropped through the parens wrapping.
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    var anno = env.store.getTypeAnno(statement.s_nominal_decl.anno);
+    while (anno == .parens) anno = env.store.getTypeAnno(anno.parens.anno);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), fields.len);
+    const field = env.store.getAnnoRecordField(fields[0]);
+    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), field.default_value);
+}
+
+test "function-valued default referencing a def is not a cycle" {
+    const allocator = std.testing.allocator;
+    // Materializing `mk`'s default only creates the `make` closure—`make`'s
+    // body is NOT evaluated at materialization, so the omission of `mk`
+    // inside that body is not an edge and there is no cycle. The walk must
+    // not descend lambda bodies reached as values.
+    const source =
+        \\Cfg := { n : U8 ?? 0, mk : (U8 -> Cfg) ?? make }
+        \\
+        \\make : U8 -> Cfg
+        \\make = |x| Cfg.{ n: x }
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    for (diagnostics) |diag| {
+        try std.testing.expect(diag != .record_default_reference_cycle);
+    }
+
+    // Both defaults survive.
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const anno = env.store.getTypeAnno(statement.s_nominal_decl.anno);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+    for (fields) |field_idx| {
+        const field = env.store.getAnnoRecordField(field_idx);
+        try std.testing.expect(field.default_value != null);
+    }
+}
+
+test "immediately-invoked lambda default cycle is still rejected" {
+    const allocator = std.testing.allocator;
+    // A lambda in direct callee position IS evaluated at materialization,
+    // so its body walks: the construction inside omits `n`, a self-edge.
+    const source = "Cfg := { n : U8 ?? (|{}| Cfg.{}.n)({}) }";
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "call through a def reference closes the cycle" {
+    const allocator = std.testing.allocator;
+    // The callee is a name-resolvable REFERENCE, but the call still
+    // evaluates `go`'s body at materialization, and that body's `Loop.{}`
+    // omits `a`: invoked-ness must follow the reference into the def's
+    // body (invoked-flavored node), or materialization recurses forever.
+    // Contrast with the fn-VALUED default pin above (`?? make`), whose
+    // body stays unwalked.
+    const source =
+        \\Loop := { a : U8 ?? go({}) }
+        \\
+        \\go = |_| Loop.{}.a
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+
+    // The default is dropped: `a` degrades to plain required.
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const anno = env.store.getTypeAnno(statement.s_nominal_decl.anno);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), fields.len);
+    const field = env.store.getAnnoRecordField(fields[0]);
+    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), field.default_value);
+}
+
+test "invoked-ness propagates through a reference chain" {
+    const allocator = std.testing.allocator;
+    // `go` is just a reference to `helper`; calling `go` still evaluates
+    // `helper`'s body at materialization, so the invoked flavor follows the
+    // chain and the omission in `helper`'s body closes the cycle.
+    const source =
+        \\Loop := { a : U8 ?? go({}) }
+        \\
+        \\go = helper
+        \\
+        \\helper = |_| Loop.{}.a
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "same def as value stays legal while calling it is a cycle" {
+    const allocator = std.testing.allocator;
+    // One def, both flavors: `Cfg`'s default references `make` as a VALUE
+    // (only the closure materializes—legal, default kept), while `Bad`'s
+    // default CALLS it, so `make`'s body walks, its `Bad.{}` omits `b`,
+    // and that cycle reports once and drops only `b`'s default.
+    const source =
+        \\Cfg := { mk : (U8 -> Bad) ?? make }
+        \\Bad := { b : U8 ?? make(1).b }
+        \\
+        \\make = |_| Bad.{}
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+
+    // Cfg's value-referencing default survives; Bad's calling default drops.
+    const cfg_stmt = env.store.getStatement(env.store.statementAt(env.type_decls, 0));
+    if (cfg_stmt != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const cfg_anno = env.store.getTypeAnno(cfg_stmt.s_nominal_decl.anno);
+    if (cfg_anno != .record) return error.ExpectedRecordAnnotation;
+    const cfg_fields = env.store.sliceAnnoRecordFields(cfg_anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), cfg_fields.len);
+    try std.testing.expect(env.store.getAnnoRecordField(cfg_fields[0]).default_value != null);
+
+    const bad_stmt = env.store.getStatement(env.store.statementAt(env.type_decls, 1));
+    if (bad_stmt != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const bad_anno = env.store.getTypeAnno(bad_stmt.s_nominal_decl.anno);
+    if (bad_anno != .record) return error.ExpectedRecordAnnotation;
+    const bad_fields = env.store.sliceAnnoRecordFields(bad_anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), bad_fields.len);
+    try std.testing.expectEqual(@as(?CIR.Expr.Idx, null), env.store.getAnnoRecordField(bad_fields[0]).default_value);
+}
+
+test "block-produced closure default cycle is rejected" {
+    const allocator = std.testing.allocator;
+    // The called def's body is a BLOCK that PRODUCES a function: calling
+    // `f` evaluates the block's final closure, so invoked-ness must flow
+    // through the block's result position into the closure's body, where
+    // `X.{}` omits `a` and closes the cycle. Without result-position
+    // propagation the closure would only walk as a value and
+    // materialization would recurse forever.
+    const source =
+        \\X := { a : U8 ?? f({}) }
+        \\
+        \\f = {
+        \\    n = 1
+        \\    |_| X.{}.a + n
+        \\}
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "if-produced function default cycle is rejected" {
+    const allocator = std.testing.allocator;
+    // Result-position propagation through `if`: calling `f` evaluates one
+    // of the branch results, so EVERY branch body and the final else walk
+    // as invoked (conditions stay values). The then-branch's lambda body
+    // omits `a`, closing the cycle—conservative by reachability, the same
+    // stance as omissions on dead branches.
+    const source =
+        \\X := { a : U8 ?? f({}) }
+        \\
+        \\f = if 1 > 0 (|_| X.{}.a) else (|_| 0)
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "higher-order argument default cycle is rejected" {
+    const allocator = std.testing.allocator;
+    // The CONSERVATIVE ARGUMENT RULE: `apply` calls its parameter, an edge
+    // CAN cannot see—but the function VALUE reached the call as the
+    // argument `make`, and every argument of a walked call is treated as
+    // invoked. `make`'s body walks, its `X.{}` omits `a`, and the cycle is
+    // name-resolvable after all.
+    const source =
+        \\X := { a : U8 ?? apply(make) }
+        \\
+        \\apply = |g| g({})
+        \\
+        \\make = |_| X.{}.a
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "uncalled function-valued def reference stays accepted" {
+    const allocator = std.testing.allocator;
+    // The function-value rule survives the argument rule: `make_handler`
+    // is referenced as a plain VALUE (never a callee, never an argument of
+    // a call), so materializing `h`'s default only creates the function
+    // value—its body's omitting construction is no edge and both defaults
+    // survive.
+    const source =
+        \\X := { a : U8 ?? 0, h : ({} -> U8) ?? make_handler }
+        \\
+        \\make_handler = |_| X.{}.a
+    ;
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    for (diagnostics) |diag| {
+        try std.testing.expect(diag != .record_default_reference_cycle);
+    }
+
+    // Both defaults survive.
+    const statement_idx = env.store.statementAt(env.type_decls, 0);
+    const statement = env.store.getStatement(statement_idx);
+    if (statement != .s_nominal_decl) return error.ExpectedNominalDeclaration;
+    const anno = env.store.getTypeAnno(statement.s_nominal_decl.anno);
+    if (anno != .record) return error.ExpectedRecordAnnotation;
+    const fields = env.store.sliceAnnoRecordFields(anno.record.fields);
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+    for (fields) |field_idx| {
+        const field = env.store.getAnnoRecordField(field_idx);
+        try std.testing.expect(field.default_value != null);
+    }
+}
+
+test "immediately-invoked closure default cycle is still rejected" {
+    const allocator = std.testing.allocator;
+    // Same rule through the closure form: the inner lambda captures `k`, so
+    // it canonicalizes as a closure, and it still sits in direct callee
+    // position—its body walks and the omission self-edge is found.
+    const source = "Cfg := { n : U8 ?? (|k| (|{}| Cfg.{}.n + k)({}))(1) }";
+
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+    var can = try Can.initModule(
+        CoreCtx.testing(allocator, allocator),
+        &env,
+        ast,
+        builtin_ctx.canInitContext(),
+    );
+    defer can.deinit();
+
+    try can.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    var found: usize = 0;
+    for (diagnostics) |diag| {
+        if (diag == .record_default_reference_cycle) found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
 }

@@ -19,6 +19,7 @@ const tracy = @import("tracy");
 const CoreCtx = ctx_mod.CoreCtx;
 
 const CIR = @import("CIR.zig");
+const DefaultCycles = @import("DefaultCycles.zig");
 const Scope = @import("Scope.zig");
 
 const tokenize = parse.tokenize;
@@ -2349,7 +2350,7 @@ fn registerTypeDecl(
 
         break :blk switch (type_decl.kind) {
             .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
-            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno, .top_level),
             .where_alias => wa_blk: {
                 const receiver = where_alias_receiver orelse unreachable; // set above for this kind
                 where_alias_clauses = try self.canonicalizeWhereAliasClauses(type_decl, final_header_idx, receiver);
@@ -4644,6 +4645,18 @@ pub fn canonicalizeFile(
 
     // Create the span of exported defs by finding definitions that correspond to exposed items
     try self.populateExports();
+
+    // Reject name-resolvable default-materialization cycles: reference
+    // edges through same-module defs plus omission edges at local nominal
+    // constructions. Cyclic defaults report once per cycle and are dropped
+    // here, so check and lowering never see them; dispatch-mediated and
+    // foreign-omission cycles are the checker's residue (design.md
+    // "Defaulted Fields"). This MUST run before the dependency graph below:
+    // its demand walk follows omission edges into surviving defaults'
+    // expressions, and its termination relies on that omission relation
+    // being acyclic (a dropped default is never materialized, so it
+    // rightly contributes no dependency).
+    try DefaultCycles.checkDefaultCycles(self.env, self.env.gpa);
 
     // Compute dependency-based evaluation order using SCC analysis
     const DependencyGraph = @import("DependencyGraph.zig");
@@ -7599,109 +7612,6 @@ fn canonicalizedRuntimeErrorExpr(self: *Self, diagnostic: Diagnostic) std.mem.Al
     };
 }
 
-/// Judge whether a canonicalized record-field default expression is a closed
-/// literal: a numeric literal (including a negated numeral), an
-/// interpolation-free string literal, a tag literal (bare or applied, plain or
-/// nominal-qualified), or a list / record / tuple literal whose components are
-/// all literals. Nothing else—in particular no name reference of any kind—
-/// so a default cannot participate in a value-reference evaluation cycle.
-/// Literal aggregates can still omit fields that materialize other defaults;
-/// the checker follows those explicit `DefaultId` dependencies and rejects
-/// cycles after field kinds are solved (design.md "Defaulted Fields").
-///
-/// Returns the first non-literal node found (for the diagnostic to point at),
-/// or null when the whole expression is a literal. The walk is an explicit
-/// worklist over the CIR (zero-recursion policy) reusing `scratch_expr_ids`.
-fn defaultNonLiteralNode(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!?Expr.Idx {
-    const walk_top = self.scratch_expr_ids.top();
-    defer self.scratch_expr_ids.clearFrom(walk_top);
-    try self.scratch_expr_ids.append(root);
-    while (self.scratch_expr_ids.top() > walk_top) {
-        const expr_idx = self.scratch_expr_ids.pop() orelse unreachable;
-        const expr = self.env.store.getExpr(expr_idx);
-        const tag = std.meta.activeTag(expr);
-        // Numeric literals (the numeral table variants store their exact
-        // value in ModuleEnv; they are still literals).
-        if (tag == .e_num or tag == .e_frac_f32 or tag == .e_frac_f64 or
-            tag == .e_dec or tag == .e_dec_small or tag == .e_num_from_numeral or
-            tag == .e_typed_int or tag == .e_typed_frac or tag == .e_typed_num_from_numeral)
-        {
-            continue;
-        }
-        // A negated numeral. When the minus is not folded into the token,
-        // it canonicalizes as `e_unary_minus` over the numeric literal;
-        // exactly that shape counts. Negation of anything else (including
-        // a nested negation) is an operation, not a literal.
-        if (tag == .e_unary_minus) {
-            const inner = std.meta.activeTag(self.env.store.getExpr(expr.e_unary_minus.expr));
-            if (inner == .e_num or inner == .e_frac_f32 or inner == .e_frac_f64 or
-                inner == .e_dec or inner == .e_dec_small or inner == .e_num_from_numeral or
-                inner == .e_typed_int or inner == .e_typed_frac or inner == .e_typed_num_from_numeral)
-            {
-                continue;
-            }
-            return expr_idx;
-        }
-        // String literals. An interpolated string canonicalizes to
-        // `e_interpolation` (which references bindings and dispatches),
-        // so it falls to the rejecting return below; a plain string is a
-        // span of `e_str_segment`s.
-        if (tag == .e_str_segment) continue;
-        if (tag == .e_str) {
-            for (self.env.store.sliceExpr(expr.e_str.span)) |segment| {
-                try self.scratch_expr_ids.append(segment);
-            }
-            continue;
-        }
-        // Tag literals, including the nominal wrapper Can itself puts
-        // around a tag/record/tuple literal that resolves to a nominal
-        // type (e.g. a bare `True`): the wrapper names a type
-        // declaration, not a value, so it cannot form a value cycle.
-        if (tag == .e_zero_argument_tag) continue;
-        if (tag == .e_tag) {
-            for (self.env.store.sliceExpr(expr.e_tag.args)) |arg| {
-                try self.scratch_expr_ids.append(arg);
-            }
-            continue;
-        }
-        if (tag == .e_nominal) {
-            try self.scratch_expr_ids.append(expr.e_nominal.backing_expr);
-            continue;
-        }
-        if (tag == .e_nominal_external) {
-            try self.scratch_expr_ids.append(expr.e_nominal_external.backing_expr);
-            continue;
-        }
-        // Aggregate literals whose components must all be literals. A
-        // record UPDATE (`{ ..base, .. }`) is not a record literal.
-        if (tag == .e_empty_list or tag == .e_empty_record) continue;
-        if (tag == .e_list) {
-            for (self.env.store.sliceExpr(expr.e_list.elems)) |elem| {
-                try self.scratch_expr_ids.append(elem);
-            }
-            continue;
-        }
-        if (tag == .e_tuple) {
-            for (self.env.store.sliceExpr(expr.e_tuple.elems)) |elem| {
-                try self.scratch_expr_ids.append(elem);
-            }
-            continue;
-        }
-        if (tag == .e_record) {
-            if (expr.e_record.ext != null) return expr_idx;
-            for (self.env.store.sliceRecordFields(expr.e_record.fields)) |field_idx| {
-                const field = self.env.store.getRecordField(field_idx);
-                try self.scratch_expr_ids.append(field.value);
-            }
-            continue;
-        }
-        // Everything else—name references, calls, operators, lambdas,
-        // control flow, blocks—is not a literal.
-        return expr_idx;
-    }
-    return null;
-}
-
 fn canonicalizedLocalLookup(
     self: *Self,
     pattern_idx: Pattern.Idx,
@@ -9579,7 +9489,10 @@ fn canonicalizeBlockTypeDeclStatement(
         defer self.restoreTypeAnnoOwnerPathStack(owner_path_stack_top);
         break :blk switch (type_decl.kind) {
             .alias => try self.canonicalizeTypeAnno(type_decl.anno, .type_decl_anno),
-            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno),
+            // Block statements are this function's only route, so this call
+            // site is the explicit "block-local" signal for the default
+            // restriction (see NominalDeclScope).
+            .nominal, .@"opaque" => try self.canonicalizeNominalBackingAnno(type_decl.anno, .block_local),
             .where_alias => wa_blk: {
                 const receiver = where_alias_receiver orelse unreachable; // set above for this kind
                 where_alias_clauses = try self.canonicalizeWhereAliasClauses(type_decl, header_idx, receiver);
@@ -10831,6 +10744,8 @@ fn runExprKernel(
 
                     var field_work: std.ArrayList(ExprRecordFieldWork) = .empty;
                     defer field_work.deinit(frame_allocator);
+                    var unset_work: std.ArrayList(ExprUnsetFieldWork) = .empty;
+                    defer unset_work.deinit(frame_allocator);
 
                     for (fields_slice) |field_idx| {
                         const ast_field = self.parse_ir.store.getRecordField(field_idx);
@@ -10856,13 +10771,23 @@ fn runExprKernel(
                             .region = field_name_region,
                         });
 
-                        const value_expr_idx = if (ast_field.value) |value_idx| value_idx else blk: {
-                            const ident_expr_idx = try self.parse_ir.store.addExpr(AST.Expr{ .ident = .{
-                                .token = ast_field.name,
-                                .qualifiers = .{ .span = .{ .start = 0, .len = 0 } },
-                                .region = ast_field.region,
-                            } });
-                            break :blk ident_expr_idx;
+                        const value_expr_idx = switch (ast_field.value) {
+                            .supplied => |value_idx| value_idx,
+                            .punned => blk: {
+                                const ident_expr_idx = try self.parse_ir.store.addExpr(AST.Expr{ .ident = .{
+                                    .token = ast_field.name,
+                                    .qualifiers = .{ .span = .{ .start = 0, .len = 0 } },
+                                    .region = ast_field.region,
+                                } });
+                                break :blk ident_expr_idx;
+                            },
+                            .unset => {
+                                try unset_work.append(frame_allocator, .{
+                                    .name = field_name_ident,
+                                    .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                                });
+                                continue;
+                            },
                         };
 
                         try field_work.append(frame_allocator, .{
@@ -10872,11 +10797,13 @@ fn runExprKernel(
                     }
 
                     const fields = try field_work.toOwnedSlice(frame_allocator);
+                    const unsets = try unset_work.toOwnedSlice(frame_allocator);
                     try stacks.pushFinishRecord(frame_allocator, .{
                         .region = region,
                         .free_vars_start = self.scratch_free_vars.top(),
                         .ext = e.ext,
                         .fields = fields,
+                        .unsets = unsets,
                     });
 
                     var child_count = fields.len;
@@ -10988,10 +10915,22 @@ fn runExprKernel(
                             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
                             continue :expr_kernel_loop .dispatch;
                         };
-                        if (field.value != null) explicit_value_count += 1;
+                        if (field.value == .unset) {
+                            // A builder field's value is mapped through the
+                            // builder function; there is nothing to map for an
+                            // unset (`name: _`) field.
+                            const feature = try self.env.insertString("unset field (`name: _`) in record builder");
+                            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                                .feature = feature,
+                                .region = region,
+                            } });
+                            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
+                            continue :expr_kernel_loop .dispatch;
+                        }
+                        if (field.value == .supplied) explicit_value_count += 1;
                         try field_work.append(frame_allocator, .{
                             .name = field_name,
-                            .value_expr = field.value,
+                            .value_expr = field.value.asSupplied(),
                         });
                     }
 
@@ -12953,6 +12892,7 @@ fn runExprKernel(
         .finish_record => {
             const state = stacks.takeFinishRecord();
             defer frame_allocator.free(state.fields);
+            defer frame_allocator.free(state.unsets);
 
             const child_count = state.fields.len + @as(usize, @intFromBool(state.ext != null));
             const result_start = child_slots.items.len - child_count;
@@ -12965,7 +12905,7 @@ fn runExprKernel(
                 break :blk if (maybe_ext.expr) |can_ext| can_ext.idx else null;
             } else null;
 
-            if (state.fields.len == 0) {
+            if (state.fields.len == 0 and state.unsets.len == 0) {
                 child_slots.shrinkRetainingCapacity(result_start);
                 const expr_idx = try self.env.addExpr(CIR.Expr{
                     .e_empty_record = .{},
@@ -12995,9 +12935,18 @@ fn runExprKernel(
             }
 
             const fields_span = try self.env.store.recordFieldSpanFrom(scratch_top);
+
+            const unsets_scratch_top = self.env.store.scratch.?.record_unset_fields.top();
+            for (state.unsets) |unset| {
+                const unset_idx = try self.env.addUnsetField(CIR.UnsetField{ .name = unset.name }, unset.region);
+                try self.env.store.scratch.?.record_unset_fields.append(unset_idx);
+            }
+            const unsets_span = try self.env.store.unsetFieldSpanFrom(unsets_scratch_top);
+
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_record = .{
                     .fields = fields_span,
+                    .unsets = unsets_span,
                     .ext = ext_expr,
                 },
             }, state.region);
@@ -14175,7 +14124,7 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
     }
 
     const record_span = try self.env.store.recordFieldSpanFrom(record_fields_start);
-    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .ext = null } }, region);
+    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .unsets = .{ .span = DataSpan.empty() }, .ext = null } }, region);
 
     return try self.env.addExpr(CIR.Expr{
         .e_lambda = .{ .args = args_span, .body = record_body },
@@ -14217,7 +14166,7 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
     }
 
     const record_span = try self.env.store.recordFieldSpanFrom(record_fields_start);
-    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .ext = null } }, region);
+    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .unsets = .{ .span = DataSpan.empty() }, .ext = null } }, region);
 
     return try self.env.addExpr(CIR.Expr{
         .e_lambda = .{ .args = args_span, .body = record_body },
@@ -16276,6 +16225,7 @@ const ExprFinishRecordWork = struct {
     free_vars_start: u32,
     ext: ?AST.Expr.Idx,
     fields: []const ExprRecordFieldWork,
+    unsets: []const ExprUnsetFieldWork,
 };
 
 const ExprFinishLambdaWork = struct {
@@ -17259,6 +17209,11 @@ const ExprRecordFieldWork = struct {
     value_expr_idx: AST.Expr.Idx,
 };
 
+const ExprUnsetFieldWork = struct {
+    name: base.Ident.Idx,
+    region: base.Region,
+};
+
 const ExprIfBranchWork = struct {
     condition: AST.Expr.Idx,
     then: AST.Expr.Idx,
@@ -18130,6 +18085,14 @@ const TypeAnnoCtx = struct {
     /// is exactly this node; nested records (e.g. a field's type) never match,
     /// so the comparison is self-scoping with no need to clear on descent.
     nominal_backing_anno: ?AST.TypeAnno.Idx = null,
+    /// True when the nominal (or opaque) declaration being backed lives in a
+    /// block rather than at module top level. `??` defaults are rejected on
+    /// such declarations: a block-local default canonicalizes in function
+    /// scope (it could capture locals no other construction site can
+    /// supply), and the end-of-module default-cycle pass only scans
+    /// top-level declarations. Only meaningful when `nominal_backing_anno`
+    /// is set.
+    nominal_decl_is_block_local: bool = false,
 
     const TypeAnnoCtxType = enum(u2) {
         /// Regular type declarations - no new type vars can be introduced
@@ -18144,8 +18107,13 @@ const TypeAnnoCtx = struct {
         return .{ .type = typ, .found_underscore = false };
     }
 
-    pub fn initNominalBacking(backing_anno: AST.TypeAnno.Idx) TypeAnnoCtx {
-        return .{ .type = .type_decl_anno, .found_underscore = false, .nominal_backing_anno = backing_anno };
+    pub fn initNominalBacking(backing_anno: AST.TypeAnno.Idx, decl_scope: NominalDeclScope) TypeAnnoCtx {
+        return .{
+            .type = .type_decl_anno,
+            .found_underscore = false,
+            .nominal_backing_anno = backing_anno,
+            .nominal_decl_is_block_local = decl_scope == .block_local,
+        };
     }
 
     pub fn isTypeDeclAndHasUnderscore(self: TypeAnnoCtx) bool {
@@ -18167,12 +18135,19 @@ fn canonicalizeTypeAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx_t
     return runTypeAnnoKernel(self, anno_idx, &ctx);
 }
 
+/// Where a nominal/opaque type declaration lives. Threaded explicitly into
+/// the backing-annotation canonicalization: `??` defaults are only legal on
+/// module top-level declarations, and `canonicalizeBlockTypeDeclStatement` is
+/// the sole block-statement route, so its call site is the authoritative
+/// source of this fact (no scope probing).
+const NominalDeclScope = enum { top_level, block_local };
+
 /// Canonicalize the top-level backing annotation of a nominal/opaque type
 /// declaration, allowing unnamed record fields (`_` / `_name`) directly inside
 /// that backing record. Used in place of `canonicalizeTypeAnno(.type_decl_anno)`
 /// for nominal/opaque declarations (aliases keep the plain entry point so they
 /// reject unnamed fields).
-fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!TypeAnno.Idx {
+fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, decl_scope: NominalDeclScope) std.mem.Allocator.Error!TypeAnno.Idx {
     // The backing record may be wrapped in parentheses (e.g. `Foo := ({ ... })`).
     // The kernel descends through parens and compares each record against the
     // backing AST index, so point the comparison at the unwrapped node it will
@@ -18185,7 +18160,7 @@ fn canonicalizeNominalBackingAnno(self: *Self, anno_idx: AST.TypeAnno.Idx) std.m
             backing_anno = backing.parens.anno;
         } else break;
     }
-    var ctx = TypeAnnoCtx.initNominalBacking(backing_anno);
+    var ctx = TypeAnnoCtx.initNominalBacking(backing_anno, decl_scope);
     return runTypeAnnoKernel(self, anno_idx, &ctx);
 }
 
@@ -19016,6 +18991,34 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
                     } });
                     ast_default_value = null;
+                } else if (ast_default_value != null and !state.is_nominal_backing) {
+                    // A `??` default is only legal on a DIRECT field of a
+                    // nominal declaration's backing record: defaults ride
+                    // the nominal identity, and restricting them there keeps
+                    // two same-shape structural types from being silently
+                    // default-incompatible and makes every omission site an
+                    // explicit nominal construction (design.md "Defaulted
+                    // Fields"). The default is dropped and the field
+                    // degrades to plain required.
+                    try self.env.pushDiagnostic(Diagnostic{ .default_not_allowed_in_structural_record = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    } });
+                    ast_default_value = null;
+                } else if (ast_default_value != null and type_anno_ctx.nominal_decl_is_block_local) {
+                    // `state.is_nominal_backing` is true here (the previous
+                    // branch handled the structural case), so this default
+                    // sits directly on a BLOCK-LOCAL nominal declaration's
+                    // backing record. Defaults are only legal on module
+                    // top-level declarations: a block-local default would
+                    // canonicalize in function scope (capturing locals no
+                    // other construction site can supply), and the
+                    // end-of-module cycle pass only scans top-level
+                    // declarations. Same recovery as the structural case:
+                    // report, drop the default, field degrades to required.
+                    try self.env.pushDiagnostic(Diagnostic{ .default_not_allowed_on_local_type_decl = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(ast_field.region),
+                    } });
+                    ast_default_value = null;
                 }
                 try stacks.pushRecordAfterField(frame_allocator, .{
                     .record = state.record,
@@ -19038,23 +19041,14 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         .record_after_field => {
             const state = stacks.takeRecordAfterField();
             const canonicalized_ty = last orelse unreachable;
-            // Canonicalize the default value expression (an ordinary
-            // expression in the enclosing scope); the checker types it
-            // against the field's type (design.md "Defaulted Fields").
+            // Canonicalize the default value expression: any PURE
+            // expression, an ordinary expression in the enclosing (module
+            // top-level) scope. The checker types it against the field's
+            // type and rejects effectful defaults; the end-of-module cycle
+            // pass rejects name-resolvable materialization cycles
+            // (design.md "Defaulted Fields").
             const default_value: ?CIR.Expr.Idx = if (state.ast_default_value) |ast_default| blk: {
                 const can_default = (try self.canonicalizeExpr(ast_default)) orelse break :blk null;
-                // A default must be a closed literal: it is materialized by
-                // the compiler at construction sites, and anything that
-                // refers to another value could form an evaluation cycle the
-                // compiler will not chase (design.md "Defaulted Fields").
-                // The default is dropped and the error reported.
-                if (try self.defaultNonLiteralNode(can_default.idx)) |non_literal_idx| {
-                    try self.env.pushDiagnostic(Diagnostic{ .record_default_not_literal = .{
-                        .field_name = state.field_name,
-                        .region = self.env.store.getExprRegion(non_literal_idx),
-                    } });
-                    break :blk null;
-                }
                 break :blk can_default.idx;
             } else null;
             const field_cir_idx = try self.env.addAnnoRecordField(.{

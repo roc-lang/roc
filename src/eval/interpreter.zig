@@ -92,6 +92,11 @@ const longjmp = sljmp.longjmp;
 pub const ExpectFailure = struct {
     message: []const u8,
     region: base.Region,
+    /// Resolved location of the failing `expect` statement. Its file entry
+    /// names the declaring module, so the failure is never rendered against
+    /// another module's source (source inlined across modules, e.g. `??`
+    /// field defaults materialized per specialization).
+    loc: base.SourceLoc,
 };
 
 /// Environment for interpreter-managed RocOps forwarding.
@@ -178,12 +183,13 @@ const InterpreterRocEnv = struct {
         self.expect_failures.clearRetainingCapacity();
     }
 
-    fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, region: base.Region) Allocator.Error!void {
+    fn recordExpectFailure(self: *InterpreterRocEnv, msg: []const u8, region: base.Region, loc: base.SourceLoc) Allocator.Error!void {
         const owned_msg = try self.allocator.dupe(u8, msg);
         errdefer self.allocator.free(owned_msg);
         try self.expect_failures.append(self.allocator, .{
             .message = owned_msg,
             .region = region,
+            .loc = loc,
         });
     }
 
@@ -924,6 +930,20 @@ pub const Interpreter = struct {
     pub fn getFailedCheckedRegion(self: *const LirInterpreter) ?base.Region {
         if (self.failed_stmt_loc.hasLocation()) return self.failed_stmt_region;
         return null;
+    }
+
+    /// The source-file entry (display name plus package-qualified module
+    /// identity) of the statement that first failed, resolved through the LIR
+    /// store's explicit source-file table. The lowerer stamps every statement
+    /// with its declaring module's file entry (including source inlined
+    /// across modules, e.g. `??` field defaults materialized per
+    /// specialization), so this is the failed region's owning module.
+    pub fn getFailedSourceFile(self: *const LirInterpreter) ?base.SourceFileEntry {
+        if (!self.failed_stmt_loc.hasLocation()) return null;
+        return .{
+            .name = self.store.sourceFileName(self.failed_stmt_loc.file),
+            .qualified_name = self.store.sourceFileQualifiedName(self.failed_stmt_loc.file),
+        };
     }
 
     /// The innermost virtual source frame of the failed statement. Callers can
@@ -3101,7 +3121,7 @@ pub const Interpreter = struct {
                         self.store.getLocal(cond_local).layout_idx,
                     );
                     if (cond_value == 0) {
-                        try self.roc_env.recordExpectFailure("expect failed", self.store.stmtRegion(current));
+                        try self.roc_env.recordExpectFailure("expect failed", self.store.stmtRegion(current), self.store.stmtLoc(current));
                         self.roc_ops.expectFailed("expect failed");
                     }
                     current = expect_stmt.next;
