@@ -10,17 +10,25 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_first_concrete.md:1:6:1:13
 # PROBLEMS
-── ✗ type mismatch ────────────────────────────── can_list_first_concrete.md:1:6
-
-This string literal is being used where a non-string type is needed.
-
-[42, "world", 3.14]
-     ^^^^^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 1 6) (end 1 13))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "can_list_first_concrete.md") (start 1 6) (end 1 13) (annotation error) (line-text "[42, \"world\", 3.14]"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenSquare,Int,Comma,StringStart,StringPart,StringEnd,Comma,Float,CloseSquare,

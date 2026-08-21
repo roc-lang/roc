@@ -10,16 +10,24 @@ Person : { $name : Str }
 # EXPECTED
 INVALID RECORD FIELD NAME - error_dollar_prefix_type_field.md:1:12:1:17
 # PROBLEMS
-── ✗ invalid record field name ────────── error_dollar_prefix_type_field.md:1:12
-
-Record field names cannot start with a dollar sign.
-
-Person : { $name : Str }
-           ^^^^^
-
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Record Field Name")
+		(region (start 1 12) (end 1 17))
+		(headline
+			(reflow "Record field names cannot start with a dollar sign."))
+		(document
+			(reflow "Names that start with ")
+			(annotated code "$")
+			(reflow " are reassignable variables declared with the ")
+			(annotated code "var")
+			(reflow " keyword, so they cannot be used as record field names.")
+			(line-break)
+			(line-break)
+			(source-region (file "error_dollar_prefix_type_field.md") (start 1 12) (end 1 17) (annotation error) (line-text "Person : { $name : Str }")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,CloseCurly,

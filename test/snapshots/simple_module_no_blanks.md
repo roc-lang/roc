@@ -13,15 +13,22 @@ world = "World"
 # EXPECTED
 NAME NOT IN SCOPE - simple_mod_no_blanks.md:2:10:2:22
 # PROBLEMS
-── ✗ name not in scope ───────────────────────── simple_mod_no_blanks.md:2:10
-
-Nothing is named line! in this scope.
-
-hello! = Stdout.line!("Hello")
-         ^^^^^^^^^^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 2 10) (end 2 22))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "line!")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "simple_mod_no_blanks.md") (start 2 10) (end 2 22) (annotation error) (line-text "hello! = Stdout.line!(\"Hello\")")))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,

@@ -11,28 +11,35 @@ app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }
 EXPOSED BUT NOT DEFINED - app.md:1:11:1:14
 EXPOSED BUT NOT DEFINED - app.md:1:6:1:9
 # PROBLEMS
-── ✗ exposed but not defined ─────────────────────────────────────── app.md:1:11
-
-The mod header says that a2! is exposed, but it is not defined anywhere in
-this mod.
-
-app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }
-          ^^^
-
-You can fix this by either defining a2! in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ exposed but not defined ──────────────────────────────────────── app.md:1:6
-
-The mod header says that a1! is exposed, but it is not defined anywhere in
-this mod.
-
-app [a1!, a2!,] { pf: platform "../basic-cli/main.roc", a: "a", }
-     ^^^
-
-You can fix this by either defining a1! in this mod, or by removing it from
-the list of exposed values.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 1 11) (end 1 14))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "a2!")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "app.md") (start 1 11) (end 1 14) (annotation error) (line-text "app [a1!, a2!,] { pf: platform \"../basic-cli/main.roc\", a: \"a\", }"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "a2!")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 1 6) (end 1 9))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "a1!")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "app.md") (start 1 6) (end 1 9) (annotation error) (line-text "app [a1!, a2!,] { pf: platform \"../basic-cli/main.roc\", a: \"a\", }"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "a1!")
+			(reflow " in this mod, or by removing it from the list of exposed values."))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,Comma,LowerIdent,Comma,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,CloseCurly,

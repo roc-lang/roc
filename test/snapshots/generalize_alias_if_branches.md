@@ -14,17 +14,25 @@ main = (picked(1), picked("a"))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
 # PROBLEMS
-── ✗ type mismatch ──────────────────────── generalize_alias_if_branches.md:5:27
-
-This string literal is being used where a non-string type is needed.
-
-main = (picked(1), picked("a"))
-                          ^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 5 27) (end 5 30))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "generalize_alias_if_branches.md") (start 5 27) (end 5 30) (annotation error) (line-text "main = (picked(1), picked(\"a\"))"))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,

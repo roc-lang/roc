@@ -16,22 +16,29 @@ ok = conv(5.U8)
 # EXPECTED
 MISSING METHOD - static_dispatch_unresolved_via_helper.md:5:13:5:25
 # PROBLEMS
-── ✗ missing method ────────────── static_dispatch_unresolved_via_helper.md:5:13
-
-This is trying to dispatch a method named to_i128 on an unresolved type
-variable, but unresolved type variables have no methods.
-
-ambiguous = conv(poly())
-            ^^^^^^^^^^^^
-
-The type was left undetermined by this call:
-
-ambiguous = conv(poly())
-                 ^^^^^^
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 5 13) (end 5 25))
+		(headline
+			(reflow "This is trying to dispatch a method named")
+			(reflow " ")
+			(annotated code "to_i128")
+			(reflow " ")
+			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+		(document
+			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 13) (end 5 25) (annotation error) (line-text "ambiguous = conv(poly())"))
+			(line-break)
+			(reflow "The type was left undetermined by this call:")
+			(line-break)
+			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 18) (end 5 24) (annotation error) (line-text "ambiguous = conv(poly())"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,

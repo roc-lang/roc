@@ -30,18 +30,25 @@ use_it = {
 # EXPECTED
 MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:12:9:12:24
 # PROBLEMS
-── ✗ missing method ──── static_dispatch_where_forced_numeric_issue_9657.md:12:9
-
-This is trying to dispatch a method named encode on an unresolved type
-variable, but unresolved type variables have no methods.
-
-output.encode()
-^^^^^^^^^^^^^^^
-
-Hint: You can replace this static dispatch call with an ordinary function call,
-or force the type variable to become more concrete—for example, by adding a
-type annotation that narrows its type to something that actually has methods.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 12 9) (end 12 24))
+		(headline
+			(reflow "This is trying to dispatch a method named")
+			(reflow " ")
+			(annotated code "encode")
+			(reflow " ")
+			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+		(document
+			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 12 9) (end 12 24) (annotation error) (line-text "        output.encode()"))
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,OpenRound,UpperIdent,OpArrow,UpperIdent,CloseRound,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,UpperIdent,OpArrow,LowerIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,CloseSquare,

@@ -20,37 +20,53 @@ UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 MOD NOT IMPORTED - type_undeclared_usage.md:8:15:8:34
 # PROBLEMS
-── ✗ undeclared type ───────────────────────────── type_undeclared_usage.md:1:10
-
-The type UnknownType is not declared in this scope.
-
-MyType : UnknownType
-         ^^^^^^^^^^^
-
-── ✗ undeclared type ───────────────────────────── type_undeclared_usage.md:3:16
-
-The type UndeclaredResult is not declared in this scope.
-
-processValue : UndeclaredResult -> Str
-               ^^^^^^^^^^^^^^^^
-
-── ● unused variable ───────────────────────────── type_undeclared_usage.md:4:17
-
-Variable value is defined here and then never used:
-
-processValue = |value| {
-                ^^^^^
-
-If you don't need this variable, prefix it with an underscore like _value to
-suppress this warning.
-
-── ✗ mod not imported ───────────────────────── type_undeclared_usage.md:8:15
-
-There is no mod with the name SomeMod imported into this Roc file.
-
-AnotherType : SomeMod.MissingType
-              ^^^^^^^^^^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 1 10) (end 1 21))
+		(headline
+			(reflow "The type ")
+			(annotated code "UnknownType")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_undeclared_usage.md") (start 1 10) (end 1 21) (annotation error) (line-text "MyType : UnknownType"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 3 16) (end 3 32))
+		(headline
+			(reflow "The type ")
+			(annotated code "UndeclaredResult")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_undeclared_usage.md") (start 3 16) (end 3 32) (annotation error) (line-text "processValue : UndeclaredResult -> Str"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 4 17) (end 4 22))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "value")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_value")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_undeclared_usage.md") (start 4 17) (end 4 22) (annotation error) (line-text "processValue = |value| {"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Imported")
+		(region (start 8 15) (end 8 34))
+		(headline
+			(text "There is no mod with the name ")
+			(annotated code "SomeMod")
+			(reflow " imported into this Roc file."))
+		(document
+			(source-region (file "type_undeclared_usage.md") (start 8 15) (end 8 34) (annotation error) (line-text "AnotherType : SomeMod.MissingType")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,UpperIdent,

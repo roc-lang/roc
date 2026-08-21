@@ -57,35 +57,79 @@ x = {
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
 TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
-── ✗ missing method ─────────────────────────── multiline_string_complex.md:40:5
-
-This not method is being called on a value whose type doesn't have that method.
-
-e: !\\
-   ^^^
-
-The value's type, which does not have a method named not, is:
-
-    Str
-
-Hint: For this to work, the type would need to have a method named not
-associated with it in the type's declaration.
-
-── ✗ type mismatch ──────────────────────────── multiline_string_complex.md:37:3
-
-The minus method on Dec has an incompatible type.
-
-0 - \\
-^
-
-The method minus has the type:
-
-    Dec, Dec -> Dec
-
-But I need it to have the type:
-
-    Dec, Str -> Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 40 5) (end 40 8))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "not")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "multiline_string_complex.md") (start 40 5) (end 40 8) (annotation error) (line-text "\te: !\\\\"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "not")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "For this to work, the type would need to have a method named")
+			(reflow " ")
+			(annotated code "not")
+			(reflow " ")
+			(reflow "associated with it in the type's declaration.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 37 3) (end 37 4))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "minus")
+			(reflow " ")
+			(reflow "method on")
+			(reflow " ")
+			(annotated code "Dec")
+			(reflow " ")
+			(reflow "has an incompatible type."))
+		(document
+			(source-region (file "multiline_string_complex.md") (start 37 3) (end 37 4) (annotation error) (line-text "\t\t0 - \\\\"))
+			(line-break)
+			(reflow "The method")
+			(reflow " ")
+			(annotated code "minus")
+			(reflow " ")
+			(reflow "has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec, Dec -> Dec")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But I need it to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec, Str -> Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwPackage,

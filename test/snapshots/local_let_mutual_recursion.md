@@ -15,18 +15,24 @@ canonicalize_diagnostics=true
 # EXPECTED
 MUTUALLY RECURSIVE LOCAL DEFINITIONS - local_let_mutual_recursion.md:2:46:2:52
 # PROBLEMS
-── ✗ mutually recursive local definitions ─── local_let_mutual_recursion.md:2:46
-
-The local definitions is_even and is_odd are mutually recursive, which isn't
-supported for local definitions.
-
-is_even = |n| if (n == 0) Bool.True else is_odd(n - 1)
-                                         ^^^^^^
-
-Local definitions are evaluated in order and can only refer to themselves or to
-earlier definitions. Move these mutually recursive definitions to the top
-level, where mutual recursion is supported.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mutually Recursive Local Definitions")
+		(region (start 2 46) (end 2 52))
+		(headline
+			(reflow "The local definitions ")
+			(annotated symbol-unqualified "is_even")
+			(reflow " and ")
+			(annotated symbol-unqualified "is_odd")
+			(reflow " are mutually recursive, which isn't supported for local definitions."))
+		(document
+			(reflow "Local definitions are evaluated in order and can only refer to themselves or to earlier definitions. Move these mutually recursive definitions to the top level, where mutual recursion is supported.")
+			(line-break)
+			(line-break)
+			(source-region (file "local_let_mutual_recursion.md") (start 2 46) (end 2 52) (annotation error) (line-text "    is_even = |n| if (n == 0) Bool.True else is_odd(n - 1)")))))
+~~~
 # TOKENS
 ~~~zig
 OpBar,Underscore,OpBar,OpenCurly,

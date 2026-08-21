@@ -97,1326 +97,2121 @@ UNEXPECTED STATEMENT - fuzz_hang_002.md:1:86:1:87
 UNEXPECTED STATEMENT - fuzz_hang_002.md:1:87:1:88
 UNEXPECTED STATEMENT - fuzz_hang_002.md:1:88:1:89
 # PROBLEMS
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:1
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:2
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
- ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:3
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-  ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:4
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-   ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:5
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-    ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:6
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-     ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:7
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-      ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:8
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-       ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ───────────────────────────────── fuzz_hang_002.md:1:9
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-        ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:10
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-         ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:11
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-          ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:12
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-           ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:13
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-            ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:14
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-             ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:15
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-              ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:16
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-               ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:17
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:18
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                 ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:19
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                  ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:20
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                   ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:21
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                    ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:22
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                     ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:23
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                      ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:24
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                       ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:25
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                        ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:26
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                         ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:27
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                          ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:28
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                           ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:29
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                            ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:30
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                             ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:31
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                              ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:32
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                               ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:33
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:34
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                 ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:35
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                  ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:36
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                   ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:37
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                    ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:38
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                     ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:39
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                      ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:40
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                       ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:41
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                        ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:42
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                         ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:43
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                          ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:44
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                           ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:45
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                            ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:46
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                             ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:47
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                              ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:48
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                               ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:49
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:50
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                 ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:51
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                  ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:52
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                   ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:53
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                    ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:54
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                     ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:55
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                      ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:56
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                       ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:57
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                        ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:58
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                         ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:59
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                          ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:60
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                           ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:61
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                            ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:62
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                             ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:63
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                              ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:64
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                               ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:65
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:66
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                 ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:67
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                  ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:68
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                   ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:69
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                    ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:70
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                     ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:71
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                      ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:72
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                       ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:73
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                        ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:74
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                         ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:75
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                          ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:76
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                           ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:77
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                            ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:78
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                             ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:79
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                              ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:80
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                               ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:81
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                                ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:82
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                                 ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:83
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                                  ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:84
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                                   ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:85
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                                    ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:86
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                                     ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:87
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                                      ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_hang_002.md:1:88
-
-I was parsing a statement, and this token cannot start a statement here.
-
-{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{
-                                                                                       ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found { here.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 1) (end 1 2))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 1) (end 1 2) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 2) (end 1 3))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 2) (end 1 3) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 3) (end 1 4))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 3) (end 1 4) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 4) (end 1 5))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 4) (end 1 5) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 5) (end 1 6))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 5) (end 1 6) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 6) (end 1 7))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 6) (end 1 7) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 7) (end 1 8))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 7) (end 1 8) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 8) (end 1 9))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 8) (end 1 9) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 9) (end 1 10))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 9) (end 1 10) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 10) (end 1 11))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 10) (end 1 11) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 11) (end 1 12))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 11) (end 1 12) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 12) (end 1 13))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 12) (end 1 13) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 13) (end 1 14))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 13) (end 1 14) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 14) (end 1 15))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 14) (end 1 15) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 15) (end 1 16))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 15) (end 1 16) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 16) (end 1 17))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 16) (end 1 17) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 17) (end 1 18))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 17) (end 1 18) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 18) (end 1 19))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 18) (end 1 19) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 19) (end 1 20))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 19) (end 1 20) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 20) (end 1 21))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 20) (end 1 21) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 21) (end 1 22))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 21) (end 1 22) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 22) (end 1 23))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 22) (end 1 23) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 23) (end 1 24))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 23) (end 1 24) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 24) (end 1 25))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 24) (end 1 25) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 25) (end 1 26))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 25) (end 1 26) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 26) (end 1 27))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 26) (end 1 27) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 27) (end 1 28))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 27) (end 1 28) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 28) (end 1 29))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 28) (end 1 29) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 29) (end 1 30))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 29) (end 1 30) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 30) (end 1 31))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 30) (end 1 31) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 31) (end 1 32))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 31) (end 1 32) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 32) (end 1 33))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 32) (end 1 33) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 33) (end 1 34))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 33) (end 1 34) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 34) (end 1 35))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 34) (end 1 35) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 35) (end 1 36))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 35) (end 1 36) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 36) (end 1 37))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 36) (end 1 37) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 37) (end 1 38))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 37) (end 1 38) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 38) (end 1 39))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 38) (end 1 39) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 39) (end 1 40))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 39) (end 1 40) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 40) (end 1 41))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 40) (end 1 41) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 41) (end 1 42))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 41) (end 1 42) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 42) (end 1 43))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 42) (end 1 43) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 43) (end 1 44))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 43) (end 1 44) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 44) (end 1 45))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 44) (end 1 45) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 45) (end 1 46))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 45) (end 1 46) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 46) (end 1 47))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 46) (end 1 47) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 47) (end 1 48))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 47) (end 1 48) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 48) (end 1 49))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 48) (end 1 49) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 49) (end 1 50))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 49) (end 1 50) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 50) (end 1 51))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 50) (end 1 51) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 51) (end 1 52))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 51) (end 1 52) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 52) (end 1 53))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 52) (end 1 53) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 53) (end 1 54))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 53) (end 1 54) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 54) (end 1 55))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 54) (end 1 55) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 55) (end 1 56))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 55) (end 1 56) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 56) (end 1 57))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 56) (end 1 57) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 57) (end 1 58))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 57) (end 1 58) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 58) (end 1 59))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 58) (end 1 59) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 59) (end 1 60))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 59) (end 1 60) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 60) (end 1 61))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 60) (end 1 61) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 61) (end 1 62))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 61) (end 1 62) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 62) (end 1 63))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 62) (end 1 63) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 63) (end 1 64))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 63) (end 1 64) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 64) (end 1 65))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 64) (end 1 65) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 65) (end 1 66))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 65) (end 1 66) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 66) (end 1 67))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 66) (end 1 67) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 67) (end 1 68))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 67) (end 1 68) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 68) (end 1 69))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 68) (end 1 69) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 69) (end 1 70))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 69) (end 1 70) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 70) (end 1 71))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 70) (end 1 71) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 71) (end 1 72))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 71) (end 1 72) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 72) (end 1 73))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 72) (end 1 73) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 73) (end 1 74))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 73) (end 1 74) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 74) (end 1 75))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 74) (end 1 75) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 75) (end 1 76))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 75) (end 1 76) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 76) (end 1 77))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 76) (end 1 77) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 77) (end 1 78))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 77) (end 1 78) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 78) (end 1 79))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 78) (end 1 79) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 79) (end 1 80))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 79) (end 1 80) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 80) (end 1 81))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 80) (end 1 81) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 81) (end 1 82))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 81) (end 1 82) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 82) (end 1 83))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 82) (end 1 83) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 83) (end 1 84))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 83) (end 1 84) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 84) (end 1 85))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 84) (end 1 85) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 85) (end 1 86))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 85) (end 1 86) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 86) (end 1 87))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 86) (end 1 87) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 87) (end 1 88))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 87) (end 1 88) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 88) (end 1 89))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "{")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_hang_002.md") (start 1 88) (end 1 89) (annotation error) (line-text "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{")))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,OpenCurly,

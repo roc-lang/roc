@@ -167,6 +167,17 @@ fn pushElement(tree: *SExprTree, element: *const DocumentElement) Allocator.Erro
             }
             try tree.endNode(begin, attrs);
         },
+        .source_location => |location| {
+            const begin = tree.beginNode();
+            try tree.pushStaticAtom("source-location");
+            const attrs = tree.beginNode();
+            if (location.filename) |filename| {
+                try pushEscapedStringPair(tree, "file", sanitisePathForSnapshots(filename));
+            }
+            try tree.pushU64Pair("line", location.line);
+            try tree.pushU64Pair("column", location.column);
+            try tree.endNode(begin, attrs);
+        },
     }
 }
 

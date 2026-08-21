@@ -12,13 +12,21 @@ T := [].{
 # EXPECTED
 MISSING NESTED TYPE - fuzz_crash_096.md:2:6:2:9
 # PROBLEMS
-── ✗ missing nested type ───────────────────────────────── fuzz_crash_096.md:2:6
-
-T is in scope, but it doesn't have a nested type named A.
-
-A : T.A
-    ^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Nested Type")
+		(region (start 2 6) (end 2 9))
+		(headline
+			(annotated code "T")
+			(reflow " is in scope, but it doesn't have a nested type ")
+			(reflow "named ")
+			(annotated code "A")
+			(reflow "."))
+		(document
+			(source-region (file "fuzz_crash_096.md") (start 2 6) (end 2 9) (annotation error) (line-text "\tA : T.A")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,CloseSquare,Dot,OpenCurly,

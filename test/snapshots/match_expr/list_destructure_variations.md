@@ -20,52 +20,105 @@ MISSING METHOD - list_destructure_variations.md:2:11:2:12
 MISSING METHOD - list_destructure_variations.md:6:31:6:32
 MISSING METHOD - list_destructure_variations.md:7:30:7:35
 # PROBLEMS
-── ✗ missing method ──────────────────────── list_destructure_variations.md:4:24
-
-This plus method is being called on a value whose type doesn't have that method.
-
-[first, second] => first + second
-                   ^^^^^^^^^^^^^^
-
-The value's type, which does not have a method named plus, is:
-
-    [One, Two, ..]
-
-── ✗ missing method ──────────────────────── list_destructure_variations.md:2:11
-
-This from_numeral method is being called on a value whose type doesn't have
-that method.
-
-[] => 0
-      ^
-
-The value's type, which does not have a method named from_numeral, is:
-
-    [One, Two, ..]
-
-── ✗ missing method ──────────────────────── list_destructure_variations.md:6:31
-
-This from_numeral method is being called on a value whose type doesn't have
-that method.
-
-[One, Two, .. as rest] => 3
-                          ^
-
-The value's type, which does not have a method named from_numeral, is:
-
-    [One, Two, ..]
-
-── ✗ missing method ──────────────────────── list_destructure_variations.md:7:30
-
-This plus method is being called on a value whose type doesn't have that method.
-
-[x, y, z, .. as more] => x + y + z
-                         ^^^^^
-
-The value's type, which does not have a method named plus, is:
-
-    [One, Two, ..]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 4 24) (end 4 38))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "list_destructure_variations.md") (start 4 24) (end 4 38) (annotation error) (line-text "    [first, second] => first + second"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "plus")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[One, Two, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 2 11) (end 2 12))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "list_destructure_variations.md") (start 2 11) (end 2 12) (annotation error) (line-text "    [] => 0"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_numeral")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[One, Two, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 6 31) (end 6 32))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "list_destructure_variations.md") (start 6 31) (end 6 32) (annotation error) (line-text "    [One, Two, .. as rest] => 3"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_numeral")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[One, Two, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 7 30) (end 7 35))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "list_destructure_variations.md") (start 7 30) (end 7 35) (annotation error) (line-text "    [x, y, z, .. as more] => x + y + z"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "plus")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[One, Two, ..]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

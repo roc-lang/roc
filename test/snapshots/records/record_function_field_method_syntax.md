@@ -12,17 +12,33 @@ result = r.f(1)
 # EXPECTED
 MISSING METHOD - record_function_field_method_syntax.md:3:12:3:13
 # PROBLEMS
-── ✗ missing method ──────────────── record_function_field_method_syntax.md:3:12
-
-This f method is being called on a value whose type doesn't have that method.
-
-result = r.f(1)
-           ^
-
-The value's type, which does not have a method named f, is:
-
-    { f: a -> a }
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 3 12) (end 3 13))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "f")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "record_function_field_method_syntax.md") (start 3 12) (end 3 13) (annotation error) (line-text "result = r.f(1)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "f")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "{ f: a -> a }")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,LowerIdent,OpColon,OpBar,LowerIdent,OpBar,LowerIdent,CloseCurly,

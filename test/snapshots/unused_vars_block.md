@@ -31,26 +31,37 @@ main! = |_| {
 UNUSED VARIABLE - unused_vars_block.md:5:5:5:15
 UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 # PROBLEMS
-── ● unused variable ────────────────────────────────── unused_vars_block.md:5:5
-
-Variable unused_var is defined here and then never used:
-
-unused_var = 42
-^^^^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _unused_var
-to suppress this warning.
-
-── ● unused variable ───────────────────────────────── unused_vars_block.md:11:5
-
-Variable another_unused is defined here and then never used:
-
-another_unused = "hello"
-^^^^^^^^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like
-_another_unused to suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 5 5) (end 5 15))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "unused_var")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_unused_var")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "unused_vars_block.md") (start 5 5) (end 5 15) (annotation error) (line-text "    unused_var = 42"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 11 5) (end 11 19))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "another_unused")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_another_unused")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "unused_vars_block.md") (start 11 5) (end 11 19) (annotation error) (line-text "    another_unused = \"hello\"")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

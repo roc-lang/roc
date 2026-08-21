@@ -14,55 +14,80 @@ UNEXPECTED STATEMENT - fuzz_crash_018.md:2:1:2:3
 UNDECLARED TYPE - fuzz_crash_018.md:1:5:1:6
 DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 # PROBLEMS
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_018.md:1:1
-
-I was parsing a statement, and this token cannot start a statement here.
-
-0 b:S
-^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found 0 here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_018.md:2:1
-
-I was parsing a statement, and this token cannot start a statement here.
-
-.R
-^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found .R here.
-Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
-
-── ✗ undeclared type ───────────────────────────────────── fuzz_crash_018.md:1:5
-
-The type S is not declared in this scope.
-
-0 b:S
-    ^
-
-── ● declaration has no value ──────────────────────────── fuzz_crash_018.md:1:3
-
-This declaration has a type annotation but no implementation.
-
-0 b:S
-  ^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 1 1) (end 1 2))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "0")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_018.md") (start 1 1) (end 1 2) (annotation error) (line-text "0 b:S"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 2 1) (end 2 3))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ".R")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with uppercase letters are used for tags, type names, and mod names in Roc.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_018.md") (start 2 1) (end 2 3) (annotation error) (line-text ".R"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 1 5) (end 1 6))
+		(headline
+			(reflow "The type ")
+			(annotated code "S")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "fuzz_crash_018.md") (start 1 5) (end 1 6) (annotation error) (line-text "0 b:S"))))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 1 3) (end 1 6))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "fuzz_crash_018.md") (start 1 3) (end 1 6) (annotation error) (line-text "0 b:S"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 Int,LowerIdent,OpColon,UpperIdent,

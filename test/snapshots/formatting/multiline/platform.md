@@ -29,56 +29,72 @@ EXPOSED BUT NOT DEFINED - platform.md:6:3:6:5
 EXPOSED BUT NOT DEFINED - platform.md:7:3:7:5
 INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
-── ✗ exposed but not defined ────────────────────────────────── platform.md:14:3
-
-The mod header says that pr1 is exposed, but it is not defined anywhere in
-this mod.
-
-"roc_not implemented": pr1,
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-You can fix this by either defining pr1 in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ exposed but not defined ────────────────────────────────── platform.md:15:3
-
-The mod header says that pr2 is exposed, but it is not defined anywhere in
-this mod.
-
-"roc_not implemented": pr2,
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-You can fix this by either defining pr2 in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ exposed but not defined ─────────────────────────────────── platform.md:6:3
-
-The mod header says that E1 is exposed, but it is not defined anywhere in
-this mod.
-
-E1,
-^^
-
-You can fix this by either defining E1 in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ exposed but not defined ─────────────────────────────────── platform.md:7:3
-
-The mod header says that E2 is exposed, but it is not defined anywhere in
-this mod.
-
-E2,
-^^
-
-You can fix this by either defining E2 in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ invalid hosted section ────────────────────────────────────────────────────
-
-The platform header uses the linker symbol roc_not implemented, but linker
-symbols in platform headers must be valid C identifiers: start with a letter or
-underscore, followed by only letters, digits, and underscores.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 14 3) (end 14 29))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "pr1")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform.md") (start 14 3) (end 14 29) (annotation error) (line-text "\t\t\"roc_not implemented\": pr1,"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "pr1")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 15 3) (end 15 29))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "pr2")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform.md") (start 15 3) (end 15 29) (annotation error) (line-text "\t\t\"roc_not implemented\": pr2,"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "pr2")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 6 3) (end 6 5))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "E1")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform.md") (start 6 3) (end 6 5) (annotation error) (line-text "\t\tE1,"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "E1")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 7 3) (end 7 5))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "E2")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "platform.md") (start 7 3) (end 7 5) (annotation error) (line-text "\t\tE2,"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "E2")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Invalid Hosted Section")
+		(headline
+			(reflow "The platform header uses the linker symbol")
+			(reflow " ")
+			(annotated code "roc_not implemented")
+			(reflow ",")
+			(reflow " ")
+			(reflow "but linker symbols in platform headers must be valid C identifiers: start with a letter or underscore, followed by only letters, digits, and underscores."))
+		(document)))
+~~~
 # TOKENS
 ~~~zig
 KwPlatform,StringStart,StringPart,StringEnd,

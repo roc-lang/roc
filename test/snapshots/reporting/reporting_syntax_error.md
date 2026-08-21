@@ -50,33 +50,29 @@ UNRECOGNIZED SYNTAX - reporting_syntax_error.md:1:1:1:1
 ~~~
 # CLI
 ~~~text
+── ✗ expected tuple separator ──────────────────── reporting_syntax_error.md:2:1
 
-┌──────────────────────────┐
-│ EXPECTED TUPLE SEPARATOR ├─ I was parsing a parenthesized expression or ────┐
-└┬─────────────────────────┘  tuple, and I expected `,` or `)`.               │
- │                                                                            │
- │                                                                            │
- │  ‾                                                                         │
- └───────────────────────────────────────────── reporting_syntax_error.md:2:1 ┘
-
-    Separate tuple elements with commas and close the tuple or parenthesized
-    expression with `)`.
-
-    For example:
-        (x, y)
-
-    I reached the end of the file before this construct was complete.
+I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.
 
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  x = (1 + 2                                                                │
- │  ‾                                                                         │
- └───────────────────────────────────────────── reporting_syntax_error.md:1:1 ┘
+^
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+Separate tuple elements with commas and close the tuple or parenthesized
+expression with ).
+
+For example:
+    (x, y)
+
+I reached the end of the file before this construct was complete.
+
+── ✗ unrecognized syntax ───────────────────────── reporting_syntax_error.md:1:1
+
+I don't recognize this syntax.
+
+x = (1 + 2
+^
+
+This might be a syntax error, an unsupported language feature, or a typo.
 
 ~~~
 # MARKDOWN
@@ -90,7 +86,6 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
-**reporting_syntax_error.md:2:1:2:1:**
 ```roc
 
 ```
@@ -99,7 +94,6 @@ I reached the end of the file before this construct was complete.
 
 **Unrecognized Syntax**
 I don't recognize this syntax.
-**reporting_syntax_error.md:1:1:1:1:**
 ```roc
 x = (1 + 2
 ```
@@ -111,7 +105,7 @@ This might be a syntax error, an unsupported language feature, or a typo.
 # HTML
 ~~~html
 <div class="report error">
-<h1 class="report-title">EXPECTED TUPLE SEPARATOR</h1>
+<h1 class="report-title">expected tuple separator</h1>
 <div class="report-content">
 I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.<br>
 Separate tuple elements with commas and close the tuple or parenthesized expression with <code class="code">)</code>.<br>
@@ -121,19 +115,19 @@ For example:<br>
 <br>
 I reached the end of the file before this construct was complete.<br>
 <br>
-<div class="source-region"><span class="filename">reporting_syntax_error.md:2:1:2:1:</span> <pre class="error"></pre></div></div>
+<div class="source-region"><pre class="error"></pre></div></div>
 </div>
 <div class="report error">
-<h1 class="report-title">UNRECOGNIZED SYNTAX</h1>
+<h1 class="report-title">unrecognized syntax</h1>
 <div class="report-content">
 I don&#39;t recognize this syntax.<br>
-<div class="source-region"><span class="filename">reporting_syntax_error.md:1:1:1:1:</span> <pre class="error">x = (1 + 2</pre></div><br>
+<div class="source-region"><pre class="error">x = (1 + 2</pre></div><br>
 This might be a syntax error, an unsupported language feature, or a typo.</div>
 </div>
 ~~~
 # LSP
 ~~~text
-EXPECTED TUPLE SEPARATOR
+expected tuple separator
 
 I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.
 Separate tuple elements with commas and close the tuple or parenthesized expression with ).
@@ -143,11 +137,11 @@ For example:
 
 I reached the end of the file before this construct was complete.
 
-reporting_syntax_error.md:2:1:2:1: 
-UNRECOGNIZED SYNTAX
+
+unrecognized syntax
 
 I don't recognize this syntax.
-reporting_syntax_error.md:1:1:1:1: x = (1 + 2
+x = (1 + 2
 
 This might be a syntax error, an unsupported language feature, or a typo.
 ~~~

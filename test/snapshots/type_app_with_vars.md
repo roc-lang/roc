@@ -15,19 +15,45 @@ main! = |_| mapList([1,2,3,4,5])
 # EXPECTED
 TOO FEW ARGS - type_app_with_vars.md:6:13:6:33
 # PROBLEMS
-── ✗ too few args ─────────────────────────────────── type_app_with_vars.md:6:13
-
-The mapList function expects 2 arguments, but it got 1 instead.
-
-main! = |_| mapList([1,2,3,4,5])
-            ^^^^^^^^^^^^^^^^^^^^
-
-The mapList function has the type:
-
-    List(a), (a -> b) -> List(b)
-
-Are there any missing commas?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Too Few Args")
+		(region (start 6 13) (end 6 33))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "mapList")
+			(reflow " function expects")
+			(reflow " ")
+			(reflow "2")
+			(reflow " ")
+			(reflow "arguments")
+			(reflow ",")
+			(reflow " ")
+			(reflow "but it got")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "type_app_with_vars.md") (start 6 13) (end 6 33) (annotation error) (line-text "main! = |_| mapList([1,2,3,4,5])"))
+			(line-break)
+			(reflow "The")
+			(reflow " ")
+			(annotated code "mapList")
+			(reflow " function has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(a), (a -> b) -> List(b)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Are there any missing commas?"))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

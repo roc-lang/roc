@@ -18,18 +18,20 @@ expect {
 # EXPECTED
 EFFECTFUL EXPECT - effectful_dispatch_in_expect.md:6:1:9:2
 # PROBLEMS
-── ✗ effectful expect ────────────────────── effectful_dispatch_in_expect.md:6:1
-
-This expect performs an effect while evaluating its condition.
-
-expect {
-    task = Task.Task
-    task.run!()
-}
-
-Keep expect conditions pure, and test effectful behavior from a function body
-instead.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Effectful Expect")
+		(region (start 6 1) (end 9 2))
+		(headline
+			(reflow "This expect performs an effect while evaluating its condition."))
+		(document
+			(source-region (file "effectful_dispatch_in_expect.md") (start 6 1) (end 9 2) (annotation error) (line-text "expect {\n\ttask = Task.Task\n\ttask.run!()\n}"))
+			(line-break)
+			(line-break)
+			(reflow "Keep expect conditions pure, and test effectful behavior from a function body instead."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,CloseSquare,Dot,OpenCurly,

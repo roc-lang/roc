@@ -16,45 +16,78 @@ OLD LIST REST PATTERN - list_rest_scoping.md:2:13:2:19
 OLD LIST REST PATTERN - list_rest_scoping.md:3:6:3:12
 OLD LIST REST PATTERN - list_rest_scoping.md:4:9:4:15
 # PROBLEMS
-── ✗ old list rest pattern ─────────────────────────── list_rest_scoping.md:2:13
-
-I was parsing a list pattern, and this uses the old rest syntax.
-
-[first, ..rest] => first + 1
-        ^^^^^^
-
-List rest patterns now use .. as name. The name is optional, but if it is
-present it must come after as.
-
-For example:
-    [first, .. as rest]
-
-── ✗ old list rest pattern ──────────────────────────── list_rest_scoping.md:3:6
-
-I was parsing a list pattern, and this uses the old rest syntax.
-
-[..rest, last] => last + 2
- ^^^^^^
-
-List rest patterns now use .. as name. The name is optional, but if it is
-present it must come after as.
-
-For example:
-    [first, .. as rest]
-
-── ✗ old list rest pattern ──────────────────────────── list_rest_scoping.md:4:9
-
-I was parsing a list pattern, and this uses the old rest syntax.
-
-[x, ..rest, y] => x + y
-    ^^^^^^
-
-List rest patterns now use .. as name. The name is optional, but if it is
-present it must come after as.
-
-For example:
-    [first, .. as rest]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Old List Rest Pattern")
+		(region (start 2 13) (end 2 19))
+		(headline
+			(reflow "I was parsing a list pattern, and this uses the old rest syntax."))
+		(document
+			(reflow "List rest patterns now use ")
+			(annotated code ".. as name")
+			(reflow ". The name is optional, but if it is present it must come after ")
+			(annotated code "as")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[first, .. as rest]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "list_rest_scoping.md") (start 2 13) (end 2 19) (annotation error) (line-text "    [first, ..rest] => first + 1"))))
+	(report
+		(severity runtime_error)
+		(title "Old List Rest Pattern")
+		(region (start 3 6) (end 3 12))
+		(headline
+			(reflow "I was parsing a list pattern, and this uses the old rest syntax."))
+		(document
+			(reflow "List rest patterns now use ")
+			(annotated code ".. as name")
+			(reflow ". The name is optional, but if it is present it must come after ")
+			(annotated code "as")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[first, .. as rest]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "list_rest_scoping.md") (start 3 6) (end 3 12) (annotation error) (line-text "    [..rest, last] => last + 2"))))
+	(report
+		(severity runtime_error)
+		(title "Old List Rest Pattern")
+		(region (start 4 9) (end 4 15))
+		(headline
+			(reflow "I was parsing a list pattern, and this uses the old rest syntax."))
+		(document
+			(reflow "List rest patterns now use ")
+			(annotated code ".. as name")
+			(reflow ". The name is optional, but if it is present it must come after ")
+			(annotated code "as")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[first, .. as rest]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(source-region (file "list_rest_scoping.md") (start 4 9) (end 4 15) (annotation error) (line-text "    [x, ..rest, y] => x + y")))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,

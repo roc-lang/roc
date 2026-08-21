@@ -28,16 +28,14 @@ NAME NOT IN SCOPE - reporting_undefined_variable.md:1:8:1:11
 ~~~
 # CLI
 ~~~text
+── ✗ name not in scope ───────────────────── reporting_undefined_variable.md:1:8
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `foo` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  main = foo                                                                │
- │         ‾‾‾                                                                │
- └─────────────────────────────────────── reporting_undefined_variable.md:1:8 ┘
+Nothing is named foo in this scope.
 
-    Is it misspelled, or is there an import missing?
+main = foo
+       ^^^
+
+Is it misspelled, or is there an import missing?
 
 ~~~
 # MARKDOWN
@@ -46,7 +44,6 @@ NAME NOT IN SCOPE - reporting_undefined_variable.md:1:8:1:11
 Nothing is named `foo` in this scope.
 Is it misspelled, or is there an import missing?
 
-**reporting_undefined_variable.md:1:8:1:11:**
 ```roc
 main = foo
 ```
@@ -57,20 +54,20 @@ main = foo
 # HTML
 ~~~html
 <div class="report error">
-<h1 class="report-title">NAME NOT IN SCOPE</h1>
+<h1 class="report-title">name not in scope</h1>
 <div class="report-content">
 Nothing is named <span class="symbol-unqualified">foo</span> in this scope.<br>
 Is it misspelled, or is there an import missing?<br>
 <br>
-<div class="source-region"><span class="filename">reporting_undefined_variable.md:1:8:1:11:</span> <pre class="error">main = foo</pre></div></div>
+<div class="source-region"><pre class="error">main = foo</pre></div></div>
 </div>
 ~~~
 # LSP
 ~~~text
-NAME NOT IN SCOPE
+name not in scope
 
 Nothing is named foo in this scope.
 Is it misspelled, or is there an import missing?
 
-reporting_undefined_variable.md:1:8:1:11: main = foo
+main = foo
 ~~~

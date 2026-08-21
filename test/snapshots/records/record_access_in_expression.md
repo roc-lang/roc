@@ -10,17 +10,24 @@ person.age + 5
 # EXPECTED
 POLYMORPHIC VALUE - record_access_in_expression.md:1:1:1:15
 # PROBLEMS
-── ✗ polymorphic value ────────────────────── record_access_in_expression.md:1:1
-
-This top-level value still has an unresolved polymorphic type.
-
-person.age + 5
-^^^^^^^^^^^^^^
-
-Its type is:
-a where [a.plus : a, Dec -> a]
-Add an annotation or use this value in a way that fixes its concrete type.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Polymorphic Value")
+		(region (start 1 1) (end 1 15))
+		(headline
+			(reflow "This top-level value still has an unresolved polymorphic type."))
+		(document
+			(source-region (file "record_access_in_expression.md") (start 1 1) (end 1 15) (annotation error) (line-text "person.age + 5"))
+			(line-break)
+			(line-break)
+			(reflow "Its type is:")
+			(line-break)
+			(annotated code-block "a where [a.plus : a, Dec -> a]")
+			(line-break)
+			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceDotLowerIdent,OpPlus,Int,

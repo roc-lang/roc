@@ -32,16 +32,23 @@ main! = |_| {
 # EXPECTED
 UNUSED VARIABLE - type_var_collision_simple.md:20:5:20:12
 # PROBLEMS
-── ● unused variable ───────────────────────── type_var_collision_simple.md:20:5
-
-Variable result3 is defined here and then never used:
-
-result3 = pair(result1, result2)
-^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _result3 to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 20 5) (end 20 12))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "result3")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_result3")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_var_collision_simple.md") (start 20 5) (end 20 12) (annotation error) (line-text "    result3 = pair(result1, result2)")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

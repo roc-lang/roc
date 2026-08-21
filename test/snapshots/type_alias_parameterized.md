@@ -17,17 +17,42 @@ main! = |_| swapPair(1, 2)
 # EXPECTED
 TOO MANY ARGS - type_alias_parameterized.md:8:13:8:27
 # PROBLEMS
-── ✗ too many args ──────────────────────────── type_alias_parameterized.md:8:13
-
-The swapPair function expects 1 argument, but it got 2 instead.
-
-main! = |_| swapPair(1, 2)
-            ^^^^^^^^^^^^^^
-
-The swapPair function has the type:
-
-    Pair(a, b) -> Pair(b, a)
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Too Many Args")
+		(region (start 8 13) (end 8 27))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "swapPair")
+			(reflow " function expects")
+			(reflow " ")
+			(reflow "1")
+			(reflow " ")
+			(reflow "argument")
+			(reflow ",")
+			(reflow " ")
+			(reflow "but it got")
+			(reflow " ")
+			(reflow "2")
+			(reflow " ")
+			(reflow "instead."))
+		(document
+			(source-region (file "type_alias_parameterized.md") (start 8 13) (end 8 27) (annotation error) (line-text "main! = |_| swapPair(1, 2)"))
+			(line-break)
+			(reflow "The")
+			(reflow " ")
+			(annotated code "swapPair")
+			(reflow " function has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Pair(a, b) -> Pair(b, a)")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

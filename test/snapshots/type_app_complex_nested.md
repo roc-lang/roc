@@ -34,51 +34,73 @@ UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 UNDECLARED TYPE - type_app_complex_nested.md:18:30:18:35
 UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 # PROBLEMS
-── ✗ undeclared type ─────────────────────────── type_app_complex_nested.md:4:27
-
-The type Maybe is not declared in this scope.
-
-processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
-                          ^^^^^
-
-── ✗ undeclared type ─────────────────────────── type_app_complex_nested.md:4:48
-
-The type Error is not declared in this scope.
-
-processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
-                                               ^^^^^
-
-── ● unused variable ─────────────────────────── type_app_complex_nested.md:7:12
-
-Variable maybeList is defined here and then never used:
-
-Ok(maybeList) => []
-   ^^^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _maybeList
-to suppress this warning.
-
-── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:12:14
-
-The type Maybe is not declared in this scope.
-
-deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
-             ^^^^^
-
-── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:18:30
-
-The type Maybe is not declared in this scope.
-
-ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
-                             ^^^^^
-
-── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:18:51
-
-The type Error is not declared in this scope.
-
-ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
-                                                  ^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 4 27) (end 4 32))
+		(headline
+			(reflow "The type ")
+			(annotated code "Maybe")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_app_complex_nested.md") (start 4 27) (end 4 32) (annotation error) (line-text "processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 4 48) (end 4 53))
+		(headline
+			(reflow "The type ")
+			(annotated code "Error")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_app_complex_nested.md") (start 4 48) (end 4 53) (annotation error) (line-text "processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 7 12) (end 7 21))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "maybeList")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_maybeList")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "type_app_complex_nested.md") (start 7 12) (end 7 21) (annotation error) (line-text "        Ok(maybeList) => []"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 12 14) (end 12 19))
+		(headline
+			(reflow "The type ")
+			(annotated code "Maybe")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_app_complex_nested.md") (start 12 14) (end 12 19) (annotation error) (line-text "deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 18 30) (end 18 35))
+		(headline
+			(reflow "The type ")
+			(annotated code "Maybe")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_app_complex_nested.md") (start 18 30) (end 18 35) (annotation error) (line-text "ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type")
+		(region (start 18 51) (end 18 56))
+		(headline
+			(reflow "The type ")
+			(annotated code "Error")
+			(reflow " is not declared in this scope."))
+		(document
+			(source-region (file "type_app_complex_nested.md") (start 18 51) (end 18 56) (annotation error) (line-text "ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))")))))
+~~~
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

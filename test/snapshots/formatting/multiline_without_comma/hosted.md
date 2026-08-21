@@ -19,48 +19,57 @@ EXPOSED BUT NOT DEFINED - hosted.md:3:2:3:4
 DECLARATION HAS NO VALUE - hosted.md:6:1:6:16
 DECLARATION HAS NO VALUE - hosted.md:7:1:7:16
 # PROBLEMS
-── ✗ exposed but not defined ───────────────────────────────────── hosted.md:2:2
-
-The mod header says that a! is exposed, but it is not defined anywhere in
-this mod.
-
-a!,
-^^
-
-You can fix this by either defining a! in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ exposed but not defined ───────────────────────────────────── hosted.md:3:2
-
-The mod header says that b! is exposed, but it is not defined anywhere in
-this mod.
-
-b!
-^^
-
-You can fix this by either defining b! in this mod, or by removing it from
-the list of exposed values.
-
-── ● declaration has no value ──────────────────────────────────── hosted.md:6:1
-
-This declaration has a type annotation but no implementation.
-
-a! : Str => Str
-^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ──────────────────────────────────── hosted.md:7:1
-
-This declaration has a type annotation but no implementation.
-
-b! : Str => Str
-^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 2 2) (end 2 4))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "a!")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "hosted.md") (start 2 2) (end 2 4) (annotation error) (line-text "\ta!,"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "a!")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 3 2) (end 3 4))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "b!")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "hosted.md") (start 3 2) (end 3 4) (annotation error) (line-text "\tb!"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "b!")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 6 1) (end 6 16))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "hosted.md") (start 6 1) (end 6 16) (annotation error) (line-text "a! : Str => Str"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 7 1) (end 7 16))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "hosted.md") (start 7 1) (end 7 16) (annotation error) (line-text "b! : Str => Str"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 KwHosted,OpenSquare,

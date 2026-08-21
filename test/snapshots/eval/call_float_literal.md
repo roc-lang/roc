@@ -10,18 +10,33 @@ x = 12.34()
 # EXPECTED
 MISSING METHOD - call_float_literal.md:1:5:1:10
 # PROBLEMS
-── ✗ missing method ────────────────────────────────── call_float_literal.md:1:5
-
-This from_numeral method is being called on a value whose type doesn't have
-that method.
-
-x = 12.34()
-    ^^^^^
-
-The value's type, which does not have a method named from_numeral, is:
-
-    ({}) -> _ret
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 1 5) (end 1 10))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_numeral")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "call_float_literal.md") (start 1 5) (end 1 10) (annotation error) (line-text "x = 12.34()"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "from_numeral")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "({}) -> _ret")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,Float,NoSpaceOpenRound,CloseRound,

@@ -43,143 +43,182 @@ TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:19:7:19:12
 TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 # PROBLEMS
-── ✗ underscore in type alias ───────────────────── underscore_error_type.md:1:1
-
-Underscores are not allowed in type alias declarations.
-
-BadType := _
-^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ──────────────────── underscore_error_type.md:6:17
-
-Underscores are not allowed in type alias declarations.
-
-BadList := List(_)
-                ^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ──────────────────── underscore_error_type.md:6:12
-
-Underscores are not allowed in type alias declarations.
-
-BadList := List(_)
-           ^^^^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ───────────────────── underscore_error_type.md:1:1
-
-Underscores are not allowed in type alias declarations.
-
-BadType := _
-^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ───────────────────── underscore_error_type.md:1:1
-
-Underscores are not allowed in type alias declarations.
-
-BadType := _
-^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ───────────────────── underscore_error_type.md:1:1
-
-Underscores are not allowed in type alias declarations.
-
-BadType := _
-^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ─────────────────── underscore_error_type.md:21:14
-
-Underscores are not allowed in type alias declarations.
-
-BadTuple := (_, U32)
-             ^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ type mismatch ──────────────────────────────── underscore_error_type.md:4:7
-
-This number is being used where a non-number type is needed.
-
-foo = 42
-      ^^
-
-Other code expects this to have the type:
-
-    BadType
-
-── ✗ type mismatch ──────────────────────────────── underscore_error_type.md:9:7
-
-This expression is used in an unexpected way.
-
-bar = [1, 2, 3]
-      ^^^^^^^^^
-
-It has the type:
-
-    List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-
-But the annotation says it should be:
-
-    BadList
-
-── ✗ type mismatch ─────────────────────────────── underscore_error_type.md:19:7
-
-This expression is used in an unexpected way.
-
-qux = |x| x
-      ^^^^^
-
-It has the type:
-
-    a -> a
-
-But the annotation says it should be:
-
-    BadFunction
-
-── ✗ type mismatch ─────────────────────────────── underscore_error_type.md:24:8
-
-This expression is used in an unexpected way.
-
-quux = ("hello", 42)
-       ^^^^^^^^^^^^^
-
-It has the type:
-
-    (a, b)
-      where [
-        a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),
-        b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-      ]
-
-But the annotation says it should be:
-
-    BadTuple
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadType := _"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 6 17) (end 6 17))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 6 17) (end 6 17) (annotation error) (line-text "BadList := List(_)"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 6 12) (end 6 16))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 6 12) (end 6 16) (annotation error) (line-text "BadList := List(_)"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadType := _"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadType := _"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 1 1) (end 1 1))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadType := _"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 21 14) (end 21 14))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 21 14) (end 21 14) (annotation error) (line-text "BadTuple := (_, U32)"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 7) (end 4 9))
+		(headline
+			(reflow "This number is being used where a non-number type is needed."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 4 7) (end 4 9) (annotation error) (line-text "foo = 42"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "BadType")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 9 7) (end 9 16))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 9 7) (end 9 16) (annotation error) (line-text "bar = [1, 2, 3]"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the annotation says it should be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "BadList")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 19 7) (end 19 12))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 19 7) (end 19 12) (annotation error) (line-text "qux = |x| x"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a -> a")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the annotation says it should be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "BadFunction")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 24 8) (end 24 21))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "underscore_error_type.md") (start 24 8) (end 24 21) (annotation error) (line-text "quux = (\"hello\", 42)"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(a, b)")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the annotation says it should be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "BadTuple")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,Underscore,

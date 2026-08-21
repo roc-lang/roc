@@ -10,15 +10,22 @@ foo = asd.0
 # EXPECTED
 NAME NOT IN SCOPE - expr_no_space_dot_int.md:1:7:1:10
 # PROBLEMS
-── ✗ name not in scope ──────────────────────────── expr_no_space_dot_int.md:1:7
-
-Nothing is named asd in this scope.
-
-foo = asd.0
-      ^^^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 1 7) (end 1 10))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "asd")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "expr_no_space_dot_int.md") (start 1 7) (end 1 10) (annotation error) (line-text "foo = asd.0")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,LowerIdent,NoSpaceDotInt,

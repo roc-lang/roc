@@ -17,31 +17,66 @@ wrong_type_function = |x| x * 3.14
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 INVALID NUMBER - lambda_annotation_mismatch_error.md:7:31:7:35
 # PROBLEMS
-── ✗ missing method ─────────────────── lambda_annotation_mismatch_error.md:3:23
-
-The value before this + operator has a type that doesn't have a plus method.
-
-string_function = |x| x + 42
-                      ^^^^^^
-
-The value's type, which does not have a method named plus, is:
-
-    Str
-
-Hint: The + operator calls a method named plus on the value preceding it,
-passing the value after the operator as the one argument.
-
-── ✗ invalid number ─────────────────── lambda_annotation_mismatch_error.md:7:31
-
-This number literal does not fit in the inferred type.
-
-wrong_type_function = |x| x * 3.14
-                              ^^^^
-
-The inferred type is:
-
-    I64
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 3 23) (end 3 29))
+		(headline
+			(reflow "The value before this")
+			(reflow " ")
+			(annotated operator "+")
+			(reflow " ")
+			(reflow "operator has a type that doesn't have a")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "method."))
+		(document
+			(source-region (file "lambda_annotation_mismatch_error.md") (start 3 23) (end 3 29) (annotation error) (line-text "string_function = |x| x + 42"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "plus")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Str")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "The")
+			(reflow " ")
+			(annotated operator "+")
+			(reflow " ")
+			(reflow "operator calls a method named")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "on the value preceding it, passing the value after the operator as the one argument.")))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 7 31) (end 7 35))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "lambda_annotation_mismatch_error.md") (start 7 31) (end 7 35) (annotation error) (line-text "wrong_type_function = |x| x * 3.14"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "I64")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,

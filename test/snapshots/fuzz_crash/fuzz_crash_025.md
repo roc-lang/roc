@@ -41,128 +41,205 @@ UNEXPECTED STATEMENT - fuzz_crash_025.md:13:3:13:4
 UNEXPECTED STATEMENT - fuzz_crash_025.md:13:4:13:5
 INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 # PROBLEMS
-── ✗ type application needs parentheses ────────────────── fuzz_crash_025.md:9:1
-
-I was parsing a type annotation, and I found a type argument without
-parentheses.
-
-d = 18446744073709551615
-^
-
-Roc type applications use parentheses around their arguments. Write List(U8),
-not List U8.
-
-For example:
-    List(U8)
-
-I found d here.
-Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:3
-
-I was parsing a statement, and this token cannot start a statement here.
-
-d = 18446744073709551615
-  ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found = here.
-
-── ✗ unexpected statement ──────────────────────────────── fuzz_crash_025.md:9:5
-
-I was parsing a statement, and this token cannot start a statement here.
-
-d = 18446744073709551615
-    ^^^^^^^^^^^^^^^^^^^^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found 18446744073709551615 here.
-
-── ✗ unexpected statement ────────────────────────────── fuzz_crash_025.md:12:48
-
-I was parsing a statement, and this token cannot start a statement here.
-
-e = 3402823669209384634633746074317682114553.14: I8
-                                               ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found : here.
-
-── ✗ type application needs parentheses ───────────────── fuzz_crash_025.md:13:1
-
-I was parsing a type annotation, and I found a type argument without
-parentheses.
-
-f =8
-^
-
-Roc type applications use parentheses around their arguments. Write List(U8),
-not List U8.
-
-For example:
-    List(U8)
-
-I found f here.
-Names that start with lowercase letters are value names or record field names,
-depending on the surrounding syntax.
-
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:3
-
-I was parsing a statement, and this token cannot start a statement here.
-
-f =8
-  ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found = here.
-
-── ✗ unexpected statement ─────────────────────────────── fuzz_crash_025.md:13:4
-
-I was parsing a statement, and this token cannot start a statement here.
-
-f =8
-   ^
-
-Statements can be declarations, type annotations, imports, expectations,
-returns, crashes, loops, or expression statements inside a block.
-
-For example:
-    answer = 42
-
-I found 8 here.
-
-── ✗ invalid number ───────────────────────────────────── fuzz_crash_025.md:12:5
-
-This number literal does not fit in the inferred type.
-
-e = 3402823669209384634633746074317682114553.14: I8
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The inferred type is:
-
-    U128
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Application Needs Parentheses")
+		(region (start 9 1) (end 9 2))
+		(headline
+			(reflow "I was parsing a type annotation, and I found a type argument without parentheses."))
+		(document
+			(reflow "Roc type applications use parentheses around their arguments. Write ")
+			(annotated code "List(U8)")
+			(reflow ", not ")
+			(annotated code "List U8")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(U8)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "d")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_025.md") (start 9 1) (end 9 2) (annotation error) (line-text "d = 18446744073709551615"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 9 3) (end 9 4))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "=")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_025.md") (start 9 3) (end 9 4) (annotation error) (line-text "d = 18446744073709551615"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 9 5) (end 9 25))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "18446744073709551615")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_025.md") (start 9 5) (end 9 25) (annotation error) (line-text "d = 18446744073709551615"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 12 48) (end 12 49))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ":")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_025.md") (start 12 48) (end 12 49) (annotation error) (line-text "e = 3402823669209384634633746074317682114553.14: I8"))))
+	(report
+		(severity runtime_error)
+		(title "Type Application Needs Parentheses")
+		(region (start 13 1) (end 13 2))
+		(headline
+			(reflow "I was parsing a type annotation, and I found a type argument without parentheses."))
+		(document
+			(reflow "Roc type applications use parentheses around their arguments. Write ")
+			(annotated code "List(U8)")
+			(reflow ", not ")
+			(annotated code "List U8")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(U8)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "f")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_025.md") (start 13 1) (end 13 2) (annotation error) (line-text "f =8"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 13 3) (end 13 4))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "=")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_025.md") (start 13 3) (end 13 4) (annotation error) (line-text "f =8"))))
+	(report
+		(severity runtime_error)
+		(title "Unexpected Statement")
+		(region (start 13 4) (end 13 5))
+		(headline
+			(reflow "I was parsing a statement, and this token cannot start a statement here."))
+		(document
+			(reflow "Statements can be declarations, type annotations, imports, expectations, returns, crashes, loops, or expression statements inside a block.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "answer = 42")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "8")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_025.md") (start 13 4) (end 13 5) (annotation error) (line-text "f =8"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 12 5) (end 12 48))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "fuzz_crash_025.md") (start 12 5) (end 12 48) (annotation error) (line-text "e = 3402823669209384634633746074317682114553.14: I8"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "U128")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

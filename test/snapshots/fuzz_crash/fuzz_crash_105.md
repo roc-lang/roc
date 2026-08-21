@@ -16,56 +16,80 @@ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - fuzz_crash_105.md:2:28:2:44
 UNDECLARED TYPE VARIABLE - fuzz_crash_105.md:2:46:2:47
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_105.md:2:55:2:57
 # PROBLEMS
-── ✗ undeclared type variable ──────────────────────────── fuzz_crash_105.md:2:3
-
-The type variable a is not declared in this scope.
-
-A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
-  ^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ where clause not allowed in type declaration ──────── fuzz_crash_105.md:2:1
-
-You cannot define a where clause inside a type declaration.
-
-A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ undeclared type variable ─────────────────────────── fuzz_crash_105.md:2:30
-
-The type variable b is not declared in this scope.
-
-A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
-                             ^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ where clause not allowed in type declaration ─────── fuzz_crash_105.md:2:28
-
-You cannot define a where clause inside a type declaration.
-
-A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
-                           ^^^^^^^^^^^^^^^^
-
-── ✗ undeclared type variable ─────────────────────────── fuzz_crash_105.md:2:46
-
-The type variable e is not declared in this scope.
-
-A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
-                                             ^
-
-Type variables must be introduced in a type annotation before they can be used.
-
-── ✗ empty tuple not allowed ──────────────────────────── fuzz_crash_105.md:2:55
-
-I am part way through parsing this tuple, but it is empty.
-
-A:a where[a.a:(X)->r,a.a:r]B:b where[b.b:r]C:e->[]h={{()}}
-                                                      ^^
-
-If you want to represent nothing, try using an empty record: {}.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 2 3) (end 2 4))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "a")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_105.md") (start 2 3) (end 2 4) (annotation error) (line-text "A:a\twhere[a.a:(X)->r,a.a:r]B:b\twhere[b.b:r]C:e->[]h={{()}}"))))
+	(report
+		(severity runtime_error)
+		(title "Where Clause Not Allowed In Type Declaration")
+		(region (start 2 1) (end 2 28))
+		(headline
+			(text "You cannot define a ")
+			(annotated code "where")
+			(reflow " clause inside a type declaration."))
+		(document
+			(source-region (file "fuzz_crash_105.md") (start 2 1) (end 2 28) (annotation error) (line-text "A:a\twhere[a.a:(X)->r,a.a:r]B:b\twhere[b.b:r]C:e->[]h={{()}}"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 2 30) (end 2 31))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "b")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_105.md") (start 2 30) (end 2 31) (annotation error) (line-text "A:a\twhere[a.a:(X)->r,a.a:r]B:b\twhere[b.b:r]C:e->[]h={{()}}"))))
+	(report
+		(severity runtime_error)
+		(title "Where Clause Not Allowed In Type Declaration")
+		(region (start 2 28) (end 2 44))
+		(headline
+			(text "You cannot define a ")
+			(annotated code "where")
+			(reflow " clause inside a type declaration."))
+		(document
+			(source-region (file "fuzz_crash_105.md") (start 2 28) (end 2 44) (annotation error) (line-text "A:a\twhere[a.a:(X)->r,a.a:r]B:b\twhere[b.b:r]C:e->[]h={{()}}"))))
+	(report
+		(severity runtime_error)
+		(title "Undeclared Type Variable")
+		(region (start 2 46) (end 2 47))
+		(headline
+			(reflow "The type variable ")
+			(annotated code "e")
+			(reflow " is not declared in this scope."))
+		(document
+			(reflow "Type variables must be introduced in a type annotation before they can be used.")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_105.md") (start 2 46) (end 2 47) (annotation error) (line-text "A:a\twhere[a.a:(X)->r,a.a:r]B:b\twhere[b.b:r]C:e->[]h={{()}}"))))
+	(report
+		(severity runtime_error)
+		(title "Empty Tuple Not Allowed")
+		(region (start 2 55) (end 2 57))
+		(headline
+			(reflow "I am part way through parsing this tuple, but it is empty."))
+		(document
+			(source-region (file "fuzz_crash_105.md") (start 2 55) (end 2 57) (annotation error) (line-text "A:a\twhere[a.a:(X)->r,a.a:r]B:b\twhere[b.b:r]C:e->[]h={{()}}"))
+			(line-break)
+			(reflow "If you want to represent nothing, try using an empty record: ")
+			(annotated code "{}")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColon,LowerIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,LowerIdent,Comma,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,CloseSquare,UpperIdent,OpColon,LowerIdent,KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,CloseSquare,UpperIdent,OpColon,LowerIdent,OpArrow,OpenSquare,CloseSquare,LowerIdent,OpAssign,OpenCurly,OpenCurly,NoSpaceOpenRound,CloseRound,CloseCurly,CloseCurly,

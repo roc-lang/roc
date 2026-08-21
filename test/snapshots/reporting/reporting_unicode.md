@@ -32,25 +32,22 @@ TYPE MISMATCH - reporting_unicode.md:2:12:2:25
 ~~~
 # CLI
 ~~~text
+── ✗ type mismatch ─────────────────────────────────── reporting_unicode.md:2:12
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  greeting = "héllo 🐢"                                                     │
- │             ‾‾‾‾‾‾‾‾‾‾                                                     │
- └───────────────────────────────────────────────── reporting_unicode.md:2:12 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+greeting = "héllo 🐢"
+           ^^^^^^^^^^
 
-        U64
+The type was determined to be:
+
+    U64
 
 ~~~
 # MARKDOWN
 ~~~markdown
 **Type Mismatch**
 This string literal is being used where a non-string type is needed.
-**reporting_unicode.md:2:12:2:25:**
 ```roc
 greeting = "héllo 🐢"
 ```
@@ -64,10 +61,10 @@ The type was determined to be:
 # HTML
 ~~~html
 <div class="report error">
-<h1 class="report-title">TYPE MISMATCH</h1>
+<h1 class="report-title">type mismatch</h1>
 <div class="report-content">
 This string literal is being used where a non-string type is needed.<br>
-<div class="source-region"><span class="filename">reporting_unicode.md:2:12:2:25:</span> <pre class="error">greeting = &quot;héllo 🐢&quot;</pre></div><br>
+<div class="source-region"><pre class="error">greeting = &quot;héllo 🐢&quot;</pre></div><br>
 The type was determined to be:<br>
 <br>
 <pre class="code-block">&nbsp;&nbsp;&nbsp;&nbsp;U64</pre></div>
@@ -75,10 +72,10 @@ The type was determined to be:<br>
 ~~~
 # LSP
 ~~~text
-TYPE MISMATCH
+type mismatch
 
 This string literal is being used where a non-string type is needed.
-reporting_unicode.md:2:12:2:25: greeting = "héllo 🐢"
+greeting = "héllo 🐢"
 
 The type was determined to be:
 

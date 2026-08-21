@@ -12,13 +12,19 @@ package [
 # EXPECTED
 MOD NOT FOUND - main.md:2:5:2:10
 # PROBLEMS
-── ✗ mod not found ────────────────────────────────────────────── main.md:2:5
-
-The mod Color was not found in this Roc project.
-
-Color,
-^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 2 5) (end 2 10))
+		(headline
+			(text "The mod ")
+			(annotated code "Color")
+			(reflow " was not found in this Roc project."))
+		(document
+			(source-region (file "main.md") (start 2 5) (end 2 10) (annotation error) (line-text "    Color,")))))
+~~~
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,

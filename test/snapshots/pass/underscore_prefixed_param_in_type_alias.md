@@ -20,50 +20,49 @@ UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:2:17:2:19
 UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:5:12:5:14
 UNDERSCORE IN TYPE ALIAS - underscore_prefixed_param_in_type_alias.md:8:15:8:17
 # PROBLEMS
-── ✗ underscore in type alias ── underscore_prefixed_param_in_type_alias.md:2:11
-
-Underscores are not allowed in type alias declarations.
-
-AliasType(_a) : _a
-          ^^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ── underscore_prefixed_param_in_type_alias.md:2:17
-
-Underscores are not allowed in type alias declarations.
-
-AliasType(_a) : _a
-                ^^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ── underscore_prefixed_param_in_type_alias.md:5:12
-
-Underscores are not allowed in type alias declarations.
-
-AliasType2(_a, b) : b
-           ^^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
-── ✗ underscore in type alias ── underscore_prefixed_param_in_type_alias.md:8:15
-
-Underscores are not allowed in type alias declarations.
-
-AliasType3(a, _b) : a
-              ^^
-
-Underscores in type annotations mean "I don't care about this type", which
-doesn't make sense when declaring a type. If you need a placeholder type
-variable, use a named type variable like `a` instead.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 2 11) (end 2 13))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_prefixed_param_in_type_alias.md") (start 2 11) (end 2 13) (annotation error) (line-text "AliasType(_a) : _a"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 2 17) (end 2 19))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_prefixed_param_in_type_alias.md") (start 2 17) (end 2 19) (annotation error) (line-text "AliasType(_a) : _a"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 5 12) (end 5 14))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_prefixed_param_in_type_alias.md") (start 5 12) (end 5 14) (annotation error) (line-text "AliasType2(_a, b) : b"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
+	(report
+		(severity runtime_error)
+		(title "Underscore In Type Alias")
+		(region (start 8 15) (end 8 17))
+		(headline
+			(reflow "Underscores are not allowed in type alias declarations."))
+		(document
+			(source-region (file "underscore_prefixed_param_in_type_alias.md") (start 8 15) (end 8 17) (annotation error) (line-text "AliasType3(a, _b) : a"))
+			(line-break)
+			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,NamedUnderscore,CloseRound,OpColon,NamedUnderscore,

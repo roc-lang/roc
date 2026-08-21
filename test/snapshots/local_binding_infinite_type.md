@@ -13,18 +13,30 @@ f = |_x| {
 # EXPECTED
 INFINITE TYPE - local_binding_infinite_type.md:2:5:2:8
 # PROBLEMS
-── ✗ infinite type ────────────────────────── local_binding_infinite_type.md:2:5
-
-I am inferring a weird self-referential type.
-
-bad = |x| bad([x])
-^^^
-
-Here is my best effort at writing down the type. You will see <RecursiveType>
-for parts of the type that repeat infinitely.
-
-    List(<RecursiveType>)
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Infinite Type")
+		(region (start 2 5) (end 2 8))
+		(headline
+			(reflow "I am inferring a weird self-referential type."))
+		(document
+			(source-region (file "local_binding_infinite_type.md") (start 2 5) (end 2 8) (annotation error) (line-text "    bad = |x| bad([x])"))
+			(line-break)
+			(reflow "Here is my best effort at writing down the type. You will see")
+			(reflow " ")
+			(annotated code "<RecursiveType>")
+			(reflow " ")
+			(reflow "for parts of the type that repeat infinitely.")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "List(<RecursiveType>)")
+			(annotation-end)
+			(line-break))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,NamedUnderscore,OpBar,OpenCurly,

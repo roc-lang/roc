@@ -16,48 +16,57 @@ EXPOSED BUT NOT DEFINED - package.md:1:14:1:16
 DECLARATION HAS NO VALUE - package.md:3:1:3:16
 DECLARATION HAS NO VALUE - package.md:4:1:4:16
 # PROBLEMS
-── ✗ exposed but not defined ─────────────────────────────────── package.md:1:10
-
-The mod header says that a! is exposed, but it is not defined anywhere in
-this mod.
-
-package [a!, b!,] { a: "a", b: "b", }
-         ^^
-
-You can fix this by either defining a! in this mod, or by removing it from
-the list of exposed values.
-
-── ✗ exposed but not defined ─────────────────────────────────── package.md:1:14
-
-The mod header says that b! is exposed, but it is not defined anywhere in
-this mod.
-
-package [a!, b!,] { a: "a", b: "b", }
-             ^^
-
-You can fix this by either defining b! in this mod, or by removing it from
-the list of exposed values.
-
-── ● declaration has no value ─────────────────────────────────── package.md:3:1
-
-This declaration has a type annotation but no implementation.
-
-a! : Str => Str
-^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
-── ● declaration has no value ─────────────────────────────────── package.md:4:1
-
-This declaration has a type annotation but no implementation.
-
-b! : Str => Str
-^^^^^^^^^^^^^^^
-
-Add a value body here, or put hosted functions in a platform type mod so
-they are published through the host boundary.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 1 10) (end 1 12))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "a!")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "package.md") (start 1 10) (end 1 12) (annotation error) (line-text "package [a!, b!,] { a: \"a\", b: \"b\", }"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "a!")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity runtime_error)
+		(title "Exposed But Not Defined")
+		(region (start 1 14) (end 1 16))
+		(headline
+			(reflow "The mod header says that ")
+			(annotated symbol-unqualified "b!")
+			(reflow " is exposed, but it is not defined anywhere in this mod."))
+		(document
+			(source-region (file "package.md") (start 1 14) (end 1 16) (annotation error) (line-text "package [a!, b!,] { a: \"a\", b: \"b\", }"))
+			(reflow "You can fix this by either defining ")
+			(annotated symbol-unqualified "b!")
+			(reflow " in this mod, or by removing it from the list of exposed values.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 3 1) (end 3 16))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "package.md") (start 3 1) (end 3 16) (annotation error) (line-text "a! : Str => Str"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
+	(report
+		(severity warning)
+		(title "Declaration Has No Value")
+		(region (start 4 1) (end 4 16))
+		(headline
+			(reflow "This declaration has a type annotation but no implementation."))
+		(document
+			(source-region (file "package.md") (start 4 1) (end 4 16) (annotation error) (line-text "b! : Str => Str"))
+			(line-break)
+			(line-break)
+			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary."))))
+~~~
 # TOKENS
 ~~~zig
 KwPackage,OpenSquare,LowerIdent,Comma,LowerIdent,Comma,CloseSquare,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,CloseCurly,

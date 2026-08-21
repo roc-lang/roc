@@ -22,21 +22,53 @@ result = do_something()
 # EXPECTED
 TYPE MISMATCH - issue8738_question_on_non_try.md:9:7:9:30
 # PROBLEMS
-── ✗ type mismatch ──────────────────────── issue8738_question_on_non_try.md:9:7
-
-The ? operator expects a Try type (a tag union containing ONLY Ok and Err
-tags), but I found.
-
-_x = ok_or(Err(""), Exit(5))?
-     ^^^^^^^^^^^^^^^^^^^^^^^
-
-This expression has type:
-
-    [Exit(a), ..] where [a.from_numeral : Numeral -> Try(a,
-    [InvalidNumeral(Str)])]
-
-Tip: Maybe wrap a value using Ok(value) or Err(value).
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 9 7) (end 9 30))
+		(headline
+			(reflow "The")
+			(reflow " ")
+			(annotated code "?")
+			(reflow " ")
+			(reflow "operator expects a")
+			(reflow " ")
+			(annotated code "Try")
+			(reflow " ")
+			(reflow "type (a tag union containing ONLY")
+			(reflow " ")
+			(annotated code "Ok")
+			(reflow " ")
+			(reflow "and")
+			(reflow " ")
+			(annotated code "Err")
+			(reflow " ")
+			(reflow "tags), but I found."))
+		(document
+			(source-region (file "issue8738_question_on_non_try.md") (start 9 7) (end 9 30) (annotation error) (line-text "\t_x = ok_or(Err(\"\"), Exit(5))?"))
+			(line-break)
+			(reflow "This expression has type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[Exit(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated underline "Tip:")
+			(reflow " ")
+			(reflow "Maybe wrap a value using")
+			(reflow " ")
+			(annotated code "Ok(value)")
+			(reflow " ")
+			(reflow "or")
+			(reflow " ")
+			(annotated code "Err(value)")
+			(reflow "."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,NamedUnderscore,CloseRound,Comma,LowerIdent,OpArrow,LowerIdent,

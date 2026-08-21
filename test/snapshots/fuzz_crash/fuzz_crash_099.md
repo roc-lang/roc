@@ -17,69 +17,97 @@ UNUSED VARIABLE - fuzz_crash_099.md:3:37:3:39
 UNUSED VARIABLE - fuzz_crash_099.md:3:5:3:8
 NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_099.md:3:20:3:37
 # PROBLEMS
-── ✗ duplicate record field ───────────────────────────── fuzz_crash_099.md:3:28
-
-The record field a appears more than once in this record.
-
-fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
-                       ^
-
-The field a was first defined in fuzz_crash_099.md:3:22:
-
-fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
-                 ^
-Record fields must have unique names. Consider renaming one of these fields or
-removing the duplicate.
-
-── ● unused variable ──────────────────────────────────── fuzz_crash_099.md:3:14
-
-Variable insert is defined here and then never used:
-
-fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
-         ^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _insert to
-suppress this warning.
-
-── ● unused variable ──────────────────────────────────── fuzz_crash_099.md:3:37
-
-Variable nt is defined here and then never used:
-
-fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
-                                ^^
-
-If you don't need this variable, prefix it with an underscore like _nt to
-suppress this warning.
-
-── ● unused variable ───────────────────────────────────── fuzz_crash_099.md:3:5
-
-Variable fn1 is defined here and then never used:
-
-fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
-^^^
-
-If you don't need this variable, prefix it with an underscore like _fn1 to
-suppress this warning.
-
-── ✗ non exhaustive destructure ───────────────────────── fuzz_crash_099.md:3:20
-
-This destructuring pattern doesn't cover all possible cases.
-
-fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})
-               ^^^^^^^^^^^^^^^^^
-
-The value being destructured has type:
-        ({ a: c }, d)
-  where [
-    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-    c.is_eq : c, c -> Bool,
-    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-    d.is_eq : d, d -> Bool,
-  ]
-
-Missing patterns:
-        ({ a: _ }, _)
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Duplicate Record Field")
+		(region (start 3 28) (end 3 29))
+		(headline
+			(reflow "The record field ")
+			(annotated record-field "a")
+			(reflow " appears more than once in this record."))
+		(document
+			(source-region (file "fuzz_crash_099.md") (start 3 28) (end 3 29) (annotation error) (line-text "    fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})"))
+			(line-break)
+			(reflow "The field ")
+			(annotated record-field "a")
+			(reflow " was first defined in ")
+			(source-location
+				(file "fuzz_crash_099.md")
+				(line 3)
+				(column 22))
+			(reflow ":")
+			(line-break)
+			(source-region (file "fuzz_crash_099.md") (start 3 22) (end 3 23) (annotation dim) (line-text "    fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})"))
+			(line-break)
+			(reflow "Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.")))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 3 14) (end 3 20))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "insert")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_insert")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_099.md") (start 3 14) (end 3 20) (annotation error) (line-text "    fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 3 37) (end 3 39))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "nt")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_nt")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_099.md") (start 3 37) (end 3 39) (annotation error) (line-text "    fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 3 5) (end 3 8))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "fn1")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_fn1")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "fuzz_crash_099.md") (start 3 5) (end 3 8) (annotation error) (line-text "    fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})"))))
+	(report
+		(severity runtime_error)
+		(title "Non Exhaustive Destructure")
+		(region (start 3 20) (end 3 37))
+		(headline
+			(reflow "This destructuring pattern doesn't cover all possible cases."))
+		(document
+			(source-region (file "fuzz_crash_099.md") (start 3 20) (end 3 37) (annotation error) (line-text "    fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})"))
+			(line-break)
+			(reflow "The value being destructured has type:")
+			(line-break)
+			(text "        ")
+			(annotated type "({ a: c }, d)\n  where [\n    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),\n    c.is_eq : c, c -> Bool,\n    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),\n    d.is_eq : d, d -> Bool,\n  ]")
+			(line-break)
+			(line-break)
+			(reflow "Missing patterns:")
+			(line-break)
+			(text "    ")
+			(annotation-start code-block)
+			(indent 1)
+			(text "({ a: _ }, _)")
+			(annotation-end)
+			(line-break))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,NamedUnderscore,OpBar,OpenCurly,

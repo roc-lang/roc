@@ -45,34 +45,29 @@ TYPE MISMATCH - reporting_type_mismatch_multiline.md:2:51:6:2
 ~~~
 # CLI
 ~~~text
+── ✗ type mismatch ─────────────────── reporting_type_mismatch_multiline.md:2:51
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  result_of_a_computation_with_a_rather_long_name = [                       │
- │      1,                                                                    │
- │      2,                                                                    │
- │      3,                                                                    │
- │  ]                                                                         │
- │                                                                            │
- └───────────────────────────────── reporting_type_mismatch_multiline.md:2:51 ┘
+This expression is used in an unexpected way.
 
-    It has the type:
+result_of_a_computation_with_a_rather_long_name = [
+    1,
+    2,
+    3,
+]
 
-        List(a) where [a.from_numeral : Numeral -> Try(a,
-        [InvalidNumeral(Str)])]
+It has the type:
 
-    But the annotation says it should be:
+    List(a) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
-        Str
+But the annotation says it should be:
+
+    Str
 
 ~~~
 # MARKDOWN
 ~~~markdown
 **Type Mismatch**
 This expression is used in an unexpected way.
-**reporting_type_mismatch_multiline.md:2:51:6:2:**
 ```roc
 result_of_a_computation_with_a_rather_long_name = [
 	1,
@@ -93,10 +88,10 @@ But the annotation says it should be:
 # HTML
 ~~~html
 <div class="report error">
-<h1 class="report-title">TYPE MISMATCH</h1>
+<h1 class="report-title">type mismatch</h1>
 <div class="report-content">
 This expression is used in an unexpected way.<br>
-<div class="source-region"><span class="filename">reporting_type_mismatch_multiline.md:2:51:6:2:</span> <pre class="error">result_of_a_computation_with_a_rather_long_name = [
+<div class="source-region"><pre class="error">result_of_a_computation_with_a_rather_long_name = [
 	1,
 	2,
 	3,
@@ -112,10 +107,10 @@ But the annotation says it should be:<br>
 ~~~
 # LSP
 ~~~text
-TYPE MISMATCH
+type mismatch
 
 This expression is used in an unexpected way.
-reporting_type_mismatch_multiline.md:2:51:6:2: result_of_a_computation_with_a_rather_long_name = [
+result_of_a_computation_with_a_rather_long_name = [
 	1,
 	2,
 	3,

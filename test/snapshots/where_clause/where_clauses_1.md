@@ -14,20 +14,29 @@ Decode(a) : a where [a.decode : List(U8) -> a]
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:1:1:2:50
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:4:1:4:47
 # PROBLEMS
-── ✗ where clause not allowed in type declaration ─────── where_clauses_1.md:1:1
-
-You cannot define a where clause inside a type declaration.
-
-Hash(a, hasher) : a
-    where [a.hash : hasher -> hasher, hasher.Hasher]
-
-── ✗ where clause not allowed in type declaration ─────── where_clauses_1.md:4:1
-
-You cannot define a where clause inside a type declaration.
-
-Decode(a) : a where [a.decode : List(U8) -> a]
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Where Clause Not Allowed In Type Declaration")
+		(region (start 1 1) (end 2 50))
+		(headline
+			(text "You cannot define a ")
+			(annotated code "where")
+			(reflow " clause inside a type declaration."))
+		(document
+			(source-region (file "where_clauses_1.md") (start 1 1) (end 2 50) (annotation error) (line-text "Hash(a, hasher) : a\n\twhere [a.hash : hasher -> hasher, hasher.Hasher]"))))
+	(report
+		(severity runtime_error)
+		(title "Where Clause Not Allowed In Type Declaration")
+		(region (start 4 1) (end 4 47))
+		(headline
+			(text "You cannot define a ")
+			(annotated code "where")
+			(reflow " clause inside a type declaration."))
+		(document
+			(source-region (file "where_clauses_1.md") (start 4 1) (end 4 47) (annotation error) (line-text "Decode(a) : a where [a.decode : List(U8) -> a]")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpColon,LowerIdent,

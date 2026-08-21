@@ -12,18 +12,30 @@ Maybe(a) : [Ok(a), Err]
 # EXPECTED
 TYPE REDECLARED - type_redeclaration_same_scope.md:3:1:3:24
 # PROBLEMS
-── ✗ type redeclared ────────────────────── type_redeclaration_same_scope.md:3:1
-
-The type Maybe is being redeclared.
-
-Maybe(a) : [Ok(a), Err]
-^^^^^^^^^^^^^^^^^^^^^^^
-
-But Maybe was already declared in type_redeclaration_same_scope.md:1:1:
-
-Maybe(a) : [Some(a), None]
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Redeclared")
+		(region (start 3 1) (end 3 24))
+		(headline
+			(reflow "The type ")
+			(annotated code "Maybe")
+			(reflow " is being redeclared."))
+		(document
+			(source-region (file "type_redeclaration_same_scope.md") (start 3 1) (end 3 24) (annotation error) (line-text "Maybe(a) : [Ok(a), Err]"))
+			(line-break)
+			(reflow "But ")
+			(annotated type "Maybe")
+			(reflow " was already declared in ")
+			(source-location
+				(file "type_redeclaration_same_scope.md")
+				(line 1)
+				(column 1))
+			(reflow ":")
+			(line-break)
+			(source-region (file "type_redeclaration_same_scope.md") (start 1 1) (end 1 27) (annotation dim) (line-text "Maybe(a) : [Some(a), None]")))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,CloseSquare,

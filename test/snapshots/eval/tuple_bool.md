@@ -13,50 +13,105 @@ MISSING METHOD - tuple_bool.md:1:45:1:51
 MISSING METHOD - tuple_bool.md:1:69:1:74
 MISSING METHOD - tuple_bool.md:1:78:1:83
 # PROBLEMS
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:38
-
-This not method is being called on a value whose type doesn't have that method.
-
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-                                     ^^^^^
-
-The value's type, which does not have a method named not, is:
-
-    [True, ..]
-
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:45
-
-This not method is being called on a value whose type doesn't have that method.
-
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-                                            ^^^^^^
-
-The value's type, which does not have a method named not, is:
-
-    [False, ..]
-
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:69
-
-This not method is being called on a value whose type doesn't have that method.
-
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-                                                                    ^^^^^
-
-The value's type, which does not have a method named not, is:
-
-    [True, ..]
-
-── ✗ missing method ───────────────────────────────────────── tuple_bool.md:1:78
-
-This not method is being called on a value whose type doesn't have that method.
-
-(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)
-                                                                             ^^^^^
-
-The value's type, which does not have a method named not, is:
-
-    [True, ..]
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 1 38) (end 1 43))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "not")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "tuple_bool.md") (start 1 38) (end 1 43) (annotation error) (line-text "(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "not")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[True, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 1 45) (end 1 51))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "not")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "tuple_bool.md") (start 1 45) (end 1 51) (annotation error) (line-text "(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "not")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[False, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 1 69) (end 1 74))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "not")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "tuple_bool.md") (start 1 69) (end 1 74) (annotation error) (line-text "(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "not")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[True, ..]")
+			(annotation-end)))
+	(report
+		(severity runtime_error)
+		(title "Missing Method")
+		(region (start 1 78) (end 1 83))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "not")
+			(reflow " ")
+			(reflow "method is being called on a value whose type doesn't have that method."))
+		(document
+			(source-region (file "tuple_bool.md") (start 1 78) (end 1 83) (annotation error) (line-text "(True, False, Bool.True, Bool.False, !True, !False, True and False, !True or !True)"))
+			(line-break)
+			(reflow "The value's type, which does not have a method named ")
+			(annotated code "not")
+			(reflow ",")
+			(reflow " ")
+			(reflow "is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[True, ..]")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenRound,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,Comma,OpBang,UpperIdent,Comma,OpBang,UpperIdent,Comma,UpperIdent,OpAnd,UpperIdent,Comma,OpBang,UpperIdent,OpOr,OpBang,UpperIdent,CloseRound,

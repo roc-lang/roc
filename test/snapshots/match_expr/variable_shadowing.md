@@ -13,19 +13,24 @@ match (value, other) {
 # EXPECTED
 POLYMORPHIC VALUE - variable_shadowing.md:1:1:4:2
 # PROBLEMS
-── ✗ polymorphic value ─────────────────────────────── variable_shadowing.md:1:1
-
-This top-level value still has an unresolved polymorphic type.
-
-match (value, other) {
-    (Some(x), y) => x + y
-    (None, x) => x * 2
-}
-
-Its type is:
-a where [a.plus : a, _arg -> a, a.times : a, Dec -> a]
-Add an annotation or use this value in a way that fixes its concrete type.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Polymorphic Value")
+		(region (start 1 1) (end 4 2))
+		(headline
+			(reflow "This top-level value still has an unresolved polymorphic type."))
+		(document
+			(source-region (file "variable_shadowing.md") (start 1 1) (end 4 2) (annotation error) (line-text "match (value, other) {\n    (Some(x), y) => x + y\n    (None, x) => x * 2\n}"))
+			(line-break)
+			(line-break)
+			(reflow "Its type is:")
+			(line-break)
+			(annotated code-block "a where [a.plus : a, _arg -> a, a.times : a, Dec -> a]")
+			(line-break)
+			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
+~~~
 # TOKENS
 ~~~zig
 KwMatch,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpenCurly,

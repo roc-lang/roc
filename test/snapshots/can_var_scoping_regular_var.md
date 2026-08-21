@@ -30,28 +30,45 @@ VAR REASSIGNMENT ERROR - :0:0:0:0
 VAR REASSIGNMENT ERROR - :0:0:0:0
 UNUSED VARIABLE - can_var_scoping_regular_var.md:2:17:2:22
 # PROBLEMS
-── ✗ var reassignment error ────────────────────────────────────────────────────
-
-Cannot reassign a var from outside the function where it was declared.
-
-Variables declared with var can only be reassigned within the same function scope.
-
-── ✗ var reassignment error ────────────────────────────────────────────────────
-
-Cannot reassign a var from outside the function where it was declared.
-
-Variables declared with var can only be reassigned within the same function scope.
-
-── ● unused variable ─────────────────────── can_var_scoping_regular_var.md:2:17
-
-Variable items is defined here and then never used:
-
-processItems = |items| {
-                ^^^^^
-
-If you don't need this variable, prefix it with an underscore like _items to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Var Reassignment Error")
+		(headline
+			(reflow "Cannot reassign a ")
+			(annotated keyword "var")
+			(reflow " from outside the function where it was declared."))
+		(document
+			(reflow "Variables declared with ")
+			(annotated keyword "var")
+			(reflow " can only be reassigned within the same function scope.")))
+	(report
+		(severity runtime_error)
+		(title "Var Reassignment Error")
+		(headline
+			(reflow "Cannot reassign a ")
+			(annotated keyword "var")
+			(reflow " from outside the function where it was declared."))
+		(document
+			(reflow "Variables declared with ")
+			(annotated keyword "var")
+			(reflow " can only be reassigned within the same function scope.")))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 2 17) (end 2 22))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "items")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_items")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "can_var_scoping_regular_var.md") (start 2 17) (end 2 22) (annotation error) (line-text "processItems = |items| {")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,

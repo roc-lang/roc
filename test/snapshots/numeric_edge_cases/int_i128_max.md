@@ -10,17 +10,25 @@ type=expr
 # EXPECTED
 INVALID NUMBER - int_i128_max.md:1:1:1:40
 # PROBLEMS
-── ✗ invalid number ──────────────────────────────────────── int_i128_max.md:1:1
-
-This number literal does not fit in the inferred type.
-
-170141183460469231731687303715884105727
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The inferred type is:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Number")
+		(region (start 1 1) (end 1 40))
+		(headline
+			(reflow "This number literal does not fit in the inferred type."))
+		(document
+			(source-region (file "int_i128_max.md") (start 1 1) (end 1 40) (annotation error) (line-text "170141183460469231731687303715884105727"))
+			(line-break)
+			(reflow "The inferred type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 Int,

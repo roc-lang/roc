@@ -10,15 +10,22 @@ a=(0->b .c())
 # EXPECTED
 NAME NOT IN SCOPE - fuzz_crash_087.md:1:7:1:8
 # PROBLEMS
-── ✗ name not in scope ─────────────────────────────────── fuzz_crash_087.md:1:7
-
-Nothing is named b in this scope.
-
-a=(0->b .c())
-      ^
-
-Is it misspelled, or is there an import missing?
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 1 7) (end 1 8))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "b")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_087.md") (start 1 7) (end 1 8) (annotation error) (line-text "a=(0->b .c())")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,NoSpaceOpenRound,Int,OpArrow,LowerIdent,DotLowerIdent,NoSpaceOpenRound,CloseRound,CloseRound,

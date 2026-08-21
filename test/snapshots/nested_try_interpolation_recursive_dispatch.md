@@ -20,22 +20,38 @@ main = {
 # EXPECTED
 RECURSIVE DISPATCH - nested_try_interpolation_recursive_dispatch.md:8:11:8:47
 # PROBLEMS
-── ✗ recursive dispatch ──── nested_try_interpolation_recursive_dispatch.md:8:11
-
-This from_interpolation dispatch would have to call itself to satisfy its own
-type.
-
-url : Try(Try(Url, [InvalidUrl]), [Outer])
-      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The dispatcher type is:
-
-    Try(Url, [InvalidUrl])
-
-Hint: Use a more specific result type, or add an associated function whose
-from_interpolation implementation does not require the same dispatch on the
-same type.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Recursive Dispatch")
+		(region (start 8 11) (end 8 47))
+		(headline
+			(reflow "This")
+			(reflow " ")
+			(annotated code "from_interpolation")
+			(reflow " ")
+			(reflow "dispatch would have to call itself to satisfy its own type."))
+		(document
+			(source-region (file "nested_try_interpolation_recursive_dispatch.md") (start 8 11) (end 8 47) (annotation error) (line-text "    url : Try(Try(Url, [InvalidUrl]), [Outer])"))
+			(line-break)
+			(reflow "The dispatcher type is:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Try(Url, [InvalidUrl])")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Use a more specific result type, or add an associated function whose")
+			(reflow " ")
+			(annotated code "from_interpolation")
+			(reflow " ")
+			(reflow "implementation does not require the same dispatch on the same type."))))
+~~~
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,

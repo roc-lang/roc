@@ -28,95 +28,156 @@ UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
 MOD NOT IMPORTED - multi_qualified_import.md:11:8:11:34
 UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 # PROBLEMS
-── ✗ expected record accessor ────────────────── multi_qualified_import.md:12:12
-
-I was parsing access after `.`, and I expected a field name or tuple index.
-
-data = json.Core.Utf8.encode("hello")
-           ^^^^^
-
-Required record access uses .name, optional record access uses .?name, and
-tuple access uses .0. Accessor names must be lowercase and adjacent to their
-punctuation.
-
-For example:
-    person.name
-    maybe_person.?name
-    pair.0
-
-I found .Core here.
-Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
-
-── ✗ expected record accessor ────────────────── multi_qualified_import.md:12:17
-
-I was parsing access after `.`, and I expected a field name or tuple index.
-
-data = json.Core.Utf8.encode("hello")
-                ^^^^^
-
-Required record access uses .name, optional record access uses .?name, and
-tuple access uses .0. Accessor names must be lowercase and adjacent to their
-punctuation.
-
-For example:
-    person.name
-    maybe_person.?name
-    pair.0
-
-I found .Utf8 here.
-Names that start with uppercase letters are used for tags, type names, and
-mod names in Roc.
-
-── ✗ mod not found ─────────────────────────── multi_qualified_import.md:3:16
-
-This Encoder type is declared to be in json.Core, which does not exist.
-
-json_encoder : Encoder
-               ^^^^^^^
-
-── ✗ does not exist ───────────────────────────── multi_qualified_import.md:4:16
-
-Json.defaultEncoder does not exist.
-
-json_encoder = Json.Core.Utf8.defaultEncoder
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Json is in scope, but it has no associated defaultEncoder.
-
-── ✗ mod not imported ──────────────────────── multi_qualified_import.md:7:11
-
-There is no mod with the name json.Core.Utf8 imported into this Roc file.
-
-process : json.Core.Utf8.Encoder -> Str
-          ^^^^^^^^^^^^^^^^^^^^^^
-
-── ● unused variable ──────────────────────────── multi_qualified_import.md:8:12
-
-Variable encoder is defined here and then never used:
-
-process = |encoder| "processing"
-           ^^^^^^^
-
-If you don't need this variable, prefix it with an underscore like _encoder to
-suppress this warning.
-
-── ✗ mod not imported ──────────────────────── multi_qualified_import.md:11:8
-
-There is no mod with the name json.Core.Utf8 imported into this Roc file.
-
-data : json.Core.Utf8.EncodedData
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-── ✗ unrecognized syntax ──────────────────────── multi_qualified_import.md:12:8
-
-I don't recognize this syntax.
-
-data = json.Core.Utf8.encode("hello")
-       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-This might be a syntax error, an unsupported language feature, or a typo.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Expected Record Accessor")
+		(region (start 12 12) (end 12 17))
+		(headline
+			(reflow "I was parsing access after `.`, and I expected a field name or tuple index."))
+		(document
+			(reflow "Required record access uses ")
+			(annotated code ".name")
+			(reflow ", optional record access uses ")
+			(annotated code ".?name")
+			(reflow ", and tuple access uses ")
+			(annotated code ".0")
+			(reflow ". Accessor names must be lowercase and adjacent to their punctuation.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "person.name")
+			(line-break)
+			(indent 1)
+			(text "maybe_person.?name")
+			(line-break)
+			(indent 1)
+			(text "pair.0")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ".Core")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with uppercase letters are used for tags, type names, and mod names in Roc.")
+			(line-break)
+			(line-break)
+			(source-region (file "multi_qualified_import.md") (start 12 12) (end 12 17) (annotation error) (line-text "data = json.Core.Utf8.encode(\"hello\")"))))
+	(report
+		(severity runtime_error)
+		(title "Expected Record Accessor")
+		(region (start 12 17) (end 12 22))
+		(headline
+			(reflow "I was parsing access after `.`, and I expected a field name or tuple index."))
+		(document
+			(reflow "Required record access uses ")
+			(annotated code ".name")
+			(reflow ", optional record access uses ")
+			(annotated code ".?name")
+			(reflow ", and tuple access uses ")
+			(annotated code ".0")
+			(reflow ". Accessor names must be lowercase and adjacent to their punctuation.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "person.name")
+			(line-break)
+			(indent 1)
+			(text "maybe_person.?name")
+			(line-break)
+			(indent 1)
+			(text "pair.0")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ".Utf8")
+			(text " here.")
+			(line-break)
+			(reflow "Names that start with uppercase letters are used for tags, type names, and mod names in Roc.")
+			(line-break)
+			(line-break)
+			(source-region (file "multi_qualified_import.md") (start 12 17) (end 12 22) (annotation error) (line-text "data = json.Core.Utf8.encode(\"hello\")"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Found")
+		(region (start 3 16) (end 3 23))
+		(headline
+			(text "This ")
+			(annotated code "Encoder")
+			(reflow " type is declared to be in ")
+			(annotated code "json.Core")
+			(reflow ", which does not exist."))
+		(document
+			(source-region (file "multi_qualified_import.md") (start 3 16) (end 3 23) (annotation error) (line-text "json_encoder : Encoder"))))
+	(report
+		(severity runtime_error)
+		(title "Does Not Exist")
+		(region (start 4 16) (end 4 45))
+		(headline
+			(annotated code "Json.defaultEncoder")
+			(reflow " does not exist."))
+		(document
+			(annotated code "Json")
+			(reflow " is in scope, but it has no associated ")
+			(annotated code "defaultEncoder")
+			(reflow ".")
+			(line-break)
+			(line-break)
+			(source-region (file "multi_qualified_import.md") (start 4 16) (end 4 45) (annotation error) (line-text "json_encoder = Json.Core.Utf8.defaultEncoder"))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Imported")
+		(region (start 7 11) (end 7 33))
+		(headline
+			(text "There is no mod with the name ")
+			(annotated code "json.Core.Utf8")
+			(reflow " imported into this Roc file."))
+		(document
+			(source-region (file "multi_qualified_import.md") (start 7 11) (end 7 33) (annotation error) (line-text "process : json.Core.Utf8.Encoder -> Str"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 8 12) (end 8 19))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "encoder")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_encoder")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "multi_qualified_import.md") (start 8 12) (end 8 19) (annotation error) (line-text "process = |encoder| \"processing\""))))
+	(report
+		(severity runtime_error)
+		(title "Mod Not Imported")
+		(region (start 11 8) (end 11 34))
+		(headline
+			(text "There is no mod with the name ")
+			(annotated code "json.Core.Utf8")
+			(reflow " imported into this Roc file."))
+		(document
+			(source-region (file "multi_qualified_import.md") (start 11 8) (end 11 34) (annotation error) (line-text "data : json.Core.Utf8.EncodedData"))))
+	(report
+		(severity runtime_error)
+		(title "Unrecognized Syntax")
+		(region (start 12 8) (end 12 38))
+		(headline
+			(reflow "I don't recognize this syntax."))
+		(document
+			(source-region (file "multi_qualified_import.md") (start 12 8) (end 12 38) (annotation error) (line-text "data = json.Core.Utf8.encode(\"hello\")"))
+			(line-break)
+			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+~~~
 # TOKENS
 ~~~zig
 KwImport,LowerIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,

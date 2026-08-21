@@ -18,46 +18,68 @@ INVALID RECORD FIELD NAME - record_field_name_cannot_be_var.md:3:8:3:10
 INVALID RECORD FIELD NAME - record_field_name_cannot_be_var.md:5:7:5:9
 UNUSED VARIABLE - record_field_name_cannot_be_var.md:3:8:3:10
 # PROBLEMS
-── ✗ invalid record field name ───────── record_field_name_cannot_be_var.md:1:15
-
-Record field names cannot start with a dollar sign.
-
-my_record = { $field: "value", ok: 1 }
-              ^^^^^^
-
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
-
-── ✗ invalid record field name ────────── record_field_name_cannot_be_var.md:3:8
-
-Record field names cannot start with a dollar sign.
-
-f = |{ $a }| "y"
-       ^^
-
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
-
-── ✗ invalid record field name ────────── record_field_name_cannot_be_var.md:5:7
-
-Record field names cannot start with a dollar sign.
-
-g : { $b : Str } -> Str
-      ^^
-
-Names that start with $ are reassignable variables declared with the var
-keyword, so they cannot be used as record field names.
-
-── ● unused variable ──────────────────── record_field_name_cannot_be_var.md:3:8
-
-Variable $a is defined here and then never used:
-
-f = |{ $a }| "y"
-       ^^
-
-If you don't need this variable, prefix it with an underscore like _$a to
-suppress this warning.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Invalid Record Field Name")
+		(region (start 1 15) (end 1 21))
+		(headline
+			(reflow "Record field names cannot start with a dollar sign."))
+		(document
+			(reflow "Names that start with ")
+			(annotated code "$")
+			(reflow " are reassignable variables declared with the ")
+			(annotated code "var")
+			(reflow " keyword, so they cannot be used as record field names.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_field_name_cannot_be_var.md") (start 1 15) (end 1 21) (annotation error) (line-text "my_record = { $field: \"value\", ok: 1 }"))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Record Field Name")
+		(region (start 3 8) (end 3 10))
+		(headline
+			(reflow "Record field names cannot start with a dollar sign."))
+		(document
+			(reflow "Names that start with ")
+			(annotated code "$")
+			(reflow " are reassignable variables declared with the ")
+			(annotated code "var")
+			(reflow " keyword, so they cannot be used as record field names.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_field_name_cannot_be_var.md") (start 3 8) (end 3 10) (annotation error) (line-text "f = |{ $a }| \"y\""))))
+	(report
+		(severity runtime_error)
+		(title "Invalid Record Field Name")
+		(region (start 5 7) (end 5 9))
+		(headline
+			(reflow "Record field names cannot start with a dollar sign."))
+		(document
+			(reflow "Names that start with ")
+			(annotated code "$")
+			(reflow " are reassignable variables declared with the ")
+			(annotated code "var")
+			(reflow " keyword, so they cannot be used as record field names.")
+			(line-break)
+			(line-break)
+			(source-region (file "record_field_name_cannot_be_var.md") (start 5 7) (end 5 9) (annotation error) (line-text "g : { $b : Str } -> Str"))))
+	(report
+		(severity warning)
+		(title "Unused Variable")
+		(region (start 3 8) (end 3 10))
+		(headline
+			(reflow "Variable ")
+			(annotated symbol-unqualified "$a")
+			(reflow " is defined here and then never used:"))
+		(document
+			(reflow "If you don't need this variable, prefix it with an underscore like ")
+			(annotated symbol-unqualified "_$a")
+			(reflow " to suppress this warning.")
+			(line-break)
+			(source-region (file "record_field_name_cannot_be_var.md") (start 3 8) (end 3 10) (annotation error) (line-text "f = |{ $a }| \"y\"")))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpenCurly,LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,LowerIdent,OpColon,Int,CloseCurly,

@@ -10,22 +10,35 @@ type=expr
 # EXPECTED
 UNEXPECTED EXPRESSION SYNTAX - method_call_inspect_defined.md:1:14:1:15
 # PROBLEMS
-── ✗ unexpected expression syntax ────────── method_call_inspect_defined.md:1:14
-
-I was parsing an expression, and this token cannot start an expression here.
-
-{ x = "hello"; x.inspect() }
-             ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found ; here.
-This token is malformed, so it cannot be used as ordinary Roc syntax.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 1 14) (end 1 15))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code ";")
+			(text " here.")
+			(line-break)
+			(reflow "This token is malformed, so it cannot be used as ordinary Roc syntax.")
+			(line-break)
+			(line-break)
+			(source-region (file "method_call_inspect_defined.md") (start 1 14) (end 1 15) (annotation error) (line-text "{ x = \"hello\"; x.inspect() }")))))
+~~~
 # TOKENS
 ~~~zig
 OpenCurly,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,MalformedUnknownToken,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,CloseCurly,

@@ -14,17 +14,25 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - can_list_multiline_mismatch.md:3:5:3:18
 # PROBLEMS
-── ✗ type mismatch ────────────────────────── can_list_multiline_mismatch.md:3:5
-
-This string literal is being used where a non-string type is needed.
-
-"hello world",
-^^^^^^^^^^^^^
-
-The type was determined to be:
-
-    Dec
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 3 5) (end 3 18))
+		(headline
+			(reflow "This string literal is being used where a non-string type is needed."))
+		(document
+			(source-region (file "can_list_multiline_mismatch.md") (start 3 5) (end 3 18) (annotation error) (line-text "    \"hello world\","))
+			(line-break)
+			(reflow "The type was determined to be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "Dec")
+			(annotation-end))))
+~~~
 # TOKENS
 ~~~zig
 OpenSquare,

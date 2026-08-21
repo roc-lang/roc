@@ -10,21 +10,33 @@ type=expr
 # EXPECTED
 UNEXPECTED EXPRESSION SYNTAX - unknown_operator.md:1:4:1:5
 # PROBLEMS
-── ✗ unexpected expression syntax ────────────────────── unknown_operator.md:1:4
-
-I was parsing an expression, and this token cannot start an expression here.
-
-1 ++ 2
-   ^
-
-Expressions can be names, literals, tags, records, lists, tuples, lambdas,
-blocks, conditionals, matches, or function calls.
-
-For example:
-    add(1, 2)
-
-I found + here.
-
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Unexpected Expression Syntax")
+		(region (start 1 4) (end 1 5))
+		(headline
+			(reflow "I was parsing an expression, and this token cannot start an expression here."))
+		(document
+			(reflow "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "add(1, 2)")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "+")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "unknown_operator.md") (start 1 4) (end 1 5) (annotation error) (line-text "1 ++ 2")))))
+~~~
 # TOKENS
 ~~~zig
 Int,OpPlus,OpPlus,Int,

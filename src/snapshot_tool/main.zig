@@ -2232,7 +2232,7 @@ fn generateReportingSections(output: *DualOutput, reports: *const std.array_list
         config: reporting.ReportingConfig,
     };
     const renderer_sections = [_]RendererSection{
-        .{ .name = "CLI", .language = "text", .render = reporting.renderReportToBoxPlain, .config = reporting.ReportingConfig.initColorTerminal() },
+        .{ .name = "CLI", .language = "text", .render = reporting.renderReportToPlain, .config = reporting.ReportingConfig.initColorTerminal() },
         .{ .name = "MARKDOWN", .language = "markdown", .render = reporting.renderReportToMarkdown, .config = reporting.ReportingConfig.initMarkdown() },
         .{ .name = "HTML", .language = "html", .render = reporting.renderReportToHtml, .config = reporting.ReportingConfig.initHtml() },
         .{ .name = "LSP", .language = "text", .render = reporting.renderReportToLsp, .config = reporting.ReportingConfig.initLsp() },
