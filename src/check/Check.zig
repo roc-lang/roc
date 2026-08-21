@@ -33517,7 +33517,19 @@ fn validateDerivedParseNominal(
         return try self.reportDerivedParseMissingMethodAt(nominal_var, self.cir.idents.parser_for, constraint, env, failure_expr);
     };
 
-    const child_err_var = try self.fresh(env, region);
+    // A nested nominal whose `parser_for` is the compiler-generated structural
+    // parser has no declaration of its own to respect: the backing walk below
+    // validates that generated body against the ENCLOSING error row, so the
+    // signature it is validated at names that same row. The encoder side
+    // already builds its nested expectation from `err_var` this way. Doing the
+    // same here keeps a generated derivation's frozen callable types a function
+    // of the contract key it is looked up by (kind, shape, encoding, state,
+    // error row), so two contexts that agree on that key cannot freeze
+    // disagreeing contracts. A CUSTOM nominal parser instead keeps its own
+    // minimal error row, which `constrainDerivedParserErrorRowIncludes`
+    // composes into the parent below.
+    const generated_parser = isGeneratedStructuralCodecMethodBinding(method_lookup, .parser);
+    const child_err_var = if (generated_parser) err_var else try self.fresh(env, region);
     const expected_ret = try self.freshParseResultTryVar(nominal_var, state_var, child_err_var, env, region);
     const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{encoding_var}, expected_runtime_fn), env, region);
@@ -33529,7 +33541,7 @@ fn validateDerivedParseNominal(
             .method_name = constraint.fn_name,
         },
     });
-    if (result.isEstablished() and isGeneratedStructuralCodecMethodBinding(method_lookup, .parser)) {
+    if (result.isEstablished() and generated_parser) {
         switch (try self.takeDerivedCodecBackingWalk(walk, nominal)) {
             .accounted_for => {},
             .unbounded => return .unsupported,
@@ -33579,6 +33591,10 @@ fn validateDerivedParseNominal(
         .ok => {},
         .unsupported, .reported_error => |validation| return validation,
     }
+    // A generated nested parser was validated at the parent's own row, so
+    // inclusion holds by construction and there is no child extension left to
+    // close.
+    if (generated_parser) return .ok;
     return try self.constrainDerivedParserErrorRowIncludes(err_var, child_err_var, env, region);
 }
 

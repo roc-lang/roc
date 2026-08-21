@@ -4223,6 +4223,20 @@ error tag into the parent row. This lets a custom JSON scalar parser retain
 only `InvalidJson(Str)` when it is nested in a record whose generated parser
 also needs `MissingRequiredField(Str)`.
 
+A compiler-GENERATED nested parser is the opposite case and keeps no row of its
+own. It has no declaration to respect, and its generated body is validated
+against the enclosing parser's error row, so the signature it is validated at
+names that same row—the derived encoder side already builds its nested
+expectation this way. This makes a generated derivation's frozen callable types
+a function of the contract key it is later matched by (kind, shape, encoding
+type, state type, error row), so two reads of one shape at one row—a nominal
+read on its own and the same nominal read again nested inside another derived
+shape—record the same contract instead of two that disagree about the nested
+parser's error row. `constrainDerivedParserErrorRowIncludes` therefore composes
+custom nominal parsers only. Pinned by
+test/cli/JsonNestedNominalContract.roc (both reads at one row, at a row wider
+than the shape demands, and at two different rows).
+
 Input formats contribute only errors that arise from reading their syntax and
 values. They do not implement a missing-required-field callback. Monotype
 specialization repeats the declared shape rule when a parser constraint was
