@@ -3736,10 +3736,105 @@ Builtin :: [].{
 			}
 		}
 
-		## Create a list with space for at least capacity items
+		## Returns a list of the specified capacity without any items.
+		##
+		## This is like calling [List.reserve] on an empty list. It's intended for
+		## building up a list incrementally, for example by calling [List.append] on it:
+		##
+		## ```roc
+		## expect {
+		##     var $squares = List.with_capacity(5)
+		##     for n in 1..=5 {
+		##         $squares = $squares.append(n * n)
+		##     }
+		##     $squares == [1, 4, 9, 16, 25]
+		## }
+		## ```
+		##
+		## When the final length is known up front, [List.with_capacity] guarantees that
+		## the appends which follow will not need to reallocate. Whether this is faster
+		## than starting from `[]` is often marginal: [List.append] grows capacity
+		## geometrically on its own, so the reallocations it performs are few and
+		## amortized. The benefit is most pronounced when reallocation would otherwise
+		## force a full copy of the list.
+		##
+		## If you don't know the exact capacity, passing a value larger than necessary
+		## still avoids reallocation, at the cost of using more memory than is needed.
+		##
+		## For more details, see [List.reserve].
 		with_capacity : U64 -> List(item)
 
-		## Ensure this list has room for at least spare additional items.
+		## Increase a list's capacity by at least the given number of additional items.
+		##
+		## When you already know how many items you are about to append, one
+		## [List.reserve] up front replaces every reallocation those appends would
+		## otherwise perform along the way:
+		##
+		## ```roc
+		## expect {
+		##     ids = [1.U64, 2, 3]
+		##
+		##     # 1000 more items are coming, so make room for them all at once
+		##     var $all = ids.reserve(1000)
+		##     for id in 4..=1003 {
+		##         $all = $all.append(id)
+		##     }
+		##
+		##     $all.len() == 1003
+		## }
+		## ```
+		##
+		## `reserve(spare)` aims for a capacity of `List.len(list) + spare` items; it
+		## trusts the request rather than rounding it up. If the list is not shared and
+		## already has room for `spare` more items, it does nothing. Otherwise it asks
+		## the allocator to grow the list to that size. The one exception is reserving
+		## a single item beyond the current capacity: that is indistinguishable from an
+		## ordinary [List.append] outgrowing the list, so the capacity grows
+		## geometrically instead of by one.
+		##
+		## Note that the reserve above sits before the loop. Because [List.reserve] aims
+		## for the exact size requested, it is a poor fit for use inside one: a reserve
+		## that then gets filled completely leaves no room for the next one, so every
+		## iteration goes back to the allocator, and the loop risks taking quadratic time
+		## in the final length:
+		##
+		## ```roc
+		## expect {
+		##     # The two appends fill the list back up to its exact capacity, so the
+		##     # next `reserve(2)` has to grow it again: one reallocation per iteration.
+		##     var $xs = []
+		##     while $xs.len() < 10 {
+		##         $xs = $xs.reserve(2)
+		##         $xs = $xs.append(0)
+		##         $xs = $xs.append(0)
+		##     }
+		##     $xs.len() == 10
+		## }
+		## ```
+		##
+		## Reserve the whole amount once before the loop instead, or start from
+		## [List.with_capacity]. A loop of plain [List.append] calls needs no help at
+		## all: when an append has to grow the list, it grows the capacity
+		## geometrically, which keeps such a loop linear in the number of items
+		## appended.
+		##
+		## Whether reserving is actually faster depends on the system allocator: many
+		## allocators can extend an existing allocation in place, in which case the
+		## reallocations that appends do on their own are cheap and [List.reserve] makes
+		## little observable difference. The benefit is most pronounced when reallocation
+		## would otherwise force a full copy of the list.
+		##
+		## [List.reserve] is not free—when more capacity is needed, it calls into the
+		## allocator, which may or may not have to move the existing items. Only use it
+		## when you actually expect to make use of the extra capacity.
+		##
+		## When you don't know exactly how many items you'll need, choosing a value
+		## somewhat higher than necessary is usually safe; a value that's too low may
+		## force later reallocation, while a value much higher than necessary just wastes
+		## memory.
+		##
+		## If you plan to use [List.reserve] on an empty list, use [List.with_capacity]
+		## instead.
 		reserve : List(item), U64 -> List(item)
 		reserve = |list, spare| list_reserve(list, spare)
 
@@ -5580,6 +5675,10 @@ Builtin :: [].{
 		}
 
 		## Ensure this dictionary has room for at least this many additional entries.
+		##
+		## Like [List.reserve], this aims for the exact size requested rather than
+		## rounding up, so call it once with the total number of entries you expect to
+		## add rather than repeatedly inside a loop.
 		reserve : Dict(k, v), U64 -> Dict(k, v)
 			where [k.to_hash : k, Hasher -> Hasher]
 		reserve = |dict, additional| match dict {
