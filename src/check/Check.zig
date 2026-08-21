@@ -561,6 +561,11 @@ hoist_binding_candidates: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx
 /// like their source locals; selected roots survive because they are already
 /// tied to an in-scope use.
 hoist_binding_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx),
+/// Local bindings that would qualify as compile-time-known if an earlier
+/// statement had not suppressed hoist selection. This drives the diagnostic
+/// that names the blocking statement; it never feeds root selection. Scoped
+/// with `hoist_binding_scope_patterns`.
+hoist_suppressed_known_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Temporary checker-only provenance for local binders known to be available
 /// during compile-time finalization. This is scoped lexically and never
 /// published as checked-artifact metadata.
@@ -1561,6 +1566,9 @@ const HoistFrame = struct {
     candidate_start: usize,
     deferred_dependency_start: usize,
     has_runtime_dependency: bool = false,
+    /// A runtime dependency that hoist suppression did not cause. Diagnostic
+    /// use only; it never feeds root selection.
+    has_unsuppressed_runtime_dependency: bool = false,
     has_contextual_dependency: bool = false,
     has_observable_effect: bool = false,
 
@@ -1569,12 +1577,23 @@ const HoistFrame = struct {
             !self.has_runtime_dependency and
             !self.has_observable_effect;
     }
+
+    /// Eligibility the frame would have if hoist suppression had not hidden the
+    /// block-local bindings it reads.
+    fn eligibleIgnoringSuppression(self: @This()) bool {
+        return self.hoist_position.allowsSemanticEligibility() and
+            !self.has_unsuppressed_runtime_dependency and
+            !self.has_observable_effect;
+    }
 };
 
 const CompletedHoistResult = struct {
     expr: CIR.Expr.Idx,
     eligible: bool,
     top_level_equivalent: bool,
+    /// Top-level equivalence the expression would have if hoist suppression had
+    /// not hidden the block-local bindings it reads. Diagnostic use only.
+    suppressed_top_level_equivalent: bool,
     has_observable_effect: bool,
     hoist_position: HoistPosition,
 };
@@ -2403,6 +2422,7 @@ fn initAssumePrepared(
         .hoist_deferred_roots = .empty,
         .hoist_binding_candidates = .{},
         .hoist_binding_scope_patterns = .empty,
+        .hoist_suppressed_known_bindings = .{},
         .hoist_known_values = .{},
         .hoist_known_value_scope_patterns = .empty,
         .hoist_contextual_bindings = .{},
@@ -2514,6 +2534,7 @@ pub fn deinit(self: *Self) void {
     self.hoist_deferred_roots.deinit(self.gpa);
     self.hoist_binding_candidates.deinit(self.gpa);
     self.hoist_binding_scope_patterns.deinit(self.gpa);
+    self.hoist_suppressed_known_bindings.deinit(self.gpa);
     var known_value_iter = self.hoist_known_values.iterator();
     while (known_value_iter.next()) |entry| {
         self.deinitHoistKnownValue(entry.value_ptr.*);
@@ -2698,6 +2719,8 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
 
     const semantically_eligible = frame.eligible();
     const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
+    const eligible_ignoring_suppression = frame.eligibleIgnoringSuppression();
+    const suppressed_top_level_equivalent = eligible_ignoring_suppression and !frame.has_contextual_dependency;
     const can_be_root = top_level_equivalent and self.exprCanBeHoistedRoot(expr);
     const can_cover_children = top_level_equivalent and self.exprCanCoverHoistedChildren(expr);
     const selection_allowed = frame.hoist_position.allowsSelection();
@@ -2800,6 +2823,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         .expr = expr,
         .eligible = semantically_eligible,
         .top_level_equivalent = top_level_equivalent,
+        .suppressed_top_level_equivalent = suppressed_top_level_equivalent,
         .has_observable_effect = frame.has_observable_effect,
         .hoist_position = frame.hoist_position,
     };
@@ -2812,6 +2836,9 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         } else if (can_be_root and !frame.binding_rhs and selection_allowed) {
             self.hoist_expr_candidates.appendAssumeCapacity(expr);
         }
+        if (!eligible_ignoring_suppression) {
+            parent.has_unsuppressed_runtime_dependency = true;
+        }
     }
 
     _ = self.hoist_frames.pop();
@@ -2819,6 +2846,15 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
 }
 
 fn markCurrentHoistRuntimeDependency(self: *Self) void {
+    if (self.hoist_frames.items.len == 0) return;
+    const frame = &self.hoist_frames.items[self.hoist_frames.items.len - 1];
+    frame.has_runtime_dependency = true;
+    frame.has_unsuppressed_runtime_dependency = true;
+}
+
+/// The dependency exists only because hoist suppression hid a block-local
+/// binding that would otherwise be compile-time known.
+fn markCurrentHoistSuppressedRuntimeDependency(self: *Self) void {
     if (self.hoist_frames.items.len == 0) return;
     self.hoist_frames.items[self.hoist_frames.items.len - 1].has_runtime_dependency = true;
 }
@@ -2855,6 +2891,31 @@ fn warnIfComptimeConditionalExpr(
     } });
 }
 
+/// A binding checked under hoist suppression is not a selection candidate, but
+/// a later refutable destructure still needs to know that its right-hand side
+/// reads only compile-time-known values.
+fn recordHoistSuppressedKnownBinding(
+    self: *Self,
+    pattern: CIR.Pattern.Idx,
+    expr: CIR.Expr.Idx,
+    completed: CompletedHoistResult,
+) Allocator.Error!void {
+    if (completed.hoist_position != .suppressed) return;
+    if (!completed.suppressed_top_level_equivalent) return;
+    if (!self.patternCanOwnHoistedBindingRoot(pattern)) return;
+    if (!self.exprCanBeHoistedBindingRoot(expr)) return;
+    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
+    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
+
+    const entry = try self.hoist_suppressed_known_bindings.getOrPut(self.gpa, pattern);
+    if (entry.found_existing) return;
+    entry.value_ptr.* = {};
+    self.hoist_binding_scope_patterns.append(self.gpa, pattern) catch |err| {
+        _ = self.hoist_suppressed_known_bindings.remove(pattern);
+        return err;
+    };
+}
+
 fn recordHoistBindingCandidate(
     self: *Self,
     pattern: CIR.Pattern.Idx,
@@ -2864,7 +2925,11 @@ fn recordHoistBindingCandidate(
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr) return;
     if (builtin.mode == .Debug) std.debug.assert(completed.hoist_position == hoist_position);
-    if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
+    if (!completed.hoist_position.allowsSelection()) {
+        try self.recordHoistSuppressedKnownBinding(pattern, expr, completed);
+        return;
+    }
+    if (!completed.top_level_equivalent) return;
     if (!self.patternCanOwnHoistedBindingRoot(pattern)) return;
     if (!self.exprCanBeHoistedBindingRoot(expr)) return;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
@@ -2945,9 +3010,8 @@ fn recordHoistPatternValidationCandidate(
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr) return;
     if (builtin.mode == .Debug) std.debug.assert(completed.hoist_position == hoist_position);
-    if (!completed.top_level_equivalent) return;
     if (!completed.hoist_position.allowsSelection()) {
-        if (completed.hoist_position == .suppressed) {
+        if (completed.hoist_position == .suppressed and completed.suppressed_top_level_equivalent) {
             if (blocking_stmt_region) |blocking_region| {
                 self.problems.markPendingStaticExhaustivenessComptimeBlocked(
                     .{ .destructure_pattern = pattern },
@@ -2957,6 +3021,7 @@ fn recordHoistPatternValidationCandidate(
         }
         return;
     }
+    if (!completed.top_level_equivalent) return;
 
     try self.hoist_deferred_roots.append(self.gpa, .{ .pattern_validation = .{
         .validation = .{
@@ -3297,6 +3362,7 @@ fn recordHoistContextualBinding(
 
 fn discardHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx) void {
     _ = self.hoist_binding_candidates.remove(pattern);
+    _ = self.hoist_suppressed_known_bindings.remove(pattern);
     self.markHoistKnownValueUnavailable(pattern);
     _ = self.hoist_selected_bindings.remove(pattern);
 }
@@ -3304,6 +3370,7 @@ fn discardHoistBindingCandidate(self: *Self, pattern: CIR.Pattern.Idx) void {
 fn popHoistBindingCandidateScope(self: *Self, start: usize) void {
     for (self.hoist_binding_scope_patterns.items[start..]) |pattern| {
         _ = self.hoist_binding_candidates.remove(pattern);
+        _ = self.hoist_suppressed_known_bindings.remove(pattern);
     }
     self.hoist_binding_scope_patterns.shrinkRetainingCapacity(start);
 }
@@ -3754,6 +3821,7 @@ const HoistSelectionTestState = struct {
         checker.hoist_deferred_roots = .empty;
         checker.hoist_binding_candidates = .{};
         checker.hoist_binding_scope_patterns = .empty;
+        checker.hoist_suppressed_known_bindings = .{};
         checker.hoist_known_values = .{};
         checker.hoist_known_value_scope_patterns = .empty;
         checker.hoist_contextual_bindings = .{};
@@ -3776,6 +3844,7 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_deferred_roots.deinit(self.allocator);
         self.checker.hoist_binding_candidates.deinit(self.allocator);
         self.checker.hoist_binding_scope_patterns.deinit(self.allocator);
+        self.checker.hoist_suppressed_known_bindings.deinit(self.allocator);
         var known_value_iter = self.checker.hoist_known_values.iterator();
         while (known_value_iter.next()) |entry| {
             self.checker.deinitHoistKnownValue(entry.value_ptr.*);
@@ -16761,7 +16830,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 break :known self.markHoistContextualDependencyForLookup(lookup.pattern_idx);
             };
             if (!compile_time_known_binding) {
-                self.markCurrentHoistRuntimeDependency();
+                if (self.hoist_suppressed_known_bindings.contains(lookup.pattern_idx)) {
+                    self.markCurrentHoistSuppressedRuntimeDependency();
+                } else {
+                    self.markCurrentHoistRuntimeDependency();
+                }
             }
 
             const resolved_pat = self.types.resolveVar(pat_var);
