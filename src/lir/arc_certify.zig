@@ -894,6 +894,10 @@ const ValueInfo = struct {
     lenders: []const ValueId,
     /// True for borrowed proc parameters: live for the whole call by ABI.
     always_live: bool,
+    /// True for static data, whose reference count is an immortal sentinel:
+    /// ARC emits neither retains nor releases for it, so it owes nothing at
+    /// a scope end and a consumer may take a unit it never accounted for.
+    immortal: bool = false,
     /// Container value this value was field-read from, or `no_value`. A
     /// unit-less consume or release of this value may claim the container's
     /// stored unit for that field instead of failing (a field take).
@@ -1347,6 +1351,10 @@ const Certifier = struct {
     /// a container local defined exactly once, and the (container,
     /// discriminant) -> variant pairs the proc's payload reads witness.
     disc_sources: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId) = .empty,
+    /// Locals a static-data literal binds. Static data's reference count is
+    /// an immortal sentinel, so ARC emits no retains or releases for it and
+    /// its units are not an obligation on any path.
+    static_data_locals: std.DynamicBitSetUnmanaged = .{},
     /// Containers with more than one definition site. A switch on one of
     /// these partitions its variants only when the walk witnessed that the
     /// condition read the value the container holds there.
@@ -1387,6 +1395,7 @@ const Certifier = struct {
         self.value_walk_scratch.deinit(self.allocator);
         self.disc_sources.deinit(self.allocator);
         self.multi_def_containers.deinit(self.allocator);
+        self.static_data_locals.deinit(self.allocator);
         self.variant_pairs.deinit(self.allocator);
         self.join_base_excl.deinit(self.allocator);
         self.clearContainerPairs();
@@ -1449,10 +1458,13 @@ const Certifier = struct {
             &.{}
         else
             try self.lender_arena.allocator().dupe(ValueId, lenders);
+        const raw_origin = @intFromEnum(origin);
+        const immortal = raw_origin < self.static_data_locals.bit_length and self.static_data_locals.isSet(raw_origin);
         try self.values.append(self.allocator, .{
             .origin = origin,
             .lenders = stored_lenders,
-            .always_live = always_live,
+            .always_live = always_live or immortal,
+            .immortal = immortal,
         });
         return id;
     }
@@ -1575,6 +1587,7 @@ const Certifier = struct {
             return self.fail("consumed partially dismantled local {d}", .{@intFromEnum(local)});
         }
         if (state.balanceOf(value) < 1) {
+            if (self.values.items[value].immortal) return;
             if (try self.tryClaim(state, value)) return;
             return self.fail("consumed local {d} without an ownership unit", .{@intFromEnum(local)});
         }
@@ -1714,6 +1727,9 @@ const Certifier = struct {
                 );
             }
             if (units == 0) continue;
+            // An immortal value owes nothing: its count is a sentinel, so no
+            // retain, release, or move it takes part in is real work.
+            if (self.values.items[value_index].immortal) continue;
             const origin = self.values.items[value_index].origin;
             if (units > 0) {
                 self.diag.context_local = origin;
@@ -3176,6 +3192,7 @@ const Certifier = struct {
         for (state.balance.items, 0..) |units, value_index| {
             if (units == 0) continue;
             if (self.claimsSpendUnit(state, @intCast(value_index))) continue;
+            if (self.values.items[value_index].immortal) continue;
             const origin = self.values.items[value_index].origin;
             if (units < 0) {
                 return self.fail(
@@ -3205,6 +3222,8 @@ const Certifier = struct {
     fn collectVariantFacts(self: *Certifier, proc: LIR.LirProcSpec, body: LIR.CFStmtId) CertifyError!void {
         self.disc_sources.clearRetainingCapacity();
         self.multi_def_containers.clearRetainingCapacity();
+        self.static_data_locals.deinit(self.allocator);
+        self.static_data_locals = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.store.localCount());
         self.variant_pairs.clearRetainingCapacity();
         self.join_base_excl.clearRetainingCapacity();
         self.clearContainerPairs();
@@ -3242,6 +3261,9 @@ const Certifier = struct {
                 }
             }
             switch (stmt) {
+                .assign_literal => |assign| {
+                    if (assign.value == .static_data) self.static_data_locals.set(@intFromEnum(assign.target));
+                },
                 .assign_ref => |assign| switch (assign.op) {
                     .discriminant => |op| try disc_reads.append(self.allocator, .{ .target = assign.target, .source = op.source }),
                     .tag_payload_struct => |op| try pair_reads.append(self.allocator, .{
@@ -3693,6 +3715,9 @@ const Certifier = struct {
                 },
                 .assign_literal => |assign| {
                     if (self.isRc(assign.target)) {
+                        // Static data's count is an immortal sentinel, so ARC
+                        // emits neither retains nor releases for it and its
+                        // unit never needs to be accounted for at a scope end.
                         _ = try self.bindFresh(&state, assign.target, 1, &.{});
                     }
                     cursor = assign.next;
@@ -4273,6 +4298,7 @@ const Certifier = struct {
             return self.fail("whole release of partially dismantled local {d}", .{@intFromEnum(local)});
         }
         if (state.balanceOf(value) < 1) {
+            if (self.values.items[value].immortal) return;
             if (try self.tryClaim(state, value)) return;
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;

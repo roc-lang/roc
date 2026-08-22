@@ -343,6 +343,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         inserter.current_sig = emit_sig;
         inserter.current_proc_body = body;
         inserter.current_source_proc = source_proc;
+        try inserter.computeImmortalLocals(body);
+        defer inserter.immortal_locals.deinit(store.allocator);
 
         // The ownership-neutral body and emitted LIR outlive this iteration;
         // all solver and materialization state does not. A single per-emission arena
@@ -963,6 +965,10 @@ const Inserter = struct {
     /// Parameter locals the current variant's demand vector seeds as born
     /// unique; consumed by `uniqueArgsMask` through `isLocalUniqueHere`.
     unique_param_override: *OwnedSet = undefined,
+    /// Locals whose every definition names static data. Such a value's
+    /// reference count is an immortal sentinel, so its retains and releases
+    /// are runtime no-ops that still cost a helper call.
+    immortal_locals: std.DynamicBitSetUnmanaged = .{},
     /// Exact resource and liveness bit domain of the proc currently emitted.
     /// It is built directly from that proc's explicit `frame_locals` span.
     current_domain: ?*const ProcArcDomain = null,
@@ -4785,6 +4791,7 @@ const Inserter = struct {
     fn retainLocalIfRcCount(self: *Inserter, local: LIR.LocalId, count: u16, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (count == 0) return next;
         if (!self.localContainsRefcounted(local)) return next;
+        if (self.isImmortal(local)) return next;
         const rc = self.rcHelperForLocal(.incref, local);
         const atomicity = self.rcAtomicity(local);
         return try addCanonicalRetain(self.store, local, rc, atomicity, count, next);
@@ -4828,8 +4835,117 @@ const Inserter = struct {
         return null;
     }
 
+    fn isImmortal(self: *const Inserter, local: LIR.LocalId) bool {
+        const raw = @intFromEnum(local);
+        if (raw >= self.immortal_locals.bit_length) return false;
+        return self.immortal_locals.isSet(raw);
+    }
+
+    /// Locals every definition of which names static data, found by walking
+    /// the body once for definition counts and static-data and pure-alias
+    /// definitions, then closing the alias edges to a fixpoint. A local with
+    /// any other definition is left out, so no path can reach a mortal value
+    /// through an immortal name.
+    fn computeImmortalLocals(self: *Inserter, body: LIR.CFStmtId) ResourceError!void {
+        const allocator = self.store.allocator;
+        const local_count = self.store.localCount();
+        self.immortal_locals = try std.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        errdefer self.immortal_locals.deinit(allocator);
+
+        var def_counts = try allocator.alloc(u8, local_count);
+        defer allocator.free(def_counts);
+        @memset(def_counts, 0);
+        var immortal_defs = try allocator.alloc(u8, local_count);
+        defer allocator.free(immortal_defs);
+        @memset(immortal_defs, 0);
+
+        const AliasEdge = struct { target: LIR.LocalId, source: LIR.LocalId, counted: bool = false };
+        var aliases = std.ArrayList(AliasEdge).empty;
+        defer aliases.deinit(allocator);
+
+        var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(LIR.CFStmtId).empty;
+        defer stack.deinit(allocator);
+        try stack.append(allocator, body);
+        while (stack.pop()) |current| {
+            if (visited.contains(current)) continue;
+            try visited.put(current, {});
+            const stmt = self.store.getCFStmt(current);
+            switch (stmt) {
+                .assign_literal => |assign| {
+                    def_counts[@intFromEnum(assign.target)] +|= 1;
+                    if (assign.value == .static_data) immortal_defs[@intFromEnum(assign.target)] +|= 1;
+                },
+                .assign_ref => |assign| {
+                    def_counts[@intFromEnum(assign.target)] +|= 1;
+                    switch (assign.op) {
+                        .local => |source| try aliases.append(allocator, .{ .target = assign.target, .source = source }),
+                        .nominal => |op| try aliases.append(allocator, .{ .target = assign.target, .source = op.backing_ref }),
+                        .list_reinterpret => |op| try aliases.append(allocator, .{ .target = assign.target, .source = op.backing_ref }),
+                        else => {},
+                    }
+                },
+                .set_local => |assign| def_counts[@intFromEnum(assign.target)] +|= 1,
+                inline .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |assign| def_counts[@intFromEnum(assign.target)] +|= 1,
+                else => {},
+            }
+            switch (stmt) {
+                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |walk| try stack.append(allocator, walk.next),
+                .switch_stmt => |walk| {
+                    const branches = self.store.getCFSwitchBranches(walk.branches);
+                    for (0..GuardedList.borrowLen(branches)) |i| {
+                        try stack.append(allocator, GuardedList.at(branches, i).body);
+                    }
+                    try stack.append(allocator, walk.default_branch);
+                    if (walk.continuation) |continuation| try stack.append(allocator, continuation);
+                },
+                .switch_initialized_payload => |walk| {
+                    try stack.append(allocator, walk.initialized_branch);
+                    try stack.append(allocator, walk.uninitialized_branch);
+                },
+                .str_match => |walk| {
+                    try stack.append(allocator, walk.on_match);
+                    try stack.append(allocator, walk.on_miss);
+                },
+                .str_match_set => |walk| {
+                    const arms = self.store.getStrMatchArms(walk.arms);
+                    for (0..GuardedList.borrowLen(arms)) |i| {
+                        try stack.append(allocator, GuardedList.at(arms, i).on_match);
+                    }
+                    try stack.append(allocator, walk.on_miss);
+                },
+                .join => |walk| {
+                    try stack.append(allocator, walk.body);
+                    try stack.append(allocator, walk.remainder);
+                },
+                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+            }
+        }
+
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (aliases.items) |*edge| {
+                if (edge.counted) continue;
+                const source = @intFromEnum(edge.source);
+                if (def_counts[source] == 0 or immortal_defs[source] < def_counts[source]) continue;
+                edge.counted = true;
+                immortal_defs[@intFromEnum(edge.target)] +|= 1;
+                changed = true;
+            }
+        }
+
+        for (0..local_count) |index| {
+            if (def_counts[index] != 0 and immortal_defs[index] >= def_counts[index]) {
+                self.immortal_locals.set(index);
+            }
+        }
+    }
+
     fn releaseLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (!self.localContainsRefcounted(local)) return next;
+        if (self.isImmortal(local)) return next;
         if (self.dismantleFor(local)) |container| {
             return try self.dismantleContainer(local, container, next);
         }
