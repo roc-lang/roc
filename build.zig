@@ -7162,7 +7162,14 @@ fn addMainExe(
     machine_code_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
     machine_code_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
-    machine_code_shim_lib.bundle_compiler_rt = true;
+    // The shim is linked alongside a platform host that is its own compiler-rt
+    // carrier, and COFF rejects the resulting duplicate definitions of `memcpy`
+    // and the integer/float libcalls outright (the same hazard noted on the
+    // boxy object above). The shim does not need a copy of its own: its objects
+    // reference only memcpy, memmove and memset, which the rest of the link
+    // already provides -- both for a platform host and for the freestanding
+    // default platform.
+    machine_code_shim_lib.bundle_compiler_rt = false;
     // On Linux the shim reaches the kernel directly, so the executables it is
     // linked into need no libc. Declaring that here makes the Zig compiler
     // enforce it: any new libc dependency in the shim's module graph becomes a
