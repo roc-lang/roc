@@ -2609,6 +2609,24 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
+            .u8_to_u16,
+            .u8_to_u32,
+            .u8_to_u64,
+            .u16_to_u32,
+            .u16_to_u64,
+            .u32_to_u64,
+            => {
+                // A widening between tracked unsigned types is the identity on
+                // the value, so the result is the same term: everything already
+                // proven about the operand keeps holding after the widening.
+                if (arg_count == 1) {
+                    if (try self.valueOf(GuardedList.at(args, 0))) |node| {
+                        try self.bind(s.target, .{ .node = node });
+                        return;
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
             .num_shift_right_zf_by => {
                 if (arg_count == 2) {
                     if (try self.valueOf(GuardedList.at(args, 1))) |amount_node| {
@@ -2849,9 +2867,6 @@ const Pass = struct {
             .u8_to_i32,
             .u8_to_i64,
             .u8_to_i128,
-            .u8_to_u16,
-            .u8_to_u32,
-            .u8_to_u64,
             .u8_to_u128,
             .u8_to_f32,
             .u8_to_f64,
@@ -2882,8 +2897,6 @@ const Pass = struct {
             .u16_to_i128,
             .u16_to_u8_wrap,
             .u16_to_u8_try,
-            .u16_to_u32,
-            .u16_to_u64,
             .u16_to_u128,
             .u16_to_f32,
             .u16_to_f64,
@@ -2918,7 +2931,6 @@ const Pass = struct {
             .u32_to_u8_try,
             .u32_to_u16_wrap,
             .u32_to_u16_try,
-            .u32_to_u64,
             .u32_to_u128,
             .u32_to_f32,
             .u32_to_f64,
