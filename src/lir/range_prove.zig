@@ -2521,17 +2521,14 @@ const Pass = struct {
             },
             .list_set, .list_set_in_place_unsafe => {
                 // Replacing one element preserves the list's length on every
-                // continuing path, so the result shares the input's length
-                // term.
+                // continuing path. A list term names nothing but its length,
+                // so the result is the same term: a loop that sets through a
+                // carried list then meets the same term on both edges, and
+                // the length the loop was entered under survives the merge.
                 if (arg_count == 3) {
                     if (try self.valueOf(GuardedList.at(args, 0))) |in_node| {
-                        if (self.len_terms.get(self.rootOf(in_node))) |len_term| {
-                            if (try self.unknownFor(self.localLayout(s.target))) |out_node| {
-                                try self.len_terms.put(out_node, len_term);
-                                try self.bind(s.target, .{ .node = out_node });
-                                return;
-                            }
-                        }
+                        try self.bind(s.target, .{ .node = in_node });
+                        return;
                     }
                 }
                 try self.bindFresh(s.target);

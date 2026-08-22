@@ -7853,68 +7853,6 @@ test "try-record extraction takes the dying union's payload without refcounting"
 }
 
 
-test "SCRATCH union takes with early error exit in wide loop" {
-    const allocator = std.testing.allocator;
-    const source =
-        \\helper : List(U16), List(U32), U64 -> Try({ xs: List(U16), ys: List(U32), n: U64 }, [Bug])
-        \\helper = |xs0, ys0, i| {
-        \\    xs = match List.set(xs0, i % 64, i.to_u16_wrap()) {
-        \\        Ok(v) => v
-        \\        Err(_) => return Err(Bug)
-        \\    }
-        \\    ys = match List.set(ys0, i % 64, i.to_u32_wrap()) {
-        \\        Ok(v) => v
-        \\        Err(_) => return Err(Bug)
-        \\    }
-        \\    Ok({ xs: xs, ys: ys, n: i * 2 })
-        \\}
-        \\
-        \\walk : U64 -> Try(U64, [Bug])
-        \\walk = |n| {
-        \\    var $xs = List.repeat(0.U16, 64)
-        \\    var $ys = List.repeat(0.U32, 64)
-        \\    var $t1 = List.repeat(0.U16, 64)
-        \\    var $t2 = List.repeat(0.U16, 64)
-        \\    var $a = 0.U64
-        \\    var $b = 1.U64
-        \\    var $c = 2.U64
-        \\    var $acc = 0.U64
-        \\    var $i = 0.U64
-        \\    while $i < n {
-        \\        if $i.bitwise_and(1) == 0 {
-        \\            found = helper($xs, $ys, $i)?
-        \\            $xs = found.xs
-        \\            $ys = found.ys
-        \\            $acc = $acc + found.n
-        \\            $t1 = match List.set($t1, $i % 64, $i.to_u16_wrap()) {
-        \\                Ok(v) => v
-        \\                Err(_) => return Err(Bug)
-        \\            }
-        \\        } else {
-        \\            $t2 = match List.set($t2, $i % 64, $i.to_u16_wrap()) {
-        \\                Ok(v) => v
-        \\                Err(_) => return Err(Bug)
-        \\            }
-        \\            $a = $a + $b
-        \\            $b = $b + $c
-        \\            $c = $c + $a
-        \\        }
-        \\        $i = $i + 1
-        \\    }
-        \\    Ok($acc + $a + ($t1.get(0) ?? 0).to_u64() + ($t2.get(0) ?? 0).to_u64())
-        \\}
-        \\
-        \\main : U64 -> U64
-        \\main = |n| {
-        \\    match walk(n) {
-        \\        Ok(v) => v
-        \\        Err(_) => 0
-        \\    }
-        \\}
-    ;
-    var optimized = try lowerModule(allocator, source, .wrappers);
-    defer optimized.deinit(allocator);
-}
 
 
 // A dominating length guard plus a masked index is how hot table loops

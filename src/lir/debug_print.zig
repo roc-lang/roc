@@ -143,7 +143,9 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("low_level {s}(", .{@tagName(s.op)});
                     try self.writeLocals(s.args, writer);
-                    try writer.writeAll(")\n");
+                    try writer.writeAll(")");
+                    if (s.unique_args != 0) try writer.print(" unique=0x{x}", .{s.unique_args});
+                    try writer.writeAll("\n");
                     current = s.next;
                 },
                 .assign_list => |s| {
