@@ -289,6 +289,10 @@ pub const MonoLlvmCodeGen = struct {
     /// Atomic helpers explicitly required by static-data relocations in the
     /// separately emitted readonly-data object.
     static_data_rc_helpers: []const layout.RcHelperKey = &.{},
+    /// Procedures a static-data object names by symbol. Only these need
+    /// external linkage under the symbol ABI; the rest stay internal so the
+    /// LLVM pipeline can see every call site and specialize across them.
+    static_data_procs: []const LirProcSpecId = &.{},
     join_points: std.AutoHashMap(u32, JoinInfo),
     compiled_joins: std.AutoHashMap(u32, void),
     stmt_incoming_counts: std.AutoHashMap(u32, u32),
@@ -1423,7 +1427,7 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const name = try self.procFunctionName(builder, proc_id, proc);
         const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
-        func.setLinkage(if (self.proc_symbol_mode == .lir_symbol) .external else .internal, builder);
+        func.setLinkage(if (self.procNeedsExternalLinkage(proc_id)) .external else .internal, builder);
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
@@ -1447,6 +1451,11 @@ pub const MonoLlvmCodeGen = struct {
             if (param_index == ret_param_index) continue;
             try attrs_wip.addParamAttr(param_index, .@"noalias", builder);
         }
+        // The argument pack is only ever copied out of, and its address never
+        // outlives the call, so calls leave it unchanged and it can stay a
+        // caller-local object across them.
+        try attrs_wip.addParamAttr(ret_param_index + 1, .readonly, builder);
+        try attrs_wip.addParamAttr(ret_param_index + 1, .nocapture, builder);
         if (self.enable_default_platform_runtime or self.enable_default_platform_diagnostics) {
             if (self.enable_default_platform_runtime) {
                 try attrs_wip.addFnAttr(.{ .string = .{
@@ -1483,6 +1492,17 @@ pub const MonoLlvmCodeGen = struct {
             .kind = builder.string("stack-probe-size") catch return error.OutOfMemory,
             .value = builder.string("4096") catch return error.OutOfMemory,
         } }, builder);
+    }
+
+    /// Whether an object outside this module can name this procedure. Only a
+    /// procedure a static-data relocation points at can; entrypoints reach
+    /// their procedure through a wrapper compiled into this same module.
+    fn procNeedsExternalLinkage(self: *const MonoLlvmCodeGen, proc_id: LirProcSpecId) bool {
+        if (self.proc_symbol_mode != .lir_symbol) return false;
+        for (self.static_data_procs) |referenced| {
+            if (referenced == proc_id) return true;
+        }
+        return false;
     }
 
     fn procFunctionName(
