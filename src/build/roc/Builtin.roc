@@ -5649,6 +5649,15 @@ Builtin :: [].{
 			}
 		}
 
+		## Returns a human-readable representation of a [Dict], with keys and values
+		## rendered using [Str.inspect].
+		## ```roc
+		## expect Str.inspect(Dict.from_list([("one", 1.I64), ("two", 2)])) ==
+		## 	"Dict.from_list([(\"one\", 1), (\"two\", 2)])"
+		## ```
+		to_inspect : Dict(k, v) -> Str
+		to_inspect = |dict| "Dict.from_list(${ Str.inspect(dict.to_list()) })"
+
 		## Returns an empty `Dict`.
 		## ```roc
 		## empty_dict = Dict.empty()
@@ -6241,6 +6250,14 @@ Builtin :: [].{
 				Hasher.write_u64(Hasher.write_u64(hasher, List.len(items)), $item_hashes)
 			}
 		}
+
+		## Returns a human-readable representation of a [Set], with items rendered
+		## using [Str.inspect].
+		## ```roc
+		## expect Str.inspect(Set.from_list([1.I64, 2, 3])) == "Set.from_list([1, 2, 3])"
+		## ```
+		to_inspect : Set(a) -> Str
+		to_inspect = |set| "Set.from_list(${ Str.inspect(set.to_list()) })"
 
 		## Creates a new empty `Set`.
 		empty : () -> Set(_item)
