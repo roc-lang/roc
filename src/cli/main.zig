@@ -2778,7 +2778,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     // Check if this is a default_app (headerless file with main!) before
     // linking the platform host shim.
-    if (try readDefaultAppSource(ctx, args.path)) |source| {
+    if (try readDefaultAppSource(ctx, args.path, .default_app)) |source| {
         // Headerless default apps never hot reload; they just run once. The shared-memory
         // shim is the run mechanism where the default platform runtime exists (Linux native,
         // or any cross-target run); elsewhere we use the plain run-once path.
@@ -3561,10 +3561,30 @@ fn finishCompiledRun(
     return finishRunTermination(ctx, exe_path, classifyNativeRunTermination(term), diagnostics);
 }
 
+/// How to classify a headerless file that failed to parse. A syntax error such
+/// as an unbalanced paren swallows every declaration after it, `main!`
+/// included, so such a file cannot be classified reliably.
+const UnparsableHeaderless = enum {
+    /// Report it as not a default app. `roc check` and `roc build` use this:
+    /// their plain-module paths already report the syntax errors against the
+    /// user's own file.
+    not_default_app,
+    /// Claim it as a default app anyway. `roc run` uses this: its staged-app
+    /// path remaps diagnostics back to the user's file, whereas falling
+    /// through ends in a misleading "expected app header" about a file that
+    /// never had a header to begin with.
+    default_app,
+};
+
 /// Check if a file is a default_app (headerless file with a main! function).
 /// On success, returns the file source (caller owns the allocation).
-/// Returns null if the file is not a default_app.
-fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.Error!?[]const u8 {
+/// Returns null if the file is not a default_app; `unparsable` decides which
+/// answer a headerless file that failed to parse gets.
+fn readDefaultAppSource(
+    ctx: *CliCtx,
+    file_path: []const u8,
+    unparsable: UnparsableHeaderless,
+) std.mem.Allocator.Error!?[]const u8 {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
     const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -3639,8 +3659,11 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.E
     }
 
     if (!ast.hasMainBangDecl()) {
-        ctx.gpa.free(source);
-        return null;
+        const may_still_be_default_app = unparsable == .default_app and ast.hasErrors();
+        if (!may_still_be_default_app) {
+            ctx.gpa.free(source);
+            return null;
+        }
     }
 
     return source;
@@ -8247,7 +8270,7 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     // Headerless apps build through a synthetic default platform.
-    if (try readDefaultAppSource(ctx, args.path)) |source| {
+    if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source| {
         return rocBuildDefaultApp(ctx, args, source);
     }
 
@@ -11230,6 +11253,60 @@ const CliTestPlan = struct {
     }
 };
 
+const CliTestCacheStats = struct {
+    modules_total: u64 = 0,
+    modules_cached: u64 = 0,
+    roots_total: u64 = 0,
+    roots_cached: u64 = 0,
+};
+
+fn cliTestCacheStats(plan: *const CliTestPlan) CliTestCacheStats {
+    var stats = CliTestCacheStats{
+        .modules_total = plan.modules.len,
+        .roots_total = plan.entries.len,
+    };
+    for (plan.modules) |module| {
+        if (module.cached_results != null) {
+            stats.modules_cached += 1;
+            stats.roots_cached += module.entry_count;
+        }
+    }
+    return stats;
+}
+
+fn cliTestCacheCounters(stats: CliTestCacheStats) [6]progress.Counter {
+    return .{
+        .{ .name = "Modules total", .count = stats.modules_total },
+        .{ .name = "Modules cached", .count = stats.modules_cached },
+        .{ .name = "Modules uncached", .count = stats.modules_total - stats.modules_cached },
+        .{ .name = "Roots total", .count = stats.roots_total },
+        .{ .name = "Roots cached", .count = stats.roots_cached },
+        .{ .name = "Roots uncached", .count = stats.roots_total - stats.roots_cached },
+    };
+}
+
+test "CLI test cache counters expose partial module and root hits" {
+    const counters = cliTestCacheCounters(.{
+        .modules_total = 46,
+        .modules_cached = 45,
+        .roots_total = 361,
+        .roots_cached = 356,
+    });
+
+    try std.testing.expectEqualStrings("Modules total", counters[0].name);
+    try std.testing.expectEqual(@as(u64, 46), counters[0].count);
+    try std.testing.expectEqualStrings("Modules cached", counters[1].name);
+    try std.testing.expectEqual(@as(u64, 45), counters[1].count);
+    try std.testing.expectEqualStrings("Modules uncached", counters[2].name);
+    try std.testing.expectEqual(@as(u64, 1), counters[2].count);
+    try std.testing.expectEqualStrings("Roots total", counters[3].name);
+    try std.testing.expectEqual(@as(u64, 361), counters[3].count);
+    try std.testing.expectEqualStrings("Roots cached", counters[4].name);
+    try std.testing.expectEqual(@as(u64, 356), counters[4].count);
+    try std.testing.expectEqualStrings("Roots uncached", counters[5].name);
+    try std.testing.expectEqual(@as(u64, 5), counters[5].count);
+}
+
 const CliCachedModuleTestResults = struct {
     results: []CliTestResultItem,
     summary: CliTestRunSummary,
@@ -12040,6 +12117,11 @@ fn lowerCheckedSourceToLir(
             .target_usize = target_usize,
             .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .consume_dead_boxes = switch (roots) {
+                .linked_output => true,
+                .platform_entrypoints => |artifact| artifact == .dev_run_image,
+                .test_plan => false,
+            },
             // Test lowering executes inline expects at every opt level; other
             // backends omit them from optimized output.
             .inline_expects = switch (roots) {
@@ -14369,12 +14451,17 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .track_watch_inputs = args.watch_inputs_file != null,
         .root_source_url = args.root_source_url,
         .main_source_url = args.main_source_url,
+        // `roc test` never links a program, so it publishes no executable
+        // artifacts: the app/platform entrypoint pairing is not part of what
+        // running the root file's `expect`s needs.
+        .post_check_publication_mode = .none,
     });
     defer build_env.deinit();
 
     // `roc test` runs the file's top-level `expect`s and nothing else, so the
     // file needs no entrypoint: a headerless file that is neither a type module
-    // nor a default app is tested as a plain module.
+    // nor a default app is tested as a plain module, and an app is tested
+    // whether or not it supplies the definitions its platform requires.
     build_env.setRootValidation(.explicit_roots);
 
     var extra_buf: [2][]const u8 = undefined;
@@ -14444,6 +14531,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         }
     }
     reporter.end();
+    reporter.recordCounters("Test result cache", &cliTestCacheCounters(cliTestCacheStats(&test_plan)));
 
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     if (args.timings) spec_timing.enableDetailedMonotypeBody();
@@ -17099,7 +17187,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         var extra_buf: [2][]const u8 = undefined;
         const extra_paths = appendExtraWatchPaths(.{ .check = args }, &extra_buf);
 
-        if (try readDefaultAppSource(ctx, args.path)) |source| {
+        if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source| {
             var default_result = rocCheckDefaultAppPreserved(
                 ctx,
                 args,
@@ -17157,7 +17245,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         return finishRocCheck(ctx, args, stdout, stderr, timer_start_ns, check_result);
     }
 
-    var check_result = if (try readDefaultAppSource(ctx, args.path)) |source|
+    var check_result = if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source|
         rocCheckDefaultApp(ctx, args, source, cache_config) catch |err| {
             reporter.fail();
             return handleProcessFileError(err, stderr, args.path);

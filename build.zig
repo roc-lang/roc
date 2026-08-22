@@ -66,7 +66,7 @@ comptime {
 }
 
 /// Test platform directories that need host libraries built
-const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive", "alloc-count" };
+const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive", "alloc-count", "box-model-uniqueness" };
 const glibc_test_platform_dirs = [_][]const u8{ "str", "int", "dylib", "archive" };
 
 fn mustUseLlvm(target: ResolvedTarget) bool {
@@ -2592,18 +2592,18 @@ fn setupTestPlatforms(
             );
             clear_cache_step.dependOn(copy_step);
 
-            // test/alloc-count declares fx's musl runtime objects (crt1.o,
-            // libc.a) as link inputs; copy them alongside its host library
+            // Allocation-sensitive test platforms declare fx's musl runtime
+            // objects as link inputs; copy them alongside their host library
             // rather than committing more copies of the same binaries.
-            if (std.mem.eql(u8, platform_dir, "alloc-count") and std.mem.endsWith(u8, cross_target.name, "musl")) {
+            if ((std.mem.eql(u8, platform_dir, "alloc-count") or std.mem.eql(u8, platform_dir, "box-model-uniqueness")) and std.mem.endsWith(u8, cross_target.name, "musl")) {
                 const copy_musl_runtime = b.addUpdateSourceFiles();
                 copy_musl_runtime.addCopyFileToSource(
                     b.path(b.pathJoin(&.{ "test/fx/platform/targets", cross_target.name, "crt1.o" })),
-                    b.pathJoin(&.{ "test/alloc-count/platform/targets", cross_target.name, "crt1.o" }),
+                    b.pathJoin(&.{ "test", platform_dir, "platform/targets", cross_target.name, "crt1.o" }),
                 );
                 copy_musl_runtime.addCopyFileToSource(
                     b.path(b.pathJoin(&.{ "test/fx/platform/targets", cross_target.name, "libc.a" })),
-                    b.pathJoin(&.{ "test/alloc-count/platform/targets", cross_target.name, "libc.a" }),
+                    b.pathJoin(&.{ "test", platform_dir, "platform/targets", cross_target.name, "libc.a" }),
                 );
                 clear_cache_step.dependOn(&copy_musl_runtime.step);
             }

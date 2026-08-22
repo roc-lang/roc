@@ -5082,7 +5082,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Return the heap pointer (which IS the Box value)
                     return .{ .general_reg = heap_ptr };
                 },
-                .box_unbox => {
+                // Consuming Box.unbox is normalized by ARC into the borrowed
+                // load followed by explicit RC statements.
+                .box_unbox => unreachable,
+                .box_unbox_borrowed => {
                     // Box.unbox(box) -> value: dereference the box pointer
                     const ls = self.layout_store;
                     // The argument is the Box—get its layout to find element info
@@ -6800,6 +6803,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .box_box,
                 .box_prepare_update,
                 .box_unbox,
+                .box_unbox_borrowed,
                 .compare,
                 .crash,
                 .crypto_blake3_hash_bytes,
