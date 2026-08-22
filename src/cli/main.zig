@@ -3565,14 +3565,16 @@ fn finishCompiledRun(
 /// as an unbalanced paren swallows every declaration after it, `main!`
 /// included, so such a file cannot be classified reliably.
 const UnparsableHeaderless = enum {
-    /// Report it as not a default app. `roc check` and `roc build` use this:
-    /// their plain-module paths already report the syntax errors against the
-    /// user's own file.
+    /// Report it as not a default app. `roc check` and `roc build` use this,
+    /// and so does `roc run --opt=size`/`--opt=speed` by way of the build
+    /// path: their plain-module paths report the syntax errors against the
+    /// user's own file and never reach an entrypoint check.
     not_default_app,
-    /// Claim it as a default app anyway. `roc run` uses this: its staged-app
-    /// path remaps diagnostics back to the user's file, whereas falling
-    /// through ends in a misleading "expected app header" about a file that
-    /// never had a header to begin with.
+    /// Claim it as a default app anyway. The `roc run` shared-memory shim uses
+    /// this: its staged-app path remaps diagnostics back to the user's file,
+    /// whereas falling through reaches the shim's app-root check and ends in a
+    /// misleading "expected app header" about a file that never had a header
+    /// to begin with.
     default_app,
 };
 
