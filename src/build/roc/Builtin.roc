@@ -5656,7 +5656,7 @@ Builtin :: [].{
 		## 	"Dict.from_list([(\"one\", 1), (\"two\", 2)])"
 		## ```
 		to_inspect : Dict(k, v) -> Str
-		to_inspect = |dict| "Dict.from_list(${ Str.inspect(dict.to_list()) })"
+		to_inspect = |dict| "Dict.from_list(${Str.inspect(dict.to_list())})"
 
 		## Returns an empty `Dict`.
 		## ```roc
@@ -6257,7 +6257,7 @@ Builtin :: [].{
 		## expect Str.inspect(Set.from_list([1.I64, 2, 3])) == "Set.from_list([1, 2, 3])"
 		## ```
 		to_inspect : Set(a) -> Str
-		to_inspect = |set| "Set.from_list(${ Str.inspect(set.to_list()) })"
+		to_inspect = |set| "Set.from_list(${Str.inspect(set.to_list())})"
 
 		## Creates a new empty `Set`.
 		empty : () -> Set(_item)
