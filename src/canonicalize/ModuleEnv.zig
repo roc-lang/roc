@@ -2888,6 +2888,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" ");
+            try report.document.addInlineCode("where");
+            try report.document.addReflowingText(" clauses can only go on function type annotations.");
 
             break :blk report;
         },
