@@ -988,10 +988,12 @@ const Pass = struct {
         self.body_assigned.clearRetainingCapacity();
     }
 
-    /// Locals assigned anywhere in the statement subtree reachable from
-    /// `head` without following jumps: reassignments a loop iteration could
-    /// perform. Jump targets either re-enter this subtree through their
-    /// declarations (nested joins, already reachable) or leave it entirely.
+    /// Locals assigned anywhere forward-reachable from `head`, following
+    /// jumps into their target join bodies. An iteration can leave the
+    /// body's lexical subtree through a jump and still return to the head,
+    /// so only full forward reachability soundly over-approximates the
+    /// assignments between two head arrivals; the over-reach into post-loop
+    /// code merely forgoes some seeds.
     fn bodyAssignedLocals(self: *Pass, head: CFStmtId) ResourceError!*const std.AutoHashMapUnmanaged(u32, void) {
         if (self.body_assigned.get(head) != null) return self.body_assigned.getPtr(head).?;
         var set = std.AutoHashMapUnmanaged(u32, void).empty;
@@ -1050,7 +1052,13 @@ const Pass = struct {
                     try self.body_assigned_scan.append(self.allocator, stmt.body);
                     try self.body_assigned_scan.append(self.allocator, stmt.remainder);
                 },
-                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .jump => |stmt| {
+                    if (self.join_stmts.get(stmt.target)) |join_stmt| {
+                        const join = self.store.getCFStmt(join_stmt).join;
+                        try self.body_assigned_scan.append(self.allocator, join.body);
+                    }
+                },
+                .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
             }
         }
         try self.body_assigned.put(head, set);

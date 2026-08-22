@@ -1009,17 +1009,6 @@ pub fn compute(
                 switch (store.getCFStmt(cursor)) {
                     inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .join => |stmt| {
-                        if (is_union) {
-                            // Tag-union takes stay region-local: a join
-                            // declared inside the region means reads or
-                            // deaths can sit in its body, where the variant
-                            // knowledge that justifies the residual dispatch
-                            // no longer accompanies every walk of the
-                            // emitted code. Such containers keep their whole
-                            // release; cross-join takes are future work.
-                            poison = ~@as(u64, 0);
-                            break :flow;
-                        }
                         try join_bodies.put(gpa, @intFromEnum(stmt.id), stmt.body);
                         cursor = stmt.remainder;
                     },

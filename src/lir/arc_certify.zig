@@ -1121,6 +1121,60 @@ const ambiguous_variant: u16 = std.math.maxInt(u16);
 
 const VariantDiscPair = struct { disc: u16, variant: u16 };
 
+/// Variant exclusions for up to a few containers, carried through the
+/// static dominator-context walk. Overflow simply drops the entry, which
+/// only forgoes a skip.
+const StmtExclCtx = struct {
+    const cap = 6;
+    entries: [cap]struct { container: LIR.LocalId, mask: u64 } = undefined,
+    len: usize = 0,
+
+    fn get(self: *const StmtExclCtx, container: LIR.LocalId) u64 {
+        for (self.entries[0..self.len]) |entry| {
+            if (entry.container == container) return entry.mask;
+        }
+        return 0;
+    }
+
+    fn withOred(self: StmtExclCtx, container: LIR.LocalId, mask: u64) StmtExclCtx {
+        if (mask == 0) return self;
+        var out = self;
+        for (out.entries[0..out.len]) |*entry| {
+            if (entry.container == container) {
+                entry.mask |= mask;
+                return out;
+            }
+        }
+        if (out.len < cap) {
+            out.entries[out.len] = .{ .container = container, .mask = mask };
+            out.len += 1;
+        }
+        return out;
+    }
+
+    /// Pointwise intersection: containers missing on either side drop out.
+    fn meet(self: StmtExclCtx, other: StmtExclCtx) StmtExclCtx {
+        var out = StmtExclCtx{};
+        for (self.entries[0..self.len]) |entry| {
+            const other_mask = other.get(entry.container);
+            const met = entry.mask & other_mask;
+            if (met != 0 and out.len < cap) {
+                out.entries[out.len] = .{ .container = entry.container, .mask = met };
+                out.len += 1;
+            }
+        }
+        return out;
+    }
+
+    fn eql(self: *const StmtExclCtx, other: *const StmtExclCtx) bool {
+        if (self.len != other.len) return false;
+        for (self.entries[0..self.len]) |entry| {
+            if (other.get(entry.container) != entry.mask) return false;
+        }
+        return true;
+    }
+};
+
 fn variantPairKey(container: LIR.LocalId, tag_discriminant: u16) u64 {
     return (@as(u64, @intFromEnum(container)) << 16) | tag_discriminant;
 }
@@ -1280,6 +1334,13 @@ const Certifier = struct {
     /// per-arm exclusion math touches one container's few pairs instead of
     /// scanning the proc's whole pair table.
     container_pairs: std.AutoHashMapUnmanaged(LIR.LocalId, std.ArrayList(VariantDiscPair)) = .empty,
+    /// Variant exclusions dominating each join's declaration, computed by a
+    /// static context walk over the proc's statement graph: a join declared
+    /// inside a discriminant switch's arm inherits the arm's exclusions,
+    /// and every entry to its body executes under them. Rebuilt body-entry
+    /// states are reseeded from this, so arm knowledge survives quotients
+    /// without ever entering a join summary.
+    join_base_excl: std.AutoHashMapUnmanaged(u32, StmtExclCtx) = .empty,
     /// Set when the current path proved itself infeasible (a live container
     /// excluded every variant); the segment walk ends vacuously.
     path_infeasible: bool = false,
@@ -1304,6 +1365,7 @@ const Certifier = struct {
         self.value_walk_scratch.deinit(self.allocator);
         self.disc_sources.deinit(self.allocator);
         self.variant_pairs.deinit(self.allocator);
+        self.join_base_excl.deinit(self.allocator);
         self.clearContainerPairs();
         self.container_pairs.deinit(self.allocator);
     }
@@ -3120,6 +3182,7 @@ const Certifier = struct {
     fn collectVariantFacts(self: *Certifier, proc: LIR.LirProcSpec, body: LIR.CFStmtId) CertifyError!void {
         self.disc_sources.clearRetainingCapacity();
         self.variant_pairs.clearRetainingCapacity();
+        self.join_base_excl.clearRetainingCapacity();
         self.clearContainerPairs();
 
         var def_counts = std.AutoHashMapUnmanaged(LIR.LocalId, u8).empty;
@@ -3251,6 +3314,129 @@ const Certifier = struct {
             if (!slot.found_existing) slot.value_ptr.* = .empty;
             try slot.value_ptr.append(self.allocator, .{ .disc = disc, .variant = variant });
         }
+
+        try self.collectJoinBaseExclusions(body);
+    }
+
+    /// Exclusion mask an arm with `case_value` of a switch on `container`'s
+    /// discriminant adds: a witnessed pair for the value pins the variant,
+    /// excluding every other; otherwise each pair with a different
+    /// discriminant excludes its own variant.
+    fn staticArmExclusion(self: *const Certifier, container: LIR.LocalId, all_mask: u64, case_value: u64) u64 {
+        const pairs = self.container_pairs.get(container) orelse return 0;
+        var excluded: u64 = 0;
+        var positive: ?u16 = null;
+        for (pairs.items) |pair| {
+            if (pair.disc == case_value) {
+                positive = pair.variant;
+            } else {
+                excluded |= @as(u64, 1) << @intCast(pair.variant);
+            }
+        }
+        if (positive) |variant| return all_mask & ~(@as(u64, 1) << @intCast(variant));
+        return excluded;
+    }
+
+    /// Fixpoint context walk recording, per join declaration, the variant
+    /// exclusions every enclosing discriminant-switch arm establishes. The
+    /// statement graph is fixed for the whole certification, so the result
+    /// is stable: no walk order or re-queue can weaken it later.
+    fn collectJoinBaseExclusions(self: *Certifier, body: LIR.CFStmtId) CertifyError!void {
+        var contexts = std.AutoHashMapUnmanaged(u32, StmtExclCtx).empty;
+        defer contexts.deinit(self.allocator);
+        var work = std.ArrayList(struct { stmt: LIR.CFStmtId, ctx: StmtExclCtx }).empty;
+        defer work.deinit(self.allocator);
+        try work.append(self.allocator, .{ .stmt = body, .ctx = .{} });
+
+        while (work.pop()) |item| {
+            var cursor = item.stmt;
+            var ctx = item.ctx;
+            walk: while (true) {
+                const seen = try contexts.getOrPut(self.allocator, @intFromEnum(cursor));
+                if (seen.found_existing) {
+                    const met = seen.value_ptr.meet(ctx);
+                    if (met.eql(seen.value_ptr)) break :walk;
+                    seen.value_ptr.* = met;
+                    ctx = met;
+                } else {
+                    seen.value_ptr.* = ctx;
+                }
+                switch (self.store.getCFStmt(cursor)) {
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    .switch_stmt => |stmt| {
+                        const container = self.disc_sources.get(stmt.cond);
+                        var all_mask: u64 = 0;
+                        if (container) |c| {
+                            const layout = self.layouts.getLayout(self.store.getLocal(c).layout_idx);
+                            if (layout.tag == .tag_union) {
+                                const count = self.layouts.getTagUnionInfo(layout).variants.len;
+                                if (count > 0 and count <= 64) {
+                                    all_mask = if (count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(count)) - 1;
+                                }
+                            }
+                        }
+                        const branches = self.store.getCFSwitchBranches(stmt.branches);
+                        for (0..GuardedList.borrowLen(branches)) |i| {
+                            const branch = GuardedList.at(branches, i);
+                            var arm_ctx = ctx;
+                            if (container != null and all_mask != 0) {
+                                const add = self.staticArmExclusion(container.?, all_mask, branch.value) & all_mask;
+                                if (add != all_mask) arm_ctx = ctx.withOred(container.?, add);
+                            }
+                            try work.append(self.allocator, .{ .stmt = branch.body, .ctx = arm_ctx });
+                        }
+                        if (stmt.continuation) |continuation| {
+                            try work.append(self.allocator, .{ .stmt = continuation, .ctx = ctx });
+                        }
+                        var default_ctx = ctx;
+                        if (container != null and all_mask != 0) {
+                            var add: u64 = 0;
+                            if (self.container_pairs.get(container.?)) |pairs| {
+                                for (pairs.items) |pair| {
+                                    var listed = false;
+                                    for (0..GuardedList.borrowLen(branches)) |i| {
+                                        if (GuardedList.at(branches, i).value == pair.disc) {
+                                            listed = true;
+                                            break;
+                                        }
+                                    }
+                                    if (listed) add |= @as(u64, 1) << @intCast(pair.variant);
+                                }
+                            }
+                            if ((add & all_mask) != all_mask) default_ctx = ctx.withOred(container.?, add & all_mask);
+                        }
+                        cursor = stmt.default_branch;
+                        ctx = default_ctx;
+                    },
+                    .switch_initialized_payload => |stmt| {
+                        try work.append(self.allocator, .{ .stmt = stmt.initialized_branch, .ctx = ctx });
+                        cursor = stmt.uninitialized_branch;
+                    },
+                    .str_match => |stmt| {
+                        try work.append(self.allocator, .{ .stmt = stmt.on_match, .ctx = ctx });
+                        cursor = stmt.on_miss;
+                    },
+                    .str_match_set => |stmt| {
+                        const arms = self.store.getStrMatchArms(stmt.arms);
+                        for (0..GuardedList.borrowLen(arms)) |i| {
+                            try work.append(self.allocator, .{ .stmt = GuardedList.at(arms, i).on_match, .ctx = ctx });
+                        }
+                        cursor = stmt.on_miss;
+                    },
+                    .join => |stmt| {
+                        const slot = try self.join_base_excl.getOrPut(self.allocator, @intFromEnum(stmt.id));
+                        if (slot.found_existing) {
+                            slot.value_ptr.* = slot.value_ptr.meet(ctx);
+                        } else {
+                            slot.value_ptr.* = ctx;
+                        }
+                        try work.append(self.allocator, .{ .stmt = stmt.body, .ctx = ctx });
+                        cursor = stmt.remainder;
+                    },
+                    .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => break :walk,
+                }
+            }
+        }
     }
 
     fn noteProcLocal(self: *Certifier, local: LIR.LocalId) Allocator.Error!void {
@@ -3342,6 +3528,23 @@ const Certifier = struct {
         group.queued = false;
         var body_state = try self.stateFromSummary(group.summary);
         errdefer body_state.deinit();
+        // The body executes inside whatever discriminant-switch arms
+        // enclose its declaration; reseed the exclusions they dominate it
+        // with, so the residual dispatch's unmatched arms stay skippable
+        // after a quotient.
+        if (self.join_base_excl.get(@intFromEnum(walk.join))) |base_ctx| {
+            if (base_ctx.len > 0) {
+                for (0..self.proc_locals.items.len) |dense| {
+                    const value = body_state.valueAtDense(dense);
+                    if (value == no_value) continue;
+                    if (body_state.balanceOf(value) < 1) continue;
+                    const origin = self.values.items[value].origin;
+                    const mask = base_ctx.get(origin);
+                    if (mask == 0) continue;
+                    try self.applyBaseExclusion(&body_state, value, mask);
+                }
+            }
+        }
         if (self.path_infeasible) {
             // Rebuilding the entry state proved it impossible (its restored
             // reads exclude every variant of a live container); the body
@@ -3902,6 +4105,22 @@ const Certifier = struct {
             if (listed) excluded |= @as(u64, 1) << @intCast(pair.variant);
         }
         return excluded;
+    }
+
+    /// Seeds a rebuilt join-entry value with its join's dominating
+    /// exclusion mask, flagging the entry infeasible when it excludes every
+    /// variant.
+    fn applyBaseExclusion(self: *Certifier, state: *State, container: ValueId, base_mask: u64) Allocator.Error!void {
+        const origin = self.values.items[container].origin;
+        const origin_layout = self.layouts.getLayout(self.store.getLocal(origin).layout_idx);
+        if (origin_layout.tag != .tag_union) return;
+        const variant_count = self.layouts.getTagUnionInfo(origin_layout).variants.len;
+        if (variant_count == 0 or variant_count > 64) return;
+        const all_mask: u64 = if (variant_count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(variant_count)) - 1;
+        const excluded = (state.variantExcludedOf(container) | base_mask) & all_mask;
+        if (excluded == 0) return;
+        try state.setVariantExcluded(container, excluded);
+        if (excluded == all_mask) self.path_infeasible = true;
     }
 
     /// A `tag_payload_struct` read: a struct payload binds a view whose
