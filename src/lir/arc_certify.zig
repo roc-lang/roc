@@ -943,6 +943,11 @@ const State = struct {
     /// the variant from the container's claims instead, so exclusions never
     /// split or refine join groups.
     variant_excluded: std.AutoHashMapUnmanaged(ValueId, u64),
+    /// Container value a discriminant read named, for each read target. A
+    /// container defined at more than one site needs this to tell a switch
+    /// reading the value it holds now from one reading a value it has since
+    /// been reassigned past. Walk-local for the same reason exclusions are.
+    disc_witness: std.AutoHashMapUnmanaged(LIR.LocalId, ValueId),
 
     fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
         const local_value = try allocator.alloc(ValueId, proc_local_count);
@@ -957,6 +962,7 @@ const State = struct {
             .conditional_condition_mask = .empty,
             .claims = .empty,
             .variant_excluded = .empty,
+            .disc_witness = .empty,
         };
     }
 
@@ -968,6 +974,7 @@ const State = struct {
         self.conditional_condition_mask.deinit(self.allocator);
         self.claims.deinit(self.allocator);
         self.variant_excluded.deinit(self.allocator);
+        self.disc_witness.deinit(self.allocator);
     }
 
     fn clone(self: *const State) Allocator.Error!State {
@@ -983,7 +990,9 @@ const State = struct {
         errdefer conditional_condition_mask.deinit(self.allocator);
         var claims = try self.claims.clone(self.allocator);
         errdefer claims.deinit(self.allocator);
-        const variant_excluded = try self.variant_excluded.clone(self.allocator);
+        var variant_excluded = try self.variant_excluded.clone(self.allocator);
+        errdefer variant_excluded.deinit(self.allocator);
+        const disc_witness = try self.disc_witness.clone(self.allocator);
         return .{
             .allocator = self.allocator,
             .local_dense = self.local_dense,
@@ -994,6 +1003,7 @@ const State = struct {
             .conditional_condition_mask = conditional_condition_mask,
             .claims = claims,
             .variant_excluded = variant_excluded,
+            .disc_witness = disc_witness,
         };
     }
 
@@ -1007,6 +1017,14 @@ const State = struct {
 
     fn setVariantExcluded(self: *State, value: ValueId, mask: u64) Allocator.Error!void {
         try self.variant_excluded.put(self.allocator, value, mask);
+    }
+
+    fn setDiscWitness(self: *State, target: LIR.LocalId, container: ValueId) Allocator.Error!void {
+        try self.disc_witness.put(self.allocator, target, container);
+    }
+
+    fn discWitnessOf(self: *const State, target: LIR.LocalId) ?ValueId {
+        return self.disc_witness.get(target);
     }
 
     fn setClaims(self: *State, value: ValueId, mask: u64) Allocator.Error!void {
@@ -1329,6 +1347,10 @@ const Certifier = struct {
     /// a container local defined exactly once, and the (container,
     /// discriminant) -> variant pairs the proc's payload reads witness.
     disc_sources: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId) = .empty,
+    /// Containers with more than one definition site. A switch on one of
+    /// these partitions its variants only when the walk witnessed that the
+    /// condition read the value the container holds there.
+    multi_def_containers: std.AutoHashMapUnmanaged(LIR.LocalId, void) = .empty,
     variant_pairs: std.AutoHashMapUnmanaged(u64, u16) = .empty,
     /// (discriminant, variant) pairs grouped per container local, so the
     /// per-arm exclusion math touches one container's few pairs instead of
@@ -1364,6 +1386,7 @@ const Certifier = struct {
         self.relevant_scratch.deinit(self.allocator);
         self.value_walk_scratch.deinit(self.allocator);
         self.disc_sources.deinit(self.allocator);
+        self.multi_def_containers.deinit(self.allocator);
         self.variant_pairs.deinit(self.allocator);
         self.join_base_excl.deinit(self.allocator);
         self.clearContainerPairs();
@@ -3181,6 +3204,7 @@ const Certifier = struct {
     /// container at a later switch; everything else is dropped.
     fn collectVariantFacts(self: *Certifier, proc: LIR.LirProcSpec, body: LIR.CFStmtId) CertifyError!void {
         self.disc_sources.clearRetainingCapacity();
+        self.multi_def_containers.clearRetainingCapacity();
         self.variant_pairs.clearRetainingCapacity();
         self.join_base_excl.clearRetainingCapacity();
         self.clearContainerPairs();
@@ -3270,6 +3294,11 @@ const Certifier = struct {
         // chain's root so the pair and the switch condition meet on one
         // name. Every link must be single-definition or the chain proves
         // nothing.
+        // A link the chain steps through must be single-definition, or the
+        // one recorded edge need not be the one this path took. The chain's
+        // end needs no such guard: with no edge to disagree about, every
+        // definition of that name is the same container, and which of them a
+        // path reached is a question about values that the walk answers.
         const Resolver = struct {
             edges: *const std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId),
             counts: *const std.AutoHashMapUnmanaged(LIR.LocalId, u8),
@@ -3278,8 +3307,8 @@ const Certifier = struct {
                 var current = start;
                 var remaining = ctx.edges.count() + 1;
                 while (remaining > 0) : (remaining -= 1) {
-                    if ((ctx.counts.get(current) orelse 0) != 1) return null;
                     const next = ctx.edges.get(current) orelse return current;
+                    if ((ctx.counts.get(current) orelse 0) != 1) return null;
                     current = next;
                 }
                 return null;
@@ -3298,10 +3327,41 @@ const Certifier = struct {
             }
         }
 
+        // A read target reached by more than one definition names a container
+        // only when every one of those definitions is a discriminant read of
+        // the same container.
+        var disc_target_defs = std.AutoHashMapUnmanaged(LIR.LocalId, u8).empty;
+        defer disc_target_defs.deinit(self.allocator);
         for (disc_reads.items) |read| {
-            if ((def_counts.get(read.target) orelse 0) != 1) continue;
-            const root = resolver.root(read.source) orelse continue;
-            try self.disc_sources.put(self.allocator, read.target, root);
+            const slot = try disc_target_defs.getOrPut(self.allocator, read.target);
+            if (slot.found_existing) slot.value_ptr.* +|= 1 else slot.value_ptr.* = 1;
+        }
+        var disc_ambiguous = std.AutoHashMapUnmanaged(LIR.LocalId, void).empty;
+        defer disc_ambiguous.deinit(self.allocator);
+        for (disc_reads.items) |read| {
+            if ((disc_target_defs.get(read.target) orelse 0) != (def_counts.get(read.target) orelse 0)) {
+                try disc_ambiguous.put(self.allocator, read.target, {});
+                continue;
+            }
+            const root = resolver.root(read.source) orelse {
+                try disc_ambiguous.put(self.allocator, read.target, {});
+                continue;
+            };
+            const slot = try self.disc_sources.getOrPut(self.allocator, read.target);
+            if (slot.found_existing) {
+                if (slot.value_ptr.* != root) try disc_ambiguous.put(self.allocator, read.target, {});
+            } else {
+                slot.value_ptr.* = root;
+            }
+        }
+        var ambiguous_it = disc_ambiguous.keyIterator();
+        while (ambiguous_it.next()) |target| _ = self.disc_sources.remove(target.*);
+
+        // A container reached by more than one definition needs the walk to
+        // witness which of them a switch's condition read.
+        var source_it = self.disc_sources.valueIterator();
+        while (source_it.next()) |root| {
+            if ((def_counts.get(root.*) orelse 0) != 1) try self.multi_def_containers.put(self.allocator, root.*, {});
         }
 
         var pair_it = self.variant_pairs.iterator();
@@ -3364,7 +3424,14 @@ const Certifier = struct {
                 switch (self.store.getCFStmt(cursor)) {
                     inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .switch_stmt => |stmt| {
-                        const container = self.disc_sources.get(stmt.cond);
+                        // A container with several definition sites can be
+                        // reassigned between this switch and the join, which
+                        // a walk of the fixed statement graph cannot see.
+                        const container = blk: {
+                            const named = self.disc_sources.get(stmt.cond) orelse break :blk null;
+                            if (self.multi_def_containers.contains(named)) break :blk null;
+                            break :blk named;
+                        };
                         var all_mask: u64 = 0;
                         if (container) |c| {
                             const layout = self.layouts.getLayout(self.store.getLocal(c).layout_idx);
@@ -3595,7 +3662,17 @@ const Certifier = struct {
                                 }
                             }
                         },
-                        .discriminant => |op| _ = try self.requireLive(&state, op.source),
+                        .discriminant => |op| {
+                            _ = try self.requireLive(&state, op.source);
+                            if (self.disc_sources.get(assign.target)) |container_local| {
+                                const raw = @intFromEnum(container_local);
+                                if (self.multi_def_containers.contains(container_local) and
+                                    raw < state.local_dense.len and state.local_dense[raw] != no_dense)
+                                {
+                                    try state.setDiscWitness(assign.target, state.valueOf(container_local));
+                                }
+                            }
+                        },
                         .field => |op| try self.bindPayloadRead(&state, assign.target, op.source, op.field_idx, assign.take_kind),
                         .tag_payload => |op| try self.bindPayloadRead(&state, assign.target, op.source, null, .none),
                         .tag_payload_struct => |op| {
@@ -4045,6 +4122,13 @@ const Certifier = struct {
         if (raw >= state.local_dense.len or state.local_dense[raw] == no_dense) return null;
         const container = state.valueOf(container_local);
         if (container == no_value) return null;
+        // With one definition site the name and the value coincide; with more
+        // than one, only a witness from this walk says the condition read the
+        // value the container holds here.
+        if (self.multi_def_containers.contains(container_local)) {
+            const witness = state.discWitnessOf(cond) orelse return null;
+            if (witness != container) return null;
+        }
         const origin_layout = self.layouts.getLayout(self.store.getLocal(container_local).layout_idx);
         if (origin_layout.tag != .tag_union) return null;
         const variant_count = self.layouts.getTagUnionInfo(origin_layout).variants.len;
