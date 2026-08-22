@@ -50,6 +50,10 @@ const max_subphases: usize = 24;
 const max_counter_groups: usize = 8;
 const max_counters_per_group: usize = 24;
 
+/// Wide enough for at least seven digits, their grouping underscores, and the ms suffix.
+/// This accommodates durations up to tens of minutes (5_999_000ms is just under 100 minutes).
+const min_completed_duration_width: usize = 11;
+
 const spinner_frames = [_][]const u8{
     "\u{280B}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283C}",
     "\u{2834}", "\u{2826}", "\u{2827}", "\u{2807}", "\u{280F}",
@@ -566,6 +570,7 @@ const DurationStyle = enum {
     final,
 };
 
+/// Format duration as human-readable string.
 /// Format a nanosecond duration into `buf`, returning the written slice.
 fn formatDuration(buf: []u8, ns: u64, style: DurationStyle) []const u8 {
     const total_secs = ns / std.time.ns_per_s;
@@ -596,6 +601,51 @@ fn formatDuration(buf: []u8, ns: u64, style: DurationStyle) []const u8 {
             return std.fmt.bufPrint(buf, "{d:.1}s", .{secs_f}) catch buf[0..0];
         },
     }
+}
+
+/// Format duration as consistent [space padding|grouped number|ms]
+/// Format a nanosecond duration into `buf`, returning the written slice.
+fn formatCompletedRowDuration(buf: []u8, ns: u64) []const u8 {
+    var total_ms = ns / std.time.ns_per_ms;
+    if (ns % std.time.ns_per_ms >= std.time.ns_per_ms / 2) total_ms += 1;
+
+    const digit_count = countDigits(total_ms);
+    const number_length = digit_count + (digit_count - 1) / 3;
+    const content_length = number_length + "ms".len;
+    const output_length = @max(min_completed_duration_width, content_length);
+    if (output_length > buf.len) return buf[0..0];
+
+    const padding_length = output_length - content_length;
+    @memset(buf[0..padding_length], ' ');
+
+    const number_end = padding_length + number_length;
+    var cursor = number_end;
+    var remaining = total_ms;
+    var digits_written: usize = 0;
+    while (digits_written < digit_count) {
+        cursor -= 1;
+        buf[cursor] = '0' + @as(u8, @intCast(remaining % 10));
+        remaining /= 10;
+        digits_written += 1;
+        if (digits_written % 3 == 0 and digits_written < digit_count) {
+            cursor -= 1;
+            buf[cursor] = '_';
+        }
+    }
+
+    @memcpy(buf[number_end .. number_end + "ms".len], "ms");
+
+    return buf[0..output_length];
+}
+
+fn countDigits(value: u64) usize {
+    var remaining = value;
+    var result: usize = 1;
+    while (remaining >= 10) {
+        remaining /= 10;
+        result += 1;
+    }
+    return result;
 }
 
 /// Format `, RSS 123MB - 456MB` for a sampled range, or an empty string when
@@ -663,6 +713,19 @@ test "formatDuration final: ms and seconds" {
     try testing.expectEqualStrings("999ms", formatDuration(&buf, 999 * std.time.ns_per_ms, .final));
     try testing.expectEqualStrings("1.2s", formatDuration(&buf, 1200 * std.time.ns_per_ms, .final));
     try testing.expectEqualStrings("1m 5s", formatDuration(&buf, 65 * std.time.ns_per_s, .final));
+}
+
+test "formatCompletedRowDuration pads and groups milliseconds" {
+    var buf: [32]u8 = undefined;
+    try testing.expectEqualStrings("        0ms", formatCompletedRowDuration(&buf, 100_000));
+    try testing.expectEqualStrings("       12ms", formatCompletedRowDuration(&buf, 12 * std.time.ns_per_ms));
+    try testing.expectEqualStrings("      999ms", formatCompletedRowDuration(&buf, 999_499_999));
+    try testing.expectEqualStrings("    1_000ms", formatCompletedRowDuration(&buf, 999_500_000));
+    try testing.expectEqualStrings("    1_200ms", formatCompletedRowDuration(&buf, 1200 * std.time.ns_per_ms));
+    try testing.expectEqualStrings("   65_000ms", formatCompletedRowDuration(&buf, 65 * std.time.ns_per_s));
+    try testing.expectEqualStrings("  100_500ms", formatCompletedRowDuration(&buf, 100 * std.time.ns_per_s + 500 * std.time.ns_per_ms));
+    try testing.expectEqualStrings("6_000_000ms", formatCompletedRowDuration(&buf, 100 * std.time.ns_per_min));
+    try testing.expectEqualStrings("60_000_000ms", formatCompletedRowDuration(&buf, 1000 * std.time.ns_per_min));
 }
 
 test "padName pads short names and leaves long names" {
