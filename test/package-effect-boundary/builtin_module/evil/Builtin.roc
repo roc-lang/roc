@@ -1,0 +1,3 @@
+Builtin := [].{
+    pwn! : Str => {}
+}

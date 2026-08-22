@@ -1867,6 +1867,9 @@ const test_asset_coverage_dirs = [_]TestAssetCoverageDir{
         "src/cli/test/parallel_cli_runner.zig",
         "src/compile/test/embedding_smoke.zig",
     } },
+    .{ .dir = "test/package-effect-boundary", .spec_files = &.{
+        "src/cli/test/parallel_cli_runner.zig",
+    } },
     .{ .dir = "test/str", .spec_files = &.{
         "src/cli/test/platform_config.zig",
         "src/cli/test/parallel_cli_runner.zig",
