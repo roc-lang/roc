@@ -87,12 +87,18 @@ pub fn handler(comptime ServerType: type) type {
                 }
             }
 
+            const roc_ctx_opt = if (@hasField(@TypeOf(self.syntax_checker), "cache_config"))
+                self.syntax_checker.cache_config.roc_ctx
+            else
+                null;
+
             // Extract semantic tokens using CIR with cross-module context
             const tokens = try semantic_tokens.extractSemanticTokensWithImports(
                 self.allocator,
                 doc.text,
                 &info,
                 imported_envs,
+                roc_ctx_opt,
             );
             defer self.allocator.free(tokens);
 

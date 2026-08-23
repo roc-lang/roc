@@ -594,6 +594,67 @@ pub fn findLookupAtOffset(module_env: *ModuleEnv, offset: u32) ?LookupResult {
     return ctx.result;
 }
 
+const FindTagAtOffsetContext = struct {
+    store: *const NodeStore,
+    common: *const base.CommonEnv,
+    target_offset: u32,
+    result_tag_name: ?[]const u8 = null,
+
+    fn visitExprPre(ctx: *FindTagAtOffsetContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
+        const region = ctx.store.getExprRegion(expr_idx);
+        if (!regionContainsOffset(region, ctx.target_offset)) {
+            return .skip_children;
+        }
+        if (expr == .e_tag) {
+            const tag = expr.e_tag;
+            ctx.result_tag_name = ctx.common.idents.getText(tag.name);
+        }
+        return .continue_traversal;
+    }
+
+    fn visitPatternPre(ctx: *FindTagAtOffsetContext, pattern_idx: CIR.Pattern.Idx, pattern: CIR.Pattern) VisitAction {
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+        const region = ctx.store.getRegionAt(node_idx);
+        if (!regionContainsOffset(region, ctx.target_offset)) {
+            return .skip_children;
+        }
+        if (pattern == .applied_tag) {
+            const tag = pattern.applied_tag;
+            ctx.result_tag_name = ctx.common.idents.getText(tag.name);
+        }
+        return .continue_traversal;
+    }
+};
+
+/// Find a tag name in an expression or pattern at the given offset.
+pub fn findTagAtOffset(module_env: *ModuleEnv, offset: u32) ?[]const u8 {
+    var ctx = FindTagAtOffsetContext{
+        .store = &module_env.store,
+        .common = &module_env.common,
+        .target_offset = offset,
+    };
+
+    var visitor = CirVisitor(FindTagAtOffsetContext).init(&ctx, .{
+        .visit_expr_pre = FindTagAtOffsetContext.visitExprPre,
+        .visit_pattern_pre = FindTagAtOffsetContext.visitPatternPre,
+    });
+
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        visitor.walkExpr(&module_env.store, def.expr);
+        if (ctx.result_tag_name != null) return ctx.result_tag_name;
+        visitor.walkPattern(&module_env.store, def.pattern);
+        if (ctx.result_tag_name != null) return ctx.result_tag_name;
+    }
+
+    if (!visitor.stopped) {
+        visitor.walkModule(&module_env.store, module_env.all_statements);
+    }
+
+    return ctx.result_tag_name;
+}
+
 /// Collect all references to a specific pattern (variable binding).
 ///
 /// This finds all e_lookup_local expressions that reference the target pattern,

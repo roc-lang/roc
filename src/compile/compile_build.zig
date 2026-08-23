@@ -2367,6 +2367,20 @@ pub const BuildEnv = struct {
         return false;
     }
 
+    pub fn findModuleByQualifiedName(self: *BuildEnv, qualified_name: []const u8) ?*coordinator_mod.ModuleState {
+        const coord = self.coordinator orelse return null;
+        if (std.mem.find(u8, qualified_name, ".")) |dot_pos| {
+            const pkg_name = qualified_name[0..dot_pos];
+            const mod_name = qualified_name[dot_pos + 1 ..];
+            if (coord.packages.get(pkg_name)) |pkg| {
+                if (pkg.getModuleId(mod_name) orelse pkg.getPublicModuleId(mod_name)) |id| {
+                    return pkg.getModule(id);
+                }
+            }
+        }
+        return self.findModuleByName(qualified_name);
+    }
+
     pub fn findModuleByName(self: *BuildEnv, module_name: []const u8) ?*coordinator_mod.ModuleState {
         const coord = self.coordinator orelse return null;
         var pkg_it = coord.packages.iterator();
@@ -3464,7 +3478,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     const module_env = try allocator.create(ModuleEnv);
     module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.initCIRFields("App");
-    const dep_idx = try module_env.recordFileDependency("data.txt");
+    const dep_idx = try module_env.recordFileDependency("data.txt", 0, 0);
     const dep_hash = [_]u8{3} ** 32;
     module_env.setFileDependencyContentHash(dep_idx, dep_hash);
     coord_mod.semantic = .{ .module_env = module_env, .checked_artifact = null };

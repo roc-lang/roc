@@ -138,15 +138,31 @@ pub const SyntaxChecker = struct {
             if (self.identity) |*identity| {
                 identity.deinit(self.checker.allocator);
             }
+            self.checker.allocator.free(self.absolute_path);
         }
 
         fn getModuleEnv(self: *DocumentBuild) ?*ModuleEnv {
             if (self.reused) {
                 return self.checker.getModuleEnvByPathInEnv(self.env, self.absolute_path);
             }
-            return self.session.?.getModuleEnv();
+            if (self.session) |*s| {
+                return s.getModuleEnv();
+            }
+            return null;
         }
     };
+
+    fn isCompilerOwnedBuiltin(self: *const SyntaxChecker, path: []const u8) bool {
+        const filename = std.fs.path.basename(path);
+        if (!std.mem.eql(u8, filename, "Builtin.roc")) return false;
+        if (self.cache_config.getModuleCacheDir(self.allocator)) |cache_dir| {
+            defer self.allocator.free(cache_dir);
+            const builtin_cache_path = std.fs.path.join(self.allocator, &.{ cache_dir, "Builtin.roc" }) catch return false;
+            defer self.allocator.free(builtin_cache_path);
+            return std.mem.eql(u8, path, builtin_cache_path);
+        } else |_| {}
+        return false;
+    }
 
     pub fn init(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugFlags, log_file: ?std.Io.File) SyntaxChecker {
         var cache_config = CacheConfig{ .roc_ctx = CoreCtx.default(allocator, allocator, std_io) };
@@ -233,7 +249,7 @@ pub const SyntaxChecker = struct {
         }
     }
 
-    fn documentIdentityFromText(self: *SyntaxChecker, uri: []const u8, text: []const u8) Allocator.Error!DocumentIdentity {
+    fn documentIdentityFromText(self: *SyntaxChecker, uri: []const u8, text: []const u8) std.mem.Allocator.Error!DocumentIdentity {
         const path = try uri_util.uriToPath(self.allocator, uri);
         defer self.allocator.free(path);
 
@@ -288,17 +304,37 @@ pub const SyntaxChecker = struct {
         if (identity) |document| {
             if (self.matchingBuildEnvHandle(document.absolute_path, document.content_hash)) |handle| {
                 const env = handle.envPtr();
+                const abs_path = try self.allocator.dupe(u8, document.absolute_path);
                 return .{
                     .checker = self,
                     .identity = identity,
                     .session = null,
                     .env = env,
-                    .absolute_path = document.absolute_path,
+                    .absolute_path = abs_path,
                     .build_succeeded = self.getModuleEnvByPathInEnv(env, document.absolute_path) != null,
                     .has_reports = handle.hasDocumentReports(),
                     .reused = true,
                 };
             }
+        }
+
+        const path = try uri_util.uriToPath(self.allocator, uri);
+        defer self.allocator.free(path);
+
+        if (self.isCompilerOwnedBuiltin(path)) {
+            const env_handle = try self.createFreshBuildEnv();
+            const env = env_handle.envPtr();
+            const abs_path = try self.allocator.dupe(u8, path);
+            return .{
+                .checker = self,
+                .identity = identity,
+                .session = null,
+                .env = env,
+                .absolute_path = abs_path,
+                .build_succeeded = false,
+                .has_reports = false,
+                .reused = false,
+            };
         }
 
         const env_handle = try self.createFreshBuildEnv();
@@ -315,12 +351,13 @@ pub const SyntaxChecker = struct {
             };
         }
 
+        const abs_path = try self.allocator.dupe(u8, session.absolute_path);
         return .{
             .checker = self,
             .identity = identity,
             .session = session,
             .env = env,
-            .absolute_path = session.absolute_path,
+            .absolute_path = abs_path,
             .build_succeeded = session.build_succeeded,
             .has_reports = has_reports,
             .reused = false,
@@ -333,6 +370,13 @@ pub const SyntaxChecker = struct {
         defer self.mutex.unlock(self.std_io);
 
         try self.updateWorkspaceRoot(workspace_root);
+
+        const check_path = try uri_util.uriToPath(self.allocator, uri);
+        defer self.allocator.free(check_path);
+
+        if (self.isCompilerOwnedBuiltin(check_path)) {
+            return try self.allocator.alloc(Diagnostics.PublishDiagnostics, 0);
+        }
 
         // Check if content has changed using hash comparison BEFORE building.
         // This avoids unnecessary rebuilds on focus/blur events.
@@ -983,6 +1027,7 @@ pub const SyntaxChecker = struct {
     pub const DefinitionResult = struct {
         uri: []const u8,
         range: LspRange,
+        origin_selection_range: ?LspRange = null,
 
         pub fn deinit(self: DefinitionResult, allocator: std.mem.Allocator) void {
             allocator.free(self.uri);
@@ -1595,12 +1640,49 @@ pub const SyntaxChecker = struct {
             }
         }
 
+        const file_deps = module_env.file_dependencies.items.items;
+        for (file_deps) |dep| {
+            if (cir_queries.regionContainsOffset(dep.region(), target_offset)) {
+                const path_text = module_env.getString(dep.relative_path);
+                const doc_path = uri_util.uriToPath(self.allocator, current_uri) catch |err| {
+                    oom.* = err;
+                    return null;
+                };
+                defer self.allocator.free(doc_path);
+
+                const doc_dir = std.fs.path.dirname(doc_path) orelse ".";
+                const target_abs_path = std.fs.path.join(self.allocator, &.{ doc_dir, path_text }) catch |err| {
+                    oom.* = err;
+                    return null;
+                };
+                defer self.allocator.free(target_abs_path);
+
+                const target_uri = uri_util.pathToUri(self.allocator, target_abs_path) catch |err| {
+                    oom.* = err;
+                    return null;
+                };
+
+                const origin_range = cir_queries.regionToRange(module_env, dep.region());
+
+                return DefinitionResult{
+                    .uri = target_uri,
+                    .range = .{
+                        .start_line = 0,
+                        .start_col = 0,
+                        .end_line = 0,
+                        .end_col = 0,
+                    },
+                    .origin_selection_range = origin_range,
+                };
+            }
+        }
+
         // Also check statements
         const local_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (local_statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
 
-            // Handle import statements specially - navigate to the imported module
+            // Handle import statements specially - navigate to the imported module or exposed item
             if (stmt == .s_import) {
                 const import_stmt = stmt.s_import;
                 const stmt_region = module_env.store.getStatementRegion(stmt_idx);
@@ -1608,6 +1690,18 @@ pub const SyntaxChecker = struct {
                 if (cir_queries.regionContainsOffset(stmt_region, target_offset)) {
                     // Get the module name from the import
                     const module_name = module_env.common.idents.getText(import_stmt.module_name_tok);
+
+                    // Check if the click is on one of the exposed items
+                    const exposed_slice = module_env.store.sliceExposedItems(import_stmt.exposes);
+                    for (exposed_slice) |exposed_item_idx| {
+                        const exposed_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(exposed_item_idx));
+                        const item_region = module_env.store.getRegionAt(exposed_node_idx);
+                        if (cir_queries.regionContainsOffset(item_region, target_offset)) {
+                            const exposed_item = module_env.store.getExposedItem(exposed_item_idx);
+                            const member_name = module_env.getIdentText(exposed_item.name);
+                            return self.findDefinitionInModule(module_name, member_name, oom);
+                        }
+                    }
 
                     // Try to find the module in the coordinator state.
                     if (self.findModuleByName(module_name, oom)) |result| {
@@ -1686,16 +1780,58 @@ pub const SyntaxChecker = struct {
             }
             if (expr_tag == .e_lookup_external) {
                 const lookup = expr.e_lookup_external;
-                // External lookup - resolve to the module file
-                // Extract module name from source text (handles builtins correctly)
+                const import_idx_int = @intFromEnum(lookup.module_idx);
+                if (import_idx_int >= module_env.imports.imports.len()) return null;
+
+                const string_idx = module_env.imports.imports.items.items[import_idx_int];
+                const module_name = module_env.common.getString(string_idx);
+                const member_name = module_env.getIdentText(lookup.ident_idx);
+
                 const region_text = module_env.getSource(lookup.region);
-                // Module.function format - extract the module name (before the dot)
                 if (std.mem.find(u8, region_text, ".")) |dot_pos| {
-                    const module_name = region_text[0..dot_pos];
-                    self.logDebug(.build, "[DEF] e_lookup_external: extracted module='{s}' from '{s}'", .{ module_name, region_text });
-                    return self.findModuleByName(module_name, oom);
+                    const prefix = region_text[0..dot_pos];
+                    const suffix = region_text[dot_pos + 1 ..];
+                    const dot_offset = lookup.region.start.offset + @as(u32, @intCast(dot_pos));
+                    if (target_offset < dot_offset) {
+                        if (completion_builtins.isBuiltinType(prefix)) {
+                            return self.findBuiltinDefinition(prefix, null, oom);
+                        }
+                        return self.findDefinitionInModule(module_name, null, oom);
+                    } else {
+                        if (completion_builtins.isBuiltinType(prefix)) {
+                            return self.findBuiltinDefinition(prefix, suffix, oom);
+                        }
+                    }
                 }
-                self.logDebug(.build, "[DEF] e_lookup_external: could not extract module name from '{s}'", .{region_text});
+                return self.findDefinitionInModule(module_name, member_name, oom);
+            }
+            if (expr_tag == .e_lookup_associated) {
+                const lookup = expr.e_lookup_associated;
+                const member_name = module_env.getIdentText(lookup.item_ident);
+                const import_idx_int = @intFromEnum(lookup.module_idx);
+                if (import_idx_int < module_env.imports.imports.len()) {
+                    const string_idx = module_env.imports.imports.items.items[import_idx_int];
+                    const module_name = module_env.common.getString(string_idx);
+                    const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                    const expr_region = module_env.store.getRegionAt(expr_node_idx);
+                    const region_text = module_env.getSource(expr_region);
+                    if (std.mem.find(u8, region_text, ".")) |dot_pos| {
+                        const prefix = region_text[0..dot_pos];
+                        const suffix = region_text[dot_pos + 1 ..];
+                        const dot_offset = expr_region.start.offset + @as(u32, @intCast(dot_pos));
+                        if (target_offset < dot_offset) {
+                            if (completion_builtins.isBuiltinType(prefix)) {
+                                return self.findBuiltinDefinition(prefix, null, oom);
+                            }
+                            return self.findDefinitionInModule(module_name, null, oom);
+                        } else {
+                            if (completion_builtins.isBuiltinType(prefix)) {
+                                return self.findBuiltinDefinition(prefix, suffix, oom);
+                            }
+                        }
+                    }
+                    return self.findDefinitionInModule(module_name, member_name, oom);
+                }
                 return null;
             }
             if (expr_tag == .e_dispatch_call) {
@@ -1724,103 +1860,447 @@ pub const SyntaxChecker = struct {
 
                 // Extract the base type name (e.g., "Str" from complex type)
                 const base_type = extractBaseTypeName(type_str);
+                const method_name = module_env.common.idents.getText(method_call.method_name);
 
-                self.logDebug(.build, "[DEF] e_dispatch_call type_str='{s}', base_type='{s}'", .{ type_str, base_type });
+                self.logDebug(.build, "[DEF] e_dispatch_call type_str='{s}', base_type='{s}', method_name='{s}'", .{ type_str, base_type, method_name });
 
-                // Find the module for this type
-                // TODO: Also navigate to the specific method definition within the module
-                const result = self.findModuleByName(base_type, oom);
+                // Find the module for this type and navigate to the specific method definition
+                const result = self.findDefinitionInModule(base_type, method_name, oom);
                 if (result == null) {
-                    self.logDebug(.build, "[DEF] findModuleByName returned null for '{s}'", .{base_type});
+                    self.logDebug(.build, "[DEF] findDefinitionInModule returned null for '{s}.{s}'", .{ base_type, method_name });
                 }
                 return result;
             }
             return null;
         }
 
+        // Check for tag expression or pattern (e.g. `WaitingForInit` in pattern `WaitingForInit =>` or expr `WaitingForInit`)
+        if (cir_queries.findTagAtOffset(module_env, target_offset)) |tag_name| {
+            return self.findTagDefinition(module_env, tag_name, current_uri, oom);
+        }
+
         return null;
     }
 
-    // isBuiltinType moved to completion/builtins.zig module
+    fn findTagInTypeAnno(store: *const can.NodeStore, common: *const base.CommonEnv, type_anno_idx: CIR.TypeAnno.Idx, tag_name: []const u8) ?Region {
+        const type_anno = store.getTypeAnno(type_anno_idx);
+        switch (type_anno) {
+            .tag_union => |tu| {
+                const tags_slice = store.sliceTypeAnnos(tu.tags);
+                for (tags_slice) |tag_idx| {
+                    const tag = store.getTypeAnno(tag_idx);
+                    if (tag == .tag) {
+                        const name = common.idents.getText(tag.tag.name);
+                        if (std.mem.eql(u8, name, tag_name)) {
+                            return store.getTypeAnnoRegion(tag_idx);
+                        }
+                    }
+                }
+                if (tu.ext) |ext_idx| {
+                    if (findTagInTypeAnno(store, common, ext_idx, tag_name)) |r| return r;
+                }
+            },
+            .tag => |t| {
+                const name = common.idents.getText(t.name);
+                if (std.mem.eql(u8, name, tag_name)) {
+                    return store.getTypeAnnoRegion(type_anno_idx);
+                }
+            },
+            .apply,
+            .rigid_var,
+            .rigid_var_lookup,
+            .underscore,
+            .lookup,
+            .tuple,
+            .record,
+            .@"fn",
+            .parens,
+            .malformed,
+            => {},
+        }
+        return null;
+    }
 
-    /// Helper function to find a module by name and return a DefinitionResult pointing to it
-    fn findModuleByName(self: *SyntaxChecker, module_name: []const u8, oom: *?Allocator.Error) ?DefinitionResult {
+    fn findTagInModuleEnv(mod_env: *ModuleEnv, tag_name: []const u8) ?Region {
+        const statements_slice = mod_env.store.sliceStatements(mod_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = mod_env.store.getStatement(stmt_idx);
+            const maybe_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
+                .s_alias_decl => |a| a.anno,
+                .s_nominal_decl => |n| n.anno,
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => null,
+            };
+            if (maybe_anno) |anno_idx| {
+                if (findTagInTypeAnno(&mod_env.store, &mod_env.common, anno_idx, tag_name)) |r| {
+                    return r;
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Helper function to find a tag declaration (e.g., `WaitingForInit` in `LoopState : [WaitingForInit, ...]`)
+    fn findTagDefinition(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        tag_name: []const u8,
+        current_uri: []const u8,
+        oom: *?Allocator.Error,
+    ) ?DefinitionResult {
+        // 1. Search in current module
+        if (findTagInModuleEnv(module_env, tag_name)) |tag_region| {
+            const range = cir_queries.regionToRange(module_env, tag_region) orelse return null;
+            const uri_copy = self.allocator.dupe(u8, current_uri) catch |err| {
+                oom.* = err;
+                return null;
+            };
+            return DefinitionResult{
+                .uri = uri_copy,
+                .range = range,
+            };
+        }
+
+        // 2. Search in imported modules
         const env = self.getModuleLookupEnv() orelse return null;
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            if (stmt == .s_import) {
+                const import_stmt = stmt.s_import;
+                const module_name = module_env.common.idents.getText(import_stmt.module_name_tok);
+                const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
+                    module_name[dot_pos + 1 ..]
+                else
+                    module_name;
 
+                if (env.findModuleByName(base_name)) |mod_state| {
+                    if (mod_state.moduleEnv()) |mod_env| {
+                        if (findTagInModuleEnv(mod_env, tag_name)) |tag_region| {
+                            const range = cir_queries.regionToRange(mod_env, tag_region) orelse continue;
+                            const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
+                                oom.* = err;
+                                return null;
+                            };
+                            return DefinitionResult{
+                                .uri = module_uri,
+                                .range = range,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// Helper function to find a builtin definition/type in Builtin.roc
+    fn findBuiltinDefinition(
+        self: *SyntaxChecker,
+        base_name: []const u8,
+        member_name: ?[]const u8,
+        oom: *?Allocator.Error,
+    ) ?DefinitionResult {
+        // Write embedded builtin source to roc cache
+        const cache_dir = self.cache_config.getModuleCacheDir(self.allocator) catch |err| switch (err) {
+            error.OutOfMemory => {
+                oom.* = error.OutOfMemory;
+                return null;
+            },
+            error.NoHomeDirectory => return null,
+        };
+        const builtin_cache_path = std.fs.path.join(self.allocator, &.{ cache_dir, "Builtin.roc" }) catch |err| {
+            self.allocator.free(cache_dir);
+            oom.* = err;
+            return null;
+        };
+        self.allocator.free(cache_dir);
+
+        // Write file if it doesn't exist
+        if (std.Io.Dir.cwd().access(self.std_io, builtin_cache_path, .{})) |_| {
+            // Already exists
+        } else |_| {
+            // Create parent dirs and write embedded source
+            if (std.fs.path.dirname(builtin_cache_path)) |dir| {
+                std.Io.Dir.cwd().createDirPath(self.std_io, dir) catch {};
+            }
+            const file = std.Io.Dir.cwd().createFile(self.std_io, builtin_cache_path, .{}) catch {
+                self.allocator.free(builtin_cache_path);
+                return null;
+            };
+            defer file.close(self.std_io);
+            file.writeStreamingAll(self.std_io, compiled_builtins.builtin_source) catch {
+                self.allocator.free(builtin_cache_path);
+                return null;
+            };
+        }
+
+        const module_uri = uri_util.pathToUri(self.allocator, builtin_cache_path) catch |err| {
+            self.allocator.free(builtin_cache_path);
+            oom.* = err;
+            return null;
+        };
+        self.allocator.free(builtin_cache_path);
+
+        var builtin_module = can.BuiltinStatic.moduleView(
+            self.allocator,
+            compiled_builtins.builtin_bin[0..],
+            "Builtin",
+            compiled_builtins.builtin_source,
+        ) catch {
+            return DefinitionResult{
+                .uri = module_uri,
+                .range = .{ .start_line = 0, .start_col = 0, .end_line = 0, .end_col = 0 },
+            };
+        };
+        defer builtin_module.deinit();
+
+        const benv = builtin_module.env;
+
+        // Find the type declaration region and end offset (the start of the next builtin type)
+        var type_decl_start_offset: ?u32 = null;
+        var type_decl_end_offset: u32 = std.math.maxInt(u32);
+        var type_decl_range: ?LspRange = null;
+
+        const builtin_indices = compiled_builtins.builtinIndices(CIR);
+        inline for (CIR.builtin_type_specs) |spec| {
+            if (std.mem.eql(u8, spec.display_name, base_name) or std.mem.eql(u8, spec.qualified_name, base_name)) {
+                const stmt_idx = @field(builtin_indices, spec.type_field);
+                const decl_region = benv.store.getStatementRegion(stmt_idx);
+                type_decl_start_offset = decl_region.start.offset;
+                type_decl_range = cir_queries.regionToRange(benv, decl_region);
+            }
+        }
+
+        if (type_decl_start_offset) |start_off| {
+            inline for (CIR.builtin_type_specs) |spec| {
+                if (spec.lookup == .top_level) {
+                    const stmt_idx = @field(builtin_indices, spec.type_field);
+                    const decl_region = benv.store.getStatementRegion(stmt_idx);
+                    if (decl_region.start.offset > start_off and decl_region.start.offset < type_decl_end_offset) {
+                        type_decl_end_offset = decl_region.start.offset;
+                    }
+                }
+            }
+        }
+
+        if (member_name) |member| {
+            const start = type_decl_start_offset orelse 0;
+            const end = @min(type_decl_end_offset, @as(u32, @intCast(compiled_builtins.builtin_source.len)));
+            if (start < end) {
+                const search_slice = compiled_builtins.builtin_source[start..end];
+                var line_it = std.mem.splitScalar(u8, search_slice, '\n');
+                var current_line_offset: usize = 0;
+                while (line_it.next()) |line| {
+                    defer current_line_offset += line.len + 1;
+
+                    var col: usize = 0;
+                    while (col < line.len and (line[col] == '\t' or line[col] == ' ')) : (col += 1) {}
+
+                    if (col < line.len and line[col] == '#') {
+                        continue;
+                    }
+
+                    const remaining = line[col..];
+                    if (std.mem.startsWith(u8, remaining, member)) {
+                        const after = remaining[member.len..];
+                        var after_idx: usize = 0;
+                        while (after_idx < after.len and (after[after_idx] == '\t' or after[after_idx] == ' ')) : (after_idx += 1) {}
+
+                        // A declaration header must be followed by ':' or '=' (e.g. `append :`, `append =`, `append ::`)
+                        if (after_idx < after.len and (after[after_idx] == ':' or after[after_idx] == '=')) {
+                            const abs_offset: u32 = start + @as(u32, @intCast(current_line_offset + col));
+                            const match_region = Region{
+                                .start = .{ .offset = abs_offset },
+                                .end = .{ .offset = abs_offset + @as(u32, @intCast(member.len)) },
+                            };
+                            if (cir_queries.regionToRange(benv, match_region)) |r| {
+                                return DefinitionResult{
+                                    .uri = module_uri,
+                                    .range = r,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (type_decl_range) |r| {
+            return DefinitionResult{
+                .uri = module_uri,
+                .range = r,
+            };
+        }
+
+        return DefinitionResult{
+            .uri = module_uri,
+            .range = .{ .start_line = 0, .start_col = 0, .end_line = 0, .end_col = 0 },
+        };
+    }
+
+    fn findMemberRangeInModuleEnv(mod_env: *ModuleEnv, base_name: []const u8, member: []const u8) ?LspRange {
+        var qualified_buf: [128]u8 = undefined;
+        const qualified = std.fmt.bufPrint(&qualified_buf, "{s}.{s}", .{ base_name, member }) catch null;
+
+        const maybe_def = module_lookup.findDefinitionByName(mod_env, member) orelse
+            (if (qualified) |q| module_lookup.findDefinitionByName(mod_env, q) else null);
+
+        if (maybe_def) |def_info| {
+            const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def_info.pattern_idx));
+            const def_region = mod_env.store.getRegionAt(pattern_node_idx);
+            return cir_queries.regionToRange(mod_env, def_region);
+        }
+
+        const statements_slice = mod_env.store.sliceStatements(mod_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = mod_env.store.getStatement(stmt_idx);
+            const header_idx: ?CIR.TypeHeader.Idx = switch (stmt) {
+                .s_alias_decl => |a| a.header,
+                .s_nominal_decl => |n| n.header,
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => null,
+            };
+            if (header_idx) |h_idx| {
+                const header = mod_env.store.getTypeHeader(h_idx);
+                const header_name = mod_env.getIdentText(header.name);
+                if (std.mem.eql(u8, header_name, member) or (qualified != null and std.mem.eql(u8, header_name, qualified.?))) {
+                    const decl_region = mod_env.store.getStatementRegion(stmt_idx);
+                    return cir_queries.regionToRange(mod_env, decl_region);
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Helper function to find a definition in a module by module name and optional member name
+    fn findDefinitionInModule(
+        self: *SyntaxChecker,
+        module_name: []const u8,
+        member_name: ?[]const u8,
+        oom: *?Allocator.Error,
+    ) ?DefinitionResult {
         // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
         const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
             module_name[dot_pos + 1 ..]
         else
             module_name;
 
+        // Check if member is a builtin type member (e.g., "Str.is_empty" or "List.is_empty")
+        if (member_name) |member| {
+            if (std.mem.find(u8, member, ".")) |dot_pos| {
+                const prefix = member[0..dot_pos];
+                const suffix = member[dot_pos + 1 ..];
+                if (completion_builtins.isBuiltinType(prefix)) {
+                    return self.findBuiltinDefinition(prefix, suffix, oom);
+                }
+            }
+        }
+
         // Check if this is a builtin type - use embedded Builtin.roc source
         if (completion_builtins.isBuiltinType(base_name)) {
             self.logDebug(.build, "[DEF] '{s}' is a builtin type", .{base_name});
-
-            // Write embedded builtin source to roc cache
-            const cache_dir = self.cache_config.getModuleCacheDir(self.allocator) catch |err| switch (err) {
-                error.OutOfMemory => {
-                    oom.* = error.OutOfMemory;
-                    return null;
-                },
-                error.NoHomeDirectory,
-                => return null,
-            };
-            const builtin_cache_path = std.fs.path.join(self.allocator, &.{ cache_dir, "Builtin.roc" }) catch |err| {
-                self.allocator.free(cache_dir);
-                oom.* = err;
-                return null;
-            };
-            self.allocator.free(cache_dir);
-
-            // Write file if it doesn't exist
-            if (std.Io.Dir.cwd().access(self.std_io, builtin_cache_path, .{})) |_| {
-                // Already exists
-            } else |_| {
-                // Create parent dirs and write embedded source
-                if (std.fs.path.dirname(builtin_cache_path)) |dir| {
-                    std.Io.Dir.cwd().createDirPath(self.std_io, dir) catch {};
-                }
-                const file = std.Io.Dir.cwd().createFile(self.std_io, builtin_cache_path, .{}) catch {
-                    self.allocator.free(builtin_cache_path);
-                    return null;
-                };
-                defer file.close(self.std_io);
-                file.writeStreamingAll(self.std_io, compiled_builtins.builtin_source) catch {
-                    self.allocator.free(builtin_cache_path);
-                    return null;
-                };
-            }
-
-            const module_uri = uri_util.pathToUri(self.allocator, builtin_cache_path) catch |err| {
-                self.allocator.free(builtin_cache_path);
-                oom.* = err;
-                return null;
-            };
-            self.allocator.free(builtin_cache_path);
-
-            return DefinitionResult{
-                .uri = module_uri,
-                .range = .{ .start_line = 0, .start_col = 0, .end_line = 0, .end_col = 0 },
-            };
+            return self.findBuiltinDefinition(base_name, member_name, oom);
         }
 
-        if (env.findModuleByName(base_name)) |mod_state| {
+        if (std.mem.eql(u8, base_name, "Builtin")) {
+            if (member_name) |member| {
+                if (std.mem.find(u8, member, ".")) |dot_pos| {
+                    const prefix = member[0..dot_pos];
+                    const suffix = member[dot_pos + 1 ..];
+                    return self.findBuiltinDefinition(prefix, suffix, oom);
+                }
+                if (completion_builtins.isBuiltinType(member)) {
+                    return self.findBuiltinDefinition(member, null, oom);
+                }
+            }
+        }
+
+        const env = self.getModuleLookupEnv() orelse return null;
+        if (env.findModuleByQualifiedName(module_name) orelse env.findModuleByName(base_name)) |mod_state| {
             const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch |err| {
                 oom.* = err;
                 return null;
             };
+
+            var range = LspRange{
+                .start_line = 0,
+                .start_col = 0,
+                .end_line = 0,
+                .end_col = 0,
+            };
+
+            if (member_name) |member| {
+                var found_range: ?LspRange = null;
+                const mod_env_opt = mod_state.moduleEnv() orelse self.getModuleEnvByPath(mod_state.path);
+                if (mod_env_opt) |mod_env| {
+                    found_range = findMemberRangeInModuleEnv(mod_env, base_name, member);
+                }
+                if (found_range == null) {
+                    if (self.getSnapshotEnv()) |snap_env| {
+                        if (snap_env.findModuleByQualifiedName(module_name) orelse snap_env.findModuleByName(base_name)) |snap_mod_state| {
+                            if (snap_mod_state.moduleEnv()) |snap_mod_env| {
+                                found_range = findMemberRangeInModuleEnv(snap_mod_env, base_name, member);
+                            }
+                        }
+                    }
+                }
+                if (found_range) |r| {
+                    range = r;
+                } else {
+                    range = .{ .start_line = 0, .start_col = 0, .end_line = 0, .end_col = 0 };
+                }
+            }
+
             return DefinitionResult{
                 .uri = module_uri,
-                .range = .{
-                    .start_line = 0,
-                    .start_col = 0,
-                    .end_line = 0,
-                    .end_col = 0,
-                },
+                .range = range,
             };
         }
+
         return null;
+    }
+
+    /// Helper function to find a module by name and return a DefinitionResult pointing to it
+    fn findModuleByName(self: *SyntaxChecker, module_name: []const u8, oom: *?Allocator.Error) ?DefinitionResult {
+        return self.findDefinitionInModule(module_name, null, oom);
     }
 
     /// Extract the base type name from a type string (e.g., "Str" from "Str", "List a" -> "List")
@@ -1844,6 +2324,50 @@ pub const SyntaxChecker = struct {
 
     // findLookupAtOffset moved to cir_queries module
 
+    fn resolveTypeBase(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        base_info: CIR.TypeAnno.LocalOrExternal,
+        type_name: []const u8,
+        oom: *?Allocator.Error,
+    ) ?DefinitionResult {
+        switch (base_info) {
+            .local => |local| {
+                // Local type definition - navigate to the statement where it's declared
+                const decl_region = module_env.store.getStatementRegion(local.decl_idx);
+                const range = cir_queries.regionToRange(module_env, decl_region) orelse return null;
+                return DefinitionResult{
+                    .uri = "", // Empty URI means same file - caller should fill in
+                    .range = range,
+                };
+            },
+            .external => |ext| {
+                const import_idx_int = @intFromEnum(ext.module_idx);
+                if (import_idx_int < module_env.imports.imports.len()) {
+                    const string_idx = module_env.imports.imports.items.items[import_idx_int];
+                    const module_name = module_env.common.getString(string_idx);
+                    return self.findDefinitionInModule(module_name, type_name, oom);
+                }
+                return self.findModuleByName(type_name, oom);
+            },
+            .pending => |pend| {
+                const import_idx_int = @intFromEnum(pend.module_idx);
+                if (import_idx_int < module_env.imports.imports.len()) {
+                    const string_idx = module_env.imports.imports.items.items[import_idx_int];
+                    const module_name = module_env.common.getString(string_idx);
+                    return self.findDefinitionInModule(module_name, type_name, oom);
+                }
+                return self.findModuleByName(type_name, oom);
+            },
+            .builtin => {
+                if (completion_builtins.isBuiltinType(type_name)) {
+                    return self.findBuiltinDefinition(type_name, null, oom);
+                }
+                return self.findModuleByName(type_name, oom);
+            },
+        }
+    }
+
     /// Find the type annotation at the given offset and return a DefinitionResult.
     /// This recursively walks type annotation trees to find the most specific type at the cursor.
     fn findTypeAnnoAtOffset(
@@ -1864,25 +2388,7 @@ pub const SyntaxChecker = struct {
                     type_name,
                     @tagName(lookup.base),
                 });
-
-                switch (lookup.base) {
-                    .local => |local| {
-                        // Local type definition - navigate to the statement where it's declared
-                        const decl_region = module_env.store.getStatementRegion(local.decl_idx);
-                        const range = cir_queries.regionToRange(module_env, decl_region) orelse return null;
-                        // For local definitions, we need the current file URI
-                        // Since we don't have it here, we return null and let the caller handle it
-                        // Actually, we can construct a result with a marker that means "same file"
-                        return DefinitionResult{
-                            .uri = "", // Empty URI means same file - caller should fill in
-                            .range = range,
-                        };
-                    },
-                    .builtin, .external, .pending => {
-                        // Builtin, external, or pending type - find the module
-                        return self.findModuleByName(type_name, oom);
-                    },
-                }
+                return self.resolveTypeBase(module_env, lookup.base, type_name, oom);
             },
             .apply => |apply| {
                 // Type with args like `List(Str)` - check args first, then the base type
@@ -1898,22 +2404,7 @@ pub const SyntaxChecker = struct {
                     type_name,
                     @tagName(apply.base),
                 });
-
-                switch (apply.base) {
-                    .local => |local| {
-                        // Local type definition - navigate to the statement where it's declared
-                        const decl_region = module_env.store.getStatementRegion(local.decl_idx);
-                        const range = cir_queries.regionToRange(module_env, decl_region) orelse return null;
-                        return DefinitionResult{
-                            .uri = "", // Empty URI means same file - caller should fill in
-                            .range = range,
-                        };
-                    },
-                    .builtin, .external, .pending => {
-                        // Builtin, external, or pending type - find the module
-                        return self.findModuleByName(type_name, oom);
-                    },
-                }
+                return self.resolveTypeBase(module_env, apply.base, type_name, oom);
             },
             .record => |rec| {
                 // Check record field types

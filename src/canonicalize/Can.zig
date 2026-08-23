@@ -6808,7 +6808,13 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
         return;
     }
 
-    const dependency_idx = try self.env.recordFileDependency(path_text);
+    const path_token_region = self.parse_ir.tokens.resolve(fi.path_tok);
+    const has_leading_quote = path_token_region.start.offset > 0 and self.parse_ir.env.source[path_token_region.start.offset - 1] == '"';
+    const has_trailing_quote = path_token_region.end.offset < self.parse_ir.env.source.len and self.parse_ir.env.source[path_token_region.end.offset] == '"';
+    const start_offset = if (has_leading_quote) path_token_region.start.offset - 1 else path_token_region.start.offset;
+    const end_offset = if (has_trailing_quote) path_token_region.end.offset + 1 else path_token_region.end.offset;
+
+    const dependency_idx = try self.env.recordFileDependency(path_text, start_offset, end_offset);
 
     // File imports require filesystem access, which is not available on wasm32.
     if (comptime builtin.cpu.arch == .wasm32) {

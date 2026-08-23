@@ -153,16 +153,6 @@ pub fn extractSemanticTokens(
     return tokens.toOwnedSlice(allocator);
 }
 
-/// Extracts semantic tokens using the Canonicalized IR for richer semantic information.
-/// Falls back to token-only extraction on canonicalization errors.
-pub fn extractSemanticTokensWithCIR(
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    info: *const LineInfo,
-) Allocator.Error![]SemanticToken {
-    return extractSemanticTokensWithImports(allocator, source, info, null);
-}
-
 /// Extracts semantic tokens with cross-module import context.
 /// When imported_envs is provided, can distinguish Module.function from record.field.
 pub fn extractSemanticTokensWithImports(
@@ -170,6 +160,7 @@ pub fn extractSemanticTokensWithImports(
     source: []const u8,
     info: *const LineInfo,
     imported_envs: ?[]*ModuleEnv,
+    roc_ctx_opt: ?CoreCtx,
 ) Allocator.Error![]SemanticToken {
     // Create ModuleEnv with source
     var module_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
@@ -191,7 +182,7 @@ pub fn extractSemanticTokensWithImports(
     defer builtin_module.deinit();
 
     // Create canonicalizer and run
-    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    const roc_ctx = roc_ctx_opt orelse CoreCtx.testing(allocator, allocator);
     var canonicalizer = can.Can.initModule(roc_ctx, &module_env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module.env,

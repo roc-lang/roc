@@ -119,6 +119,7 @@ pub fn getDeclarationPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
 /// Find a definition by name, searching through all_defs and all_statements.
 /// Returns information about the first matching definition found.
 pub fn findDefinitionByName(module_env: *ModuleEnv, name: []const u8) ?DefinitionInfo {
+    const mod_name = module_env.module_name;
     // Search through all_defs first
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
@@ -126,6 +127,17 @@ pub fn findDefinitionByName(module_env: *ModuleEnv, name: []const u8) ?Definitio
         if (extractIdentFromPattern(&module_env.store, def.pattern)) |ident_idx| {
             const ident_name = module_env.getIdentText(ident_idx);
             if (std.mem.eql(u8, ident_name, name)) {
+                return DefinitionInfo{
+                    .pattern_idx = def.pattern,
+                    .expr_idx = def.expr,
+                    .ident_idx = ident_idx,
+                };
+            }
+            if (mod_name.len > 0 and ident_name.len == mod_name.len + 1 + name.len and
+                std.mem.startsWith(u8, ident_name, mod_name) and
+                ident_name[mod_name.len] == '.' and
+                std.mem.eql(u8, ident_name[mod_name.len + 1 ..], name))
+            {
                 return DefinitionInfo{
                     .pattern_idx = def.pattern,
                     .expr_idx = def.expr,
@@ -151,6 +163,17 @@ pub fn findDefinitionByName(module_env: *ModuleEnv, name: []const u8) ?Definitio
                         .ident_idx = ident_idx,
                     };
                 }
+                if (mod_name.len > 0 and ident_name.len == mod_name.len + 1 + name.len and
+                    std.mem.startsWith(u8, ident_name, mod_name) and
+                    ident_name[mod_name.len] == '.' and
+                    std.mem.eql(u8, ident_name[mod_name.len + 1 ..], name))
+                {
+                    return DefinitionInfo{
+                        .pattern_idx = pattern_idx,
+                        .expr_idx = parts.expr,
+                        .ident_idx = ident_idx,
+                    };
+                }
             }
         }
     }
@@ -158,26 +181,9 @@ pub fn findDefinitionByName(module_env: *ModuleEnv, name: []const u8) ?Definitio
     return null;
 }
 
-/// Find a definition by name, also matching unqualified names against qualified ones.
-/// For example, name "concat" will match a definition named "Str.concat".
-/// This is useful for resolving external lookups where the caller knows only the
-/// unqualified function name.
+/// Find a definition by exact name in the module.
 pub fn findDefinitionByUnqualifiedName(module_env: *ModuleEnv, name: []const u8) ?DefinitionInfo {
-    // Try exact match first
-    if (findDefinitionByName(module_env, name)) |info| return info;
-
-    // Fall back to suffix matching: "name" matches "Module.name"
-    var iter = iterateDefinitions(module_env);
-    while (iter.next()) |def_info| {
-        const def_name = module_env.getIdentText(def_info.ident_idx);
-        if (def_name.len > name.len and
-            std.mem.endsWith(u8, def_name, name) and
-            def_name[def_name.len - name.len - 1] == '.')
-        {
-            return def_info;
-        }
-    }
-    return null;
+    return findDefinitionByName(module_env, name);
 }
 
 /// Find the Def that owns a specific pattern index.
