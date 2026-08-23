@@ -37,6 +37,65 @@ const windows_cross_targets = [_]CrossTarget{
     .{ .name = "arm64mingw", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu } },
 };
 
+/// MinGW C runtime files that a `*mingw` target must find next to `host.lib`.
+///
+/// A MinGW link passes `-lldmingw /nodefaultlib` and then only the inputs the
+/// platform declares (see `src/cli/linker.zig`), so the startup object, the
+/// compiled runtime archives, and the UCRT/Win32 import libraries all have to
+/// live in the platform's `targets/<target>/` directory. `test/fx` holds the
+/// checked-in copy (regenerate with `ci/vendor_mingw_runtime.py`) and the build
+/// copies it into the other test platforms rather than committing duplicates.
+const mingw_runtime_files = [_][]const u8{
+    "crt2.obj",
+    "dllcrt2.obj",
+    "libmingw32.lib",
+    "zigc.lib",
+    "compiler_rt.lib",
+    "api-ms-win-crt-conio-l1-1-0.lib",
+    "api-ms-win-crt-convert-l1-1-0.lib",
+    "api-ms-win-crt-environment-l1-1-0.lib",
+    "api-ms-win-crt-filesystem-l1-1-0.lib",
+    "api-ms-win-crt-heap-l1-1-0.lib",
+    "api-ms-win-crt-locale-l1-1-0.lib",
+    "api-ms-win-crt-math-l1-1-0.lib",
+    "api-ms-win-crt-multibyte-l1-1-0.lib",
+    "api-ms-win-crt-private-l1-1-0.lib",
+    "api-ms-win-crt-process-l1-1-0.lib",
+    "api-ms-win-crt-runtime-l1-1-0.lib",
+    "api-ms-win-crt-stdio-l1-1-0.lib",
+    "api-ms-win-crt-string-l1-1-0.lib",
+    "api-ms-win-crt-time-l1-1-0.lib",
+    "api-ms-win-crt-utility-l1-1-0.lib",
+    "advapi32.lib",
+    "kernel32.lib",
+    "ntdll.lib",
+    "shell32.lib",
+    "user32.lib",
+    // The http-headers host calls into Winsock; `/nodefaultlib` drops the
+    // `.drectve /defaultlib:ws2_32` its object carries, so platforms that need
+    // sockets list this explicitly.
+    "ws2_32.lib",
+};
+
+/// Copies fx's checked-in MinGW C runtime into another test platform's
+/// `platform/targets/<target_name>/` directory, so a `*mingw` link finds every
+/// input the platform declares without committing more copies of the same
+/// binaries. Returns the step so callers can order it after the host build.
+fn copyMingwRuntimeToTestPlatform(
+    b: *std.Build,
+    platform_dir: []const u8,
+    target_name: []const u8,
+) *Step {
+    const copy = b.addUpdateSourceFiles();
+    for (mingw_runtime_files) |runtime_filename| {
+        copy.addCopyFileToSource(
+            b.path(b.pathJoin(&.{ "test/fx/platform/targets", target_name, runtime_filename })),
+            b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, runtime_filename }),
+        );
+    }
+    return &copy.step;
+}
+
 /// BSD cross-compile targets
 const bsd_cross_targets = [_]CrossTarget{
     .{ .name = "x64freebsd", .query = .{ .cpu_arch = .x86_64, .os_tag = .freebsd, .abi = .none } },
@@ -2705,6 +2764,13 @@ fn setupTestPlatforms(
                 omit_frame_pointer,
             );
             clear_cache_step.dependOn(copy_step);
+
+            // MinGW targets link only what the platform declares, so each one
+            // needs fx's checked-in C runtime alongside its host library.
+            // test/fx is the source of those files, so it needs no copy.
+            if (std.mem.endsWith(u8, cross_target.name, "mingw") and !std.mem.eql(u8, platform_dir, "fx")) {
+                clear_cache_step.dependOn(copyMingwRuntimeToTestPlatform(b, platform_dir, cross_target.name));
+            }
         }
     }
 
@@ -6217,12 +6283,10 @@ pub fn build(b: *std.Build) void {
                 .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" }
             else
                 .{ target, native_fx_target_dir },
-            .windows => if (fx_arch == .x86_64)
-                .{ target, "x64win" }
-            else if (fx_arch == .aarch64)
-                .{ target, "arm64win" }
-            else
-                .{ target, native_fx_target_dir },
+            // Windows: build for the native ABI. A gnu-ABI `zig build` lands in
+            // x64mingw/arm64mingw and an MSVC one in x64win/arm64win, matching
+            // what `roc build` picks as its default target.
+            .windows => .{ target, native_fx_target_dir },
             .macos, .freebsd, .openbsd, .netbsd, .other => .{ target, native_fx_target_dir },
         };
 
@@ -6300,6 +6364,10 @@ pub fn build(b: *std.Build) void {
             );
             copy_musl_runtime.step.dependOn(final_static_data_host_step);
             break :blk &copy_musl_runtime.step;
+        } else if (std.mem.endsWith(u8, static_data_host_target_dir, "mingw")) blk: {
+            const copy_mingw_runtime = copyMingwRuntimeToTestPlatform(b, "static-data-host", static_data_host_target_dir);
+            copy_mingw_runtime.dependOn(final_static_data_host_step);
+            break :blk copy_mingw_runtime;
         } else final_static_data_host_step;
         b.getInstallStep().dependOn(final_static_data_platform_step);
 
@@ -6327,6 +6395,10 @@ pub fn build(b: *std.Build) void {
             );
             copy_musl_runtime.step.dependOn(final_provided_callable_host_step);
             break :blk &copy_musl_runtime.step;
+        } else if (std.mem.endsWith(u8, static_data_host_target_dir, "mingw")) blk: {
+            const copy_mingw_runtime = copyMingwRuntimeToTestPlatform(b, "provided-callable-host", static_data_host_target_dir);
+            copy_mingw_runtime.dependOn(final_provided_callable_host_step);
+            break :blk copy_mingw_runtime;
         } else final_provided_callable_host_step;
         b.getInstallStep().dependOn(final_provided_callable_platform_step);
 
@@ -6365,7 +6437,9 @@ pub fn build(b: *std.Build) void {
                 .{ b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }), "arm64musl" }
             else
                 .{ target, null },
-            .windows => if (http_arch == .x86_64) .{ target, "x64win" } else if (http_arch == .aarch64) .{ target, "arm64win" } else .{ target, null },
+            // Windows: build for the native ABI so a gnu-ABI `zig build` lands
+            // in x64mingw/arm64mingw, matching `roc build`'s default target.
+            .windows => .{ target, roc_target.RocTarget.fromStdTarget(target.result).toName() },
             .macos => if (http_arch == .x86_64) .{ target, "x64mac" } else if (http_arch == .aarch64) .{ target, "arm64mac" } else .{ target, null },
             .freebsd, .openbsd, .netbsd, .other => .{ target, null },
         };
@@ -6382,6 +6456,12 @@ pub fn build(b: *std.Build) void {
                 omit_frame_pointer,
             );
             b.getInstallStep().dependOn(final_http_host_step);
+
+            // A MinGW link uses only what the platform declares, so the C
+            // runtime has to sit next to the host library.
+            if (std.mem.endsWith(u8, target_dir, "mingw")) {
+                final_http_host_step.dependOn(copyMingwRuntimeToTestPlatform(b, "http-headers", target_dir));
+            }
 
             const http_app_exe_name = if (http_host_target.result.os.tag == .windows)
                 "http_header_decoder_server_prebuilt.exe"
@@ -6442,6 +6522,12 @@ pub fn build(b: *std.Build) void {
                 omit_frame_pointer,
             );
             b.getInstallStep().dependOn(final_json_host_step);
+
+            // A MinGW link uses only what the platform declares, so the C
+            // runtime has to sit next to the host library.
+            if (std.mem.endsWith(u8, target_dir, "mingw")) {
+                final_json_host_step.dependOn(copyMingwRuntimeToTestPlatform(b, "json-decoder", target_dir));
+            }
 
             const json_exe_ext = if (http_host_target.result.os.tag == .windows) ".exe" else "";
             const json_app_exe_name = b.fmt("json_decoder_prebuilt{s}", .{json_exe_ext});
