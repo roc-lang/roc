@@ -8064,11 +8064,13 @@ const Cloner = struct {
 
     /// Collapse a match whose scrutinee is a known constructor to the selected
     /// branch's body. `decline_on_no_match` distinguishes the two callers: the
-    /// direct known-match collapse proves exhaustiveness (a known constructor
-    /// always selects a branch), so a miss is an invariant; case-of-case
-    /// distribution instead *offers* a value that a branch may not structurally
-    /// cover (an opaque tag payload the selection cannot verify), so it declines
-    /// and leaves the match materialized.
+    /// direct known-match collapse proves exhaustiveness for a non-empty branch
+    /// set, so a miss there is an invariant; case-of-case distribution instead
+    /// *offers* a value that a branch may not structurally cover (an opaque tag
+    /// payload the selection cannot verify), so it declines and leaves the
+    /// match materialized. An empty branch set is absurd elimination. A symbolic
+    /// structural value does not prove reachability because an eager child may
+    /// itself be an impossible expression, so that match must also remain.
     fn selectKnownMatchValue(
         self: *Cloner,
         scrutinee: Value,
@@ -8077,6 +8079,7 @@ const Cloner = struct {
         bindings: *BindingChain,
     ) Common.LowerError!?Value {
         if (scrutinee == .expr) return null;
+        if (branches_span.len == 0) return null;
         // Read each branch by stable index rather than holding a `branchSpan`
         // borrow: `cloneExprValue(branch.body)` below can append to `branches`
         // through a nested match, which would invalidate a live borrow.
@@ -13571,6 +13574,34 @@ test "known match fold aborts on undecidable branches and trips the invariant wh
             (std.posix.W.IFEXITED(raw_status) and std.posix.W.EXITSTATUS(raw_status) != 0);
         try std.testing.expect(failed);
     }
+}
+
+test "known match fold preserves absurd elimination of a structural product" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const empty_union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const field_name = try program.names.internRecordFieldLabel("impossible");
+    const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
+        .{ .name = field_name, .ty = empty_union_ty, .default = null },
+    }) });
+    const impossible_local = try program.addLocal(@enumFromInt(1), empty_union_ty);
+    const impossible_expr = try program.addExpr(.{ .ty = empty_union_ty, .data = .{ .local = impossible_local } });
+    const record_value = Value{ .record = .{
+        .ty = record_ty,
+        .fields = &.{.{ .name = field_name, .value = .{ .expr = impossible_expr } }},
+    } };
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    var bindings: BindingChain = .{};
+    try std.testing.expectEqual(
+        @as(?Value, null),
+        try cloner.simplifyKnownMatchValue(record_value, Ast.Span(Ast.Branch).empty(), &bindings),
+    );
 }
 
 test "call-pattern specialization declarations are referenced" {
