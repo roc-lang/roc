@@ -452,6 +452,13 @@ pub const Store = struct {
         }
     }
 
+    /// Assert that no speculative solver transaction is open. Mismatch
+    /// poisoning is permanent error recovery and must never run speculatively;
+    /// callers that unify under a savepoint use the non-poisoning relation API.
+    pub fn assertNoSavepointActive(self: *const Self) void {
+        std.debug.assert(!self.savepoint_active);
+    }
+
     /// Undo everything done since `savepoint` was created.
     pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
         // Replay journaled in-place writes in reverse so each pre-existing entry

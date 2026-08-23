@@ -14,6 +14,7 @@ const BuildEnv = compile.BuildEnv;
 pub const BuildEnvHandle = struct {
     allocator: Allocator,
     env: BuildEnv,
+    cwd: [:0]const u8,
     ref_count: usize = 0,
     debug: bool = false,
     owners: std.StringHashMapUnmanaged(usize) = .{},
@@ -22,11 +23,12 @@ pub const BuildEnvHandle = struct {
     document_has_reports: bool = true,
 
     /// Create a new handle with a single owner.
-    pub fn create(allocator: Allocator, env: BuildEnv, owner: []const u8, debug: bool) Allocator.Error!*BuildEnvHandle {
+    pub fn create(allocator: Allocator, env: BuildEnv, cwd: [:0]const u8, owner: []const u8, debug: bool) Allocator.Error!*BuildEnvHandle {
         const handle = try allocator.create(BuildEnvHandle);
         handle.* = .{
             .allocator = allocator,
             .env = env,
+            .cwd = cwd,
             .ref_count = 1,
             .debug = debug,
         };
@@ -92,6 +94,7 @@ pub const BuildEnvHandle = struct {
             }
             self.owners.deinit(self.allocator);
             self.env.deinit();
+            self.allocator.free(self.cwd);
             self.allocator.destroy(self);
         }
     }

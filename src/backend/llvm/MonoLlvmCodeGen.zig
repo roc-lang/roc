@@ -3362,7 +3362,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn boxyOutDescPtr(self: *MonoLlvmCodeGen, name: []const u8) Error!LlvmBuilder.Value {
-        return self.allocEntryBlockSlot(try self.ptrType(), 1, self.targetPointerAlignment(), name);
+        return try self.allocEntryBlockSlot(try self.ptrType(), 1, self.targetPointerAlignment(), name);
     }
 
     fn emitBoxyBox(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
@@ -3845,7 +3845,7 @@ pub const MonoLlvmCodeGen = struct {
         const data_ptr = if (reuse) |reuse_local| blk: {
             const capture_src = try self.allocEntryBlockSlot(
                 .i8,
-                @intCast(total_capture_size),
+                total_capture_size,
                 LlvmBuilder.Alignment.fromByteUnits(builtins.erased_callable.capture_alignment),
                 "erased_repack_capture",
             );
@@ -4388,7 +4388,10 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_str => try self.emitDecToStr(target, GuardedList.at(arg_locals, 0)),
             .num_to_str => try self.emitNumToStr(target, GuardedList.at(arg_locals, 0)),
             .box_box => try self.emitBoxBox(target, GuardedList.at(arg_locals, 0)),
-            .box_unbox => try self.emitBoxUnbox(target, GuardedList.at(arg_locals, 0)),
+            // Consuming Box.unbox is normalized by ARC into the borrowed load
+            // followed by explicit payload incref and box decref statements.
+            .box_unbox => unreachable,
+            .box_unbox_borrowed => try self.emitBoxUnbox(target, GuardedList.at(arg_locals, 0)),
             .box_prepare_update => try self.emitBoxPrepareUpdate(target, GuardedList.at(arg_locals, 0), unique_args),
             .erased_capture_load => try self.emitErasedCaptureLoad(target, GuardedList.at(arg_locals, 0)),
             .ptr_alloca => try self.emitPtrAlloca(target),
@@ -9319,7 +9322,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         const null_ptr = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
-        const enabled = abi.contains_refcounted and abi.elem_layout_idx != null;
+        const enabled = abi.contains_refcounted;
 
         try call_args.append(
             self.allocator,
@@ -12659,9 +12662,16 @@ pub const MonoLlvmCodeGen = struct {
                 const tag = wip.instructions.get(@intFromEnum(instruction)).tag;
                 if (builtin.mode == .Debug and block_idx != 0) {
                     if (tag == .alloca or tag == .@"alloca inalloca") {
+                        const builder = self.builder orelse return error.CompilationFailed;
+                        const instruction_index = @intFromEnum(instruction);
+                        const instruction_name = if (wip.strip)
+                            "<stripped>"
+                        else
+                            (wip.names.items[instruction_index].slice(builder) orelse "<anonymous>");
+                        const function_name = wip.function.name(builder).slice(builder) orelse "<anonymous>";
                         std.debug.panic(
-                            "LLVM/codegen invariant violated: fixed-lifetime alloca emitted outside the procedure entry block",
-                            .{},
+                            "LLVM/codegen invariant violated: fixed-lifetime alloca '{s}' emitted in block {d} outside procedure '{s}' entry block",
+                            .{ instruction_name, block_idx, function_name },
                         );
                     }
                 }

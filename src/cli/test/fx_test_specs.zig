@@ -265,6 +265,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Record inspection",
     },
     .{
+        .roc_file = "test/fx/inspect_dict_set.roc",
+        .io_spec = "1>Set.from_list([1, 2, 3])|1>Dict.from_list([(\"a\", 3), (\"b\", 2)])|1>Set.from_list([])|1>Dict.from_list([])|1>{ labels: Set.from_list([\"red\", \"blue\"]), scores: Dict.from_list([(\"alice\", 10), (\"bob\", 20)]) }",
+        .description = "Dict and Set inspection uses from_list syntax for direct, empty, polymorphic, and nested values",
+    },
+    .{
         .roc_file = "test/fx/inspect_field_only_repro.roc",
         .io_spec = "1>test",
         .description = "Repro: inspect projected string field",

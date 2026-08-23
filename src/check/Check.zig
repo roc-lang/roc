@@ -4703,17 +4703,22 @@ fn fieldPresenceRelationForContext(
     return if (row_width_relation == .exact) .committed_value else .ordinary;
 }
 
-/// Unify two types with a context for error reporting.
-fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+fn unifyOptionsForContext(ctx: problem.Context, on_mismatch: unifier.MismatchBehavior) unifier.Options {
     const row_width_relation: unifier.RowWidthRelation = if (std.meta.activeTag(ctx) == .platform_requirement)
         .exact
     else
         .construction;
-    return self.runUnify(a, b, env, .{
+    return .{
         .context = ctx,
+        .on_mismatch = on_mismatch,
         .row_width_relation = row_width_relation,
         .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
-    });
+    };
+}
+
+/// Unify two types with a context for error reporting.
+fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.runUnify(a, b, env, unifyOptionsForContext(ctx, .poison_to_err));
 }
 
 fn exprIsFreshRecordConstruction(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
@@ -11960,7 +11965,14 @@ fn collectAnnotationTypeAnnos(
                     }
                     try pending.append(allocator, method.ret);
                 },
-                .w_alias, .w_malformed => {},
+                // A where alias reference's arguments are generated in place
+                // (`generateWhereAliasReferenceArgs`), so its node tree must be
+                // reset like any other. This matters when an argument's rigid
+                // var occurs nowhere else in the annotation: its node is the
+                // primary occurrence, and a stale rigid left behind here fails
+                // to re-unify on the body pass.
+                .w_alias => |alias| try pending.append(allocator, alias.alias),
+                .w_malformed => {},
             }
         }
     }
@@ -16259,7 +16271,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     var commit_probe = try self.beginCommitProbe(env);
                     var committed = false;
                     defer if (!committed) commit_probe.rollback();
-                    const result = try self.unify(expected_copy, seed_list_var, env);
+                    const result = try commit_probe.unify(expected_copy, seed_list_var);
                     if (!result.isEstablished()) break :seed null;
                     committed = true;
                     commit_probe.commit();
@@ -22372,13 +22384,12 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
 /// throwaway problem/snapshot stores precisely because they never survive), a
 /// commit-probe runs its unifications through the REAL `runUnify` wrapper—full
 /// bookkeeping: fresh vars ranked into the caller env's var pool, regions
-/// stamped, and deferred dispatch constraints copied out. A caller that owns its
-/// mismatch diagnostic uses `.write_no_report`, because occurrence-directed
-/// mismatch poisoning cannot run under a type-store savepoint. On failure the
+/// stamped, and deferred dispatch constraints copied out. Its unification
+/// methods hardcode `.write_no_report`: a failed speculative relation is rolled
+/// back before its caller reports or poisons anything. The ordinary poisoning
+/// wrappers assert if called while this savepoint is active. On failure the
 /// probe must rewind everything that bookkeeping grew:
-///   - problems / snapshots recorded by failed in-probe unifications (the
-///     store savepoint already un-poisons the `.err`-merged vars themselves;
-///     this drops the reports, restoring the throwaway-store behavior);
+///   - problems / snapshots recorded by any other in-probe operation;
 ///   - the caller env's var-pool rank lists (entries for vars the savepoint
 ///     rollback just discarded would dangle into the generalizer);
 ///   - the caller env's deferred dispatch constraints (their receivers and
@@ -22391,6 +22402,14 @@ const CommitProbe = struct {
     extra_strings_len: usize,
     missing_patterns_len: usize,
     snapshots_mark: SnapshotStore.Mark,
+
+    fn unify(self: *CommitProbe, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result {
+        return self.check.runUnify(a, b, self.env, .{ .on_mismatch = .write_no_report });
+    }
+
+    fn unifyInContext(self: *CommitProbe, a: Var, b: Var, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+        return self.check.runUnify(a, b, self.env, unifyOptionsForContext(ctx, .write_no_report));
+    }
 
     fn rollback(self: *CommitProbe) void {
         std.debug.assert(self.check.commit_probe_active);
@@ -23582,7 +23601,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
                 .quote, .interpolation => try self.freshStr(env, self.getRegionAt(driver)),
             };
             try self.literal_defaulting_candidate_vars.append(self.gpa, candidate_var);
-            const unify_result = try self.unify(driver, candidate_var, env);
+            const unify_result = try commit_probe.unify(driver, candidate_var);
             if (!unify_result.isEstablished()) continue :candidate;
         }
 
@@ -24830,7 +24849,7 @@ fn quoteDefaultSatisfiesConstraints(
     defer commit_probe.rollback();
 
     const candidate_var = try self.freshStr(env, self.getRegionAt(literal_var));
-    const unify_result = try self.unify(literal_var, candidate_var, env);
+    const unify_result = try commit_probe.unify(literal_var, candidate_var);
     if (!unify_result.isEstablished()) return false;
     return try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env);
 }
@@ -25061,7 +25080,7 @@ fn tryCommitNumeralCandidate(
         env,
         self.getRegionAt(literal_var),
     );
-    const unify_result = try self.unify(literal_var, candidate_var, env);
+    const unify_result = try commit_probe.unify(literal_var, candidate_var);
     if (!unify_result.isEstablished()) return null;
 
     if (!try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env)) return null;
@@ -25100,12 +25119,11 @@ fn literalInfoAcceptsBuiltinNumKind(lit: StaticDispatchConstraint.LiteralInfo, n
 /// way or the other.
 fn staticDispatchConstraintAcceptsCandidate(
     self: *Self,
-    _: *CommitProbe,
+    probe: *CommitProbe,
     constraint: StaticDispatchConstraint,
     candidate_var: Var,
     env: *Env,
 ) Allocator.Error!bool {
-    // Scope-proof token only; not otherwise consulted.
     const candidate_resolved = self.types.resolveVar(candidate_var);
     const nominal_type = candidate_resolved.desc.content.unwrapNominalType() orelse return false;
     const owner_env, _ = self.ownerEnvForOriginModule(
@@ -25134,7 +25152,7 @@ fn staticDispatchConstraintAcceptsCandidate(
     // path this merge (and its rank/region/deferred-constraint bookkeeping) is
     // kept. The probe owns failure, so a mismatch must not run occurrence-directed
     // poisoning while the store savepoint is active.
-    const result = try self.runUnify(method_var, constraint.fn_var, env, .{ .on_mismatch = .write_no_report });
+    const result = try probe.unify(method_var, constraint.fn_var);
     return result.isEstablished();
 }
 
@@ -26864,7 +26882,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         },
                     };
                     const fn_result = fn_result: {
-                        if (self.probe_depth != 0 or !self.varIsConflictedDefaultLiteral(deferred_constraint.var_)) {
+                        if (self.probe_depth != 0) {
+                            break :fn_result try self.runUnify(
+                                method_var,
+                                constraint.fn_var,
+                                env,
+                                unifyOptionsForContext(fn_ctx, .write_no_report),
+                            );
+                        }
+                        if (!self.varIsConflictedDefaultLiteral(deferred_constraint.var_)) {
                             break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
                         }
                         // This receiver's type is the documented head default,
@@ -26879,10 +26905,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // never runs under an active savepoint; the problem
                         // and snapshots it records live outside the type store
                         // and survive the rollback. Success commits—a default
-                        // target that satisfies a constraint is real. (Inside
-                        // an enclosing probe the ordinary path is fine: the
-                        // outer speculation never commits a nested dispatch
-                        // failure.)
+                        // target that satisfies a constraint is real. An
+                        // enclosing probe takes the explicit non-poisoning path
+                        // above instead of nesting another savepoint.
                         self.probe_var_pool_lens.clearRetainingCapacity();
                         const rank_count = @intFromEnum(env.rank()) + 1;
                         try self.probe_var_pool_lens.ensureTotalCapacity(self.gpa, rank_count);
@@ -27537,7 +27562,7 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
 
         // Keep successful writes for the commit path, but leave mismatch
         // reporting and recovery to this function after the probe rolls back.
-        const result = try self.runUnify(expected_str_var, part.var_, env, .{ .on_mismatch = .write_no_report });
+        const result = try probe.unify(expected_str_var, part.var_);
         if (!result.isEstablished()) break :blk false;
         if (!try self.interpolationPartConstraintsAcceptBuiltinStr(&probe, constraints_range, expected_str_var, env)) {
             break :blk false;
@@ -33488,7 +33513,7 @@ fn checkFlexVarConstraintCompatibility(
             // The mismatch is reported below, after the rollback, against the
             // pristine relation—occurrence-directed poisoning must not run
             // under the savepoint.
-            const result = try self.runUnify(method_var, constraint.fn_var, env, .{ .on_mismatch = .write_no_report });
+            const result = try commit_probe.unify(method_var, constraint.fn_var);
             if (!result.isEstablished()) break :accepted false;
 
             committed = true;
@@ -33655,7 +33680,7 @@ fn checkBranchBodyAgainstExpected(
         var committed = false;
         defer if (!committed) commit_probe.rollback();
 
-        const result = try self.unifyInContext(body_var, acc, env, ctx);
+        const result = try commit_probe.unifyInContext(body_var, acc, ctx);
         if (result.isEstablished()) {
             committed = true;
             commit_probe.commit();
