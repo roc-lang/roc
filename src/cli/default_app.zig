@@ -349,7 +349,16 @@ test "stage: a relative package path is rewritten for the staging directory" {
     var staged = (try stage(testing.allocator, "/home/user/proj", source, .not_default_app)).?;
     defer staged.deinit(testing.allocator);
 
-    try testing.expect(std.mem.find(u8, staged.synthetic_source, "helper: \"/home/user/proj/helper/main.roc\"") != null);
+    const expected_path = try std.fs.path.resolve(testing.allocator, &.{ "/home/user/proj", "helper/main.roc" });
+    defer testing.allocator.free(expected_path);
+
+    var expected_literal = std.ArrayList(u8).empty;
+    defer expected_literal.deinit(testing.allocator);
+    try expected_literal.appendSlice(testing.allocator, "helper: \"");
+    try appendRocStringBody(testing.allocator, &expected_literal, expected_path);
+    try expected_literal.append(testing.allocator, '"');
+
+    try testing.expect(std.mem.find(u8, staged.synthetic_source, expected_literal.items) != null);
 }
 
 test "stage: the platform alias avoids a package that already uses it" {
