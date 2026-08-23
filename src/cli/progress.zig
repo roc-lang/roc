@@ -52,7 +52,7 @@ const max_counters_per_group: usize = 24;
 
 /// Wide enough for at least seven digits, their grouping underscores, and the ms suffix.
 /// This accommodates durations up to tens of minutes (5_999_000ms is just under 100 minutes).
-const min_completed_duration_width: usize = 11;
+const min_completed_duration_width: usize = "5_999_000ms".len;
 
 const spinner_frames = [_][]const u8{
     "\u{280B}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283C}",
@@ -488,12 +488,12 @@ pub const Reporter = struct {
             if (show_parent) {
                 var parent_buf: [32]u8 = undefined;
                 const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
-                const parent_dur = formatDuration(&parent_buf, total, .final);
+                const parent_dur = formatCompletedRowDuration(&parent_buf, total);
                 self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(p.name), parent_dur, mem }) catch {};
             }
             for (p.sub[0..p.sub_len], 0..) |s, sub_index| {
                 var buf: [32]u8 = undefined;
-                const dur = formatDuration(&buf, s.ns, .final);
+                const dur = formatCompletedRowDuration(&buf, s.ns);
                 var sub_mem_buf: [48]u8 = undefined;
                 const sub_range = p.sub_mem[sub_index];
                 const sub_mem = formatMemRange(&sub_mem_buf, sub_range.min, sub_range.max);
@@ -507,7 +507,7 @@ pub const Reporter = struct {
         }
         const total = (p.end_ns orelse self.elapsedNs()) - p.start_ns;
         var buf: [32]u8 = undefined;
-        const dur = formatDuration(&buf, total, .final);
+        const dur = formatCompletedRowDuration(&buf, total);
         self.writer.print("  {s} {f} {s}{s}\n", .{ check, padName(p.name), dur, mem }) catch {};
     }
 
@@ -566,11 +566,11 @@ pub fn writeDuration(writer: *std.Io.Writer, ns: u64) std.Io.Writer.Error!void {
 const DurationStyle = enum {
     /// Whole-second granularity, for the live ticking counter.
     live,
-    /// Sub-second precision, for finished phases.
+    /// Human-friendly formatting with sub-second precision, for finished phases.
     final,
 };
 
-/// Format duration as human-readable string.
+/// Format a duration in human-readable units.
 /// Format a nanosecond duration into `buf`, returning the written slice.
 fn formatDuration(buf: []u8, ns: u64, style: DurationStyle) []const u8 {
     const total_secs = ns / std.time.ns_per_s;
@@ -603,7 +603,7 @@ fn formatDuration(buf: []u8, ns: u64, style: DurationStyle) []const u8 {
     }
 }
 
-/// Format duration as consistent [space padding|grouped number|ms]
+/// Format a duration as rounded, right-aligned, grouped milliseconds.
 /// Format a nanosecond duration into `buf`, returning the written slice.
 fn formatCompletedRowDuration(buf: []u8, ns: u64) []const u8 {
     var total_ms = ns / std.time.ns_per_ms;
@@ -797,7 +797,7 @@ test "static breakdown lists every phase with the timings flag" {
     try testing.expect(std.mem.find(u8, out, "Type Inference") != null);
     try testing.expect(std.mem.find(u8, out, "Compile-Time Evaluation") != null);
     try testing.expect(std.mem.find(u8, out, "Monotype Lowering") != null);
-    try testing.expect(std.mem.find(u8, out, "40ms") != null);
+    try testing.expect(std.mem.find(u8, out, "       40ms") != null);
     try testing.expect(std.mem.find(u8, out, "LIR Passes") != null);
     try testing.expect(std.mem.find(u8, out, "ARC") != null);
     try testing.expect(std.mem.find(u8, out, "Store Results") != null);
