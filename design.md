@@ -10954,10 +10954,10 @@ Every object-format address embedded in compiler-owned code or data remains a
 relocation through this boundary. In particular, Wasm function pointers are
 relocations against their function symbols, never raw indices into the
 compiler object's current table: the final linker may reserve null slots or
-concatenate platform element segments before the sealed object's segment. The
+concatenate platform table-initializer segments before the sealed object's segment. The
 same rule applies to code constants, static data, Boxy registrations, erased
 callables, and runtime callback tables. Sealing changes symbol binding in place
-without decoding and re-encoding code, data, element, COMDAT, or relocation
+without decoding and re-encoding code, data, table-initializer, COMDAT, or relocation
 sections, so it adds no whole-object rewrite and preserves the linker's exact
 layout metadata.
 
