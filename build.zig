@@ -186,7 +186,18 @@ fn linkWatchPlatformLibs(step: *Step.Compile, target: ResolvedTarget) void {
 
 const TestHostOptions = struct {
     uses_stack_handler: bool = false,
+    /// Extra source files compiled as their own objects and added to the host
+    /// archive as separate members, for platforms that test multi-member hosts.
+    extra_sources: []const []const u8 = &.{},
 };
+
+/// The dylib host keeps its hosted functions in a second archive member that
+/// only the app references, so `run-test-dylib` fails if a link ever stops
+/// rooting the hosted symbols it uses (see test/dylib/platform/host_hosted.zig).
+fn testPlatformExtraHostSources(platform_dir: []const u8) []const []const u8 {
+    if (std.mem.eql(u8, platform_dir, "dylib")) return &.{"test/dylib/platform/host_hosted.zig"};
+    return &.{};
+}
 
 fn testPlatformUsesStackHandler(platform_dir: []const u8) bool {
     return std.mem.eql(u8, platform_dir, "fx") or std.mem.eql(u8, platform_dir, "fx-open");
@@ -2231,6 +2242,25 @@ fn createTestPlatformHostLib(
         // link inputs. Zig's LLVM backend emits that ELF visibility metadata.
         lib.use_llvm = true;
     }
+    for (options.extra_sources) |source| {
+        const obj = b.addObject(.{
+            .name = b.fmt("{s}_{s}", .{ name, std.fs.path.stem(source) }),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(source),
+                .target = host_target,
+                .optimize = optimize,
+                .strip = strip,
+                .omit_frame_pointer = omit_frame_pointer,
+                .stack_check = if (isGlibcTestHost(host_target)) false else null,
+                .pic = true,
+            }),
+        });
+        configureBackend(obj, host_target);
+        if (testHostNeedsLlvm(host_target)) obj.use_llvm = true;
+        obj.link_function_sections = true;
+        obj.link_data_sections = true;
+        lib.root_module.addObject(obj);
+    }
     if (options.uses_stack_handler) {
         lib.root_module.addImport("base", roc_modules.base);
         const crash_handlers = b.createModule(.{
@@ -2275,6 +2305,7 @@ fn buildAndCopyTestPlatformHostLib(
 ) *Step {
     const options = TestHostOptions{
         .uses_stack_handler = testPlatformUsesStackHandler(platform_dir),
+        .extra_sources = testPlatformExtraHostSources(platform_dir),
     };
     // The dylib/archive tests assert that unused hosted symbols and their
     // canary data are removed by the final link. Zig Debug emits host objects
