@@ -689,9 +689,13 @@ pub fn solve(
     var visible = try computeVisibilityFromFacts(allocator, &solver);
     errdefer visible.deinit(allocator);
     if (builtin.mode == .Debug) {
-        var independently_visible = try computeVisibilityFromLift(allocator, store, rc_local, &solver.pinned, solver.proc_stmts, solver.proc_returns);
+        var partition: AllocationPartition = undefined;
+        var independently_visible = try computeVisibilityFromLift(allocator, store, rc_local, &solver.pinned, solver.proc_stmts, solver.proc_returns, &partition);
         defer independently_visible.deinit(allocator);
+        defer partition.deinit();
         if (!visible.eql(independently_visible)) solveInvariant("typed visibility facts disagreed with independent LIR analysis");
+        verifyAliasesWithinPartition(&solver, rc_local, &partition);
+        PartitionDiag.report(&solver, rc_local, &partition);
     }
 
     // Unique returns form a second monotone dependency graph: proc-return
@@ -2837,6 +2841,66 @@ fn fillPinnedProcContracts(
     }
 }
 
+/// Disjoint-set forest over locals, with path halving on lookup.
+const Sets = struct {
+    fn root(parents: []u32, start: u32) u32 {
+        var current = start;
+        while (parents[current] != current) current = parents[current];
+        const result = current;
+        current = start;
+        while (parents[current] != current) {
+            const next = parents[current];
+            parents[current] = result;
+            current = next;
+        }
+        return result;
+    }
+
+    fn merge(parents: []u32, ranks: []u8, a: u32, b: u32) void {
+        var a_root = root(parents, a);
+        var b_root = root(parents, b);
+        if (a_root == b_root) return;
+        if (ranks[a_root] < ranks[b_root]) {
+            const tmp = a_root;
+            a_root = b_root;
+            b_root = tmp;
+        }
+        parents[b_root] = a_root;
+        if (ranks[a_root] == ranks[b_root]) ranks[a_root] += 1;
+    }
+};
+
+/// Locals grouped by the allocation they can name, over-approximated: two
+/// locals share a set whenever any statement could make them refer to one
+/// allocation, including the fallback for operations whose sharing masks say
+/// nothing. Built by the visibility walk, which needs the same relation to
+/// decide which allocations a host thread can reach.
+///
+/// Over-approximation is the safe direction for both users: visibility marks
+/// too many allocations reachable, and a liveness question over the set finds
+/// too many holders live.
+pub const AllocationPartition = struct {
+    allocator: Allocator,
+    parent: []u32,
+
+    pub fn deinit(self: *AllocationPartition) void {
+        self.allocator.free(self.parent);
+        self.* = undefined;
+    }
+
+    /// Representative of the set containing `local`.
+    pub fn rootOf(self: *AllocationPartition, local: LIR.LocalId) u32 {
+        const index = @intFromEnum(local);
+        if (index >= self.parent.len) return index;
+        return Sets.root(self.parent, index);
+    }
+
+    /// True when the two locals may name one allocation.
+    pub fn sameAllocation(self: *AllocationPartition, a: LIR.LocalId, b: LIR.LocalId) bool {
+        return self.rootOf(a) == self.rootOf(b);
+    }
+};
+
 fn computeVisibilityFromFacts(
     allocator: Allocator,
     solver: *const Solver,
@@ -2849,34 +2913,6 @@ fn computeVisibilityFromFacts(
     defer allocator.free(rank);
     for (parent, 0..) |*entry, index| entry.* = @intCast(index);
     @memset(rank, 0);
-
-    const Sets = struct {
-        fn root(parents: []u32, start: u32) u32 {
-            var current = start;
-            while (parents[current] != current) current = parents[current];
-            const result = current;
-            current = start;
-            while (parents[current] != current) {
-                const next = parents[current];
-                parents[current] = result;
-                current = next;
-            }
-            return result;
-        }
-
-        fn merge(parents: []u32, ranks: []u8, a: u32, b: u32) void {
-            var a_root = root(parents, a);
-            var b_root = root(parents, b);
-            if (a_root == b_root) return;
-            if (ranks[a_root] < ranks[b_root]) {
-                const tmp = a_root;
-                a_root = b_root;
-                b_root = tmp;
-            }
-            parents[b_root] = a_root;
-            if (ranks[a_root] == ranks[b_root]) ranks[a_root] += 1;
-        }
-    };
 
     var seeds = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, arc_count);
     defer seeds.deinit(allocator);
@@ -2936,7 +2972,7 @@ pub fn computeVisibility(
     rc_local: []const bool,
     pinned: *const std.bit_set.DynamicBitSetUnmanaged,
 ) SolveError!std.bit_set.DynamicBitSetUnmanaged {
-    return computeVisibilityFromLift(allocator, store, rc_local, pinned, null, null);
+    return computeVisibilityFromLift(allocator, store, rc_local, pinned, null, null, null);
 }
 
 fn computeVisibilityFromLift(
@@ -2946,6 +2982,7 @@ fn computeVisibilityFromLift(
     pinned: *const std.bit_set.DynamicBitSetUnmanaged,
     proc_stmts: ?[]const std.ArrayList(LIR.CFStmtId),
     lifted_returns: ?[]const std.ArrayList(u32),
+    partition_out: ?*AllocationPartition,
 ) SolveError!std.bit_set.DynamicBitSetUnmanaged {
     const local_count = store.localCount();
     const proc_count = store.procSpecCount();
@@ -2969,39 +3006,11 @@ fn computeVisibilityFromLift(
     // edge, compacting the doubled edges into CSR, and then rediscovering the
     // same connected components with a propagation worklist.
     const parent = try allocator.alloc(u32, local_count);
-    defer allocator.free(parent);
+    errdefer allocator.free(parent);
     const rank = try allocator.alloc(u8, local_count);
     defer allocator.free(rank);
     for (parent, 0..) |*entry, index| entry.* = @intCast(index);
     @memset(rank, 0);
-
-    const Sets = struct {
-        fn root(parents: []u32, start: u32) u32 {
-            var current = start;
-            while (parents[current] != current) current = parents[current];
-            const result = current;
-            current = start;
-            while (parents[current] != current) {
-                const next = parents[current];
-                parents[current] = result;
-                current = next;
-            }
-            return result;
-        }
-
-        fn merge(parents: []u32, ranks: []u8, a: u32, b: u32) void {
-            var a_root = root(parents, a);
-            var b_root = root(parents, b);
-            if (a_root == b_root) return;
-            if (ranks[a_root] < ranks[b_root]) {
-                const tmp = a_root;
-                a_root = b_root;
-                b_root = tmp;
-            }
-            parents[b_root] = a_root;
-            if (ranks[a_root] == ranks[b_root]) ranks[a_root] += 1;
-        }
-    };
 
     // Per-proc return values, for linking call results to callee returns.
     const ret_values = try allocator.alloc(std.ArrayList(u32), proc_count);
@@ -3281,7 +3290,105 @@ fn computeVisibilityFromLift(
         if (is_rc and visible_roots.isSet(Sets.root(parent, @intCast(index)))) visible.set(index);
     }
 
+    if (partition_out) |out| {
+        out.* = .{ .allocator = allocator, .parent = parent };
+    } else {
+        allocator.free(parent);
+    }
     return visible;
+}
+
+/// Checks that every relation the uniqueness analysis treats as naming one
+/// allocation falls inside the allocation partition. The two are derived
+/// independently — one from the lifted fact stream, the other from a direct
+/// statement walk — so agreement is evidence that the partition covers every
+/// aliasing path. Only refcounted pairs are checked, because the partition
+/// unions nothing else.
+/// Sizes of the allocation sets holding the values at argument positions
+/// where a runtime uniqueness check could otherwise be elided. A liveness
+/// question asked over a set only helps if the sets are small: a value sharing
+/// a set with everything it was ever stored beside will always look live.
+/// Absent on targets without an environment.
+const PartitionDiag = if (builtin.os.tag == .freestanding) struct {
+    fn report(_: *Solver, _: []const bool, _: *AllocationPartition) void {}
+} else struct {
+    fn report(solver: *Solver, rc_local: []const bool, partition: *AllocationPartition) void {
+        if (std.c.getenv("ROC_ARC_UNIQUE_DIAG") == null) return;
+        const local_count = solver.store.localCount();
+        var sizes = solver.allocator.alloc(u32, local_count) catch return;
+        defer solver.allocator.free(sizes);
+        @memset(sizes, 0);
+        for (0..local_count) |index| {
+            if (!rc_local[index]) continue;
+            sizes[partition.rootOf(@enumFromInt(@as(u32, @intCast(index))))] += 1;
+        }
+
+        var counted: u32 = 0;
+        var singletons: u32 = 0;
+        var small: u32 = 0;
+        var largest: u32 = 0;
+        var total: u64 = 0;
+        for (0..solver.store.procSpecCount()) |proc_index| {
+            for (solver.proc_stmts[proc_index].items) |stmt_id| {
+                const stmt = solver.store.getCFStmt(stmt_id);
+                const assign = switch (stmt) {
+                    .assign_low_level => |low| low,
+                    else => continue,
+                };
+                const check_mask = assign.rc_effect.may_runtime_uniqueness_check_args &
+                    assign.rc_effect.consume_args;
+                if (check_mask == 0) continue;
+                const args = solver.store.getLocalSpan(assign.args);
+                for (0..GuardedList.borrowLen(args)) |position| {
+                    if (position >= 64) break;
+                    if ((check_mask & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
+                    const size = sizes[partition.rootOf(GuardedList.at(args, position))];
+                    counted += 1;
+                    total += size;
+                    if (size <= 1) singletons += 1;
+                    if (size <= 4) small += 1;
+                    if (size > largest) largest = size;
+                }
+            }
+        }
+        if (counted == 0) return;
+        std.debug.print(
+            "=== ARC allocation sets at check-eligible positions ({d}) ===\n  alone {d}, at most four {d}, largest {d}, mean {d}\n",
+            .{ counted, singletons, small, largest, total / counted },
+        );
+    }
+};
+
+fn verifyAliasesWithinPartition(
+    solver: *Solver,
+    rc_local: []const bool,
+    partition: *AllocationPartition,
+) void {
+    const shares = struct {
+        fn go(rc: []const bool, part: *AllocationPartition, a: LIR.LocalId, b: LIR.LocalId) bool {
+            const a_index = @intFromEnum(a);
+            const b_index = @intFromEnum(b);
+            if (a_index >= rc.len or !rc[a_index]) return true;
+            if (b_index >= rc.len or !rc[b_index]) return true;
+            return part.sameAllocation(a, b);
+        }
+    }.go;
+
+    for (solver.unique_facts.items) |fact| switch (fact) {
+        .alias => |alias| if (!shares(rc_local, partition, alias.target, alias.source)) {
+            solveInvariant("an alias fact named two allocations the partition kept apart");
+        },
+        else => {},
+    };
+    for (solver.binding_facts.items) |fact| switch (fact) {
+        .borrow => |borrow| if (!shares(rc_local, partition, borrow.target, borrow.source)) {
+            solveInvariant("a borrow fact named two allocations the partition kept apart");
+        },
+        .alias => |alias| if (!shares(rc_local, partition, alias.target, alias.source)) {
+            solveInvariant("a binding alias named two allocations the partition kept apart");
+        },
+        else => {},
+    };
 }
 
 /// Result of the born-unique analysis, one bit triple per local.
