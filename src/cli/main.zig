@@ -9926,16 +9926,29 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
                 args.synthetic_default_platform,
             );
 
-            const force_undefined_symbols = try staticDataLinkRootSymbols(
+            const static_data_roots = try staticDataLinkRootSymbols(
                 ctx,
                 static_data_exports,
                 enable_default_platform_runtime and args.debug,
             );
+            const target_format = linker.TargetFormat.detectFromOs(target_os);
+            // The app references hosted functions weakly (see declareHostSymbol),
+            // and a weak reference alone never extracts an archive member. Worse,
+            // LLD's COFF symbol table discards a lazy archive entry when a weak
+            // reference reaches it before a strong one, so with a multi-member
+            // host archive the hosted symbols can silently resolve to null. Root
+            // every hosted symbol the app uses so the link must resolve it from
+            // the platform inputs. wasm hosted functions are imports, not archive
+            // members, so they are left alone.
+            const force_undefined_symbols = if (target_format == .wasm)
+                static_data_roots
+            else
+                try std.mem.concat(ctx.arena, []const u8, &.{ static_data_roots, hosted_symbols });
             const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
             const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
 
             const link_config = linker.LinkConfig{
-                .target_format = linker.TargetFormat.detectFromOs(target_os),
+                .target_format = target_format,
                 .target_abi = llvmBuildLinkAbi(target, args.synthetic_default_platform),
                 .target_os = target_os,
                 .target_arch = target_arch,
