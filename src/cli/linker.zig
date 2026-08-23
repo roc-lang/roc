@@ -390,6 +390,17 @@ fn appendPlatformFile(
     }
 }
 
+/// The C runtime ABI a Windows link targets: the configured one, or the
+/// host's own when the caller left it unset.
+fn windowsLinkAbi(config: LinkConfig) LinkError!TargetAbi {
+    if (config.target_abi) |abi| return abi;
+    if (builtin.target.os.tag != .windows) return LinkError.InvalidArguments;
+    return switch (roc_target.windowsAbiFromStd(builtin.target.abi) orelse return LinkError.InvalidArguments) {
+        .msvc => TargetAbi.msvc,
+        .mingw => TargetAbi.mingw,
+    };
+}
+
 /// Build the linker command arguments for the given configuration.
 /// Returns the args array that would be passed to LLD.
 fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
@@ -544,13 +555,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Add linker name for Windows COFF
             try args.append("lld-link");
 
-            const target_abi = config.target_abi orelse blk: {
-                if (builtin.target.os.tag != .windows) return LinkError.InvalidArguments;
-                break :blk switch (roc_target.windowsAbiFromStd(builtin.target.abi) orelse return LinkError.InvalidArguments) {
-                    .msvc => TargetAbi.msvc,
-                    .mingw => TargetAbi.mingw,
-                };
-            };
+            const target_abi = try windowsLinkAbi(config);
 
             switch (target_abi) {
                 .msvc => {
@@ -592,6 +597,10 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                     try args.append("-lldmingw");
                     try args.append("/nodefaultlib");
                     try args.append("/alternatename:__image_base__=__ImageBase");
+                    // LLD's MinGW-mode DLL entry is `_DllMainCRTStartup`, while
+                    // mingw-w64's dllcrt2 defines `DllMainCRTStartup`. Alias
+                    // them the way `zig cc -shared` does.
+                    try args.append("/alternatename:_DllMainCRTStartup=DllMainCRTStartup");
                 },
                 .musl, .gnu, .freestanding => return LinkError.InvalidArguments,
             }
@@ -860,12 +869,20 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
     // Add platform-provided files that come after object files
     // Also use --whole-archive in case there are static libs here too
+    //
+    // Not on MinGW: a MinGW platform lists its C runtime and import libraries
+    // after `app`, and whole-archive loading would force every member of
+    // libmingw32 and of each import library, which define overlapping symbols
+    // (`__NULL_IMPORT_DESCRIPTOR`, the delay-load helpers, ...). Host archives
+    // that need full inclusion come before `app`.
+    const lazy_post = config.lazy_platform_archives or
+        (is_windows and (try windowsLinkAbi(config)) == .mingw);
     if (config.platform_files_post.len > 0) {
         if (!is_macos and !is_windows and !config.lazy_platform_archives) {
             try args.append("--whole-archive");
         }
         for (config.platform_files_post) |platform_file| {
-            if (config.lazy_platform_archives) {
+            if (lazy_post) {
                 try args.append(platform_file);
             } else {
                 try appendPlatformFile(ctx, &args, platform_file, is_macos, is_windows);
@@ -1372,6 +1389,7 @@ test "MinGW linking uses explicit platform runtime inputs without MSVC defaults"
     _ = findArg(args.items, "-lldmingw") orelse return error.MissingMinGWMode;
     _ = findArg(args.items, "/nodefaultlib") orelse return error.MissingNoDefaultLib;
     _ = findArg(args.items, "/alternatename:__image_base__=__ImageBase") orelse return error.MissingImageBaseAlias;
+    _ = findArg(args.items, "/alternatename:_DllMainCRTStartup=DllMainCRTStartup") orelse return error.MissingDllEntryAlias;
     _ = findArg(args.items, "/machine:arm64") orelse return error.MissingMachine;
     _ = findArg(args.items, "crt2.obj") orelse return error.MissingPlatformInput;
     _ = findArg(args.items, "libhost.a") orelse return error.MissingPlatformInput;
@@ -1382,6 +1400,42 @@ test "MinGW linking uses explicit platform runtime inputs without MSVC defaults"
     for (args.items) |arg| {
         try std.testing.expect(!std.mem.startsWith(u8, arg, "/libpath:"));
         try std.testing.expect(!std.mem.startsWith(u8, arg, "/defaultlib:"));
+    }
+}
+
+test "mingw links wrap only pre-app platform archives when not lazy" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    // A vtable-ABI link needs the whole host archive, but the C runtime and
+    // import libraries a MinGW platform lists after `app` must stay lazy:
+    // whole-archive loading them pulls every member and their overlapping
+    // definitions collide.
+    const config = LinkConfig{
+        .target_format = .coff,
+        .target_abi = .mingw,
+        .target_os = .windows,
+        .target_arch = .x86_64,
+        .output_path = "app.exe",
+        .object_files = &.{"roc_app.obj"},
+        .platform_files_pre = &.{ "crt2.obj", "host.lib" },
+        .platform_files_post = &.{ "libmingw32.lib", "kernel32.lib" },
+        .lazy_platform_archives = false,
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    _ = findArg(args.items, "/wholearchive:host.lib") orelse return error.MissingHostWholeArchive;
+    _ = findArg(args.items, "libmingw32.lib") orelse return error.MissingPlatformInput;
+    _ = findArg(args.items, "kernel32.lib") orelse return error.MissingPlatformInput;
+    for (args.items) |arg| {
+        try std.testing.expect(!std.mem.eql(u8, arg, "/wholearchive:libmingw32.lib"));
+        try std.testing.expect(!std.mem.eql(u8, arg, "/wholearchive:kernel32.lib"));
     }
 }
 
