@@ -6,7 +6,7 @@ const lir = @import("lir");
 
 const harness = @import("lower_to_lir_harness.zig");
 
-fn expectOneRefreshSpecialization(
+fn expectSingleSourceRefreshSpecialization(
     store: *const lir.LirStore,
     _: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
@@ -54,5 +54,5 @@ test "issue 10831: repeated annotated calls reuse one specialization" {
         \\    echo!(if final.items.len() == 1 { "ok" } else { "bad" })
         \\    Ok({})
         \\}
-    , .{ .proc_debug_names = true }, expectOneRefreshSpecialization);
+    , .{ .proc_debug_names = true }, expectSingleSourceRefreshSpecialization);
 }

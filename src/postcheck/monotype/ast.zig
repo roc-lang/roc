@@ -262,8 +262,8 @@ pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *c
     return .{ .bytes = hasher.finalResult() };
 }
 
-/// Compute the stable digest used in specialization identity from the exact
-/// durable evidence nodes and lexical frames carried by a function template.
+/// Compute the stable specialization digest from durable evidence topology,
+/// canonical callable keys, and lexical frames carried by a function template.
 pub fn fnEvidenceDigest(
     evidence: []const check.ConstStore.ConstFnEvidence,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
@@ -444,6 +444,11 @@ test "function evidence identity uses canonical callable keys" {
     try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
 
     right[0].target.method_callable_key.bytes[0] = 9;
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+
+    right[0].target.method_callable_key = method_key;
+    right[0].target.instantiation.?.callable_key.bytes[0] = 9;
     try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }
