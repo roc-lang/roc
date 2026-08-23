@@ -687,6 +687,14 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Allow undefined symbols (imports from host environment)
             try args.append("--allow-undefined");
 
+            // A non-debug final module exposes only its Import and Export
+            // sections. Compiler-owned local names have no runtime purpose and
+            // must not make implementation details observable in name/linking
+            // metadata (also keeps output independent of its filename).
+            if (!config.wasm_debug_info) {
+                try args.append("--strip-all");
+            }
+
             if (config.wasm_import_memory) {
                 try args.append("--import-memory");
             }
@@ -899,35 +907,23 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     }
 }
 
-/// Combine Wasm objects and archives into one relocatable object.
-///
-/// This is the one-time correctness link used to prepare a platform host for
-/// later surgical dev links. Whole-archive preserves the surgical linker's
-/// previous contract of loading every declared archive member, while LLD owns
-/// normal strong/weak and COMDAT resolution.
-pub fn linkWasmRelocatable(
+/// Compose only compiler-owned Wasm objects into one relocatable object.
+/// Platform inputs are categorically excluded by the caller; sealing happens
+/// immediately after this link and before the result reaches a platform link.
+pub fn linkWasmObjectsRelocatable(
     ctx: *CliCtx,
     output_path: []const u8,
     input_paths: []const []const u8,
 ) LinkError!void {
-    if (comptime !llvm_available) {
-        return LinkError.LLVMNotAvailable;
-    }
+    if (comptime !llvm_available) return LinkError.LLVMNotAvailable;
 
-    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, input_paths.len + 7) catch
+    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, input_paths.len + 4) catch
         return LinkError.OutOfMemory;
     try args.append("wasm-ld");
     try args.append("-r");
     try args.append("-o");
     try args.append(output_path);
-    try args.append("--whole-archive");
     try args.appendSlice(input_paths);
-    try args.append("--no-whole-archive");
-
-    std.log.debug("Relocatable Wasm linker command:", .{});
-    for (args.items) |arg| {
-        std.log.debug("  {s}", .{arg});
-    }
 
     embedded_lld.link(ctx.arena, .wasm, args.items, .{
         .can_exit_early = false,

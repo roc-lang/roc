@@ -13,7 +13,10 @@ platform ""
     }
     targets: {
         inputs_dir: "targets/",
-        wasm32: { inputs: ["host.wasm", app] },
+        wasm32: {
+            inputs: ["host.wasm", app],
+            exports: ["wasm_main", "wasm_result_len", "wasm_reset_alloc_counts", "wasm_alloc_count", "wasm_dealloc_count"],
+        },
     }
 
 import Stdout
