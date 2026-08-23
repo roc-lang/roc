@@ -243,7 +243,7 @@ pub const ConstFnNestedEvidence = union(enum(u8)) {
 /// Exact checked callable relation attached to a stored target edge.
 pub const ConstFnCallableInstantiation = struct {
     view: names.CheckedModuleDigest,
-    /// Stable semantic identity of `callable_ty`. The raw checked id remains
+    /// Stable checked identity of `callable_ty`. The raw checked id remains
     /// replay payload and may differ between equivalent fresh instantiations.
     callable_key: names.CanonicalTypeKey,
     callable_ty: checked_ids.CheckedTypeId,
@@ -256,7 +256,7 @@ pub const ConstFnEvidence = union(enum(u8)) {
     target: struct {
         view: names.CheckedModuleDigest,
         method: static_dispatch.MethodTarget,
-        /// Stable semantic identity of `method.callable_ty`.
+        /// Stable checked identity of `method.callable_ty`.
         method_callable_key: names.CanonicalTypeKey,
         instantiation: ?ConstFnCallableInstantiation,
         nested: ConstFnNestedEvidence,

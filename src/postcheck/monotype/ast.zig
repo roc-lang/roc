@@ -263,7 +263,7 @@ pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *c
 }
 
 /// Compute the stable specialization digest from durable evidence topology,
-/// canonical callable keys, and lexical frames carried by a function template.
+/// checked callable type keys, and lexical frames carried by a function template.
 pub fn fnEvidenceDigest(
     evidence: []const check.ConstStore.ConstFnEvidence,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
@@ -311,8 +311,8 @@ pub fn fnEvidenceDigest(
     return .{ .bytes = hasher.finalResult() };
 }
 
-/// Exact semantic equality for retained function evidence. Checked callable
-/// ids are replay payload; their canonical keys are the durable identity.
+/// Exact checked-identity equality for retained function evidence. Checked
+/// callable ids are replay payload; their type keys are the durable identity.
 pub fn fnEvidenceEql(
     left_evidence: []const check.ConstStore.ConstFnEvidence,
     left_frames: []const check.ConstStore.ConstFnEvidenceFrame,
@@ -412,7 +412,7 @@ fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
     } else writeU8(hasher, 0);
 }
 
-test "function evidence identity uses canonical callable keys" {
+test "function evidence identity uses checked callable type keys" {
     var method_key: names.CanonicalTypeKey = .{};
     method_key.bytes[0] = 1;
     var instantiation_key: names.CanonicalTypeKey = .{};

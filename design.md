@@ -6636,12 +6636,12 @@ equality of the closed Monotype function type. Digest collisions are therefore
 harmless.
 
 Checked callable type ids inside dispatch evidence are relation-replay payload,
-not specialization identity: generalized scheme uses deliberately publish fresh
-identity-bearing roots. Evidence hashing and exact topology equality use each
-callable root's producer-authored canonical checked type key instead. The
+not specialization identity: separate generalized scheme uses deliberately
+contain distinct identity-bearing roots. Evidence hashing and exact topology
+equality use each callable root's producer-authored checked type key instead. The
 owning checked module remains part of the identity, and the raw root id remains
 alongside the key solely so Monotype can replay the exact checked relation.
-Thus fresh instantiations with the same canonical identity-variable topology
+Thus instantiations with the same checked identity-variable topology
 reuse one specialization, while different callable shapes remain distinct.
 
 The identity is immutable: it is written once when the record is reserved and

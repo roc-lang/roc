@@ -29,7 +29,7 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
 /// Version 13: retained function evidence identifies callable types by their
-/// canonical checked keys while preserving raw checked ids for relation replay.
+/// checked type keys while preserving raw checked ids for relation replay.
 /// Version 12: graph-reduced type digests (versioned digest domains,
 /// alias-opaque encoding, recursive-group reduction, and previously missing
 /// identity fields), which change every serialized digest byte.
