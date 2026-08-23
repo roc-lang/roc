@@ -39,7 +39,7 @@ const default_threshold_ns: u64 = std.time.ns_per_s;
 
 /// Minimum width of the phase-name column. A separator is always emitted after
 /// the padded name so a future longer label cannot run into its duration.
-const name_width: usize = 28;
+const name_width: usize = 37;
 
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
