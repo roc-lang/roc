@@ -3369,6 +3369,7 @@ pub fn finalizeMemoryAndTableWithConfig(self: *Self, config: FinalMemoryConfig) 
 const wasm_magic = "\x00asm";
 const wasm_version = 1;
 
+/// Selects which invariants `preload` requires for its Wasm consumer.
 pub const PreloadMode = enum {
     /// Inspect a final module. Relocatable metadata is not required.
     executable,
