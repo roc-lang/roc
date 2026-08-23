@@ -90,6 +90,17 @@ fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
         (target.result.os.tag == .windows and target.result.cpu.arch == .aarch64);
 }
 
+/// Every executable that links the whole compiler emits more `.text` than an
+/// ARM32 branch can reach. LLD places range-extension thunks *between* input
+/// sections, so a monolithic `.text` leaves it nowhere to put one and the link
+/// fails with "InputSection too large for range extension thunk". Splitting per
+/// function and per datum gives LLD those insertion points, and lets the final
+/// link discard unused compiler code on every target.
+fn splitCompilerSections(step: *Step.Compile) void {
+    step.link_function_sections = true;
+    step.link_data_sections = true;
+}
+
 fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
     if (mustUseLlvm(target)) {
         step.use_llvm = true;
@@ -117,7 +128,7 @@ const TestHostOptions = struct {
 };
 
 fn testPlatformUsesStackHandler(platform_dir: []const u8) bool {
-    return std.mem.eql(u8, platform_dir, "fx");
+    return std.mem.eql(u8, platform_dir, "fx") or std.mem.eql(u8, platform_dir, "fx-open");
 }
 
 fn testPlatformRequiresSectionDceHost(platform_dir: []const u8) bool {
@@ -2161,6 +2172,13 @@ fn createTestPlatformHostLib(
     }
     if (options.uses_stack_handler) {
         lib.root_module.addImport("base", roc_modules.base);
+        const crash_handlers = b.createModule(.{
+            .root_source_file = b.path("test/host_crash_handlers.zig"),
+            .target = host_target,
+            .optimize = optimize,
+        });
+        crash_handlers.addImport("base", roc_modules.base);
+        lib.root_module.addImport("host_crash_handlers", crash_handlers);
     }
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
@@ -3886,6 +3904,7 @@ pub fn build(b: *std.Build) void {
             .valgrind = valgrind_support,
         }),
     });
+    splitCompilerSections(snapshot_exe);
     configureBackend(snapshot_exe, target);
     roc_modules.addAll(snapshot_exe);
     snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -6908,12 +6927,7 @@ fn addMainExe(
     // SetUnhandledExceptionFilter stack-overflow handler before the interpreter
     // can catch the overflow itself. Reserve 64 MiB to match eval-test-runner.
     exe.stack_size = 64 * 1024 * 1024;
-    // Keep functions and data in independent sections. Besides allowing the
-    // final linker to discard unused compiler code, this is required on ARM32:
-    // LLD cannot place range-extension thunks inside the monolithic .text
-    // section Zig otherwise emits for Roc's large debug executable.
-    exe.link_function_sections = true;
-    exe.link_data_sections = true;
+    splitCompilerSections(exe);
     configureBackend(exe, target);
     exe.root_module.addImport("llvm_codegen", llvm_codegen_module);
     linkWatchPlatformLibs(exe, target);
