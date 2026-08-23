@@ -1070,6 +1070,155 @@ const UniqueReturnWork = struct {
 
 /// Settles unique-return bits over exact return, direct-call, and pure-alias
 /// dependencies. Every proc and local bit is enqueued at most once.
+/// Why the uniqueness fixpoint left a value non-unique, in the order
+/// `attemptBorn` tests its conditions. Reported only for values that reach an
+/// argument position where a runtime uniqueness check could otherwise have
+/// been elided, so the histogram counts real missed opportunities rather than
+/// every non-unique value in the program.
+const NonUniqueCause = enum {
+    /// Another holder of the value is live, so it is not unique even though
+    /// it was born unique.
+    destroyed,
+    /// A parameter whose join writes can never all be unique.
+    param_blocked,
+    /// The value is a procedure parameter, so a caller may hold it too.
+    foreign_param,
+    /// The local is defined more than once, or aliases two different sources.
+    /// Flow-insensitive uniqueness cannot pick one of several runtime births,
+    /// so it gives up on the local entirely.
+    multi_definition,
+    /// A call feeding the value has a callee whose return is not unique.
+    nonunique_call,
+    /// The value aliases another whose own origin is not unique.
+    alias_source_nonunique,
+    /// Nothing gives the value a unique origin: neither an allocation site
+    /// nor a call.
+    no_unique_origin,
+};
+
+/// Histogram of why uniqueness proofs fail at the argument positions that
+/// would otherwise elide a runtime count check. Off unless
+/// `ROC_ARC_UNIQUE_DIAG` is set, and absent on targets without an
+/// environment. Pairs with the emission-side histogram of the same name:
+/// that one says how many positions are lost to an unproven value, and this
+/// one says which solver limitation lost them.
+const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
+    fn report(
+        _: *Solver,
+        _: *const Uniqueness,
+        _: *const UniqueOriginFacts,
+        _: []const bool,
+        _: *const std.bit_set.DynamicBitSetUnmanaged,
+    ) void {}
+} else struct {
+    fn cause(
+        uniqueness: *const Uniqueness,
+        origins: *const UniqueOriginFacts,
+        param_blocked: []const bool,
+        param_is_param: *const std.bit_set.DynamicBitSetUnmanaged,
+        is_param: *const std.bit_set.DynamicBitSetUnmanaged,
+        value: u32,
+    ) NonUniqueCause {
+        if (uniqueness.born_unique.isSet(value)) return .destroyed;
+        if (param_is_param.isSet(value) and param_blocked[value]) return .param_blocked;
+        if (origins.static_foreign.isSet(value)) {
+            return if (is_param.isSet(value)) .foreign_param else .multi_definition;
+        }
+        if (origins.remaining_nonunique_calls[value] != 0) return .nonunique_call;
+        if (origins.alias_source[value] != no_local) return .alias_source_nonunique;
+        return .no_unique_origin;
+    }
+
+    /// Follows an alias chain to the value that actually blocks it, so the
+    /// histogram attributes the failure to its root rather than to every
+    /// alias along the way. Bounded by the chain length; alias edges point at
+    /// earlier definitions, so the walk terminates.
+    fn rootCause(
+        uniqueness: *const Uniqueness,
+        origins: *const UniqueOriginFacts,
+        param_blocked: []const bool,
+        param_is_param: *const std.bit_set.DynamicBitSetUnmanaged,
+        is_param: *const std.bit_set.DynamicBitSetUnmanaged,
+        value: u32,
+    ) struct { cause: NonUniqueCause, depth: u32 } {
+        var current = value;
+        var depth: u32 = 0;
+        while (depth < 64) {
+            const reason = cause(uniqueness, origins, param_blocked, param_is_param, is_param, current);
+            if (reason != .alias_source_nonunique) return .{ .cause = reason, .depth = depth };
+            const source = origins.alias_source[current];
+            if (source == no_local or source == current) {
+                return .{ .cause = .alias_source_nonunique, .depth = depth };
+            }
+            current = source;
+            depth += 1;
+        }
+        return .{ .cause = .alias_source_nonunique, .depth = depth };
+    }
+
+    fn report(
+        solver: *Solver,
+        uniqueness: *const Uniqueness,
+        origins: *const UniqueOriginFacts,
+        param_blocked: []const bool,
+        param_is_param: *const std.bit_set.DynamicBitSetUnmanaged,
+    ) void {
+        if (std.c.getenv("ROC_ARC_UNIQUE_DIAG") == null) return;
+        // Built here rather than carried on the solver: it exists only to
+        // separate a parameter's foreignness from a multiply-defined local's,
+        // and the report is off by default.
+        var is_param = std.bit_set.DynamicBitSetUnmanaged.initEmpty(
+            solver.allocator,
+            solver.domain.arc_to_local.len,
+        ) catch return;
+        defer is_param.deinit(solver.allocator);
+        for (0..solver.store.procSpecCount()) |proc_index| {
+            const proc = solver.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const params = solver.store.getLocalSpan(proc.args);
+            for (0..GuardedList.borrowLen(params)) |i| {
+                if (solver.domain.indexOf(GuardedList.at(params, i))) |index| is_param.set(index);
+            }
+        }
+        const field_count = @typeInfo(NonUniqueCause).@"enum".fields.len;
+        var counts = [_]u64{0} ** field_count;
+        var total: u64 = 0;
+        var max_depth: u32 = 0;
+        var depth_sum: u64 = 0;
+        for (0..solver.store.procSpecCount()) |proc_index| {
+            for (solver.proc_stmts[proc_index].items) |stmt_id| {
+                const stmt = solver.store.getCFStmt(stmt_id);
+                const assign = switch (stmt) {
+                    .assign_low_level => |low| low,
+                    else => continue,
+                };
+                const check_mask = assign.rc_effect.may_runtime_uniqueness_check_args &
+                    assign.rc_effect.consume_args;
+                if (check_mask == 0) continue;
+                const args = solver.store.getLocalSpan(assign.args);
+                for (0..GuardedList.borrowLen(args)) |position| {
+                    if (position >= 64) break;
+                    if ((check_mask & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
+                    const arg = GuardedList.at(args, position);
+                    const value = solver.domain.indexOf(arg) orelse continue;
+                    if (uniqueness.unique.isSet(value)) continue;
+                    total += 1;
+                    const root = rootCause(uniqueness, origins, param_blocked, param_is_param, &is_param, value);
+                    counts[@intFromEnum(root.cause)] += 1;
+                    if (root.depth > max_depth) max_depth = root.depth;
+                    depth_sum += root.depth;
+                }
+            }
+        }
+        if (total == 0) return;
+        std.debug.print("=== ARC unproven-uniqueness causes ({d}) ===\n", .{total});
+        inline for (@typeInfo(NonUniqueCause).@"enum".fields) |field| {
+            const count = counts[field.value];
+            if (count != 0) std.debug.print("  {s: <24} {d}\n", .{ field.name, count });
+        }
+        std.debug.print("  alias chain depth: max {d}, mean {d}\n", .{ max_depth, depth_sum / total });
+    }
+};
+
 fn solveUniqueReturnModes(
     solver: *Solver,
     uniqueness: *Uniqueness,
@@ -1253,6 +1402,8 @@ fn solveUniqueReturnModes(
         }
     }
     try work.run();
+
+    UniqueSolveDiag.report(solver, uniqueness, origins, param_blocked, &param_is_param);
 }
 
 /// Lifts each procedure's reachable ownership-neutral statements exactly

@@ -239,6 +239,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     var inserter = Inserter{
         .store = store,
         .layouts = layouts,
+        .unique_diag = UniqueDiag.init(),
     };
     var local_contains_refcounted = try store.allocator.alloc(bool, store.localCount());
     defer store.allocator.free(local_contains_refcounted);
@@ -454,6 +455,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
         try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, .{ .sigs = all_sigs }, options.roots);
     }
+
+    inserter.unique_diag.report();
 }
 
 const VariantSelector = struct {
@@ -946,9 +949,73 @@ const ArcPlans = struct {
     root: u32 = no_plan,
 };
 
+/// Why a runtime uniqueness check survives at an argument position. The
+/// variants are the conditions `uniqueArgBlock` tests, in order; each name is
+/// the first one that held. Positions reaching `elided` take the in-place path
+/// with no runtime count check.
+const UniqueBlock = enum {
+    elided,
+    /// The argument is the operation's own destination.
+    self_target,
+    /// Nothing in the layout is reference counted, so no check exists to elide.
+    not_refcounted,
+    /// The solver could not prove the value unique at this point.
+    not_proven_unique,
+    /// The operation does not consume this position.
+    not_consumed,
+    /// A later use needs the value, so its count must stay above one.
+    preserved,
+    /// The value is borrowed here rather than owned.
+    not_owned,
+    /// Another operand of the same statement shares the borrow group, so the
+    /// group is still live at the operation.
+    group_shares_operand,
+};
+
+/// Histogram of why runtime uniqueness checks survive, for telling which
+/// solver limitation a program actually hits rather than guessing. Off unless
+/// `ROC_ARC_UNIQUE_DIAG` is set, and absent on targets without an environment.
+const UniqueDiag = if (builtin.os.tag == .freestanding) struct {
+    fn init() @This() {
+        return .{};
+    }
+
+    fn record(_: *@This(), _: UniqueBlock) void {}
+
+    fn report(_: *const @This()) void {}
+} else struct {
+    const slot_count = @typeInfo(UniqueBlock).@"enum".fields.len;
+
+    on: bool = false,
+    counts: [slot_count]u64 = [_]u64{0} ** slot_count,
+
+    fn init() @This() {
+        return .{ .on = std.c.getenv("ROC_ARC_UNIQUE_DIAG") != null };
+    }
+
+    fn record(self: *@This(), reason: UniqueBlock) void {
+        if (!self.on) return;
+        self.counts[@intFromEnum(reason)] += 1;
+    }
+
+    fn report(self: *const @This()) void {
+        if (!self.on) return;
+        var total: u64 = 0;
+        for (self.counts) |count| total += count;
+        std.debug.print("=== ARC uniqueness-check positions ({d}) ===\n", .{total});
+        inline for (@typeInfo(UniqueBlock).@"enum".fields) |field| {
+            const count = self.counts[field.value];
+            if (count != 0) std.debug.print("  {s: <20} {d}\n", .{ field.name, count });
+        }
+    }
+};
+
 const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
+    /// Why runtime uniqueness checks survived, when the diagnostic is on.
+    /// Read from the environment in `insert`, which cannot happen at comptime.
+    unique_diag: UniqueDiag = .{},
     local_contains_refcounted: []const bool = &.{},
     solution: *const arc_solve.Solution = undefined,
     /// Field takes solved against the ownership-neutral bodies; consulted by
@@ -3490,19 +3557,40 @@ const Inserter = struct {
             if (i >= 64) break;
             const bit = argMaskBit(i);
             if ((check_mask & bit) == 0) continue;
-            if (local == target) continue;
-            if (!self.localContainsRefcounted(local)) continue;
-            if (!self.isLocalUniqueHere(local)) continue;
-            if ((rc_effect.consume_args & bit) == 0) continue;
-            if ((preserve_consumed_args & bit) != 0) continue;
-            if (!owned.contains(local)) continue;
-            // The preserve scan proved the argument's borrow group dead
-            // after this statement; a group member appearing as another
-            // operand of this same statement is still live at the op.
-            if (self.groupSharesOtherOperand(locals, i, local)) continue;
-            unique |= bit;
+            const reason = self.uniqueArgBlock(.{
+                .locals = locals,
+                .position = i,
+                .local = local,
+                .rc_effect = rc_effect,
+                .target = target,
+                .bit = bit,
+                .preserve_consumed_args = preserve_consumed_args,
+                .owned = owned,
+            });
+            self.unique_diag.record(reason);
+            if (reason == .elided) unique |= bit;
         }
         return unique;
+    }
+
+    /// The first condition that forces a runtime uniqueness check at an
+    /// argument position, or `.elided` when none does. The emitted mask and
+    /// the `ROC_ARC_UNIQUE_DIAG` histogram both read this one answer, so they
+    /// cannot disagree about why a check survived.
+    fn uniqueArgBlock(self: *const Inserter, args: anytype) UniqueBlock {
+        if (args.local == args.target) return .self_target;
+        if (!self.localContainsRefcounted(args.local)) return .not_refcounted;
+        if (!self.isLocalUniqueHere(args.local)) return .not_proven_unique;
+        if ((args.rc_effect.consume_args & args.bit) == 0) return .not_consumed;
+        if ((args.preserve_consumed_args & args.bit) != 0) return .preserved;
+        if (!args.owned.contains(args.local)) return .not_owned;
+        // The preserve scan proved the argument's borrow group dead
+        // after this statement; a group member appearing as another
+        // operand of this same statement is still live at the op.
+        if (self.groupSharesOtherOperand(args.locals, args.position, args.local)) {
+            return .group_shares_operand;
+        }
+        return .elided;
     }
 
     /// True when the local's value is statically unique in the current
