@@ -402,12 +402,39 @@ const VisibilityFact = union(enum) {
     seed: LIR.LocalId,
 };
 
+/// What added the second holder that ends a value's uniqueness.
+const DestroyOrigin = enum(u8) {
+    /// A retain the producer asked for explicitly.
+    incref,
+    /// The closure or an argument of an erased call.
+    erased_call_closure,
+    erased_call_arg,
+    /// The capture of a packed erased callable.
+    erased_capture,
+    /// An operand a low-level operation retains rather than consumes.
+    low_level_retain,
+    /// An operand past the tracked argument-mask width.
+    low_level_untracked_arg,
+    /// The value moved into an aggregate, which now holds it too.
+    list_element,
+    struct_field,
+    tag_payload,
+    struct_store,
+    tag_store,
+    /// A local write that is not a join-parameter move.
+    local_write,
+};
+
 const UniqueFact = union(enum) {
     birth: LIR.LocalId,
     foreign: LIR.LocalId,
     alias: struct { target: LIR.LocalId, source: LIR.LocalId },
     consume: LIR.LocalId,
-    destroy: LIR.LocalId,
+    /// Another holder of the value appeared, so the value is no longer the
+    /// sole owner. `origin` names the construct that added the holder; it
+    /// rides along in payload space the union already reserves for its wider
+    /// variants, so carrying it costs nothing.
+    destroy: struct { local: LIR.LocalId, origin: DestroyOrigin },
     read: LIR.LocalId,
     /// A join parameter declaration; its uniqueness settles from its
     /// `initialize_join_param` writes rather than a definition of its own.
@@ -1170,6 +1197,114 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         return null;
     }
 
+    /// How a value lost uniqueness. The verdict is a whole-procedure bit set
+    /// from several mechanisms, and they call for different fixes, so the
+    /// report separates them rather than reporting one opaque "destroyed".
+    const DestroyMechanism = enum {
+        /// Passed to a callee that borrows the parameter. A borrow adds no
+        /// reference, so this is the flow-insensitive verdict at its most
+        /// conservative: the borrow ends when the call returns.
+        call_borrowed_arg,
+        /// Consumed more than once. Two arms of a branch each consuming the
+        /// value count as two consumes even though only one of them runs.
+        double_consume,
+        /// An explicit second holder: a retain, or a move into an aggregate.
+        second_holder,
+        /// Inherited from an alias source that is read somewhere in the
+        /// procedure. Reading does not add a reference; the source is simply
+        /// live at its own use, which says nothing about whether it is live
+        /// where the alias wants to mutate in place.
+        alias_source_read,
+        /// An alias target that is also defined elsewhere. Flow-insensitive
+        /// uniqueness cannot pick one of several runtime definitions, so it
+        /// treats the local as having another holder.
+        multi_def_alias,
+        /// Inherited transitively across the alias graph the uniqueness
+        /// computation builds internally, which is wider than the single
+        /// recorded alias source. One read or one second holder anywhere in
+        /// the graph reaches every value connected to it.
+        alias_graph_propagated,
+    };
+
+    /// The incoming join-parameter write whose value has another holder,
+    /// which is the write that produced the `param_write_destroyed` verdict.
+    fn firstDestroyedWrite(solver: *Solver, uniqueness: *const Uniqueness, param: u32) ?u32 {
+        for (solver.unique_facts.items) |fact| switch (fact) {
+            .param_write => |write| {
+                const index = solver.domain.indexOf(write.param) orelse continue;
+                if (index != param) continue;
+                const value = solver.domain.indexOf(write.value) orelse continue;
+                if (uniqueness.destroyed.isSet(value)) return @intCast(value);
+            },
+            else => {},
+        };
+        return null;
+    }
+
+    fn isRead(solver: *Solver, value: u32) bool {
+        for (solver.unique_facts.items) |fact| switch (fact) {
+            .read => |local| {
+                const index = solver.domain.indexOf(local) orelse continue;
+                if (index == value) return true;
+            },
+            else => {},
+        };
+        return false;
+    }
+
+    fn destroyMechanismOf(solver: *Solver, origins: *const UniqueOriginFacts, value: u32) DestroyMechanism {
+        // The verdict propagates along alias edges, so the mechanism may sit
+        // at any point of the chain rather than at the value the emission
+        // side named. Test every hop and report the first that explains it.
+        var current = value;
+        var hops: u32 = 0;
+        while (hops < 64) : (hops += 1) {
+            var borrowed = false;
+            for (solver.unique_calls.items) |call| {
+                const sig = solver.sigs[@intFromEnum(call.callee)];
+                const args = solver.store.getLocalSpan(call.args);
+                for (0..GuardedList.borrowLen(args)) |position| {
+                    const arg = solver.domain.indexOf(GuardedList.at(args, position)) orelse continue;
+                    if (arg != current) continue;
+                    if (sig.paramMode(position) != .owned) borrowed = true;
+                }
+            }
+            if (borrowed) return .call_borrowed_arg;
+
+            var consumes: u32 = 0;
+            for (solver.unique_facts.items) |fact| switch (fact) {
+                .consume => |local| {
+                    const index = solver.domain.indexOf(local) orelse continue;
+                    if (index == current) consumes += 1;
+                },
+                else => {},
+            };
+            if (consumes > 1) return .double_consume;
+            if (destroyOriginOf(solver, current) != null) return .second_holder;
+            if (isRead(solver, current)) return .alias_source_read;
+            if (origins.alias_source[current] != no_local and origins.static_foreign.isSet(current)) {
+                return .multi_def_alias;
+            }
+
+            const source = origins.alias_source[current];
+            if (source == no_local or source == current) return .alias_graph_propagated;
+            current = source;
+        }
+        return .alias_graph_propagated;
+    }
+
+    /// The construct that added the second holder of a value, when one did.
+    fn destroyOriginOf(solver: *Solver, value: u32) ?DestroyOrigin {
+        for (solver.unique_facts.items) |fact| switch (fact) {
+            .destroy => |destroy| {
+                const index = solver.domain.indexOf(destroy.local) orelse continue;
+                if (index == value) return destroy.origin;
+            },
+            else => {},
+        };
+        return null;
+    }
+
     fn cause(
         solver: *Solver,
         uniqueness: *const Uniqueness,
@@ -1285,6 +1420,8 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
             }
         }
         var def_counts = [_]u64{0} ** stmt_tag_count;
+        var destroy_counts = [_]u64{0} ** @typeInfo(DestroyOrigin).@"enum".fields.len;
+        var mechanism_counts = [_]u64{0} ** @typeInfo(DestroyMechanism).@"enum".fields.len;
         var undefined_defs: u64 = 0;
 
         const field_count = @typeInfo(NonUniqueCause).@"enum".fields.len;
@@ -1321,6 +1458,16 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
                     }
                     if (def_kind[blame] == 255) undefined_defs += 1 else def_counts[def_kind[blame]] += 1;
                     if (set_mode[blame] != 255) mode_counts[set_mode[blame]] += 1;
+                    if (root.cause == .destroyed or root.cause == .param_write_destroyed) {
+                        const culprit = if (root.cause == .destroyed)
+                            blame
+                        else
+                            firstDestroyedWrite(solver, uniqueness, blame) orelse blame;
+                        if (destroyOriginOf(solver, culprit)) |origin| {
+                            destroy_counts[@intFromEnum(origin)] += 1;
+                        }
+                        mechanism_counts[@intFromEnum(destroyMechanismOf(solver, origins, culprit))] += 1;
+                    }
                     if (root.depth > max_depth) max_depth = root.depth;
                     depth_sum += root.depth;
                 }
@@ -1342,6 +1489,14 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         inline for (@typeInfo(LIR.SetLocalWriteMode).@"enum".fields) |field| {
             const count = mode_counts[field.value];
             if (count != 0) std.debug.print("  mode:{s: <19} {d}\n", .{ field.name, count });
+        }
+        inline for (@typeInfo(DestroyOrigin).@"enum".fields) |field| {
+            const count = destroy_counts[field.value];
+            if (count != 0) std.debug.print("  holder:{s: <17} {d}\n", .{ field.name, count });
+        }
+        inline for (@typeInfo(DestroyMechanism).@"enum".fields) |field| {
+            const count = mechanism_counts[field.value];
+            if (count != 0) std.debug.print("  how:{s: <20} {d}\n", .{ field.name, count });
         }
     }
 };
@@ -2365,10 +2520,10 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             if (assign.reuse_source) |reuse_source| {
                 try solver.unique_facts.append(allocator, .{ .consume = reuse_source });
             } else {
-                try solver.unique_facts.append(allocator, .{ .destroy = assign.closure });
+                try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = assign.closure, .origin = .erased_call_closure } });
             }
             for (0..GuardedList.borrowLen(args)) |index| {
-                try solver.unique_facts.append(allocator, .{ .destroy = GuardedList.at(args, index) });
+                try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = GuardedList.at(args, index), .origin = .erased_call_arg } });
             }
         },
         .assign_packed_erased_fn => |assign| {
@@ -2378,7 +2533,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             if (assign.reuse) |reuse| try solver.binding_facts.append(allocator, .{ .demand = reuse });
             if (assign.capture) |capture| try liftVisibilityLink(solver, assign.target, capture);
             try solver.unique_facts.append(allocator, .{ .birth = assign.target });
-            if (assign.capture) |capture| try solver.unique_facts.append(allocator, .{ .destroy = capture });
+            if (assign.capture) |capture| try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = capture, .origin = .erased_capture } });
             if (assign.reuse) |reuse| try solver.unique_facts.append(allocator, .{ .consume = reuse });
         },
         .assign_low_level => |assign| {
@@ -2431,7 +2586,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             for (0..GuardedList.borrowLen(args)) |position| {
                 const arg = GuardedList.at(args, position);
                 if (position >= 64) {
-                    try solver.unique_facts.append(allocator, .{ .destroy = arg });
+                    try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = arg, .origin = .low_level_untracked_arg } });
                     continue;
                 }
                 const bit = @as(u64, 1) << @as(u6, @intCast(position));
@@ -2441,7 +2596,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     read_only = false;
                 }
                 if ((rc_effect.retain_args & bit) != 0) {
-                    try solver.unique_facts.append(allocator, .{ .destroy = arg });
+                    try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = arg, .origin = .low_level_retain } });
                     read_only = false;
                 }
                 if (read_only) try solver.unique_facts.append(allocator, .{ .read = arg });
@@ -2455,7 +2610,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 const elem = GuardedList.at(elems, index);
                 try solver.binding_facts.append(allocator, .{ .demand = elem });
                 try liftVisibilityLink(solver, assign.target, elem);
-                try solver.unique_facts.append(allocator, .{ .destroy = elem });
+                try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = elem, .origin = .list_element } });
             }
         },
         .assign_struct => |assign| {
@@ -2466,7 +2621,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 const field = GuardedList.at(fields, index);
                 try solver.binding_facts.append(allocator, .{ .demand = field });
                 try liftVisibilityLink(solver, assign.target, field);
-                try solver.unique_facts.append(allocator, .{ .destroy = field });
+                try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = field, .origin = .struct_field } });
             }
         },
         .assign_tag => |assign| {
@@ -2475,7 +2630,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             if (assign.payload) |payload| {
                 try solver.binding_facts.append(allocator, .{ .demand = payload });
                 try liftVisibilityLink(solver, assign.target, payload);
-                try solver.unique_facts.append(allocator, .{ .destroy = payload });
+                try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = payload, .origin = .tag_payload } });
             }
         },
         .store_struct => |assign| {
@@ -2484,14 +2639,14 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             for (0..GuardedList.borrowLen(fields)) |index| {
                 const field = GuardedList.at(fields, index);
                 try solver.binding_facts.append(allocator, .{ .demand = field });
-                try solver.unique_facts.append(allocator, .{ .destroy = field });
+                try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = field, .origin = .struct_store } });
             }
         },
         .store_tag => |assign| {
             try solver.binding_facts.append(allocator, .{ .demand = assign.dest });
             if (assign.payload) |payload| {
                 try solver.binding_facts.append(allocator, .{ .demand = payload });
-                try solver.unique_facts.append(allocator, .{ .destroy = payload });
+                try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = payload, .origin = .tag_store } });
             }
         },
         .set_local => |assign| {
@@ -2505,8 +2660,8 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 try solver.unique_facts.append(allocator, .{ .consume = assign.value });
             } else {
                 try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-                try solver.unique_facts.append(allocator, .{ .destroy = assign.target });
-                try solver.unique_facts.append(allocator, .{ .destroy = assign.value });
+                try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = assign.target, .origin = .local_write } });
+                try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = assign.value, .origin = .local_write } });
             }
         },
         .debug => |debug_stmt| try solver.unique_facts.append(allocator, .{ .read = debug_stmt.message }),
@@ -2517,7 +2672,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         },
         .expect => |expect_stmt| try solver.unique_facts.append(allocator, .{ .read = expect_stmt.condition }),
         .comptime_branch_taken => {},
-        .incref => |rc| try solver.unique_facts.append(allocator, .{ .destroy = rc.value }),
+        .incref => |rc| try solver.unique_facts.append(allocator, .{ .destroy = .{ .local = rc.value, .origin = .incref } }),
         .decref => {},
         .decref_if_initialized => |rc| {
             try solver.binding_facts.append(allocator, .{ .demand = rc.value });
@@ -3425,7 +3580,7 @@ fn computeUniquenessFromFacts(
             try origins.noteAlias(alias.target, alias.source);
         },
         .consume => |local| if (domain.indexOf(local)) |index| Marks.consume(&consumed, &destroyed, index),
-        .destroy => |local| if (domain.indexOf(local)) |index| destroyed.set(index),
+        .destroy => |destroy| if (domain.indexOf(destroy.local)) |index| destroyed.set(index),
         .read => |local| if (domain.indexOf(local)) |index| read.set(index),
         .join_param => |local| if (domain.indexOf(local)) |index| param_set.set(index),
         .param_write => |write| if (domain.indexOf(write.param)) |param_index| {
