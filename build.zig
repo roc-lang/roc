@@ -5071,7 +5071,7 @@ pub fn build(b: *std.Build) void {
                 "--wasm-path",
                 "test/wasm/issue_10836_boxed_low_alignment_static_lib_app.wasm",
                 "--expected",
-                "7,9;Inc(42)",
+                "7,9;11,13;Inc(42)",
             });
             run_wasm_issue_10836_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10836_test.step);
