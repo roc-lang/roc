@@ -803,7 +803,7 @@ test "box reuse rewrites an inlined straight-line payload producer" {
 
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } });
     const rebox = try testLowLevel(&store, result_box, .box_box, &.{new_payload}, ret);
-    const add = try testLowLevel(&store, new_payload, .num_plus, &.{ old_payload, one }, rebox);
+    const add = try testLowLevel(&store, new_payload, .num_int_add_wrap, &.{ old_payload, one }, rebox);
     const literal = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },

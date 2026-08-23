@@ -2,8 +2,8 @@
 //!
 //! Fully checked Roc lowers each safety decision into ordinary LIR: a bounds
 //! test is a comparison feeding a switch whose failing arm produces the error
-//! value, and overflow-checked arithmetic is a `*_checked` low-level op that
-//! the backends expand into an overflow branch plus a crash. When a dominating
+//! value, and integer arithmetic carries an explicit behavior family member
+//! that the backends implement directly. When a dominating
 //! branch already implies a check cannot fail (a decode loop's margin test
 //! `cursor + 16 <= len` implies every eight-byte read at `cursor` is in
 //! bounds), the check is pure overhead on every iteration.
@@ -12,14 +12,14 @@
 //!
 //! - a comparison whose outcome is implied becomes a constant `Bool` tag
 //! - a switch on a constant condition becomes its surviving branch
-//! - a checked arithmetic op that cannot overflow becomes its wrapping form
+//! - an arithmetic op proved exact becomes `*_proven_cannot_overflow`
 //!
 //! Anything the prover cannot justify keeps its checks, so the failure mode of
 //! a weak proof is missing speedup, never unsoundness.
 //!
 //! Facts come from three sources. A branch edge asserts its condition: inside
 //! the taken arm of `switch` on `a <= b`, that ordering holds. The
-//! continuation of a surviving `*_checked` op asserts exactness: control only
+//! continuation of a surviving `*_crash_on_overflow` op asserts exactness: control only
 //! reaches it when the operation did not wrap, so its result equals the
 //! mathematical sum, which is precisely the no-overflow knowledge that plain
 //! wrapping ops cannot carry. Bit operations assert constant ranges: masking
@@ -61,6 +61,7 @@ const layout_mod = @import("layout");
 const LIR = core.LIR;
 const LirStore = core.LirStore;
 const CheckedArithmetic = core.CheckedArithmetic;
+const BodyClone = @import("body_clone.zig");
 const GuardedList = LirStore.GuardedList;
 const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
@@ -119,10 +120,30 @@ const Pred = struct {
     b: NodeId,
 };
 
+/// The arithmetic question that defined a Bool local. Its false switch edge
+/// proves that the matching wrapping operation is exact on that path.
+const OverflowPred = struct {
+    operation: CheckedArithmetic.Operation,
+    lhs: NodeId,
+    rhs: NodeId,
+    operand_layout: layout_mod.Idx,
+};
+
+/// A same-sign constant checked chain whose defining statement can be
+/// combined with the immediately following checked operation.
+const ArithmeticChain = struct {
+    operation: CheckedArithmetic.Operation,
+    base: LocalId,
+    constant: i128,
+    stmt: CFStmtId,
+};
+
 /// Symbolic knowledge about one local at one program point.
 const Binding = struct {
     node: NodeId,
     pred: ?Pred = null,
+    overflow_pred: ?OverflowPred = null,
+    arithmetic_chain: ?ArithmeticChain = null,
 };
 
 /// Where an ordering fact's justification lives.
@@ -142,6 +163,11 @@ const Fact = struct {
     origin: FactOrigin,
 };
 
+const EdgeFact = union(enum) {
+    ordering: Fact,
+    no_overflow: OverflowPred,
+};
+
 /// Saved path-environment entry for backtracking.
 const Undo = struct {
     local: LocalId,
@@ -152,9 +178,10 @@ const Undo = struct {
 const Frame = struct {
     stmt: CFStmtId,
     facts_len: usize,
+    no_overflow_facts_len: usize,
     undo_len: usize,
-    /// Ordering fact asserted by the branch edge leading here, if any.
-    edge_fact: ?Fact,
+    /// Path fact asserted by the branch edge leading here, if any.
+    edge_fact: ?EdgeFact,
 };
 
 /// One jump statement and its target, collected during the pre-scan.
@@ -337,6 +364,7 @@ const Pass = struct {
     // Per-proc, per-round state. Reset by `resetRound`.
     nodes: std.ArrayList(Node),
     facts: std.ArrayList(Fact),
+    no_overflow_facts: std.ArrayList(OverflowPred),
     global_env: collections.DenseMap(LocalId, Binding),
     path_env: collections.DenseMap(LocalId, Binding),
     undo: std.ArrayList(Undo),
@@ -393,6 +421,7 @@ const Pass = struct {
     proof_records: std.ArrayList(ProofRecord),
     proof_facts: std.ArrayList(Fact),
     last_claim: ?struct { a: NodeId, b: NodeId, m: i128 },
+    read_counts: ?BodyClone.ReadCounts,
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store) Pass {
         const allocator = store.allocator;
@@ -402,6 +431,7 @@ const Pass = struct {
             .allocator = allocator,
             .nodes = .empty,
             .facts = .empty,
+            .no_overflow_facts = .empty,
             .global_env = collections.DenseMap(LocalId, Binding).init(allocator),
             .path_env = collections.DenseMap(LocalId, Binding).init(allocator),
             .undo = .empty,
@@ -437,12 +467,14 @@ const Pass = struct {
             .proof_records = .empty,
             .proof_facts = .empty,
             .last_claim = null,
+            .read_counts = null,
         };
     }
 
     fn deinit(self: *Pass) void {
         self.nodes.deinit(self.allocator);
         self.facts.deinit(self.allocator);
+        self.no_overflow_facts.deinit(self.allocator);
         self.global_env.deinit();
         self.path_env.deinit();
         self.undo.deinit(self.allocator);
@@ -472,11 +504,13 @@ const Pass = struct {
         self.query_best.deinit();
         self.proof_records.deinit(self.allocator);
         self.proof_facts.deinit(self.allocator);
+        if (self.read_counts) |*counts| counts.deinit();
     }
 
     fn resetRound(self: *Pass) void {
         self.nodes.clearRetainingCapacity();
         self.facts.clearRetainingCapacity();
+        self.no_overflow_facts.clearRetainingCapacity();
         self.global_facts.clearRetainingCapacity();
         self.field_values.clearRetainingCapacity();
         self.global_env.clearRetainingCapacity();
@@ -777,8 +811,9 @@ const Pass = struct {
         try self.bind(target, .{ .node = node });
     }
 
-    fn rewindTo(self: *Pass, facts_len: usize, undo_len: usize) ResourceError!void {
+    fn rewindTo(self: *Pass, facts_len: usize, no_overflow_facts_len: usize, undo_len: usize) ResourceError!void {
         self.facts.shrinkRetainingCapacity(facts_len);
+        self.no_overflow_facts.shrinkRetainingCapacity(no_overflow_facts_len);
         while (self.undo.items.len > undo_len) {
             const entry = self.undo.pop().?;
             if (entry.prev) |prev| {
@@ -792,6 +827,9 @@ const Pass = struct {
     // Pre-scan: predecessor counts, jump counts, and assignment counts.
 
     fn prescanProc(self: *Pass, proc: LIR.LirProcSpec) ResourceError!void {
+        if (self.read_counts) |*counts| counts.deinit();
+        self.read_counts = null;
+        self.read_counts = if (proc.body) |body| try BodyClone.countReachableReads(self.store, body) else null;
         const args = self.store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(args)) |i| {
             try self.bumpAssign(GuardedList.at(args, i));
@@ -2062,12 +2100,14 @@ const Pass = struct {
             self.path_env.clearRetainingCapacity();
             self.undo.clearRetainingCapacity();
             self.facts.clearRetainingCapacity();
+            self.no_overflow_facts.clearRetainingCapacity();
             self.frames.clearRetainingCapacity();
             try self.facts.appendSlice(self.allocator, self.global_facts.items);
             try self.seedFromMerge(head);
             try self.frames.append(self.allocator, .{
                 .stmt = head,
                 .facts_len = self.facts.items.len,
+                .no_overflow_facts_len = self.no_overflow_facts.items.len,
                 .undo_len = self.undo.items.len,
                 .edge_fact = null,
             });
@@ -2077,8 +2117,11 @@ const Pass = struct {
 
     fn walkRegion(self: *Pass, head: CFStmtId) ResourceError!void {
         while (self.frames.pop()) |frame| {
-            try self.rewindTo(frame.facts_len, frame.undo_len);
-            if (frame.edge_fact) |fact| try self.addFact(fact);
+            try self.rewindTo(frame.facts_len, frame.no_overflow_facts_len, frame.undo_len);
+            if (frame.edge_fact) |fact| switch (fact) {
+                .ordering => |ordering| try self.addFact(ordering),
+                .no_overflow => |no_overflow| try self.no_overflow_facts.append(self.allocator, no_overflow),
+            };
 
             var current = frame.stmt;
             walk: while (true) {
@@ -2098,7 +2141,13 @@ const Pass = struct {
                         switch (s.op) {
                             .local => |src| {
                                 if (try self.valueOf(src)) |node| {
-                                    try self.bind(s.target, .{ .node = node, .pred = if (self.lookup(src)) |b| b.pred else null });
+                                    const source_binding = self.lookup(src);
+                                    try self.bind(s.target, .{
+                                        .node = node,
+                                        .pred = if (source_binding) |b| b.pred else null,
+                                        .overflow_pred = if (source_binding) |b| b.overflow_pred else null,
+                                        .arithmetic_chain = if (source_binding) |b| b.arithmetic_chain else null,
+                                    });
                                 } else {
                                     try self.bindFresh(s.target);
                                 }
@@ -2134,12 +2183,21 @@ const Pass = struct {
                         // place; `s` is a pre-rewrite copy, so its `next`
                         // stays valid either way.
                         try self.modelLowLevel(current, s);
-                        current = s.next;
+                        switch (self.store.getCFStmt(current)) {
+                            .crash => break :walk,
+                            else => current = s.next,
+                        }
                     },
                     .set_local => |s| {
                         try self.visited.put(current, {});
                         if (try self.valueOf(s.value)) |node| {
-                            try self.bind(s.target, .{ .node = node, .pred = if (self.lookup(s.value)) |b| b.pred else null });
+                            const source_binding = self.lookup(s.value);
+                            try self.bind(s.target, .{
+                                .node = node,
+                                .pred = if (source_binding) |b| b.pred else null,
+                                .overflow_pred = if (source_binding) |b| b.overflow_pred else null,
+                                .arithmetic_chain = if (source_binding) |b| b.arithmetic_chain else null,
+                            });
                         } else {
                             try self.bindFresh(s.target);
                         }
@@ -2339,10 +2397,11 @@ const Pass = struct {
         }
     }
 
-    fn pushFrame(self: *Pass, stmt: CFStmtId, edge_fact: ?Fact) ResourceError!void {
+    fn pushFrame(self: *Pass, stmt: CFStmtId, edge_fact: ?EdgeFact) ResourceError!void {
         try self.frames.append(self.allocator, .{
             .stmt = stmt,
             .facts_len = self.facts.items.len,
+            .no_overflow_facts_len = self.no_overflow_facts.items.len,
             .undo_len = self.undo.items.len,
             .edge_fact = edge_fact,
         });
@@ -2352,35 +2411,43 @@ const Pass = struct {
     /// edges: the `1` arm asserts it and the `0`/default arm asserts its
     /// negation.
     fn pushSwitchArms(self: *Pass, s: anytype, switch_stmt: CFStmtId) ResourceError!void {
-        const pred: ?Pred = if (self.lookup(s.cond)) |binding| binding.pred else null;
+        const binding = self.lookup(s.cond);
         const cond_is_bool = self.localLayout(s.cond) == .bool;
 
         const branches = self.store.getCFSwitchBranches(s.branches);
         const branch_count = GuardedList.borrowLen(branches);
 
-        var default_fact: ?Fact = null;
-        if (pred != null and cond_is_bool and branch_count == 1) {
+        var default_fact: ?EdgeFact = null;
+        if (binding != null and cond_is_bool and branch_count == 1) {
             const only = GuardedList.at(branches, 0);
             if (only.value == 1) {
-                default_fact = self.predFact(pred.?, false, switch_stmt);
+                default_fact = self.boolEdgeFact(binding.?, false, switch_stmt);
             } else if (only.value == 0) {
-                default_fact = self.predFact(pred.?, true, switch_stmt);
+                default_fact = self.boolEdgeFact(binding.?, true, switch_stmt);
             }
         }
         try self.pushFrame(s.default_branch, default_fact);
 
         for (0..branch_count) |i| {
             const branch = GuardedList.at(branches, i);
-            var edge_fact: ?Fact = null;
-            if (pred != null and cond_is_bool) {
+            var edge_fact: ?EdgeFact = null;
+            if (binding != null and cond_is_bool) {
                 if (branch.value == 1) {
-                    edge_fact = self.predFact(pred.?, true, switch_stmt);
+                    edge_fact = self.boolEdgeFact(binding.?, true, switch_stmt);
                 } else if (branch.value == 0) {
-                    edge_fact = self.predFact(pred.?, false, switch_stmt);
+                    edge_fact = self.boolEdgeFact(binding.?, false, switch_stmt);
                 }
             }
             try self.pushFrame(branch.body, edge_fact);
         }
+    }
+
+    fn boolEdgeFact(self: *const Pass, binding: Binding, holds: bool, switch_stmt: CFStmtId) ?EdgeFact {
+        if (binding.pred) |pred| return .{ .ordering = self.predFact(pred, holds, switch_stmt) };
+        if (!holds) {
+            if (binding.overflow_pred) |overflow_pred| return .{ .no_overflow = overflow_pred };
+        }
+        return null;
     }
 
     /// Ordering fact asserted when a comparison holds (or fails, for the
@@ -2501,23 +2568,19 @@ const Pass = struct {
             .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte => {
                 try self.modelCompare(stmt, s, args, arg_count);
             },
-            .num_plus_checked, .num_minus_checked => {
-                try self.modelCheckedArith(stmt, s, args, arg_count);
-            },
-            .num_plus => {
-                if (try self.wrapAddExact(args, arg_count, self.localLayout(s.target))) |node| {
-                    try self.bind(s.target, .{ .node = node });
-                } else {
-                    try self.bindFresh(s.target);
-                }
-            },
-            .num_minus => {
-                if (try self.wrapSubExact(args, arg_count)) |node| {
-                    try self.bind(s.target, .{ .node = node });
-                } else {
-                    try self.bindFresh(s.target);
-                }
-            },
+            .num_int_add_wrap,
+            .num_int_add_crash_on_overflow,
+            .num_int_add_overflows,
+            .num_int_add_proven_cannot_overflow,
+            .num_int_sub_wrap,
+            .num_int_sub_crash_on_overflow,
+            .num_int_sub_overflows,
+            .num_int_sub_proven_cannot_overflow,
+            .num_int_mul_wrap,
+            .num_int_mul_crash_on_overflow,
+            .num_int_mul_overflows,
+            .num_int_mul_proven_cannot_overflow,
+            => try self.modelFamilyArith(stmt, s, args, arg_count),
             .num_bitwise_and => {
                 var mask: ?i128 = null;
                 if (arg_count == 2) {
@@ -2685,11 +2748,10 @@ const Pass = struct {
             .num_negate,
             .num_abs,
             .num_abs_diff,
-            .num_plus_wrap,
-            .num_minus_wrap,
-            .num_times,
-            .num_times_wrap,
-            .num_times_checked,
+            .num_float_add,
+            .num_float_sub,
+            .num_float_mul,
+            .dec_mul,
             .num_div_by,
             .num_div_by_checked,
             .num_div_trunc_by,
@@ -3054,6 +3116,7 @@ const Pass = struct {
             .compare,
             .crash,
             => try self.bindFresh(s.target),
+            .num_plus, .num_minus, .num_times => unreachable,
         }
     }
 
@@ -3131,9 +3194,15 @@ const Pass = struct {
         try self.bind(s.target, .{ .node = bool_node, .pred = .{ .op = op, .a = a, .b = b } });
     }
 
-    fn modelCheckedArith(self: *Pass, stmt: CFStmtId, s: anytype, args: anytype, arg_count: usize) ResourceError!void {
-        const target_layout = self.localLayout(s.target);
-        const max = trackedIntMax(target_layout);
+    const ArithmeticProof = struct {
+        proven: bool = false,
+        result: ?NodeId = null,
+    };
+
+    fn modelFamilyArith(self: *Pass, stmt: CFStmtId, s: anytype, args: anytype, arg_count: usize) ResourceError!void {
+        const entry = CheckedArithmetic.classify(s.op) orelse unreachable;
+        const operand_layout = if (arg_count > 0) self.localLayout(GuardedList.at(args, 0)) else self.localLayout(s.target);
+        const max = trackedIntMax(operand_layout);
         if (arg_count != 2 or max == null) {
             try self.bindFresh(s.target);
             return;
@@ -3147,92 +3216,322 @@ const Pass = struct {
             return;
         };
 
-        var provable = false;
-        var result: ?NodeId = null;
-        if (s.op == .num_plus_checked) {
-            if (self.constValueOf(rhs)) |c| {
-                if (c >= 0) {
-                    // Never wraps when lhs stays at most max - c.
-                    if (try self.constNode(max.? - c)) |limit| {
-                        provable = try self.proveLe(lhs, limit, 0);
-                    }
-                    // Control past a surviving checked add proves the sum
-                    // is exact regardless of whether it can be rewritten.
-                    result = try self.derived(lhs, c);
-                }
-            } else if (self.constValueOf(lhs)) |c| {
-                if (c >= 0) {
-                    if (try self.constNode(max.? - c)) |limit| {
-                        provable = try self.proveLe(rhs, limit, 0);
-                    }
-                    result = try self.derived(rhs, c);
-                }
-            }
-        } else if (s.op == .num_minus_checked) {
-            // Never wraps when rhs stays at most lhs.
-            provable = try self.proveLe(rhs, lhs, 0);
-            // Control past a surviving checked subtract proves the
-            // difference is exact, so the result stays on lhs's root
-            // with a window widened by rhs's absolute bounds.
-            const rhs_lo = self.absLoOf(rhs);
-            const rhs_hi = self.absHiOf(rhs);
-            if (rhs_lo >= 0) {
-                result = try self.derivedRange(lhs, -rhs_hi, -rhs_lo);
-            }
-        } else unreachable;
+        if (try self.foldSameSignConstantChain(stmt, s, args, entry, lhs, rhs, operand_layout, max.?)) return;
 
-        if (provable) {
+        var proof = try self.proveFamilyNoOverflow(entry.operation, lhs, rhs, operand_layout);
+        if (!proof.proven and self.pathProvesNoOverflow(entry.operation, lhs, rhs, operand_layout)) {
+            proof = .{
+                .proven = true,
+                .result = try self.survivingFamilyResult(entry.operation, lhs, rhs),
+            };
+        }
+        const always_overflows = self.familyAlwaysOverflows(entry.operation, lhs, rhs, max.?);
+
+        if (entry.mode == .crash_on_overflow and always_overflows) {
+            try self.rewriteAsArithmeticCrash(stmt, entry.operation);
+            return;
+        }
+
+        if (entry.mode == .overflows) {
+            if ((proof.proven or always_overflows) and self.live_pending) {
+                self.deferred_rewrites = true;
+            } else if (proof.proven or always_overflows) {
+                const truth: u16 = @intFromBool(always_overflows);
+                self.store.getCFStmtPtr(stmt).* = .{ .assign_tag = .{
+                    .target = s.target,
+                    .variant_index = truth,
+                    .discriminant = truth,
+                    .payload = null,
+                    .next = s.next,
+                } };
+                self.rewrites += 1;
+                if (try self.constNode(truth)) |node| {
+                    try self.bind(s.target, .{ .node = node });
+                } else {
+                    try self.bindFresh(s.target);
+                }
+                return;
+            }
+
+            const bool_node = (try self.freshRoot(0, 1)) orelse return self.bindFresh(s.target);
+            try self.bind(s.target, .{ .node = bool_node, .overflow_pred = .{
+                .operation = entry.operation,
+                .lhs = lhs,
+                .rhs = rhs,
+                .operand_layout = operand_layout,
+            } });
+            return;
+        }
+
+        if (proof.proven and entry.mode != .proven_cannot_overflow) {
             if (self.live_pending) {
                 self.deferred_rewrites = true;
-            } else if (CheckedArithmetic.uncheckedOp(s.op)) |unchecked| {
+            } else if (CheckedArithmetic.provenForm(s.op)) |proven| {
                 try self.recordProof(stmt);
                 const ptr = &self.store.getCFStmtPtr(stmt).assign_low_level;
-                ptr.op = unchecked;
-                ptr.rc_effect = unchecked.rcEffect();
+                ptr.op = proven;
+                ptr.rc_effect = proven.rcEffect();
                 self.rewrites += 1;
             }
         }
 
-        if (result) |node| {
-            try self.bind(s.target, .{ .node = node });
-        } else {
-            try self.bindFresh(s.target);
+        var result = proof.result;
+        if (result == null and entry.mode == .crash_on_overflow) {
+            // Continuing past a surviving checked operation proves its result
+            // exact even if its input ranges did not prove safety beforehand.
+            result = try self.survivingFamilyResult(entry.operation, lhs, rhs);
         }
+        const result_node = result orelse (try self.unknownFor(self.localLayout(s.target)) orelse return);
+        try self.bind(s.target, .{
+            .node = result_node,
+            .arithmetic_chain = if (entry.mode == .crash_on_overflow and !proof.proven)
+                self.constantArithmeticChain(stmt, entry.operation, args, lhs, rhs)
+            else
+                null,
+        });
     }
 
-    /// Exact node for a wrapping add proven not to wrap, or null.
-    fn wrapAddExact(self: *Pass, args: anytype, arg_count: usize, target_layout: layout_mod.Idx) ResourceError!?NodeId {
-        const max = trackedIntMax(target_layout) orelse return null;
-        if (arg_count != 2) return null;
-        const lhs = (try self.valueOf(GuardedList.at(args, 0))) orelse return null;
-        const rhs = (try self.valueOf(GuardedList.at(args, 1))) orelse return null;
-        if (self.constValueOf(rhs)) |c| {
-            if (c >= 0) {
-                if (try self.constNode(max - c)) |limit| {
-                    if (try self.proveLe(lhs, limit, 0)) return try self.derived(lhs, c);
-                }
-            }
+    fn constantArithmeticChain(
+        self: *const Pass,
+        stmt: CFStmtId,
+        operation: CheckedArithmetic.Operation,
+        args: anytype,
+        lhs: NodeId,
+        rhs: NodeId,
+    ) ?ArithmeticChain {
+        return switch (operation) {
+            .add => if (self.constValueOf(rhs)) |constant|
+                .{ .operation = .add, .base = GuardedList.at(args, 0), .constant = constant, .stmt = stmt }
+            else if (self.constValueOf(lhs)) |constant|
+                .{ .operation = .add, .base = GuardedList.at(args, 1), .constant = constant, .stmt = stmt }
+            else
+                null,
+            .sub => if (self.constValueOf(rhs)) |constant|
+                .{ .operation = .sub, .base = GuardedList.at(args, 0), .constant = constant, .stmt = stmt }
+            else
+                null,
+            .mul => null,
+        };
+    }
+
+    fn foldSameSignConstantChain(
+        self: *Pass,
+        stmt: CFStmtId,
+        s: anytype,
+        args: anytype,
+        entry: CheckedArithmetic.FamilyEntry,
+        lhs: NodeId,
+        rhs: NodeId,
+        operand_layout: layout_mod.Idx,
+        max: i128,
+    ) ResourceError!bool {
+        if (entry.mode != .crash_on_overflow or (entry.operation != .add and entry.operation != .sub)) return false;
+
+        var inner_local: LocalId = undefined;
+        var outer_constant_local: LocalId = undefined;
+        var outer_constant: i128 = undefined;
+        if (entry.operation == .add) {
+            if (self.constValueOf(rhs)) |constant| {
+                inner_local = GuardedList.at(args, 0);
+                outer_constant_local = GuardedList.at(args, 1);
+                outer_constant = constant;
+            } else if (self.constValueOf(lhs)) |constant| {
+                inner_local = GuardedList.at(args, 1);
+                outer_constant_local = GuardedList.at(args, 0);
+                outer_constant = constant;
+            } else return false;
+        } else {
+            outer_constant = self.constValueOf(rhs) orelse return false;
+            inner_local = GuardedList.at(args, 0);
+            outer_constant_local = GuardedList.at(args, 1);
         }
-        if (self.constValueOf(lhs)) |c| {
-            if (c >= 0) {
-                if (try self.constNode(max - c)) |limit| {
-                    if (try self.proveLe(rhs, limit, 0)) return try self.derived(rhs, c);
-                }
-            }
+        if (outer_constant < 0 or outer_constant > max) return false;
+
+        const chain = (self.lookup(inner_local) orelse return false).arithmetic_chain orelse return false;
+        if (chain.operation != entry.operation or chain.constant < 0 or chain.constant > max) return false;
+
+        const inner = switch (self.store.getCFStmt(chain.stmt)) {
+            .assign_low_level => |inner| inner,
+            else => return false,
+        };
+        if (inner.target != inner_local) return false;
+        const outer_literal_stmt = self.literalDefinitionOnPath(inner.next, stmt, outer_constant_local) orelse return false;
+        const read_counts = self.read_counts orelse return false;
+        if (read_counts.get(inner_local) != 1 or read_counts.get(outer_constant_local) != 1) return false;
+        const inner_entry = CheckedArithmetic.classify(inner.op) orelse return false;
+        if (inner_entry.operation != entry.operation or inner_entry.mode != .crash_on_overflow) return false;
+
+        const wrapping_op = CheckedArithmetic.member(entry.operation, .wrap);
+        self.store.getCFStmtPtr(chain.stmt).assign_low_level.op = wrapping_op;
+        self.store.getCFStmtPtr(chain.stmt).assign_low_level.rc_effect = wrapping_op.rcEffect();
+
+        if (outer_constant > max - chain.constant) {
+            try self.rewriteAsArithmeticCrash(stmt, entry.operation);
+            return true;
+        }
+        const combined_constant = chain.constant + outer_constant;
+        self.store.getCFStmtPtr(outer_literal_stmt).assign_literal.value = .{
+            .i128_literal = .{ .value = combined_constant, .layout_idx = operand_layout },
+        };
+        const combined_args = try self.store.addLocalSpan(&.{ chain.base, outer_constant_local });
+        self.store.getCFStmtPtr(stmt).assign_low_level.args = combined_args;
+        self.rewrites += 1;
+
+        const result = (try self.survivingFamilyResult(entry.operation, lhs, rhs)) orelse
+            (try self.unknownFor(self.localLayout(s.target)) orelse return true);
+        try self.bind(s.target, .{ .node = result, .arithmetic_chain = .{
+            .operation = entry.operation,
+            .base = chain.base,
+            .constant = combined_constant,
+            .stmt = stmt,
+        } });
+        return true;
+    }
+
+    fn literalDefinitionOnPath(self: *const Pass, start: CFStmtId, target: CFStmtId, local: LocalId) ?CFStmtId {
+        var current = start;
+        var remaining = self.store.cfStmtCount();
+        var definition: ?CFStmtId = null;
+        while (remaining > 0) : (remaining -= 1) {
+            if (current == target) return definition;
+            current = switch (self.store.getCFStmt(current)) {
+                .assign_literal => |literal| blk: {
+                    if (literal.target == local) definition = current;
+                    break :blk literal.next;
+                },
+                else => return null,
+            };
         }
         return null;
     }
 
-    /// Bounded node for a wrapping subtract proven not to wrap, or null.
-    fn wrapSubExact(self: *Pass, args: anytype, arg_count: usize) ResourceError!?NodeId {
-        if (arg_count != 2) return null;
-        const lhs = (try self.valueOf(GuardedList.at(args, 0))) orelse return null;
-        const rhs = (try self.valueOf(GuardedList.at(args, 1))) orelse return null;
+    fn proveFamilyNoOverflow(
+        self: *Pass,
+        operation: CheckedArithmetic.Operation,
+        lhs: NodeId,
+        rhs: NodeId,
+        operand_layout: layout_mod.Idx,
+    ) ResourceError!ArithmeticProof {
+        if (builtin.mode == .Debug) self.last_claim = null;
+        const max = trackedIntMax(operand_layout) orelse return .{};
+        const lhs_lo = self.absLoOf(lhs);
+        const lhs_hi = self.absHiOf(lhs);
         const rhs_lo = self.absLoOf(rhs);
         const rhs_hi = self.absHiOf(rhs);
-        if (rhs_lo < 0) return null;
-        if (!try self.proveLe(rhs, lhs, 0)) return null;
-        return try self.derivedRange(lhs, -rhs_hi, -rhs_lo);
+
+        switch (operation) {
+            .add => {
+                // This numeric proof handles two dynamic unsigned operands
+                // without allocating a symbolic limit node.
+                if (lhs_lo >= 0 and rhs_lo >= 0 and rhs_hi <= max and lhs_hi <= max - rhs_hi) {
+                    const result = if (self.constValueOf(rhs)) |c|
+                        try self.derived(lhs, c)
+                    else if (self.constValueOf(lhs)) |c|
+                        try self.derived(rhs, c)
+                    else
+                        try self.freshRoot(lhs_lo + rhs_lo, lhs_hi + rhs_hi);
+                    return .{ .proven = result != null, .result = result };
+                }
+
+                if (self.constValueOf(rhs)) |c| {
+                    if (c >= 0 and c <= max) {
+                        if (try self.constNode(max - c)) |limit| {
+                            if (try self.proveLe(lhs, limit, 0)) return .{ .proven = true, .result = try self.derived(lhs, c) };
+                        }
+                    }
+                } else if (self.constValueOf(lhs)) |c| {
+                    if (c >= 0 and c <= max) {
+                        if (try self.constNode(max - c)) |limit| {
+                            if (try self.proveLe(rhs, limit, 0)) return .{ .proven = true, .result = try self.derived(rhs, c) };
+                        }
+                    }
+                }
+            },
+            .sub => {
+                if (lhs_lo >= rhs_hi or try self.proveLe(rhs, lhs, 0)) {
+                    const result = if (rhs_lo >= 0) try self.derivedRange(lhs, -rhs_hi, -rhs_lo) else null;
+                    return .{ .proven = result != null, .result = result };
+                }
+            },
+            .mul => {
+                const result = try self.mulConstExactNodes(lhs, rhs, operand_layout);
+                return .{ .proven = result != null, .result = result };
+            },
+        }
+        return .{};
+    }
+
+    fn pathProvesNoOverflow(
+        self: *const Pass,
+        operation: CheckedArithmetic.Operation,
+        lhs: NodeId,
+        rhs: NodeId,
+        operand_layout: layout_mod.Idx,
+    ) bool {
+        var i = self.no_overflow_facts.items.len;
+        while (i > 0) {
+            i -= 1;
+            const fact = self.no_overflow_facts.items[i];
+            if (fact.operation != operation or fact.operand_layout != operand_layout) continue;
+            if (fact.lhs == lhs and fact.rhs == rhs) return true;
+            if ((operation == .add or operation == .mul) and fact.lhs == rhs and fact.rhs == lhs) return true;
+        }
+        return false;
+    }
+
+    fn survivingFamilyResult(self: *Pass, operation: CheckedArithmetic.Operation, lhs: NodeId, rhs: NodeId) ResourceError!?NodeId {
+        return switch (operation) {
+            .add => if (self.constValueOf(rhs)) |c|
+                try self.derived(lhs, c)
+            else if (self.constValueOf(lhs)) |c|
+                try self.derived(rhs, c)
+            else
+                null,
+            .sub => blk: {
+                const rhs_lo = self.absLoOf(rhs);
+                const rhs_hi = self.absHiOf(rhs);
+                break :blk if (rhs_lo >= 0) try self.derivedRange(lhs, -rhs_hi, -rhs_lo) else null;
+            },
+            .mul => null,
+        };
+    }
+
+    fn familyAlwaysOverflows(self: *const Pass, operation: CheckedArithmetic.Operation, lhs: NodeId, rhs: NodeId, max: i128) bool {
+        const a = self.constValueOf(lhs) orelse return false;
+        const b = self.constValueOf(rhs) orelse return false;
+        return switch (operation) {
+            .add => b > max or a > max - b,
+            .sub => a < b,
+            .mul => b != 0 and a > @divTrunc(max, b),
+        };
+    }
+
+    fn rewriteAsArithmeticCrash(self: *Pass, stmt: CFStmtId, operation: CheckedArithmetic.Operation) ResourceError!void {
+        const op = CheckedArithmetic.member(operation, .crash_on_overflow);
+        const message = CheckedArithmetic.overflowMessage(op) orelse unreachable;
+        self.store.getCFStmtPtr(stmt).* = .{ .crash = .{
+            .msg = .{ .literal = try self.store.insertString(message) },
+        } };
+        self.rewrites += 1;
+    }
+
+    fn mulConstExactNodes(self: *Pass, lhs: NodeId, rhs: NodeId, target_layout: layout_mod.Idx) ResourceError!?NodeId {
+        const max = trackedIntMax(target_layout) orelse return null;
+        var factor: i128 = undefined;
+        var operand: NodeId = undefined;
+        if (self.constValueOf(rhs)) |c| {
+            factor = c;
+            operand = lhs;
+        } else if (self.constValueOf(lhs)) |c| {
+            factor = c;
+            operand = rhs;
+        } else return null;
+        if (factor < 0) return null;
+        const lo = self.absLoOf(operand);
+        const hi = self.absHiOf(operand);
+        if (lo < 0) return null;
+        if (factor != 0 and hi > @divTrunc(max, factor)) return null;
+        return try self.freshRoot(lo * factor, hi * factor);
     }
 };
 

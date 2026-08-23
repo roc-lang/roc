@@ -23441,7 +23441,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const false_expr = try self.boolLiteral(false, ctl.bool_ty);
-        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+        const remaining_minus_one = try self.lowLevelExpr(.num_int_sub_wrap, &.{
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             try self.intLiteralExpr(1, ctl.u64_ty),
         }, ctl.u64_ty);
@@ -23577,7 +23577,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const cursor_expr = try self.localExpr(continue_state_local, state_ty);
         const false_expr = try self.boolLiteral(false, ctl.bool_ty);
-        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+        const remaining_minus_one = try self.lowLevelExpr(.num_int_sub_wrap, &.{
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             try self.intLiteralExpr(1, ctl.u64_ty),
         }, ctl.u64_ty);
@@ -24654,7 +24654,7 @@ const BodyContext = struct {
             state_ty,
         );
         const counted_done = try self.addExpr(.{ .ty = ret_ty, .data = .{ .break_ = done_value } });
-        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+        const remaining_minus_one = try self.lowLevelExpr(.num_int_sub_wrap, &.{
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             try self.intLiteralExpr(1, ctl.u64_ty),
         }, ctl.u64_ty);
@@ -25093,7 +25093,7 @@ const BodyContext = struct {
             try self.localExpr(elem_local, elem_ty),
             list_ty,
         );
-        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+        const remaining_minus_one = try self.lowLevelExpr(.num_int_sub_wrap, &.{
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             try self.intLiteralExpr(1, ctl.u64_ty),
         }, ctl.u64_ty);

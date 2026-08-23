@@ -35450,7 +35450,7 @@ test "template dispatch classification separates direct calls from graph relatio
                 .kind = .{ .procedure = .{
                     .proc = undefined,
                     .template = undefined,
-                    .runtime_target = .{ .low_level = .num_plus_wrap },
+                    .runtime_target = .{ .low_level = .num_int_add_wrap },
                 } },
                 .callable_ty = callable_ty,
             },

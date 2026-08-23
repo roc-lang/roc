@@ -42,7 +42,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v21: erased calls and procedures carry explicit packed-argument plans.
 /// v22: combines the independent v20 and v21 image changes.
 /// v23: Boxy type descriptors identify field-presence slots explicitly.
-pub const FORMAT_VERSION: u32 = 23;
+/// v24: integer arithmetic uses explicit behavior-family operations.
+pub const FORMAT_VERSION: u32 = 24;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{

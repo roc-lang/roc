@@ -8743,9 +8743,14 @@ varies is only how many of those checks the range prover discharges.
 `num_plus`, `num_minus`, and `num_times` survive as source-policy markers
 emitted by canonicalization, where the operand layout is not yet committed. A
 single lowering step maps them to a family member using the layout: a float
-layout selects the float operation, an integer layout selects
-`crash_on_overflow`, and the explicit `_wrap` builtins select `wrap`. These
-markers never reach a LIR pass or a backend.
+layout selects the float operation and an integer layout selects
+`crash_on_overflow`. These markers never reach a LIR pass or a backend.
+
+Explicit `_wrap` builtins are integer-only, so their target is already known at
+canonicalization and they map directly to the corresponding `wrap` family
+member. Compiler-synthesized wrapping arithmetic whose concrete layout is
+already known does the same. The lowering step is the choke point only for the
+polymorphic source-policy operations.
 
 The overflow predicate needs no such marker. It is integer-only and has exactly
 one form, so there is no policy for the lowering step to decide, and it maps
@@ -8816,13 +8821,13 @@ something plain `+` provides, and doing so has measurably cost throughput.
 `Dec` is fixed-point over an `i128`. Its addition and subtraction are plain
 `i128` arithmetic and join the integer family, despite the family name saying
 integer, because that is precisely what they are at the machine level. `Dec`
-multiplication requires rescaling, so it remains its own operation.
+multiplication requires rescaling, so it remains its own `dec_mul` operation.
 
 ### Division and shifts
 
 Division, remainder, modulo, negation, and absolute value keep their existing
-checked forms. Their overflow shape differs — the most negative value divided
-by negative one, and division by zero — and they are not part of this family.
+checked forms. Their overflow shape differs—the most negative value divided
+by negative one, and division by zero—and they are not part of this family.
 Shift operations do not yet assert no-wraparound where it would be provable.
 
 ## ARC Borrow Inference
