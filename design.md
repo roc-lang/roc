@@ -10971,7 +10971,7 @@ sealed object's local definition.
 An Archive output contains the sealed object as one member rather than separate
 app, builtins, runtime, sidecar, or compiler-rt members. The archive symbol
 index therefore advertises only the platform's `provides` definitions from
-Roc-owned code. Shared and executable outputs pass only the sealed object to
+Roc-owned code. `Shared` and `Exe` outputs pass only the sealed object to
 the platform linker. Final runtime exports are selected exclusively from the
 platform target's `exports` field. An absent or empty field exports no
 functions; object symbol discovery must never enlarge that set.
