@@ -16,38 +16,34 @@ main! = |_| {}
 AMBIGUOUS FUNCTION TYPE - type_function_effectful.md:3:31:3:33
 UNEXPECTED STATEMENT - type_function_effectful.md:3:34:3:36
 # PROBLEMS
+── ✗ ambiguous function type ─────────────────── type_function_effectful.md:3:31
 
-┌─────────────────────────┐
-│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
-└┬────────────────────────┘  arrows need parentheses.                         │
- │                                                                            │
- │  runEffect! : (_a => _b) -> _a => _b                                       │
- │                                ‾‾                                          │
- └─────────────────────────────────────────── type_function_effectful.md:3:31 ┘
+I was parsing a function type, and multiple arrows need parentheses.
 
-    Use parentheses to say whether the function returns another function or
-    takes a function as an argument.
+runEffect! : (_a => _b) -> _a => _b
+                              ^^
 
-    For example:
-        a -> (b -> c)
-        (a -> b) -> c
+Use parentheses to say whether the function returns another function or takes a
+function as an argument.
 
+For example:
+    a -> (b -> c)
+    (a -> b) -> c
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  runEffect! : (_a => _b) -> _a => _b                                       │
- │                                   ‾‾                                       │
- └─────────────────────────────────────────── type_function_effectful.md:3:34 ┘
+── ✗ unexpected statement ────────────────────── type_function_effectful.md:3:34
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+runEffect! : (_a => _b) -> _a => _b
+                                 ^^
 
-    I found `_b` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found _b here.
 
 # TOKENS
 ~~~zig
@@ -115,7 +111,7 @@ main! = |_| {}
 			(args
 				(p-assign (ident "fn!"))
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 211)
+			(e-call (constraint-fn-var 221)
 				(e-lookup-local
 					(p-assign (ident "fn!")))
 				(e-lookup-local

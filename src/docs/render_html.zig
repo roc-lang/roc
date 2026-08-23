@@ -72,7 +72,7 @@ const SidebarNode = struct {
 /// generated reference builtin types but the builtins are not part of the
 /// package being documented. Each builtin type is a top-level page here (e.g.
 /// `…/Str`), matching how `reshapeBuiltin` lays the site out.
-const builtins_docs_base_url = "https://roc-lang.org/builtins/main/";
+const builtins_docs_base_url = "https://roc-lang.org/docs/main/";
 
 /// Builtin types documented as nested types on another type's page rather than
 /// on their own top-level page, mapped to the owning page. Mirrors the builtins'
@@ -92,6 +92,16 @@ const builtin_nested_type_owners = [_]struct { name: []const u8, owner: []const 
     .{ .name = "F32", .owner = "Num" },  .{ .name = "F64", .owner = "Num" },
     .{ .name = "Dec", .owner = "Num" },  .{ .name = "Numeral", .owner = "Num" },
 };
+
+/// The `name`↔`type` separator for a record field: `?:` marks an optional
+/// field, plain `:` a required or defaulted one (a defaulted field's `??`
+/// default is written as a suffix after the type).
+fn fieldSeparator(kind: DocType.Field.Kind) []const u8 {
+    return switch (kind) {
+        .optional => " ?: ",
+        .required, .defaulted => " : ",
+    };
+}
 
 /// Writes the published URL for a builtin type referenced from another package's
 /// docs: `…/Num#U8` for a nested type, `…/Str` for a top-level one.
@@ -191,7 +201,7 @@ const RenderContext = struct {
         /// Resolved shorthand references in `doc`.
         refs: []const DocModel.DocRef = &.{},
         /// 1-based source line of the first character of `doc`. Zero
-        /// when unknown — broken-link reports then get `source_line = 0`.
+        /// when unknown—broken-link reports then get `source_line = 0`.
         start_line: u32 = 0,
     };
 
@@ -330,8 +340,8 @@ const RenderContext = struct {
 /// path (e.g. `Builtin.Num.U8.default`); intermediate path components like
 /// `Num` and `U8` are not standalone entries but become group nodes in the
 /// rendered tree (so anchors `id="Builtin.Num.U8"` exist on the page). For
-/// each entry we walk its prefixes — minus the leaf component for value
-/// entries — and record `short_name → module_relative_path` so a reference to
+/// each entry we walk its prefixes—minus the leaf component for value
+/// entries—and record `short_name → module_relative_path` so a reference to
 /// a bare `U8` can be linked to `Builtin.Num.U8`. Keys and values are slices
 /// into `entry.name`, which is owned by the PackageDocs and lives for the
 /// duration of rendering.
@@ -351,7 +361,7 @@ fn populateAnchorMap(
             try std.fmt.allocPrint(arena, "{s}.{s}", .{ parent_rel_path, local_name });
 
         // For value entries, the final dotted segment is the value's own name
-        // (e.g. `default` in `Builtin.Num.U8.default`) — exclude it so we only
+        // (e.g. `default` in `Builtin.Num.U8.default`)—exclude it so we only
         // map type-like prefixes (`Num`, `Num.U8`).
         var rel_end: usize = entry_rel_path.len;
         if (entry.kind == .value) {
@@ -408,8 +418,8 @@ fn addAnchor(
 
 /// Walk every entry recursively and add each dotted prefix of its full path
 /// (including the leaf segment, even for value entries) to `set`. Mirrors the
-/// shape of `buildEntryTree` so every `id="…"` value emitted by the renderer
-/// — both leaf entry ids and intermediate group-node ids — has a matching
+/// shape of `buildEntryTree` so every `id="…"` value emitted by the renderer—
+/// both leaf entry ids and intermediate group-node ids—has a matching
 /// entry here. `parent_path` is the full path of the entry whose `children`
 /// we are walking, or empty for top-level entries (whose own `name` already
 /// contains the module prefix).
@@ -475,8 +485,35 @@ pub fn renderPackageDocs(
 ) RenderError!void {
     // Ensure the output directory exists
     std.Io.Dir.cwd().createDirPath(io, output_dir_path) catch |err| switch (err) {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
         error.PathAlreadyExists => {},
-        else => return err,
     };
 
     var output_dir = try std.Io.Dir.cwd().openDir(io, output_dir_path, .{});
@@ -529,8 +566,35 @@ fn writeLangRefPages(
     langref: *const render_markdown.LangRef,
 ) RenderError!void {
     dir.createDirPath(io, "langref") catch |err| switch (err) {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
         error.PathAlreadyExists => {},
-        else => return err,
     };
     var sub_dir = try dir.openDir(io, "langref", .{});
     defer sub_dir.close(io);
@@ -545,7 +609,34 @@ fn writeLangRefPages(
         // giving the extensionless `/langref/<slug>` URL. Slugs are filename-safe.
         sub_dir.createDirPath(io, article.slug) catch |err| switch (err) {
             error.PathAlreadyExists => {},
-            else => return err,
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.DeviceBusy,
+            error.DiskQuota,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileNotFound,
+            error.FileTooBig,
+            error.IsDir,
+            error.LinkQuotaExceeded,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.Streaming,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => return err,
         };
         var article_dir = try sub_dir.openDir(io, article.slug, .{});
         defer article_dir.close(io);
@@ -576,8 +667,8 @@ fn writeLangRefArticlePage(
 
     // The README landing page is served at `/langref/` (one level below the
     // site root), while every other article is served at `/langref/<slug>/`
-    // (two levels below). `base` reaches the site root — for assets, module
-    // links and search entries — and `langref_base` reaches the `langref/`
+    // (two levels below). `base` reaches the site root—for assets, module
+    // links and search entries—and `langref_base` reaches the `langref/`
     // directory, for links to sibling articles.
     const base = if (article.is_index) "../" else "../../";
     const langref_base = if (article.is_index) "" else "../";
@@ -622,7 +713,7 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir:
     // The index page's center content used to repeat the module list (and a
     // "Builtin Docs"/package-name heading) that's already in the sidebar. It's
     // now just the guide links (see writeMainOpen) plus the search bar, so
-    // there's nothing package-specific to render here — just a decorative logo
+    // there's nothing package-specific to render here—just a decorative logo
     // filling the otherwise-empty space.
     try writeMainOpen(w, ctx, gpa, "");
 
@@ -639,8 +730,35 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir:
 fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) RenderError!void {
     // Create module subdirectory
     dir.createDirPath(io, mod.name) catch |err| switch (err) {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
         error.PathAlreadyExists => {},
-        else => return err,
     };
 
     var sub_dir = try dir.openDir(io, mod.name, .{});
@@ -783,7 +901,7 @@ fn writeMainOpen(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     // participates in the form's flex layout. With JS enabled it is hidden by
     // default CSS; the <noscript><style> below swaps which input is visible
     // when JS is disabled. Avoid putting layout-relevant elements inside
-    // <noscript> — Chrome can render them as literal text.
+    // <noscript>—Chrome can render them as literal text.
     try w.writeAll("            <input type=\"search\" id=\"module-search-nojs\" placeholder=\"Enable JavaScript to search\" autocomplete=\"off\" disabled aria-label=\"Search requires JavaScript\" />\n");
     try w.writeAll("            <noscript><style>#module-search{display:none}#module-search-nojs{display:block}</style></noscript>\n");
     try w.writeAll("            <button class=\"menu-toggle\" type=\"button\" aria-label=\"Toggle sidebar\">");
@@ -794,7 +912,7 @@ fn writeMainOpen(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []c
     try w.writeAll("            </ul>\n");
     try w.writeAll("        </form>\n");
 
-    // Prose-guide links (Tutorial, FAQ, Language Reference) — the same links
+    // Prose-guide links (Tutorial, FAQ, Language Reference)—the same links
     // shown in the sidebar. Written into every docs page (gated only on
     // langref, not on page type) because this element is part of the
     // persistent chrome search.js carries across soft navigations, alongside
@@ -1186,7 +1304,7 @@ fn renderEntryTree(
             }
         }
     } else if (node.children.items.len > 0) {
-        // Non-leaf group node — render a group header and recurse at deeper depth
+        // Non-leaf group node—render a group header and recurse at deeper depth
         try writeIndent(w, base);
         try w.writeAll("<section class=\"entry-group\" id=\"");
         try writeHtmlEscaped(w, node.full_path);
@@ -1272,7 +1390,7 @@ fn renderSidebarTree(
             try w.writeAll("</li>\n");
         } else if (node.is_leaf) {
             if (depth == 1 and node.is_type) {
-                // Top-level type with no children — render with the same
+                // Top-level type with no children—render with the same
                 // structure as types that have children so they all share
                 // a consistent visual style in the sidebar.
                 try w.writeAll("                        ");
@@ -1587,7 +1705,7 @@ fn renderSearchTree(
 
             try w.writeAll(" <span class=\"type-ahead-signature\">");
             switch (entry.kind) {
-                .value, .alias => {
+                .value, .alias, .where_alias => {
                     try w.writeAll(": ");
                     try renderDocTypeHtml(w, sig_ctx, gpa, sig, false);
                 },
@@ -1627,7 +1745,7 @@ fn renderEntrySignature(w: Writer, ctx: *const RenderContext, gpa: Allocator, en
                 try w.writeAll(" : ");
                 try renderDocTypeHtml(w, ctx, gpa, sig, false);
             },
-            .alias => {
+            .alias, .where_alias => {
                 try w.writeAll(" : ");
                 try renderDocTypeHtml(w, ctx, gpa, sig, false);
             },
@@ -1732,7 +1850,7 @@ fn renderParagraphs(w: Writer, ctx: *const RenderContext, text: []const u8) (All
     var i: usize = 0;
     while (i < text.len) {
         if (i + 1 < text.len and text[i] == '\n' and text[i + 1] == '\n') {
-            // Found a blank line — emit the accumulated paragraph
+            // Found a blank line—emit the accumulated paragraph
             const para = std.mem.trim(u8, text[start..i], " \t\n\r");
             if (para.len > 0) {
                 try w.writeAll("                <p>");
@@ -1773,13 +1891,13 @@ fn writeDocText(w: Writer, ctx: *const RenderContext, text: []const u8) (Allocat
             const code_start = i;
             while (i < text.len and text[i] != '`') i += 1;
             if (i < text.len) {
-                // Found closing backtick — render as <code>
+                // Found closing backtick—render as <code>
                 try w.writeAll("<code>");
                 try writeHtmlEscaped(w, text[code_start..i]);
                 try w.writeAll("</code>");
                 i += 1; // skip closing backtick
             } else {
-                // No closing backtick — treat the opening backtick as literal text
+                // No closing backtick—treat the opening backtick as literal text
                 try writeHtmlEscaped(w, text[code_start - 1 .. i]);
             }
             plain_start = i;
@@ -1939,7 +2057,7 @@ fn writeBuiltinDocRefUrl(w: Writer, builtin_ref: []const u8) (Allocator.Error ||
 }
 
 /// Report `label` as broken when its resolved anchor isn't in `all_anchors`.
-/// Anchors longer than the stack buffer (`overflow`) are skipped — those are
+/// Anchors longer than the stack buffer (`overflow`) are skipped—those are
 /// far longer than any real Roc identifier path, so a false negative there
 /// is preferable to truncating and reporting a phantom mismatch.
 fn validateAnchor(
@@ -2016,7 +2134,7 @@ const MultilineLayoutSet = struct {
                 .where_clause => |wc| {
                     try frames.append(gpa, .{ .value = wc.type, .children_visited = false });
                     for (wc.constraints) |constraint| {
-                        try frames.append(gpa, .{ .value = constraint.signature, .children_visited = false });
+                        try frames.append(gpa, .{ .value = constraint.child(), .children_visited = false });
                     }
                 },
             }
@@ -2082,7 +2200,7 @@ const MultilineLayoutSet = struct {
                 if (wc.layout == .multiline and wc.constraints.len > 0) break :blk true;
                 if (self.contains(wc.type)) break :blk true;
                 for (wc.constraints) |constraint| {
-                    if (self.contains(constraint.signature)) break :blk true;
+                    if (self.contains(constraint.child())) break :blk true;
                 }
                 break :blk false;
             },
@@ -2203,12 +2321,16 @@ fn renderDocTypeHtml(
                                 i -= 1;
                                 const field = rec.fields[i];
                                 try frames.append(gpa, .{ .html = ",\n" });
+                                if (field.kind == .defaulted) {
+                                    try frames.append(gpa, .{ .escaped = field.kind.defaulted orelse "…" });
+                                    try frames.append(gpa, .{ .html = " ?? " });
+                                }
                                 try frames.append(gpa, .{ .doc_type = .{
                                     .value = field.type,
                                     .needs_parens = false,
                                     .indent = item.indent + 1,
                                 } });
-                                try frames.append(gpa, .{ .html = " : " });
+                                try frames.append(gpa, .{ .html = fieldSeparator(field.kind) });
                                 try frames.append(gpa, .{ .escaped = field.name });
                                 try frames.append(gpa, .{ .indent = item.indent + 1 });
                             }
@@ -2219,12 +2341,16 @@ fn renderDocTypeHtml(
                             while (i > 0) {
                                 i -= 1;
                                 const field = rec.fields[i];
+                                if (field.kind == .defaulted) {
+                                    try frames.append(gpa, .{ .escaped = field.kind.defaulted orelse "…" });
+                                    try frames.append(gpa, .{ .html = " ?? " });
+                                }
                                 try frames.append(gpa, .{ .doc_type = .{
                                     .value = field.type,
                                     .needs_parens = false,
                                     .indent = item.indent,
                                 } });
-                                try frames.append(gpa, .{ .html = " : " });
+                                try frames.append(gpa, .{ .html = fieldSeparator(field.kind) });
                                 try frames.append(gpa, .{ .escaped = field.name });
                                 if (i > 0) try frames.append(gpa, .{ .html = ", " });
                             }
@@ -2371,16 +2497,26 @@ fn renderDocTypeHtml(
                             var i = wc.constraints.len;
                             while (i > 0) {
                                 i -= 1;
-                                const constraint = wc.constraints[i];
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = constraint.signature,
-                                    .needs_parens = false,
-                                    .indent = item.indent,
-                                } });
-                                try frames.append(gpa, .{ .html = " : " });
-                                try frames.append(gpa, .{ .escaped = constraint.method_name });
+                                switch (wc.constraints[i]) {
+                                    .method => |method| {
+                                        try frames.append(gpa, .{ .doc_type = .{
+                                            .value = method.signature,
+                                            .needs_parens = false,
+                                            .indent = item.indent,
+                                        } });
+                                        try frames.append(gpa, .{ .html = " : " });
+                                        try frames.append(gpa, .{ .escaped = method.method_name });
+                                    },
+                                    .where_alias => |alias| {
+                                        try frames.append(gpa, .{ .doc_type = .{
+                                            .value = alias.alias,
+                                            .needs_parens = false,
+                                            .indent = item.indent,
+                                        } });
+                                    },
+                                }
                                 try frames.append(gpa, .{ .html = "</span>." });
-                                try frames.append(gpa, .{ .escaped = constraint.type_var });
+                                try frames.append(gpa, .{ .escaped = wc.constraints[i].typeVar() });
                                 try frames.append(gpa, .{ .html = "<span class=\"type-var\">" });
                                 if (i > 0) try frames.append(gpa, .{ .html = ", " });
                             }
@@ -2400,17 +2536,27 @@ fn renderDocTypeHtml(
                             var i = wc.constraints.len;
                             while (i > 0) {
                                 i -= 1;
-                                const constraint = wc.constraints[i];
                                 try frames.append(gpa, .{ .html = ",\n" });
-                                try frames.append(gpa, .{ .doc_type = .{
-                                    .value = constraint.signature,
-                                    .needs_parens = false,
-                                    .indent = item.indent + 2,
-                                } });
-                                try frames.append(gpa, .{ .html = " : " });
-                                try frames.append(gpa, .{ .escaped = constraint.method_name });
+                                switch (wc.constraints[i]) {
+                                    .method => |method| {
+                                        try frames.append(gpa, .{ .doc_type = .{
+                                            .value = method.signature,
+                                            .needs_parens = false,
+                                            .indent = item.indent + 2,
+                                        } });
+                                        try frames.append(gpa, .{ .html = " : " });
+                                        try frames.append(gpa, .{ .escaped = method.method_name });
+                                    },
+                                    .where_alias => |alias| {
+                                        try frames.append(gpa, .{ .doc_type = .{
+                                            .value = alias.alias,
+                                            .needs_parens = false,
+                                            .indent = item.indent + 2,
+                                        } });
+                                    },
+                                }
                                 try frames.append(gpa, .{ .html = "</span>." });
-                                try frames.append(gpa, .{ .escaped = constraint.type_var });
+                                try frames.append(gpa, .{ .escaped = wc.constraints[i].typeVar() });
                                 try frames.append(gpa, .{ .html = "<span class=\"type-var\">" });
                                 try frames.append(gpa, .{ .indent = item.indent + 2 });
                             }
@@ -2638,7 +2784,7 @@ test "writeTypeLink strips the module prefix for same-module builtin refs" {
     // A promoted builtin module ("Encoding") uses bare ids (`JsonState`,
     // `HttpHeaderState`), but the compiler can report a same-module reference
     // module-qualified (`Encoding.JsonState`). The link must drop the redundant
-    // `Encoding.` so the fragment matches the id on the page — otherwise it
+    // `Encoding.` so the fragment matches the id on the page—otherwise it
     // points at `#Encoding.JsonState`, which doesn't exist. A regular module
     // ("Parser") keeps the prefix on its ids, and must not have it doubled.
     const encoding_entries = try gpa.alloc(DocModel.DocEntry, 1);
@@ -2719,7 +2865,7 @@ test "writeDocRefHref reports broken shorthand refs" {
     // Build a minimal PackageDocs whose Builtin module exposes
     // `Builtin.Num.U8` with a child `div_by`. The doc comment on `div_by`
     // contains a `[div_by]` reference that, per the existing resolver,
-    // produces `#Builtin.div_by` — a fragment that does not exist on the
+    // produces `#Builtin.div_by`—a fragment that does not exist on the
     // page. The renderer should report exactly that ref as broken, while
     // leaving correct refs (`[U8]`, `[U8.div_by]`) alone.
     // Doc spans three lines so we can verify the reported source line equals
@@ -2765,7 +2911,7 @@ test "writeDocRefHref reports broken shorthand refs" {
 
     const modules = try gpa.alloc(DocModel.ModuleDocs, 1);
     modules[0] = module;
-    // Leak the outer modules slice intentionally — `module.deinit` already
+    // Leak the outer modules slice intentionally—`module.deinit` already
     // freed everything inside, and we want the module struct itself to
     // remain valid for that deinit call. Free the slice here to balance.
     defer gpa.free(modules);
@@ -2898,11 +3044,11 @@ test "doc shorthand refs in package docs resolve builtins and nested type-module
     const html = try tmp.dir.readFileAlloc(std.testing.io, "index.html", gpa, .limited(1024 * 1024));
     defer gpa.free(html);
 
-    try testing.expect(std.mem.find(u8, html, "href=\"https://roc-lang.org/builtins/main/Str\"") != null);
+    try testing.expect(std.mem.find(u8, html, "href=\"https://roc-lang.org/docs/main/Str\"") != null);
     try testing.expect(std.mem.find(u8, html, "href=\"#String.Utf8\"") != null);
 
     // Shorthand `[Name]` refs wrap their label in <code>.
-    try testing.expect(std.mem.find(u8, html, "href=\"https://roc-lang.org/builtins/main/Str\"><code>Str</code></a>") != null);
+    try testing.expect(std.mem.find(u8, html, "href=\"https://roc-lang.org/docs/main/Str\"><code>Str</code></a>") != null);
     try testing.expect(std.mem.find(u8, html, "href=\"#String.Utf8\"><code>Utf8</code></a>") != null);
     try testing.expect(std.mem.find(
         u8,
@@ -3017,6 +3163,91 @@ test "renderDocTypeHtml renders where clause single-line when single_line_signat
     );
 }
 
+fn buildOptionalFieldsRecordFixture(gpa: Allocator) Allocator.Error!*const DocType {
+    const u8_req = try gpa.create(DocType);
+    u8_req.* = .{ .type_ref = .{
+        .module_path = try gpa.dupe(u8, ""),
+        .type_name = try gpa.dupe(u8, "U8"),
+    } };
+    const str_opt = try gpa.create(DocType);
+    str_opt.* = .{ .type_ref = .{
+        .module_path = try gpa.dupe(u8, ""),
+        .type_name = try gpa.dupe(u8, "Str"),
+    } };
+    const u8_def = try gpa.create(DocType);
+    u8_def.* = .{ .type_ref = .{
+        .module_path = try gpa.dupe(u8, ""),
+        .type_name = try gpa.dupe(u8, "U8"),
+    } };
+
+    const fields = try gpa.alloc(DocType.Field, 3);
+    fields[0] = .{ .name = try gpa.dupe(u8, "req"), .type = u8_req, .kind = .required };
+    fields[1] = .{ .name = try gpa.dupe(u8, "opt"), .type = str_opt, .kind = .optional };
+    fields[2] = .{ .name = try gpa.dupe(u8, "def"), .type = u8_def, .kind = .{ .defaulted = try gpa.dupe(u8, "3") } };
+
+    const root = try gpa.create(DocType);
+    root.* = .{ .record = .{
+        .fields = fields,
+        .ext = null,
+        .is_open = false,
+        .layout = .compact,
+    } };
+    return root;
+}
+
+test "renderDocTypeHtml renders required, optional, and defaulted record fields" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const root = try buildOptionalFieldsRecordFixture(gpa);
+    defer {
+        root.deinit(gpa);
+        gpa.destroy(root);
+    }
+
+    const package_docs = DocModel.PackageDocs{
+        .name = "Test",
+        .modules = &[_]DocModel.ModuleDocs{},
+    };
+    var ctx = try RenderContext.init(&package_docs, gpa);
+    defer ctx.deinit(gpa);
+    ctx.suppress_type_links = true;
+
+    var output: std.Io.Writer.Allocating = .init(gpa);
+    defer output.deinit();
+
+    try renderDocTypeHtml(&output.writer, &ctx, gpa, root, false);
+    try testing.expectEqualStrings(
+        "{ req : <span class=\"type\">U8</span>, " ++
+            "opt ?: <span class=\"type\">Str</span>, " ++
+            "def : <span class=\"type\">U8</span> ?? 3 }",
+        output.written(),
+    );
+}
+
+test "record field kinds round-trip through writeToSExpr" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const root = try buildOptionalFieldsRecordFixture(gpa);
+    defer {
+        root.deinit(gpa);
+        gpa.destroy(root);
+    }
+
+    var output: std.Io.Writer.Allocating = .init(gpa);
+    defer output.deinit();
+
+    try root.writeToSExpr(&output.writer, 0);
+    try testing.expectEqualStrings(
+        "(record" ++
+            " (field \"req\" (type-ref (name \"U8\")))" ++
+            " (field-optional \"opt\" (type-ref (name \"Str\")))" ++
+            " (field-defaulted \"def\" (type-ref (name \"U8\")) \"3\"))",
+        output.written(),
+    );
+}
+
 test "renderDocTypeHtml expands trailing-comma collections and their parents" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -3089,16 +3320,16 @@ fn buildWhereClauseFixture(gpa: Allocator) Allocator.Error!*const DocType {
     v_sig.* = .{ .type_var = try gpa.dupe(u8, "v") };
 
     const constraints = try gpa.alloc(DocType.Constraint, 2);
-    constraints[0] = .{
+    constraints[0] = .{ .method = .{
         .type_var = try gpa.dupe(u8, "k"),
         .method_name = try gpa.dupe(u8, "is_eq"),
         .signature = k_sig,
-    };
-    constraints[1] = .{
+    } };
+    constraints[1] = .{ .method = .{
         .type_var = try gpa.dupe(u8, "v"),
         .method_name = try gpa.dupe(u8, "to_hash"),
         .signature = v_sig,
-    };
+    } };
 
     const root = try gpa.create(DocType);
     root.* = .{ .where_clause = .{
@@ -3114,7 +3345,7 @@ test "builtin_nested_type_owners lists every numeric type under Num" {
     // package's signature) link to `…/Num#U8` via `builtin_nested_type_owners`.
     // The type system's precision enums are the source of truth for which
     // numeric types exist, so if a new one is added there it must also be added
-    // to the table — otherwise its external links would 404 at `…/U8`.
+    // to the table—otherwise its external links would 404 at `…/U8`.
     const tt = @import("types").types;
     inline for (.{ tt.Int.Precision, tt.Frac.Precision }) |Precision| {
         inline for (@typeInfo(Precision).@"enum".fields) |field| {

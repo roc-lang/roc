@@ -113,8 +113,8 @@ pub const CommonIdents = extern struct {
     is_gt: Ident.Idx,
     is_gte: Ident.Idx,
     is_eq: Ident.Idx,
-    range_exclusive: Ident.Idx,
-    range_inclusive: Ident.Idx,
+    range_exclusive_to: Ident.Idx,
+    range_inclusive_to: Ident.Idx,
     to_hash: Ident.Idx,
     parser_for: Ident.Idx,
     encoder_for: Ident.Idx,
@@ -152,6 +152,7 @@ pub const CommonIdents = extern struct {
 
     // Fully-qualified type identifiers for type checking and layout generation
     builtin_iter: Ident.Idx,
+    builtin_range: Ident.Idx,
     builtin_try: Ident.Idx,
     builtin_numeral: Ident.Idx,
     builtin_str: Ident.Idx,
@@ -226,6 +227,12 @@ pub const CommonIdents = extern struct {
     question_err: Ident.Idx,
     // Synthetic identifier for .. implicit rigids in open tag unions or records
     open_ext: Ident.Idx,
+    // Synthetic identifier naming the rigid presence variable minted when
+    // checking a definition's body against its own `?:` optional-field signature.
+    optional_presence: Ident.Idx,
+    // Error tag produced by optional field access (`r.?x`) when the field is
+    // absent: the Err side of `Try(field_type, [MissingField])`.
+    missing_field: Ident.Idx,
 
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
@@ -246,8 +253,8 @@ pub const CommonIdents = extern struct {
             .is_gt = try common.insertIdent(gpa, Ident.for_text("is_gt")),
             .is_gte = try common.insertIdent(gpa, Ident.for_text("is_gte")),
             .is_eq = try common.insertIdent(gpa, Ident.for_text("is_eq")),
-            .range_exclusive = try common.insertIdent(gpa, Ident.for_text("range_exclusive")),
-            .range_inclusive = try common.insertIdent(gpa, Ident.for_text("range_inclusive")),
+            .range_exclusive_to = try common.insertIdent(gpa, Ident.for_text("range_exclusive_to")),
+            .range_inclusive_to = try common.insertIdent(gpa, Ident.for_text("range_inclusive_to")),
             .to_hash = try common.insertIdent(gpa, Ident.for_text("to_hash")),
             .parser_for = try common.insertIdent(gpa, Ident.for_text("parser_for")),
             .encoder_for = try common.insertIdent(gpa, Ident.for_text("encoder_for")),
@@ -280,6 +287,7 @@ pub const CommonIdents = extern struct {
             .f64 = try common.insertIdent(gpa, Ident.for_text("F64")),
             .dec = try common.insertIdent(gpa, Ident.for_text("Dec")),
             .builtin_iter = try common.insertIdent(gpa, Ident.for_text("Builtin.Iter")),
+            .builtin_range = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Range")),
             .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
             .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
@@ -352,6 +360,10 @@ pub const CommonIdents = extern struct {
             .question_err = try common.insertIdent(gpa, Ident.for_text("#err")),
             // Synthetic identifier for .. implicit rigids in open tag unions or records
             .open_ext = try common.insertIdent(gpa, Ident.for_text("#others")),
+            // Synthetic identifier naming rigid presence vars for `?:` fields
+            .optional_presence = try common.insertIdent(gpa, Ident.for_text("#optional")),
+            // Error tag for optional field access on an absent field
+            .missing_field = try common.insertIdent(gpa, Ident.for_text("MissingField")),
         };
     }
 
@@ -375,8 +387,8 @@ pub const CommonIdents = extern struct {
             .is_gt = common.findIdent("is_gt") orelse unreachable,
             .is_gte = common.findIdent("is_gte") orelse unreachable,
             .is_eq = common.findIdent("is_eq") orelse unreachable,
-            .range_exclusive = common.findIdent("range_exclusive") orelse unreachable,
-            .range_inclusive = common.findIdent("range_inclusive") orelse unreachable,
+            .range_exclusive_to = common.findIdent("range_exclusive_to") orelse unreachable,
+            .range_inclusive_to = common.findIdent("range_inclusive_to") orelse unreachable,
             .to_hash = common.findIdent("to_hash") orelse unreachable,
             .parser_for = common.findIdent("parser_for") orelse unreachable,
             .encoder_for = common.findIdent("encoder_for") orelse unreachable,
@@ -409,6 +421,7 @@ pub const CommonIdents = extern struct {
             .f64 = common.findIdent("F64") orelse unreachable,
             .dec = common.findIdent("Dec") orelse unreachable,
             .builtin_iter = common.findIdent("Builtin.Iter") orelse unreachable,
+            .builtin_range = common.findIdent("Builtin.Num.Range") orelse unreachable,
             .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
             .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
@@ -481,6 +494,10 @@ pub const CommonIdents = extern struct {
             .question_err = common.findIdent("#err") orelse unreachable,
             // Synthetic identifier for .. implicit rigids in open tag unions or records
             .open_ext = common.findIdent("#others") orelse unreachable,
+            // Synthetic identifier naming rigid presence vars for `?:` fields
+            .optional_presence = common.findIdent("#optional") orelse unreachable,
+            // Error tag for optional field access on an absent field
+            .missing_field = common.findIdent("MissingField") orelse unreachable,
         };
     }
 };
@@ -573,6 +590,22 @@ pub const MethodBinding = extern struct {
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
 
+/// Construction-time position shared by the parallel method identity and
+/// definition tables.
+pub const MethodTableIndex = enum(u32) { _ };
+
+/// A definition whose implementation was authored by the compiler as one
+/// exact low-level operation. Canonicalization publishes this alongside CIR so
+/// every later stage can consume the producer-owned runtime identity without
+/// inspecting the generated lambda body.
+pub const ProvidedLowLevelDef = extern struct {
+    def_idx: u32,
+    op: base.LowLevel,
+    _padding: u16 = 0,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Exact checker-owned shape of an iterator step result.
 pub const IteratorStepTopology = extern struct {
     done_tag_ident: u32,
@@ -591,6 +624,8 @@ pub const ForLoopDispatchPlan = extern struct {
     node_idx: u32,
     pattern_idx: u32,
     iterable_idx: u32,
+    iterator_var: u32,
+    step_var: u32,
     iter_fn_var: u32,
     next_fn_var: u32,
     step_topology: IteratorStepTopology,
@@ -635,19 +670,19 @@ pub const NumeralLiteral = extern struct {
 };
 
 /// One constrained-scheme use recorded by checking for static-dispatch
-/// evidence. It names the source node, the scheme root used at that edge, and
-/// — for an instantiation — the fresh var each constrained scheme var was
+/// evidence. It names the source node, the scheme root used at that edge, and—
+/// for an instantiation—the fresh var each constrained scheme var was
 /// copied to. Shared monomorphic edges have no copy pairs. Publication resolves
 /// the recorded vars after checking settles to decide how each of the callee's
 /// dispatch constraints was satisfied at this site.
 pub const SchemeUseRecord = extern struct {
     node_idx: u32,
-    /// `Slot` — distinguishes several schemes instantiated at one node (a value
+    /// `Slot`—distinguishes several schemes instantiated at one node (a value
     /// use, an expression-position function stored as a value, or the target
     /// of a dispatch constraint).
     slot_kind: u32,
     /// For `dispatch_target` slots, the raw fn `Var` of the constraint whose
-    /// discharge instantiated this scheme — unique per constraint
+    /// discharge instantiated this scheme—unique per constraint
     /// instantiation, so nested evidence chains resolve without ambiguity.
     /// 0 for value and nested-function use slots (keyed by `node_idx`
     /// instead).
@@ -687,6 +722,50 @@ pub const SchemeUsePair = extern struct {
     /// The fresh copy created for this instantiation (`Var`).
     fresh_var: u32,
 
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// One compiler-generated parser or encoder derivation validated by checking.
+/// The referenced vars remain checker-owned here; checked publication converts
+/// them to stable checked type ids before post-check compilation.
+pub const GeneratedCodecDerivation = extern struct {
+    kind: u32,
+    source_constraint_fn_var: u32,
+    source_runtime_fn_var: u32,
+    source_shape_var: u32,
+    source_encoding_var: u32,
+    source_state_var: u32,
+    source_error_var: u32,
+    constraint_fn_var: u32,
+    runtime_fn_var: u32,
+    shape_var: u32,
+    encoding_var: u32,
+    state_var: u32,
+    error_var: u32,
+    calls_start: u32,
+    calls_len: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub const Kind = enum(u32) {
+        parser,
+        encoder,
+    };
+};
+
+/// One exact method callable used inside a checked generated codec.
+pub const GeneratedCodecCall = extern struct {
+    method_ident: u32,
+    dispatcher_var: u32,
+    callable_var: u32,
+    /// Exact generated callable relation whose dispatch-target record owns the
+    /// selected method scheme's nested evidence.
+    evidence_var: u32,
+    /// The value shape this call handles, or `no_subject_var` when the method
+    /// has no shape-specific call contract.
+    subject_var: u32,
+
+    pub const no_subject_var = std.math.maxInt(u32);
     pub const SafeList = collections.SafeList(@This());
 };
 
@@ -744,6 +823,32 @@ pub const NumericSuffixTarget = extern struct {
     }
 };
 
+/// Checker-produced construction evidence for one field omitted by a record
+/// literal through defaulted-field width absorption. The field's default is
+/// construction-site data; it must survive even when later value unification
+/// normalizes the shared runtime row to `required`.
+pub const RecordOmittedDefault = extern struct {
+    expr: CIR.Expr.Idx,
+    field_name: Ident.Idx,
+    origin_module: base.ModuleIdentity.Idx,
+    default_expr_node: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// A source node whose checked value is a rank-1 polymorphic type scheme.
+///
+/// Generalization records this explicitly because a partially generalized
+/// scheme can have a monomorphic structural root with quantified descendants.
+/// Consumers must therefore not infer scheme-ness from the root variable's
+/// rank. The table is kept sorted by `node_idx` for allocation-free imported
+/// lookup.
+pub const BindingScheme = extern struct {
+    node_idx: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 gpa: std.mem.Allocator,
 
 common: CommonEnv,
@@ -761,6 +866,16 @@ all_defs: CIR.Def.Span,
 /// Module-global value definitions: top-level values, associated items, and
 /// compiler-created hosted globals. Local block definitions are not included.
 global_value_defs: CIR.Def.Span,
+/// Exact module-global value definitions selected by canonicalization's
+/// source-name collision policy. Contains one definition per source-visible
+/// name plus every definition whose pattern has no single source name.
+top_level_value_defs: CIR.Def.Span,
+/// Module-global definitions that introduce checked value bindings. Concrete
+/// shadowed definitions retain their exact identities; annotation-only
+/// declarations superseded by an implementation are excluded.
+value_binding_defs: CIR.Def.Span,
+/// Exact definitions rewritten from annotation-only declarations to hosted lambdas.
+hosted_defs: CIR.Def.Span,
 /// All the top-level statements in the module (populated by canonicalization)
 all_statements: CIR.Statement.Span,
 /// All canonical type-declaration statements in the module.
@@ -824,8 +939,10 @@ store: NodeStore,
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
 /// Exact strict-demand edges between top-level definitions. Canonicalization
-/// produces this data and serialization preserves it for checked-artifact
-/// publication; unlike `evaluation_order`, it is not a transient traversal aid.
+/// produces the initial relation and checking replaces it after resolving
+/// literal dispatch; serialization preserves the finalized relation for
+/// checked-artifact publication. Unlike `evaluation_order`, it is not a
+/// transient traversal aid.
 top_level_demand_dependencies: DependencyGraph.Dependency.SafeList,
 top_level_demand_dependencies_ready: bool,
 
@@ -850,6 +967,8 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 method_idents: MethodIdents,
 /// Mapping from (owner declaration, method_ident) pairs to defining def indices.
 method_defs: MethodDefs,
+/// Compiler-authored low-level implementations, ordered by definition index.
+provided_low_level_defs: ProvidedLowLevelDef.SafeList,
 
 /// Dispatch plans attached by checking to source `for` loop nodes.
 for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
@@ -864,9 +983,19 @@ numeric_suffix_targets: NumericSuffixTarget.SafeList,
 scheme_uses: SchemeUseRecord.SafeList,
 /// Flat pool of (scheme var → fresh var) pairs backing `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
+/// Exact source bindings that checking generalized into rank-1 type schemes.
+/// Sorted by source node for allocation-free cross-module lookup.
+binding_schemes: BindingScheme.SafeList,
+/// Generated codec derivations validated by checking and consumed by checked
+/// artifact publication.
+generated_codec_derivations: GeneratedCodecDerivation.SafeList,
+/// Flat pool backing `generated_codec_derivations.calls_start/calls_len`.
+generated_codec_calls: GeneratedCodecCall.SafeList,
 /// Static-dispatch obligations explicitly rejected by checking. Publication
 /// consumes these records instead of inferring rejection from erroneous types.
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
+/// Exact default identities selected at record-literal omission sites.
+record_omitted_defaults: RecordOmittedDefault.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -904,12 +1033,23 @@ pub const ProvidesEntry = struct {
 /// entry with module_ident="Stdout", func_ident="line!", and symbol pointing to
 /// the interned string "roc_stdout_line".
 pub const HostedEntry = struct {
+    pub const TargetStatus = enum(u8) {
+        unresolved,
+        resolved,
+        missing_module,
+        missing_value,
+    };
+
     /// The type module name (e.g., "Stdout"); null for unqualified functions
     module_ident: ?Ident.Idx,
     /// The hosted function name (e.g., "line!")
     func_ident: Ident.Idx,
     /// The literal linker symbol (e.g., "roc_stdout_line")
     symbol: StringLiteral.Idx,
+    /// Exact imported definition selected by this entry after canonicalization.
+    target_import: ?CIR.Import.Idx,
+    target_def: ?CIR.Def.Idx,
+    target_status: TargetStatus,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -972,8 +1112,11 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.top_level_demand_dependencies.relocate(offset);
     self.method_idents.relocate(offset);
     self.method_defs.relocate(offset);
+    self.provided_low_level_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
+    self.binding_schemes.relocate(offset);
     self.rejected_static_dispatches.relocate(offset);
+    self.record_omitted_defaults.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -989,6 +1132,9 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.module_role = .user;
     self.all_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.global_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
+    self.top_level_value_defs = .{ .span = .{ .start = 0, .len = 0 } };
+    self.value_binding_defs = .{ .span = .{ .start = 0, .len = 0 } };
+    self.hosted_defs = .{ .span = .{ .start = 0, .len = 0 } };
     self.all_statements = .{ .span = .{ .start = 0, .len = 0 } };
     self.type_decls = .{ .span = .{ .start = 0, .len = 0 } };
     self.forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } };
@@ -1031,6 +1177,9 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_role = .user,
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .global_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .top_level_value_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .value_binding_defs = .{ .span = .{ .start = 0, .len = 0 } },
+        .hosted_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
         .type_decls = .{ .span = .{ .start = 0, .len = 0 } },
         .forward_type_decls = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1059,13 +1208,18 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
         .method_defs = MethodDefs.init(),
+        .provided_low_level_defs = try ProvidedLowLevelDef.SafeList.initCapacity(gpa, 4),
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
+        .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
+        .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
+        .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
+        .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
     };
 }
 
@@ -1085,13 +1239,18 @@ pub fn deinit(self: *Self) void {
     self.import_mapping.deinit();
     self.method_idents.deinit(self.gpa);
     self.method_defs.deinit(self.gpa);
+    self.provided_low_level_defs.deinit(self.gpa);
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.binding_schemes.deinit(self.gpa);
+    self.generated_codec_derivations.deinit(self.gpa);
+    self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
+    self.record_omitted_defaults.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1113,18 +1272,38 @@ pub fn setTopLevelDemandDependencies(
     self.top_level_demand_dependencies_ready = true;
 }
 
-/// Return the exact strict-demand relation produced by canonicalization.
+/// Return the producer-authored low-level implementation for `def_idx`.
+pub fn providedLowLevelForDef(self: *const Self, def_idx: CIR.Def.Idx) ?base.LowLevel {
+    const entries = self.provided_low_level_defs.items.items;
+    const wanted: u32 = @intFromEnum(def_idx);
+    var low: usize = 0;
+    var high: usize = entries.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const candidate = entries[mid];
+        if (candidate.def_idx < wanted) {
+            low = mid + 1;
+        } else if (candidate.def_idx > wanted) {
+            high = mid;
+        } else {
+            return candidate.op;
+        }
+    }
+    return null;
+}
+
+/// Return the current producer-authored exact strict-demand relation.
 pub fn topLevelDemandDependencies(self: *const Self) []const DependencyGraph.Dependency {
     std.debug.assert(self.top_level_demand_dependencies_ready);
     return self.top_level_demand_dependencies.items.items;
 }
 
-/// Whether canonicalization has produced the exact strict-demand relation.
+/// Whether a compiler stage has produced the exact strict-demand relation.
 pub fn topLevelDemandDependenciesReady(self: *const Self) bool {
     return self.top_level_demand_dependencies_ready;
 }
 
-/// Whether one exact strict-demand edge was produced by canonicalization.
+/// Whether the current exact strict-demand relation contains one edge.
 pub fn hasTopLevelDemandDependency(
     self: *const Self,
     dependent: CIR.Def.Idx,
@@ -1163,13 +1342,18 @@ pub fn deinitCachedModule(self: *Self) void {
     // import_mapping is initialized empty during deserialization and may have
     // items added later, so we need to free it
     self.import_mapping.deinit();
+    self.provided_low_level_defs.deinit(self.gpa);
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.binding_schemes.deinit(self.gpa);
+    self.generated_codec_derivations.deinit(self.gpa);
+    self.generated_codec_calls.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
+    self.record_omitted_defaults.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -1238,7 +1422,7 @@ pub fn pushMalformed(self: *Self, comptime RetIdx: type, reason: CIR.Diagnostic)
 /// Like `pushMalformed`, but does NOT register `reason` in the reported
 /// diagnostics list. The malformed node still references the diagnostic (for
 /// runtime crash text), but the diagnostic that is actually reported for this
-/// site is pushed separately and later — used when forward-reference vs
+/// site is pushed separately and later—used when forward-reference vs
 /// mutual-recursion classification of a local definition is deferred to the end
 /// of the enclosing block.
 pub fn pushRuntimeErrorExpr(self: *Self, comptime RetIdx: type, reason: CIR.Diagnostic) std.mem.Allocator.Error!RetIdx {
@@ -1258,14 +1442,7 @@ pub fn replaceExprWithRuntimeError(self: *Self, expr_idx: CIR.Expr.Idx, reason: 
 
 /// Extract the region from any diagnostic variant
 fn getDiagnosticRegion(diagnostic: CIR.Diagnostic) Region {
-    return switch (diagnostic) {
-        .type_redeclared => |data| data.redeclared_region,
-        .type_alias_redeclared => |data| data.redeclared_region,
-        .nominal_type_redeclared => |data| data.redeclared_region,
-        .duplicate_record_field => |data| data.duplicate_region,
-        .duplicate_tag => |data| data.duplicate_region,
-        inline else => |data| data.region,
-    };
+    return diagnostic.toRegion();
 }
 
 /// Import helper functions from CIR
@@ -1633,7 +1810,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("Variable ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is defined here and then never used.");
+            try report.headline.addReflowingText(" is defined here and then never used:");
 
             try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
             const ident_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{owned_ident});
@@ -1657,8 +1834,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
         .underscore_in_type_declaration => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
-            const kind = if (data.is_alias) "alias" else "opaque type";
-            const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{kind});
+            const headline = try std.fmt.allocPrint(allocator, "Underscores are not allowed in type {s} declarations.", .{data.declared.label()});
             defer allocator.free(headline);
             var report = try Report.init(allocator, "Underscore In Type Alias", headline, .runtime_error);
 
@@ -1732,9 +1908,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is being redeclared.");
 
-            // Show where the redeclaration is
-            try report.document.addReflowingText("The redeclaration is here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 redeclared_region_info,
@@ -1747,7 +1920,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("But ");
             try report.document.addType(owned_type_name);
-            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addReflowingText(" was already declared in ");
+            try report.document.addSourceLocation(original_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -1770,8 +1945,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is being redeclared.");
 
-            try report.document.addReflowingText("The redeclaration is here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 redeclared_region_info,
@@ -1784,7 +1957,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("But ");
             try report.document.addType(owned_type_name);
-            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addReflowingText(" was already declared in ");
+            try report.document.addSourceLocation(original_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -1807,8 +1982,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is being redeclared.");
 
-            try report.document.addReflowingText("The redeclaration is here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 redeclared_region_info,
@@ -1821,7 +1994,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("But ");
             try report.document.addType(owned_type_name);
-            try report.document.addReflowingText(" was already declared here:");
+            try report.document.addReflowingText(" was already declared in ");
+            try report.document.addSourceLocation(original_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -1843,6 +2018,29 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_stmt);
             try report.headline.addReflowingText(" is not allowed at the top level.");
             try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .invalid_associated_statement => |data| blk: {
+            const stmt_name = self.getString(data.stmt);
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Invalid Statement", "", .runtime_error);
+            const owned_stmt = try report.addOwnedString(stmt_name);
+            try report.headline.addReflowingText("The statement ");
+            try report.headline.addInlineCode(owned_stmt);
+            try report.headline.addReflowingText(" is not allowed in an associated block.");
+            try report.document.addReflowingText("Only associated values, type declarations, and type annotations are allowed in an associated block.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1939,9 +2137,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addRecordField(owned_field_name);
             try report.headline.addReflowingText(" appears more than once in this record.");
 
-            // Show where the duplicate field is
-            try report.document.addReflowingText("This field is duplicated here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 duplicate_region_info,
@@ -1954,7 +2149,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("The field ");
             try report.document.addRecordField(owned_field_name);
-            try report.document.addReflowingText(" was first defined here:");
+            try report.document.addReflowingText(" was first defined in ");
+            try report.document.addSourceLocation(original_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -2162,9 +2359,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("The name ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is being redeclared here.");
+            try report.headline.addReflowingText(" is being redeclared here:");
 
-            // The main box shows the new declaration; point below it at the original.
+            // The primary region shows the new declaration; point below it at the original.
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 new_region_info,
@@ -2177,7 +2374,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("In this scope, ");
             try report.document.addUnqualifiedSymbol(owned_ident);
-            try report.document.addReflowingText(" was already defined here:");
+            try report.document.addReflowingText(" was already defined in ");
+            try report.document.addSourceLocation(original_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 original_region_info,
@@ -2662,8 +2861,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_count);
             try report.headline.addReflowingText(" values, which exceeds the compiler limit.");
 
-            try report.document.addReflowingText("The export list starts here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -2683,8 +2880,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("where");
             try report.headline.addReflowingText(" clause inside a type declaration.");
 
-            try report.document.addReflowingText("You're attempting do this here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -2693,6 +2888,32 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+            try report.document.addLineBreak();
+            try report.document.addAnnotated("Hint:", .emphasized);
+            try report.document.addReflowingText(" ");
+            try report.document.addInlineCode("where");
+            try report.document.addReflowingText(" clauses can only go on function type annotations.");
+
+            break :blk report;
+        },
+        .where_alias_constraint_not_on_receiver => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Where Alias Constrains Another Type", "", .runtime_error);
+            try report.headline.addReflowingText("A where alias constrains only its receiver, but this constraint is on a different type variable.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Write this constraint against ");
+            try report.document.addInlineCode(self.getIdent(data.receiver_name));
+            try report.document.addReflowingText(", or declare a separate where alias for the other type variable and apply it alongside this one.");
 
             break :blk report;
         },
@@ -2719,6 +2940,80 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" You need a named variable, like ");
             try report.document.addInlineCode("..others");
             try report.document.addReflowingText(", to use this here.");
+
+            break :blk report;
+        },
+        .record_default_not_literal => |data| blk: {
+            const field_name = self.getIdent(data.field_name);
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Default Value Must Be A Literal", "", .runtime_error);
+            const owned_field_name = try report.addOwnedString(field_name);
+            try report.headline.addReflowingText("The default value for the ");
+            try report.headline.addRecordField(owned_field_name);
+            try report.headline.addReflowingText(" field is not a literal.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("A field default (");
+            try report.document.addInlineCode("??");
+            try report.document.addReflowingText(") is materialized by the compiler at every construction site that omits the field, so it must be a literal: a number, an interpolation-free string, a tag, or a list, record, or tuple built only from literals. Anything that refers to another value could form an evaluation cycle the compiler will not chase.");
+
+            break :blk report;
+        },
+        .optional_field_cannot_have_default => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Optional Field Cannot Have A Default", "", .runtime_error);
+            try report.headline.addReflowingText("A field cannot be both optional (");
+            try report.headline.addInlineCode("?:");
+            try report.headline.addReflowingText(") and defaulted (");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText("): a default fills the field whenever construction omits it, so the field can never be missing. Use ");
+            try report.headline.addInlineCode(":");
+            try report.headline.addReflowingText(" with ");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(" instead.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .unnamed_field_cannot_have_default => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = try Report.init(allocator, "Unnamed Field Cannot Have A Default", "", .runtime_error);
+            try report.headline.addReflowingText("Unnamed fields (");
+            try report.headline.addInlineCode("_");
+            try report.headline.addReflowingText(" or ");
+            try report.headline.addInlineCode("_name");
+            try report.headline.addReflowingText(") reserve padding in a nominal record layout, so they cannot have a ");
+            try report.headline.addInlineCode("??");
+            try report.headline.addReflowingText(" default. Remove the default, or give the field a regular name if it should be filled when omitted.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
 
             break :blk report;
         },
@@ -3030,6 +3325,37 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .roc_version_mismatch => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            const pinned_bytes = self.getIdent(data.pinned);
+            const running_bytes = self.getIdent(data.running);
+
+            var report = try Report.init(allocator, "Roc Version Mismatch", "", .warning);
+            const pinned = try report.addOwnedString(pinned_bytes);
+            const running = try report.addOwnedString(running_bytes);
+            try report.headline.addReflowingText("This header pins Roc version ");
+            try report.headline.addInlineCode(pinned);
+            try report.headline.addReflowingText(", but you are running ");
+            try report.headline.addInlineCode(running);
+            try report.headline.addReflowingText(".");
+
+            try report.document.addReflowingText("Run ");
+            try report.document.addInlineCode("roc fmt");
+            try report.document.addReflowingText(" to update the pin, or switch to the pinned version of the compiler.");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .redundant_expose_main_type => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -3225,8 +3551,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("This type is declared here:");
-            try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -3239,7 +3563,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addLineBreak();
             try report.document.addReflowingText("And it references ");
             try report.document.addType(owned_other_name);
-            try report.document.addReflowingText(" declared here:");
+            try report.document.addReflowingText(" declared in ");
+            try report.document.addSourceLocation(other_region_info, owned_filename);
+            try report.document.addReflowingText(":");
             try report.document.addLineBreak();
             try report.document.addSourceRegion(
                 other_region_info,
@@ -3337,7 +3663,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getLineStartsAll(),
             );
         },
-        else => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
+        .invalid_string_interpolation,
+        .can_lambda_not_implemented,
+        .unused_type_var_name,
+        .type_var_marked_unused,
+        .type_var_starting_with_dollar,
+        => std.debug.panic("Unhandled canonicalize diagnostic in diagnosticToReport: {s}", .{@tagName(diagnostic)}),
     };
 }
 
@@ -3374,6 +3705,9 @@ pub const Serialized = extern struct {
     module_role: ModuleRole,
     all_defs: CIR.Def.Span,
     global_value_defs: CIR.Def.Span,
+    top_level_value_defs: CIR.Def.Span,
+    value_binding_defs: CIR.Def.Span,
+    hosted_defs: CIR.Def.Span,
     all_statements: CIR.Statement.Span,
     type_decls: CIR.Statement.Span,
     forward_type_decls: CIR.Statement.Span,
@@ -3405,13 +3739,18 @@ pub const Serialized = extern struct {
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
     method_idents: MethodIdents.Serialized,
     method_defs: MethodDefs.Serialized,
+    provided_low_level_defs: ProvidedLowLevelDef.SafeList.Serialized,
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
+    binding_schemes: BindingScheme.SafeList.Serialized,
+    generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
+    generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
+    record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3460,6 +3799,9 @@ pub const Serialized = extern struct {
         self.module_role = env.module_role;
         self.all_defs = env.all_defs;
         self.global_value_defs = env.global_value_defs;
+        self.top_level_value_defs = env.top_level_value_defs;
+        self.value_binding_defs = env.value_binding_defs;
+        self.hosted_defs = env.hosted_defs;
         self.all_statements = env.all_statements;
         self.type_decls = env.type_decls;
         self.forward_type_decls = env.forward_type_decls;
@@ -3512,13 +3854,18 @@ pub const Serialized = extern struct {
         }
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
         try self.method_defs.serialize(&env.method_defs, allocator, writer);
+        try self.provided_low_level_defs.serialize(&env.provided_low_level_defs, allocator, writer);
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
+        try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
+        try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
+        try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
+        try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3546,6 +3893,9 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .top_level_value_defs = self.top_level_value_defs,
+            .value_binding_defs = self.value_binding_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3574,13 +3924,18 @@ pub const Serialized = extern struct {
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
+            .provided_low_level_defs = self.provided_low_level_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
+            .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
+            .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
 
         return env;
@@ -3608,6 +3963,9 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .top_level_value_defs = self.top_level_value_defs,
+            .value_binding_defs = self.value_binding_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3636,13 +3994,18 @@ pub const Serialized = extern struct {
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
+            .provided_low_level_defs = self.provided_low_level_defs.deserializeInto(base_addr),
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
+            .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
+            .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
+            .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
         };
     }
 
@@ -3670,6 +4033,9 @@ pub const Serialized = extern struct {
             .module_role = self.module_role,
             .all_defs = self.all_defs,
             .global_value_defs = self.global_value_defs,
+            .top_level_value_defs = self.top_level_value_defs,
+            .value_binding_defs = self.value_binding_defs,
+            .hosted_defs = self.hosted_defs,
             .all_statements = self.all_statements,
             .type_decls = self.type_decls,
             .forward_type_decls = self.forward_type_decls,
@@ -3700,13 +4066,18 @@ pub const Serialized = extern struct {
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
             .method_defs = self.method_defs.deserializeInto(base_addr),
+            .provided_low_level_defs = try self.provided_low_level_defs.deserializeWithCopy(base_addr, gpa),
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
+            .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -3729,6 +4100,8 @@ pub fn recordForLoopDispatchPlan(
     node_idx: Node.Idx,
     pattern_idx: Node.Idx,
     iterable_idx: Node.Idx,
+    iterator_var: TypeVar,
+    step_var: TypeVar,
     iter_fn_var: TypeVar,
     next_fn_var: TypeVar,
     step_topology: IteratorStepTopology,
@@ -3742,6 +4115,8 @@ pub fn recordForLoopDispatchPlan(
             .node_idx = raw_node,
             .pattern_idx = raw_pattern,
             .iterable_idx = raw_iterable,
+            .iterator_var = @intFromEnum(iterator_var),
+            .step_var = @intFromEnum(step_var),
             .iter_fn_var = @intFromEnum(iter_fn_var),
             .next_fn_var = @intFromEnum(next_fn_var),
             .step_topology = step_topology,
@@ -3752,6 +4127,8 @@ pub fn recordForLoopDispatchPlan(
         .node_idx = raw_node,
         .pattern_idx = raw_pattern,
         .iterable_idx = raw_iterable,
+        .iterator_var = @intFromEnum(iterator_var),
+        .step_var = @intFromEnum(step_var),
         .iter_fn_var = @intFromEnum(iter_fn_var),
         .next_fn_var = @intFromEnum(next_fn_var),
         .step_topology = step_topology,
@@ -3824,7 +4201,7 @@ fn sortedNodeSlot(comptime T: type, entries: []const T, raw_node: u32) usize {
 }
 
 /// Insert or replace `entry` in a node-sorted SafeList. Appends are O(1) when
-/// entries arrive in increasing node order (the common case — recording
+/// entries arrive in increasing node order (the common case—recording
 /// follows node allocation); out-of-order inserts shift the tail.
 fn upsertSortedByNode(comptime T: type, list: *collections.SafeList(T), gpa: std.mem.Allocator, entry: T) std.mem.Allocator.Error!void {
     const entries = list.items.items;
@@ -3850,6 +4227,29 @@ fn findSortedByNode(comptime T: type, entries: []const T, raw_node: u32) ?T {
     return null;
 }
 
+/// Record that `node_idx` names a rank-1 polymorphic value scheme. This is
+/// checker-produced binding metadata, not a property reconstructed from the
+/// solved type graph.
+pub fn recordBindingScheme(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(
+        BindingScheme,
+        &self.binding_schemes,
+        self.gpa,
+        .{ .node_idx = @intFromEnum(node_idx) },
+    );
+}
+
+/// Whether checking classified `node_idx` as a rank-1 polymorphic value
+/// scheme. Imported value resolution uses this exact producer-authored bit to
+/// preserve the classification on its local type-graph copy.
+pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
+    return findSortedByNode(
+        BindingScheme,
+        self.binding_schemes.items.items,
+        @intFromEnum(node_idx),
+    ) != null;
+}
+
 /// Return the digits before the decimal point for a recorded numeral.
 pub fn numeralDigitsBefore(self: *const Self, literal: NumeralLiteral) []const u8 {
     return self.numeral_digit_bytes.items.items[literal.digits_start..][0..literal.before_len];
@@ -3861,7 +4261,7 @@ pub fn numeralDigitsAfter(self: *const Self, literal: NumeralLiteral) []const u8
     return self.numeral_digit_bytes.items.items[start..][0..literal.after_len];
 }
 
-/// The exact-digit view of a recorded numeral — the input every literal fit
+/// The exact-digit view of a recorded numeral—the input every literal fit
 /// and bit computation consumes (src/types/numeral.zig). Borrowed from this
 /// env's digit pool.
 pub fn exactNumeral(self: *const Self, literal: NumeralLiteral) types_mod.numeral.Exact {
@@ -3892,6 +4292,15 @@ pub fn recordNumeralDispatchPlan(
 pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeStore.LiteralDispatchPlan {
     const plan = self.store.literalDispatchPlanForNode(node_idx) orelse return null;
     return if (plan.dispatchKind() == .numeral) plan else null;
+}
+
+/// Commit checking's exact resolution for a live numeral or quote literal.
+pub fn finalizeLiteralDispatchResolution(
+    self: *Self,
+    node_idx: Node.Idx,
+    resolution: NodeStore.LiteralDispatchPlan.Resolution,
+) void {
+    self.store.finalizeLiteralDispatchResolution(node_idx, resolution);
 }
 
 /// Record the checked `from_quote` function for a string literal node.
@@ -3927,6 +4336,67 @@ pub fn recordSchemeUse(
         .pairs_start = pairs_start,
         .pairs_len = @intCast(pairs.len),
     });
+}
+
+/// Record one successfully checked generated codec derivation and its exact
+/// internal method callables.
+pub fn recordGeneratedCodecDerivation(
+    self: *Self,
+    kind: GeneratedCodecDerivation.Kind,
+    source_constraint_fn_var: TypeVar,
+    source_runtime_fn_var: TypeVar,
+    source_shape_var: TypeVar,
+    source_encoding_var: TypeVar,
+    source_state_var: TypeVar,
+    source_error_var: TypeVar,
+    constraint_fn_var: TypeVar,
+    runtime_fn_var: TypeVar,
+    shape_var: TypeVar,
+    encoding_var: TypeVar,
+    state_var: TypeVar,
+    error_var: TypeVar,
+    calls: []const GeneratedCodecCall,
+) std.mem.Allocator.Error!void {
+    var existing_index: ?usize = null;
+    for (self.generated_codec_derivations.items.items, 0..) |existing, index| {
+        if (existing.kind == @intFromEnum(kind) and
+            existing.source_constraint_fn_var == @intFromEnum(source_constraint_fn_var))
+        {
+            existing_index = index;
+            break;
+        }
+    }
+    if (existing_index) |index| {
+        const existing = self.generated_codec_derivations.items.items[index];
+        if (existing.calls_start + existing.calls_len == self.generated_codec_calls.items.items.len) {
+            self.generated_codec_calls.items.shrinkRetainingCapacity(existing.calls_start);
+        }
+    }
+
+    const calls_start: u32 = @intCast(self.generated_codec_calls.items.items.len);
+    _ = try self.generated_codec_calls.appendSlice(self.gpa, calls);
+    const derivation = GeneratedCodecDerivation{
+        .kind = @intFromEnum(kind),
+        .source_constraint_fn_var = @intFromEnum(source_constraint_fn_var),
+        .source_runtime_fn_var = @intFromEnum(source_runtime_fn_var),
+        .source_shape_var = @intFromEnum(source_shape_var),
+        .source_encoding_var = @intFromEnum(source_encoding_var),
+        .source_state_var = @intFromEnum(source_state_var),
+        .source_error_var = @intFromEnum(source_error_var),
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+        .runtime_fn_var = @intFromEnum(runtime_fn_var),
+        .shape_var = @intFromEnum(shape_var),
+        .encoding_var = @intFromEnum(encoding_var),
+        .state_var = @intFromEnum(state_var),
+        .error_var = @intFromEnum(error_var),
+        .calls_start = calls_start,
+        .calls_len = @intCast(calls.len),
+    };
+    if (existing_index) |index| {
+        self.generated_codec_derivations.items.items[index] = derivation;
+        return;
+    }
+    _ = try self.generated_codec_derivations.append(self.gpa, derivation);
 }
 
 /// Persist one checker-rejected static-dispatch obligation.
@@ -4093,6 +4563,36 @@ pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Er
     const expr_idx = try self.store.addExpr(expr, region);
     self.debugAssertArraysInSync();
     return expr_idx;
+}
+
+/// Reserve one contiguous field-access path plus its enclosing expression.
+pub fn startFieldAccessPath(self: *Self, segment_count: u32) std.mem.Allocator.Error!NodeStore.FieldAccessPathBuilder {
+    return self.store.startFieldAccessPath(segment_count);
+}
+
+/// Append one source-ordered field-access segment to a reserved path.
+pub fn appendFieldAccessPathSegmentAssumeCapacity(
+    self: *Self,
+    builder: NodeStore.FieldAccessPathBuilder,
+    segment: CIR.Expr.FieldAccessSegment,
+    region: Region,
+) CIR.Expr.FieldAccessSegment.Idx {
+    const segment_idx = self.store.appendFieldAccessPathSegmentAssumeCapacity(builder, segment, region);
+    self.debugAssertArraysInSync();
+    return segment_idx;
+}
+
+/// Finish a fully populated field-access path.
+pub fn finishFieldAccessPath(self: *Self, builder: NodeStore.FieldAccessPathBuilder) CIR.Expr.FieldAccessSegment.Span {
+    const span = self.store.finishFieldAccessPath(builder);
+    self.debugAssertArraysInSync();
+    return span;
+}
+
+/// Roll back a field-access path whose construction did not finish.
+pub fn rollbackFieldAccessPath(self: *Self, builder: NodeStore.FieldAccessPathBuilder) void {
+    self.store.rollbackFieldAccessPath(builder);
+    self.debugAssertArraysInSync();
 }
 
 /// Add a new capture to the node store.
@@ -4361,10 +4861,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
             // Only process assign patterns - skip destructuring patterns
             const pattern = self.store.getPattern(def.pattern);
-            switch (pattern) {
-                .assign => {},
-                else => continue, // Skip non-assign patterns (like destructuring)
-            }
+            if (std.meta.activeTag(pattern) != .assign) continue; // Skip non-assign patterns (like destructuring)
 
             // Use def_idx for type lookup, not def.pattern. During type checking,
             // def_var and pattern_var are unified, but the type store may not have
@@ -4395,13 +4892,10 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         const all_stmts = self.store.sliceStatements(self.all_statements);
         var has_type_decl = false;
         for (all_stmts) |stmt_idx| {
-            const stmt = self.store.getStatement(stmt_idx);
-            switch (stmt) {
-                .s_alias_decl, .s_nominal_decl => {
-                    has_type_decl = true;
-                    break;
-                },
-                else => continue,
+            const tag = std.meta.activeTag(self.store.getStatement(stmt_idx));
+            if (tag == .s_alias_decl or tag == .s_nominal_decl or tag == .s_where_alias_decl) {
+                has_type_decl = true;
+                break;
             }
         }
 
@@ -4439,6 +4933,21 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
+                    .s_where_alias_decl => |where_alias| {
+                        const stmt_begin = tree.beginNode();
+                        try tree.pushStaticAtom("where-alias");
+
+                        const stmt_region = self.store.getStatementRegion(stmt_idx);
+                        try self.appendRegionInfoToSExprTreeFromRegion(tree, stmt_region);
+
+                        try type_writer.write(varFrom(stmt_idx), .one_line);
+                        try tree.pushStringPair("type", type_writer.get());
+
+                        const stmt_attrs = tree.beginNode();
+                        const header = self.store.getTypeHeader(where_alias.header);
+                        try header.pushToSExprTree(self, tree, where_alias.header);
+                        try tree.endNode(stmt_begin, stmt_attrs);
+                    },
                     .s_nominal_decl => |nominal| {
                         const stmt_begin = tree.beginNode();
                         try tree.pushStaticAtom("nominal");
@@ -4464,7 +4973,25 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
-                    else => continue,
+                    .s_decl,
+                    .s_var,
+                    .s_var_uninitialized,
+                    .s_reassign,
+                    .s_crash,
+                    .s_dbg,
+                    .s_expr,
+                    .s_expect,
+                    .s_for,
+                    .s_while,
+                    .s_infinite_loop,
+                    .s_breakable_loop,
+                    .s_break,
+                    .s_return,
+                    .s_import,
+                    .s_type_anno,
+                    .s_type_var_alias,
+                    .s_runtime_error,
+                    => continue,
                 }
             }
 
@@ -4576,7 +5103,26 @@ pub fn getLineStartsAll(self: *const Self) []const u32 {
 }
 
 pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
-    return TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null);
+    var type_writer = try TypeWriter.initFromParts(self.gpa, &self.types, self.getIdentStore(), null);
+    type_writer.setDefaultSourceResolver(self, typeWriterDefaultSource);
+    return type_writer;
+}
+
+/// Resolve a defaulted field's identity to its default's source snippet for
+/// type rendering (design.md "Defaulted Fields"): renderable exactly when
+/// the default was declared in THIS module and its source text is a short
+/// single line; a foreign or unwieldy default renders as `?? …`.
+pub fn typeWriterDefaultSource(ctx: *const anyopaque, id: types_mod.DefaultId) ?[]const u8 {
+    const env: *const Self = @ptrCast(@alignCast(ctx));
+    if (id.origin_module != env.selfModuleIdentity()) return null;
+    const region = env.store.getExprRegion(@as(CIR.Expr.Idx, @enumFromInt(id.expr_node)));
+    const source = env.getSourceAll();
+    if (region.start.offset > region.end.offset or region.end.offset > source.len) return null;
+    const snippet = source[region.start.offset..region.end.offset];
+    // Keep type strings readable: long or multi-line defaults render `…`.
+    if (snippet.len == 0 or snippet.len > 40) return null;
+    if (std.mem.findScalar(u8, snippet, '\n') != null) return null;
+    return snippet;
 }
 
 /// Inserts an identifier into the common environment and returns its index.
@@ -4635,7 +5181,7 @@ pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *cons
     return @ptrCast(bytes.ptr);
 }
 
-/// Display ident for an env-local identity index. Diagnostics only — never
+/// Display ident for an env-local identity index. Diagnostics only—never
 /// use for identity decisions.
 pub fn moduleIdentityDisplayIdent(self: *const Self, idx: base.ModuleIdentity.Idx) Ident.Idx {
     std.debug.assert(!idx.isNone());
@@ -4687,7 +5233,7 @@ pub fn setContentIdentity(self: *Self, hash: base.ModuleIdentity.Hash) std.mem.A
 
 /// Compute and record this module's deep content identity from its resolved
 /// direct imports: H(module name, source bytes, import identity hashes).
-/// Idempotent. Every imported env must already be finalized — imports are
+/// Idempotent. Every imported env must already be finalized—imports are
 /// checked (or at least identity-finalized) before their dependents.
 pub fn ensureContentIdentity(
     self: *Self,
@@ -4700,7 +5246,7 @@ pub fn ensureContentIdentity(
     for (imported_envs) |imported_env| {
         if (imported_env == @as(*const Self, self)) continue;
         // An import that is this module's own content (same name, same source
-        // bytes — e.g. the baked Builtin env while `roc check Builtin.roc`
+        // bytes—e.g. the baked Builtin env while `roc check Builtin.roc`
         // checks the identical source) contributes nothing to the transitive
         // closure; folding it in would make byte-identical modules disagree
         // on identity depending on which copy was loaded first.
@@ -4747,6 +5293,42 @@ pub fn registerMethodDefForOwner(self: *Self, owner: CIR.Statement.Idx, method_i
 pub fn registerMethodDefForMethodOwner(self: *Self, owner: MethodOwner, method_ident: Ident.Idx, binding: MethodBinding) Allocator.Error!void {
     const key = MethodKey.init(owner, method_ident);
     try self.method_defs.put(self.gpa, key, binding);
+}
+
+/// Appends one complete method entry to the parallel construction tables.
+pub fn appendMethodForMethodOwner(
+    self: *Self,
+    owner: MethodOwner,
+    method_ident: Ident.Idx,
+    qualified_ident: Ident.Idx,
+    binding: MethodBinding,
+) Allocator.Error!MethodTableIndex {
+    std.debug.assert(self.method_idents.entries.items.len == self.method_defs.entries.items.len);
+    const index: MethodTableIndex = @enumFromInt(self.method_idents.entries.items.len);
+
+    try self.method_idents.entries.ensureUnusedCapacity(self.gpa, 1);
+    try self.method_defs.entries.ensureUnusedCapacity(self.gpa, 1);
+    try self.registerMethodIdentForMethodOwner(owner, method_ident, qualified_ident);
+    try self.registerMethodDefForMethodOwner(owner, method_ident, binding);
+    return index;
+}
+
+/// Replaces the values at one construction-time method table position while
+/// preserving its explicit owner-and-name key.
+pub fn replaceMethodAt(
+    self: *Self,
+    index: MethodTableIndex,
+    owner: MethodOwner,
+    method_ident: Ident.Idx,
+    qualified_ident: Ident.Idx,
+    binding: MethodBinding,
+) void {
+    const table_index: usize = @intFromEnum(index);
+    const key = MethodKey.init(owner, method_ident);
+    std.debug.assert(MethodKey.order(self.method_idents.entries.items[table_index].key, key) == .eq);
+    std.debug.assert(MethodKey.order(self.method_defs.entries.items[table_index].key, key) == .eq);
+    self.method_idents.entries.items[table_index].value = qualified_ident;
+    self.method_defs.entries.items[table_index].value = binding;
 }
 
 /// Looks up a qualified method ident for an explicit owner declaration.

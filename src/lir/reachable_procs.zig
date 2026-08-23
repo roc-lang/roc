@@ -121,6 +121,7 @@ const Pass = struct {
             try self.markConstPlan(request.plan);
             if (request.initializer) |initializer| try self.markProc(initializer);
         }
+        try self.markBoxyTableProcs();
 
         try self.drainProcQueue();
         self.assignCompactProcIds();
@@ -132,6 +133,7 @@ const Pass = struct {
         self.remapConstRoots();
         self.remapStaticDataInitializers();
         try self.remapErasedFns();
+        self.remapBoxyTableProcs();
         self.remapComptimeSites();
         self.remapProcDebugNames();
         self.compactProcSpecs();
@@ -175,10 +177,10 @@ const Pass = struct {
                 .init_uninitialized => |s| try self.pushStmt(s.next),
                 .assign_ref => |s| try self.pushStmt(s.next),
                 .assign_literal => |s| {
-                    switch (s.value) {
-                        .proc_ref => |referenced_proc| try self.markProc(referenced_proc),
-                        .static_data => |id| try self.markStaticData(id),
-                        else => {},
+                    if (s.value == .proc_ref) {
+                        try self.markProc(s.value.proc_ref);
+                    } else if (s.value == .static_data) {
+                        try self.markStaticData(s.value.static_data);
                     }
                     try self.pushStmt(s.next);
                 },
@@ -191,7 +193,11 @@ const Pass = struct {
                     try self.markProc(s.proc);
                     try self.pushStmt(s.next);
                 },
-                .assign_low_level => |s| try self.pushStmt(s.next),
+                inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
+                .boxy_tag_match => |s| {
+                    try self.pushStmt(s.on_match);
+                    try self.pushStmt(s.on_miss);
+                },
                 .assign_list => |s| try self.pushStmt(s.next),
                 .assign_struct => |s| try self.pushStmt(s.next),
                 .assign_tag => |s| try self.pushStmt(s.next),
@@ -249,6 +255,13 @@ const Pass = struct {
 
     fn pushStmt(self: *Pass, stmt: LIR.CFStmtId) Allocator.Error!void {
         try self.stmt_stack.append(self.allocator, stmt);
+    }
+
+    fn markBoxyTableProcs(self: *Pass) Allocator.Error!void {
+        for (self.result.boxy_method_slots.items) |slot| {
+            if (!slot.present or slot.structural_eq) continue;
+            try self.markProc(slot.proc);
+        }
     }
 
     fn markConstPlan(self: *Pass, plan_id: LirProgram.ConstPlanId) Allocator.Error!void {
@@ -353,10 +366,10 @@ const Pass = struct {
             const stmt = self.store.getCFStmtPtr(stmt_id);
             switch (stmt.*) {
                 .assign_literal => |*s| {
-                    switch (s.value) {
-                        .proc_ref => s.value.proc_ref = self.remapProc(s.value.proc_ref),
-                        .static_data => s.value.static_data = self.remapStaticData(s.value.static_data),
-                        else => {},
+                    if (s.value == .proc_ref) {
+                        s.value.proc_ref = self.remapProc(s.value.proc_ref);
+                    } else if (s.value == .static_data) {
+                        s.value.static_data = self.remapStaticData(s.value.static_data);
                     }
                     const next = s.next;
                     s.next = self.remapStmt(next);
@@ -429,6 +442,17 @@ const Pass = struct {
                 inline .init_uninitialized,
                 .assign_ref,
                 .assign_call_erased,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -447,6 +471,14 @@ const Pass = struct {
                     const next = s.next;
                     s.next = self.remapStmt(next);
                     try self.pushStmt(next);
+                },
+                .boxy_tag_match => |*s| {
+                    const on_match = s.on_match;
+                    const on_miss = s.on_miss;
+                    s.on_match = self.remapStmt(on_match);
+                    s.on_miss = self.remapStmt(on_miss);
+                    try self.pushStmt(on_match);
+                    try self.pushStmt(on_miss);
                 },
                 .ret,
                 .jump,
@@ -526,6 +558,13 @@ const Pass = struct {
             }
             if (old_entries.len > 0) self.allocator.free(old_entries);
             set.entries = new_entries;
+        }
+    }
+
+    fn remapBoxyTableProcs(self: *Pass) void {
+        for (self.result.boxy_method_slots.items) |*slot| {
+            if (!slot.present or slot.structural_eq) continue;
+            slot.proc = self.remapProc(slot.proc);
         }
     }
 
@@ -643,10 +682,10 @@ const Pass = struct {
     fn verifyStmtRefs(self: *Pass, stmt: LIR.CFStmt, proc_count: usize, stmt_count: usize) void {
         switch (stmt) {
             .assign_literal => |s| {
-                switch (s.value) {
-                    .proc_ref => |proc| self.verifyProcRef(proc, proc_count),
-                    .static_data => |id| self.verifyStaticDataRef(id),
-                    else => {},
+                if (s.value == .proc_ref) {
+                    self.verifyProcRef(s.value.proc_ref, proc_count);
+                } else if (s.value == .static_data) {
+                    self.verifyStaticDataRef(s.value.static_data);
                 }
                 self.verifyStmtRef(s.next, stmt_count);
             },
@@ -661,6 +700,17 @@ const Pass = struct {
             inline .init_uninitialized,
             .assign_ref,
             .assign_call_erased,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -690,6 +740,10 @@ const Pass = struct {
                 self.verifyStmtRef(s.uninitialized_branch, stmt_count);
             },
             .str_match => |s| {
+                self.verifyStmtRef(s.on_match, stmt_count);
+                self.verifyStmtRef(s.on_miss, stmt_count);
+            },
+            .boxy_tag_match => |s| {
                 self.verifyStmtRef(s.on_match, stmt_count);
                 self.verifyStmtRef(s.on_miss, stmt_count);
             },

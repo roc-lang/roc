@@ -12,35 +12,31 @@ a=(0(0->X)
 MISSING METHOD - fuzz_crash_097.md:1:4:1:5
 TYPE MISMATCH - fuzz_crash_097.md:1:4:2:4
 # PROBLEMS
+── ✗ missing method ────────────────────────────────────── fuzz_crash_097.md:1:4
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_numeral` method is being called on a value ────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  a=(0(0->X)                                                                │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_097.md:1:4 ┘
+This from_numeral method is being called on a value whose type doesn't have
+that method.
 
-    The value's type, which does not have a method named `from_numeral`, is:
+a=(0(0->X)
+   ^
 
-        [X(b), ..] -> _ret
-          where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
+The value's type, which does not have a method named from_numeral, is:
 
+    [X(b), ..] -> _ret
+      where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This is not a record, so it does not have any fields to ───┐
-└┬──────────────┘  access.                                                    │
- │                                                                            │
- │  a=(0(0->X)                                                                │
- │  ->X .a)                                                                   │
- │                                                                            │
- └───────────────────────────────────────────────────── fuzz_crash_097.md:1:4 ┘
+── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_097.md:1:4
 
-    It is:
+This is not a record, so it does not have any fields to access.
 
-        [X(_b), ..]
+a=(0(0->X)
+->X .a)
 
-    But I need a record with a `a` field.
+It is:
+
+    [X(_b), ..]
+
+But I need a record with a a field.
 
 # TOKENS
 ~~~zig
@@ -57,22 +53,22 @@ EndOfFile,
 			(p-ident (raw "a"))
 			(e-tuple
 				(e-field-access
-					(e-arrow-call
-						(e-apply
-							(e-int (raw "0"))
-							(e-arrow-call
+					(receiver
+						(e-arrow-call
+							(e-apply
 								(e-int (raw "0"))
-								(e-tag (raw "X"))))
-						(e-tag (raw "X")))
-					(e-ident (raw ".a")))))))
+								(e-arrow-call
+									(e-int (raw "0"))
+									(e-tag (raw "X"))))
+							(e-tag (raw "X"))))
+					(segment (mode "required") (field "a")))))))
 ~~~
 # FORMATTED
 ~~~roc
 a = (
-	(
-		0(0->X)
-			->X,
-	).a,
+	0(0 |> X)
+		|> X
+		.a
 )
 ~~~
 # CANONICALIZE
@@ -80,21 +76,13 @@ a = (
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-field-access (field "a")
-			(receiver
-				(e-tag (name "X")
-					(args
-						(e-call (constraint-fn-var 215)
-							(e-runtime-error (tag "erroneous_value_expr"))
-							(e-tag (name "X")
-								(args
-									(e-num (value "0")))))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_b")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_b"))))
+		(expr (type "Error"))))
 ~~~

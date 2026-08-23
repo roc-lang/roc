@@ -33,8 +33,8 @@ pub fn underlineAppliesToLine(start_line: u32, end_line: u32, line_num: u32) boo
 /// Write the padding that precedes an underline span on a caret row, advancing
 /// from `col_position` (1-based; 1 means nothing has been written on this row
 /// yet) up to `start_column`. The row's first gap mirrors the source line's own
-/// characters via `printLeadingWhitespace` — preserving tabs so the carets land
-/// under a tabbed line — while gaps between spans are plain spaces.
+/// characters via `printLeadingWhitespace`—preserving tabs so the carets land
+/// under a tabbed line—while gaps between spans are plain spaces.
 pub fn printUnderlineGap(writer: anytype, line: []const u8, col_position: u32, start_column: u32) error{WriteFailed}!void {
     if (start_column <= col_position) return;
     if (col_position == 1) {
@@ -87,7 +87,7 @@ fn codepointWidth(cp: u21) usize {
 }
 
 /// The number of terminal columns `bytes` occupies when rendered, accounting
-/// for multi-byte UTF-8, wide/zero-width characters, and tabs (which the box
+/// for multi-byte UTF-8, wide/zero-width characters, and tabs (which the terminal
 /// renderer renders as a single space). Roc reports columns as byte offsets,
 /// so callers map byte spans to display columns through this.
 pub fn displayWidth(bytes: []const u8) usize {

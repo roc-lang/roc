@@ -33,7 +33,7 @@ pub const TestSpec = struct {
 /// host-boundary fixture independently for interpreter and dev backends.
 pub const host_boxed_fn_boundary_test = TestSpec{
     .roc_file = "test/fx/host_boxed_fn_boundary.roc",
-    .io_spec = "1>primitive: 42|1>nested record: 39|1>recursive tree: 42|1>host returns boxed capture: 42|1>host consumes primitive: 42|1>host consumes nested record: 40|1>host consumes recursive tree: 43|1>host consumes boxed capture: 15|1>host roundtrip: 42|1>host store: 42|1>drops primitive=1 nested_record=1 nested_str=1 recursive_tree=1 tree_child_boxes=4 boxed_capture=1",
+    .io_spec = "1>primitive: 42|1>nested record: 39|1>recursive tree: 42|1>host returns boxed capture: 42|1>host consumes primitive: 42|1>host consumes nested record: 40|1>host consumes recursive tree: 43|1>host consumes boxed capture: 15|1>host roundtrip: 42|1>host declines reuse: 42|1>host consumes reuse: 42|1>host store: 42|1>drops primitive=1 nested_record=1 nested_str=1 recursive_tree=1 tree_child_boxes=4 boxed_capture=1 transition_outer=1 transition_inner=1 transition_nonnull=1",
     .description = "Regression test: Boxed erased callables across the host boundary in both directions",
 };
 
@@ -46,6 +46,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/app.roc",
         .io_spec = "0<abc|1>Hello from stdout!|1>Line 1 to stdout|2>Line 2 to stderr|1>Line 3 to stdout|2>Error from stderr!|1>Crypto hashes ok",
         .description = "Basic effectful functions: Stdout.line!, Stderr.line!",
+    },
+    .{
+        .roc_file = "test/fx/phantom_capability_parameter.roc",
+        .io_spec = "1>41",
+        .description = "Repro for issue 10770: a nominal's phantom parameter survives a call boundary",
     },
     .{
         .roc_file = "test/fx/subdir/app.roc",
@@ -109,6 +114,26 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/numeric_fold.roc",
         .io_spec = "1>Sum: 15.0",
         .description = "List.fold with numeric accumulators",
+    },
+    .{
+        .roc_file = "test/fx/runtime_dec_to_u8_wrap.roc",
+        .io_spec = "0<72623859790382856|1>[56, 1, 1]",
+        .description = "Regression test: wrapping Dec-to-integer conversion in runtime code (issue #10626)",
+    },
+    .{
+        .roc_file = "test/fx/runtime_dec_to_int_wrap_widths.roc",
+        .io_spec = "0<3|1>widths: 3 3 3 3 3 3 3 3 3 3|1>trunc: 3 -3 -3|1>wide: 11553255926290448384 30000000000000000000 0",
+        .description = "Every runtime Dec-to-integer width recovers the whole part and truncates toward zero; all but I128 wrap past the destination range",
+    },
+    .{
+        .roc_file = "test/fx/runtime_i128_div_rem_mod.roc",
+        .io_spec = "0<3|1>unsigned: 42857142857142857142 6 6|1>signed: 42857142857142857142 6 6|1>negative: -42857142857142857142 -6 1",
+        .description = "Runtime 128-bit division, remainder and modulo agree across backends and keep the operands' full width",
+    },
+    .{
+        .roc_file = "test/fx/runtime_zst_list_ownership.roc",
+        .io_spec = "0<3|1>append: 2|1>literal: 3|1>concat: 5|1>repeat: 3|1>first: ok",
+        .description = "Zero-sized-element lists keep their length through reserve/append/concat and strand no allocation",
     },
     .{
         .roc_file = "test/fx/list_for_each.roc",
@@ -240,6 +265,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Record inspection",
     },
     .{
+        .roc_file = "test/fx/inspect_dict_set.roc",
+        .io_spec = "1>Set.from_list([1, 2, 3])|1>Dict.from_list([(\"a\", 3), (\"b\", 2)])|1>Set.from_list([])|1>Dict.from_list([])|1>{ labels: Set.from_list([\"red\", \"blue\"]), scores: Dict.from_list([(\"alice\", 10), (\"bob\", 20)]) }",
+        .description = "Dict and Set inspection uses from_list syntax for direct, empty, polymorphic, and nested values",
+    },
+    .{
         .roc_file = "test/fx/inspect_field_only_repro.roc",
         .io_spec = "1>test",
         .description = "Repro: inspect projected string field",
@@ -290,6 +320,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Repro: named outer direct map2 value dropped before static output",
     },
     .{
+        .roc_file = "test/fx/control_flow_selected_runtime_representation_repro.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: #10596 local if binding between iterator call and empty iterator",
+    },
+    .{
         .roc_file = "test/fx/drop_concat_unused_repro.roc",
         .io_spec = "1>done",
         .description = "Repro: dropped concat string before static output",
@@ -321,6 +356,16 @@ pub const io_spec_tests = [_]TestSpec{
     },
     // Bug regression tests
     .{
+        .roc_file = "test/fx/erased_small_first_arg.roc",
+        .io_spec = "1>2",
+        .description = "Regression test: LLVM erased callable ABI preserves a sub-word first argument (issue #10364)",
+    },
+    .{
+        .roc_file = "test/fx/packed_list_two_bodies.roc",
+        .io_spec = "0<three|1>165|1>168",
+        .description = "Regression test: a packed compile-time list constant restored in two proc bodies must not reuse the first body's GEP instruction (issue #10697)",
+    },
+    .{
         .roc_file = "test/fx/unify_scratch_fresh_vars_rank_bug.roc",
         .io_spec = "1>ok",
         .description = "Regression test: unify scratch fresh_vars must be cleared between calls",
@@ -334,6 +379,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/list_map_fallible.roc",
         .io_spec = "1>done",
         .description = "Regression test: List.map with fallible function (U64.from_str)",
+    },
+    .{
+        .roc_file = "test/fx/issue_10368_list_map_reuse.roc",
+        .io_spec = "1>one map 0803c9e914002577bbfa01bae7cf9e32a7ef9d1c9e07d19542be4df2c190cbaf|1>two maps f0e5e7a2abe3428a08147f2fbb9eaad2261990945cbfbfcaf37149c6002e215d",
+        .description = "Regression test: optimized List.map reuse preserves a shared parameter-derived input",
     },
     .{
         .roc_file = "test/fx/list_append_stdin_uaf.roc",
@@ -378,7 +428,7 @@ pub const io_spec_tests = [_]TestSpec{
     .{
         .roc_file = "test/fx/dbg_corrupts_recursive_tag_union.roc",
         .io_spec = "1>Child is Text: hello",
-        .expected_build_stderr_contains = &.{"`DBG` IN OPTIMIZED BUILD"},
+        .expected_build_stderr_contains = &.{"`dbg` in optimized build"},
         .description = "Regression test: dbg on recursive tag union preserves variant discriminant (issue #8804)",
     },
     .{
@@ -583,6 +633,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/leak_list_str_drop_nested.roc",
         .io_spec = "0<xy|1>drop done",
         .description = "Leak coverage for dropped heap List(Str) and List(List(Str)) (roc_builtins_list_decref_str / _flat_list callback paths)",
+    },
+    .{
+        .roc_file = "test/fx/hosted_list_str_ownership.roc",
+        .io_spec = "0<abcdefgh|1>hosted bytes: 120 local bytes: 120",
+        .description = "Regression test for #10774: a hosted function owns a List(Str) argument whose elements the caller still holds, so the caller's retain must cover the element strings the host's release drops",
     },
 };
 

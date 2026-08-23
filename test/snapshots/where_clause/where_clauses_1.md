@@ -14,30 +14,23 @@ Decode(a) : a where [a.decode : List(U8) -> a]
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:1:1:2:50
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_1.md:4:1:4:47
 # PROBLEMS
+── ✗ where clause not allowed in type declaration ─────── where_clauses_1.md:1:1
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  Hash(a, hasher) : a                                                       │
- │      where [a.hash : hasher -> hasher, hasher.Hasher]                      │
- │                                                                            │
- └──────────────────────────────────────────────────── where_clauses_1.md:1:1 ┘
+You cannot define a where clause inside a type declaration.
 
-    You're attempting do this here:
+Hash(a, hasher) : a
+    where [a.hash : hasher -> hasher, hasher.Hasher]
 
+Hint: where clauses can only go on function type annotations.
 
-┌──────────────────────────────────────────────┐
-│ WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION ├─ You cannot define a ────────┐
-└┬─────────────────────────────────────────────┘  `where` clause inside a     │
- │                                                type declaration.           │
- │                                                                            │
- │  Decode(a) : a where [a.decode : List(U8) -> a]                            │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                            │
- └──────────────────────────────────────────────────── where_clauses_1.md:4:1 ┘
+── ✗ where clause not allowed in type declaration ─────── where_clauses_1.md:4:1
 
-    You're attempting do this here:
+You cannot define a where clause inside a type declaration.
+
+Decode(a) : a where [a.decode : List(U8) -> a]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Hint: where clauses can only go on function type annotations.
 
 # TOKENS
 ~~~zig
@@ -56,12 +49,26 @@ EndOfFile,
 				(args
 					(ty-var (raw "a"))
 					(ty-var (raw "hasher"))))
-			(ty-var (raw "a")))
+			(ty-var (raw "a"))
+			(where
+				(method (mod-of "a") (name "hash")
+					(args
+						(ty-var (raw "hasher")))
+					(ty-var (raw "hasher")))
+				(alias (mod-of "hasher")
+					(ty (name "Hasher")))))
 		(s-type-decl
 			(header (name "Decode")
 				(args
 					(ty-var (raw "a"))))
-			(ty-var (raw "a")))))
+			(ty-var (raw "a"))
+			(where
+				(method (mod-of "a") (name "decode")
+					(args
+						(ty-apply
+							(ty (name "List"))
+							(ty (name "U8"))))
+					(ty-var (raw "a")))))))
 ~~~
 # FORMATTED
 ~~~roc

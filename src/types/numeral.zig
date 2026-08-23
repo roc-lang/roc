@@ -10,7 +10,7 @@
 //!     escalating to big-integer arithmetic only for adversarial digit counts).
 //!   - `intBits`/`decBits`/`floatBits`: the bit pattern the value denotes in a
 //!     concrete builtin type. Float conversion is correctly rounded
-//!     (round-to-nearest, ties-to-even) straight from the binary digit facts —
+//!     (round-to-nearest, ties-to-even) straight from the binary digit facts—
 //!     no decimal text is ever reconstructed.
 //!
 //! Every stage that needs one of these answers (checking, monotype lowering,
@@ -55,7 +55,7 @@ pub const dec_one: u128 = 1_000_000_000_000_000_000;
 ///
 /// The magnitude is `before + after/10^scale`; `after` counts `scale` decimal
 /// digits, so `after < 10^scale` always. `is_fractional` is the syntactic
-/// fact "written with a decimal point or nonzero fractional digits" — `1e5`
+/// fact "written with a decimal point or nonzero fractional digits"—`1e5`
 /// is not fractional even though it parses from a `frac` token.
 pub const Exact = struct {
     /// Digits before the decimal point (after folding in any exponent),
@@ -217,7 +217,7 @@ fn divOutExcessDecimalPlaces(allocator: Allocator, after_be: []const u8, excess:
     // 10^excess = 2^excess · 5^excess, so `after` must have at least `excess`
     // trailing zero BITS to divide exactly. This costs one byte scan and
     // rejects virtually every adversarial huge-scale literal before any
-    // big-integer work — the cheap counterpart of the in-u128 branch's
+    // big-integer work—the cheap counterpart of the in-u128 branch's
     // `after % divisor` guard in `decBits`.
     if (trailingZeroBits(after_be) < excess) return null;
     const big = std.math.big.int.Managed;
@@ -406,7 +406,7 @@ fn roundLimbsToFloat(comptime F: type, limbs: []const std.math.big.Limb, sticky:
 }
 
 /// Assemble `mantissa * 2^ulp_exponent` as F. The mantissa always fits F's
-/// precision (a rounding carry to 2^precision is still exact — the low bits
+/// precision (a rounding carry to 2^precision is still exact—the low bits
 /// are zero), so scaling is exact; out-of-range magnitudes become inf.
 fn assembleFloat(comptime F: type, mantissa: FloatSpec(F).Mantissa, ulp_exponent: i64) F {
     const spec = FloatSpec(F);
@@ -523,7 +523,7 @@ pub fn fits(allocator: Allocator, exact: Exact, target: Target) Allocator.Error!
     switch (target) {
         .f32, .f64 => return true,
         .dec => return (try decBits(allocator, exact)) != null,
-        else => {
+        .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => {
             const magnitude = intMagnitude(exact) orelse return false;
             return intTargetAccepts(target, magnitude, exact.is_negative);
         },
@@ -682,7 +682,7 @@ test "trailingZeroBits counts across big-endian byte boundaries" {
     try testing.expectEqual(@as(u32, 8), trailingZeroBits(&.{ 0x01, 0x00 }));
     // 0x30 = 48 = 16*3: 4 trailing zero bits.
     try testing.expectEqual(@as(u32, 4), trailingZeroBits(&.{0x30}));
-    // Odd magnitude: none — so no 10^excess (excess >= 1) can divide it,
+    // Odd magnitude: none—so no 10^excess (excess >= 1) can divide it,
     // which is the fast-reject path for adversarial huge-scale fractions.
     try testing.expectEqual(@as(u32, 0), trailingZeroBits(&.{ 0x12, 0x01 }));
     // Zero magnitude: every power of two divides it.
@@ -737,7 +737,7 @@ test "floatBits matches correctly-rounded parseFloat on curated cases" {
 
 test "floatBits handles deep subnormal magnitudes" {
     const gpa = testing.allocator;
-    // 0.<323 zeros>49406564584124654 — near f64 min subnormal (~4.94e-324).
+    // 0.<323 zeros>49406564584124654—near f64 min subnormal (~4.94e-324).
     var text = std.ArrayList(u8).empty;
     defer text.deinit(gpa);
     try text.appendSlice(gpa, "0.");

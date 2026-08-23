@@ -7,8 +7,11 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base_mod = @import("base");
 const backend = @import("backend");
 const builtins = @import("builtins");
+const eval = @import("eval");
+const lir = @import("lir");
 const ipc = @import("ipc");
 const shim_host_abi = @import("shim_host_abi");
 const shim_io = @import("shim_io");
@@ -21,8 +24,9 @@ pub const std_options_debug_io = shim_io.io();
 /// Disables threaded debug IO to prevent the threaded vtable from being linked into user programs.
 pub const std_options_debug_threaded_io = null;
 
-/// Disables stack-trace capture in the shim; panics here go through the host's RocOps.
-pub const std_options = shim_io.std_options_no_stack_tracing;
+/// Keeps std off the symbols a roc program's link cannot resolve; see
+/// `shim_io.std_options_static_archive`. Panics here go through the host's RocOps.
+pub const std_options = shim_io.std_options_static_archive;
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
@@ -30,6 +34,17 @@ const shim_symbols = builtins.shim_symbols;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const hot_reload = ipc.hot_reload;
 const RunImage = backend.RunImage;
+
+const BoxyProgramRuntime = struct {
+    runtime: *eval.boxy_abi.GlobalBoxyRuntime,
+    view: *lir.LirImage.BoxySidecar.View,
+
+    fn deinit(self: *BoxyProgramRuntime, gpa: Allocator) void {
+        eval.boxy_abi.deinitRuntime(self.runtime);
+        self.view.deinit();
+        gpa.destroy(self.view);
+    }
+};
 
 const DevProgram = struct {
     entrypoints: []const RunImage.Entrypoint,
@@ -40,13 +55,21 @@ const DevProgram = struct {
     descriptor: ?*hot_reload.ImageDescriptor,
     descriptor_offset: usize,
     local_refs: std.atomic.Value(usize),
+    boxy: ?BoxyProgramRuntime,
 
-    fn deinit(self: *DevProgram) void {
+    fn deinit(self: *DevProgram, gpa: Allocator) void {
+        if (self.boxy) |*boxy| boxy.deinit(gpa);
+        self.boxy = null;
         self.entrypoints = &.{};
         self.code = &.{};
         self.executable = &.{};
         self.data = &.{};
     }
+};
+
+const HotReloadCallRef = struct {
+    program: *DevProgram,
+    previous_boxy_runtime: ?*eval.boxy_abi.GlobalBoxyRuntime,
 };
 
 const RuntimeState = struct {
@@ -77,9 +100,7 @@ const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
     VirtualProtectFailed,
 };
 
-const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError || error{
-    SysctlFailed,
-};
+const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError;
 
 var runtime_state_initialized: std.atomic.Value(bool) = .init(false);
 var runtime_state: RuntimeState = undefined;
@@ -111,9 +132,30 @@ fn viewRuntimeImage(
     return RunImage.viewMappedImage(header, shm.base_ptr, image_bound);
 }
 
-fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
-    const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo(), page_size);
+/// Decode and own the boxy runtime paired with one run image. Generated table
+/// indices are meaningful only against this exact sidecar; retained old images
+/// therefore retain their runtime alongside their code and data.
+fn createBoxyRuntime(gpa: Allocator, ops: *RocOps, view: *const RunImage.ProgramView) RuntimeStateError!?BoxyProgramRuntime {
+    if (view.boxy_blob.len == 0) return null;
+
+    const boxy_view = try gpa.create(lir.LirImage.BoxySidecar.View);
+    errdefer gpa.destroy(boxy_view);
+    boxy_view.* = view.boxy_sidecar.view(
+        view.boxy_blob.ptr,
+        view.boxy_blob.len,
+        base_mod.target.TargetUsize.native,
+        gpa,
+    ) catch return error.InvalidDevRunImage;
+    errdefer boxy_view.deinit();
+
+    const runtime = eval.boxy_abi.createRuntimeFromSidecarView(gpa, boxy_view, ops) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    return .{ .runtime = runtime, .view = boxy_view };
+}
+
+fn openRuntimeState(gpa: Allocator, ops: *RocOps) RuntimeStateError!RuntimeState {
+    var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo());
     errdefer shm.deinit(gpa);
 
     const header_offset = @sizeOf(SharedMemoryAllocator.Header);
@@ -132,6 +174,7 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     const view = try viewRuntimeImage(&shm, image_offset, image_bound);
     const program = try createDevProgram(
         gpa,
+        ops,
         &view,
         generation,
         if (retained_image) |image| image.descriptor_offset else hot_reload.invalid_descriptor_offset,
@@ -155,7 +198,7 @@ fn ensureRuntimeState(ops: *RocOps) ShimError!*RuntimeState {
 
     if (runtime_state_initialized.load(.acquire)) return &runtime_state;
 
-    runtime_state = openRuntimeState(allocator()) catch {
+    runtime_state = openRuntimeState(allocator(), ops) catch {
         ops.crash("Machine-code shim could not map the compiled Roc image");
         return error.ImageUnavailable;
     };
@@ -321,20 +364,24 @@ fn loadDevProgram(
         .descriptor = descriptor,
         .descriptor_offset = descriptor_offset,
         .local_refs = std.atomic.Value(usize).init(1),
+        .boxy = null,
     };
 }
 
 fn createDevProgram(
     gpa: Allocator,
+    ops: *RocOps,
     view: *const RunImage.ProgramView,
     generation: u64,
     descriptor_offset: usize,
     descriptor: ?*hot_reload.ImageDescriptor,
-) LoadDevProgramError!*DevProgram {
+) RuntimeStateError!*DevProgram {
     const program = try gpa.create(DevProgram);
     errdefer gpa.destroy(program);
 
     program.* = try loadDevProgram(gpa, view, generation, descriptor_offset, descriptor);
+    errdefer program.deinit(gpa);
+    program.boxy = try createBoxyRuntime(gpa, ops, view);
     return program;
 }
 
@@ -369,7 +416,7 @@ fn relocatedDataAddress(base_addr: usize, addend: i64) RunImage.ImageError!usize
 }
 
 fn destroyDevProgram(gpa: Allocator, program: *DevProgram) void {
-    program.deinit();
+    program.deinit(gpa);
     gpa.destroy(program);
 }
 
@@ -416,10 +463,75 @@ fn protectDataPages(
     try ipc.platform.protectMappedMemory(view.data.ptr, protected_len, protection);
 }
 
+const HostArch = enum { x86, x86_64, aarch64, other };
+
+fn hostArch() HostArch {
+    return switch (builtin.cpu.arch) {
+        .x86 => .x86,
+        .x86_64 => .x86_64,
+        .aarch64, .aarch64_be => .aarch64,
+        .alpha,
+        .amdgcn,
+        .arc,
+        .arceb,
+        .arm,
+        .armeb,
+        .avr,
+        .bpfeb,
+        .bpfel,
+        .csky,
+        .hexagon,
+        .hppa,
+        .hppa64,
+        .kalimba,
+        .kvx,
+        .lanai,
+        .loongarch32,
+        .loongarch64,
+        .m68k,
+        .microblaze,
+        .microblazeel,
+        .mips,
+        .mipsel,
+        .mips64,
+        .mips64el,
+        .msp430,
+        .nvptx,
+        .nvptx64,
+        .or1k,
+        .powerpc,
+        .powerpcle,
+        .powerpc64,
+        .powerpc64le,
+        .propeller,
+        .riscv32,
+        .riscv32be,
+        .riscv64,
+        .riscv64be,
+        .s390x,
+        .sh,
+        .sheb,
+        .sparc,
+        .sparc64,
+        .spirv32,
+        .spirv64,
+        .thumb,
+        .thumbeb,
+        .ve,
+        .wasm32,
+        .wasm64,
+        .x86_16,
+        .xcore,
+        .xtensa,
+        .xtensaeb,
+        => .other,
+    };
+}
+
 fn flushInstructionCache(memory: []const u8) void {
-    switch (builtin.cpu.arch) {
+    switch (hostArch()) {
         .x86, .x86_64 => {},
-        else => {
+        .aarch64, .other => {
             const clearCache = struct {
                 extern fn __clear_cache(start: *const anyopaque, end: *const anyopaque) void;
             }.__clear_cache;
@@ -445,10 +557,25 @@ fn ensureFunctionStub(gpa: Allocator, stubs: *std.ArrayList(FunctionStub), name:
 
 fn resolveShimFunction(name: []const u8) ?usize {
     const registry = builtins.builtin_registry;
-    if (!std.mem.startsWith(u8, name, registry.symbol_prefix)) return null;
-    const suffix = name[registry.symbol_prefix.len..];
-    const builtin_fn = std.meta.stringToEnum(registry.BuiltinFn, suffix) orelse return null;
-    return builtin_fn.wrapperAddress();
+    if (std.mem.startsWith(u8, name, registry.symbol_prefix)) {
+        const suffix = name[registry.symbol_prefix.len..];
+        if (std.meta.stringToEnum(registry.BuiltinFn, suffix)) |builtin_fn| {
+            return builtin_fn.wrapperAddress();
+        }
+    }
+    return resolveBoxyShimFunction(name);
+}
+
+/// Resolve a Boxy runtime wrapper to the linked in-process implementation.
+fn resolveBoxyShimFunction(name: []const u8) ?usize {
+    inline for (std.meta.fields(backend.LirCodeGenMod.BoxyBuiltinFn)) |field| {
+        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @enumFromInt(field.value);
+        const symbol_name = comptime boxy_fn.symbolName();
+        if (std.mem.eql(u8, name, symbol_name)) {
+            return @intFromPtr(&@field(eval.boxy_abi, symbol_name));
+        }
+    }
+    return null;
 }
 
 fn maxDevDataAlignment(view: *const RunImage.ProgramView) RunImage.ImageError!usize {
@@ -485,15 +612,15 @@ comptime {
 }
 
 fn jumpStubSize() JumpStubError!usize {
-    return switch (builtin.cpu.arch) {
+    return switch (hostArch()) {
         .x86_64 => x86_64_jump_stub_size,
-        .aarch64, .aarch64_be => aarch64_jump_stub_size,
-        else => error.UnsupportedPlatform,
+        .aarch64 => aarch64_jump_stub_size,
+        .x86, .other => error.UnsupportedPlatform,
     };
 }
 
 fn writeJumpStub(buf: []u8, target_addr: usize) JumpStubError!void {
-    switch (builtin.cpu.arch) {
+    switch (hostArch()) {
         .x86_64 => {
             if (buf.len < x86_64_jump_stub_size) return error.InvalidDevRunImage;
             buf[0] = 0x49; // movabs r11, imm64
@@ -503,7 +630,7 @@ fn writeJumpStub(buf: []u8, target_addr: usize) JumpStubError!void {
             buf[11] = 0xFF;
             buf[12] = 0xE3;
         },
-        .aarch64, .aarch64_be => {
+        .aarch64 => {
             if (buf.len < aarch64_jump_stub_size) return error.InvalidDevRunImage;
             const addr: u64 = @intCast(target_addr);
             std.mem.writeInt(u32, buf[0..][0..4], movzX16(@truncate(addr), 0), .little);
@@ -512,7 +639,7 @@ fn writeJumpStub(buf: []u8, target_addr: usize) JumpStubError!void {
             std.mem.writeInt(u32, buf[12..][0..4], movkX16(@truncate(addr >> 48), 48), .little);
             std.mem.writeInt(u32, buf[16..][0..4], 0xD61F_0200, .little); // br x16
         },
-        else => return error.UnsupportedPlatform,
+        .x86, .other => return error.UnsupportedPlatform,
     }
 }
 
@@ -559,6 +686,9 @@ fn executeDevEntrypoint(
     };
     const func: *const fn (*anyopaque, *anyopaque, ?*anyopaque) callconv(.c) void =
         @ptrCast(@alignCast(program.code.ptr + entry_offset));
+    const runtime = if (program.boxy) |boxy| boxy.runtime else null;
+    const previous_runtime = eval.boxy_abi.swapActiveRuntime(runtime);
+    defer _ = eval.boxy_abi.swapActiveRuntime(previous_runtime);
     func(@ptrCast(ops), ret, arg_ptr);
 }
 
@@ -657,6 +787,7 @@ fn devProgramRefCount(program: *const DevProgram) usize {
 
 fn refreshRuntimeProgramIfNeeded(
     state: *RuntimeState,
+    ops: *RocOps,
 ) void {
     const control = state.control orelse return;
 
@@ -683,6 +814,7 @@ fn refreshRuntimeProgramIfNeeded(
         const gpa = allocator();
         const next_program = createDevProgram(
             gpa,
+            ops,
             &view,
             retained_image.generation,
             retained_image.descriptor_offset,
@@ -728,7 +860,7 @@ fn evaluateEntrypoint(
     const state = try ensureRuntimeState(ops);
     if (state.control != null) {
         runtime_state_mutex.lockUncancelable(shimIo());
-        refreshRuntimeProgramIfNeeded(state);
+        refreshRuntimeProgramIfNeeded(state, ops);
         const program = state.program;
         acquireDevProgramRef(program);
         runtime_state_mutex.unlock(shimIo());
@@ -748,19 +880,53 @@ pub fn roc_hot_reload_enter(return_address: usize) ?*anyopaque {
     if (!runtime_state_initialized.load(.acquire)) return null;
     const program = findDevProgramByCodeAddressLocked(&runtime_state, return_address) orelse return null;
     acquireDevProgramRef(program);
-    return program;
+    const call_ref = allocator().create(HotReloadCallRef) catch @panic("machine-code shim could not allocate a hot-reload call reference");
+    call_ref.* = .{
+        .program = program,
+        .previous_boxy_runtime = eval.boxy_abi.swapActiveRuntime(if (program.boxy) |boxy| boxy.runtime else null),
+    };
+    return call_ref;
 }
 
 /// Release a loaded dev image token returned by `roc_hot_reload_enter`.
 pub fn roc_hot_reload_leave(code_ref: ?*anyopaque) void {
     const code_ref_ptr = code_ref orelse return;
-    const program: *DevProgram = @ptrCast(@alignCast(code_ref_ptr));
+    const call_ref: *HotReloadCallRef = @ptrCast(@alignCast(code_ref_ptr));
+    _ = eval.boxy_abi.swapActiveRuntime(call_ref.previous_boxy_runtime);
+    const program = call_ref.program;
+    allocator().destroy(call_ref);
     releaseDevProgramRef(program);
 }
 
 /// Retain the image that created a boxed erased-callable payload.
 pub fn roc_hot_reload_retain_current(return_address: usize) ?*anyopaque {
-    return roc_hot_reload_enter(return_address);
+    runtime_state_mutex.lockUncancelable(shimIo());
+    defer runtime_state_mutex.unlock(shimIo());
+
+    if (!runtime_state_initialized.load(.acquire)) return null;
+    const program = findDevProgramByCodeAddressLocked(&runtime_state, return_address) orelse return null;
+    acquireDevProgramRef(program);
+    return program;
+}
+
+/// Select the sidecar runtime retained by an erased callable while its capture
+/// drop callback executes. Returns the previously selected runtime.
+pub fn roc_hot_reload_activate_retained(code_ref: ?*anyopaque) ?*anyopaque {
+    const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return null));
+    const runtime = if (program.boxy) |boxy| boxy.runtime else null;
+    return eval.boxy_abi.swapActiveRuntime(runtime);
+}
+
+/// Restore the sidecar runtime returned by `roc_hot_reload_activate_retained`.
+pub fn roc_hot_reload_deactivate_retained(previous: ?*anyopaque) void {
+    const runtime: ?*eval.boxy_abi.GlobalBoxyRuntime = if (previous) |ptr| @ptrCast(@alignCast(ptr)) else null;
+    _ = eval.boxy_abi.swapActiveRuntime(runtime);
+}
+
+/// Release an image retained by `roc_hot_reload_retain_current`.
+pub fn roc_hot_reload_release_retained(code_ref: ?*anyopaque) void {
+    const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return));
+    releaseDevProgramRef(program);
 }
 
 comptime {
@@ -808,10 +974,10 @@ fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
 }
 
 test "loaded dev program borrows direct shared image metadata" {
-    const code: []const u8 = switch (builtin.cpu.arch) {
+    const code: []const u8 = switch (hostArch()) {
         .x86_64 => &[_]u8{0xC3},
-        .aarch64, .aarch64_be => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 },
-        else => return error.SkipZigTest,
+        .aarch64 => &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 },
+        .x86, .other => return error.SkipZigTest,
     };
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -832,16 +998,29 @@ test "loaded dev program borrows direct shared image metadata" {
         &.{},
         &.{},
         &.{},
+        &.{},
+        std.mem.zeroes(RunImage.BoxySidecar),
     );
     const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size));
 
     var program = try loadDevProgram(std.testing.allocator, &view, 0, hot_reload.invalid_descriptor_offset, null);
-    defer program.deinit();
+    defer program.deinit(std.testing.allocator);
 
     try std.testing.expect(program.entrypoints.ptr == view.entrypoints.ptr);
     try std.testing.expect(program.code.ptr == view.code.ptr);
     try std.testing.expectEqual(@as(u32, 0), program.entrypoints[0].ordinal);
     try std.testing.expectEqual(@as(u64, 0), program.entrypoints[0].code_offset);
+}
+
+test "shim resolves every Boxy runtime wrapper" {
+    inline for (std.meta.fields(backend.LirCodeGenMod.BoxyBuiltinFn)) |field| {
+        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @enumFromInt(field.value);
+        const symbol_name = comptime boxy_fn.symbolName();
+        try std.testing.expectEqual(
+            @intFromPtr(&@field(eval.boxy_abi, symbol_name)),
+            resolveShimFunction(symbol_name),
+        );
+    }
 }
 
 test "data relocations patch data pointers" {
@@ -885,6 +1064,8 @@ test "data relocations patch data pointers" {
         .data = &data,
         .data_symbols = &data_symbols,
         .page_size = 4096,
+        .boxy_blob = &.{},
+        .boxy_sidecar = std.mem.zeroes(RunImage.BoxySidecar),
     };
     const relocation_context = RelocationContext{
         .view = &view,
@@ -928,6 +1109,8 @@ test "function-pointer data relocations patch generated Roc code pointers" {
         .data = &data,
         .data_symbols = &.{},
         .page_size = 4096,
+        .boxy_blob = &.{},
+        .boxy_sidecar = std.mem.zeroes(RunImage.BoxySidecar),
     };
     const relocation_context = RelocationContext{
         .view = &view,

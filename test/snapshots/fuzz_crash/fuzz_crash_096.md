@@ -12,15 +12,12 @@ T := [].{
 # EXPECTED
 MISSING NESTED TYPE - fuzz_crash_096.md:2:6:2:9
 # PROBLEMS
+── ✗ missing nested type ───────────────────────────────── fuzz_crash_096.md:2:6
 
-┌─────────────────────┐
-│ MISSING NESTED TYPE ├─ `T` is in scope, but it doesn't have a nested type ──┐
-└┬────────────────────┘  named `A`.                                           │
- │                                                                            │
- │  A : T.A                                                                   │
- │      ‾‾‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_096.md:2:6 ┘
+T is in scope, but it doesn't have a nested type named A.
 
+A : T.A
+    ^^^
 
 # TOKENS
 ~~~zig
@@ -66,7 +63,7 @@ NO CHANGE
 	(type_decls
 		(nominal (type "T")
 			(ty-header (name "T")))
-		(alias (type "T.A")
+		(alias (type "Error")
 			(ty-header (name "fuzz_crash_096.T.A"))))
 	(expressions))
 ~~~

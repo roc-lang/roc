@@ -155,7 +155,29 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+RBTree(k) := [
+	Empty,
+	Node(RBTree(k)),
+].{
+	delete = |tree| {
+		delRBTree : RBTree(k) -> RBTree(k)
+		delRBTree = |inner| {
+			match inner {
+				RBTree.Node(Empty) => Empty
+				RBTree.Node(RBTree.Node(x)) => RBTree.Node(x) |> delRBTree
+				Empty => Empty
+			}
+		}
+		delCurr : RBTree(k) -> RBTree(k)
+		delCurr = |t| {
+			match t {
+				RBTree.Node(inner) => inner |> delRBTree
+				_ => t
+			}
+		}
+		tree |> delCurr
+	}
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -191,7 +213,7 @@ NO CHANGE
 													(p-nominal
 														(p-applied-tag))))
 											(value
-												(e-call (constraint-fn-var 316)
+												(e-call (constraint-fn-var 331)
 													(e-lookup-local
 														(p-assign (ident "delRBTree")))
 													(e-nominal (nominal "RBTree")
@@ -223,7 +245,7 @@ NO CHANGE
 													(p-nominal
 														(p-applied-tag))))
 											(value
-												(e-call (constraint-fn-var 349)
+												(e-call (constraint-fn-var 365)
 													(e-lookup-local
 														(p-assign (ident "delRBTree")))
 													(e-lookup-local
@@ -235,7 +257,7 @@ NO CHANGE
 											(value
 												(e-lookup-local
 													(p-assign (ident "t")))))))))))
-				(e-call (constraint-fn-var 356)
+				(e-call (constraint-fn-var 372)
 					(e-lookup-local
 						(p-assign (ident "delCurr")))
 					(e-lookup-local

@@ -56,7 +56,7 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
         panic_jmp = null; // prevent re-entry
         sljmp.longjmp(jmp, 1);
     }
-    // No protection active — use default behavior.
+    // No protection active—use default behavior.
     std.debug.defaultPanic(msg, @returnAddress());
 }
 
@@ -84,6 +84,7 @@ const rand = prng.random();
 
 const SnapshotError =
     Allocator.Error ||
+    lir.CheckedPipeline.LowerResourceError ||
     Error ||
     fmt.FormatAstError ||
     eval_mod.BuiltinModules.InitError ||
@@ -327,9 +328,9 @@ fn renderReportsToProblemsSection(output: *DualOutput, reports: *const std.array
         }
         log("reported NIL problems", .{});
     } else {
-        // Render all reports in order, as plain-text boxes.
+        // Render all reports in order using the plain terminal layout.
         for (reports.items) |*report| {
-            reporting.renderReportToBoxPlain(report, &output.md_writer.writer, reporting.ReportingConfig.initMarkdown()) catch |err| {
+            reporting.renderReportToPlain(report, &output.md_writer.writer, reporting.ReportingConfig.initMarkdown()) catch |err| {
                 std.debug.panic("Failed to render report: {s}", .{@errorName(err)});
             };
 
@@ -416,7 +417,7 @@ fn lastTitleSegment(title: []const u8) []const u8 {
     return std.mem.trim(u8, title, " \t\r\n");
 }
 
-/// Dupe `s` shouted to ALL CAPS via the box renderer's own `writeShouted`, so
+/// Dupe `s` shouted to ALL CAPS via the reporting formatter's `writeShouted`, so
 /// the EXPECTED section's titles can never drift from the rendered PROBLEMS.
 fn shoutedDupe(allocator: std.mem.Allocator, s: []const u8) Allocator.Error![]u8 {
     var shouted = std.Io.Writer.Allocating.init(allocator);
@@ -448,7 +449,22 @@ fn reportRegionLoc(report: *const reporting.Report) RegionLoc {
                     .ec = dr.start_column,
                 };
             },
-            else => {},
+            .text,
+            .annotated,
+            .line_break,
+            .indent,
+            .space,
+            .horizontal_rule,
+            .annotation_start,
+            .annotation_end,
+            .raw,
+            .reflowing_text,
+            .link,
+            .vertical_stack,
+            .horizontal_concat,
+            .source_code_multi_region,
+            .source_location,
+            => {},
         }
     }
     return .{ .file = "", .sl = 0, .sc = 0, .el = 0, .ec = 0 };
@@ -868,7 +884,16 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
                 .package => "package",
                 .platform => "platform",
                 .app => "app",
-                else => "file",
+                .file,
+                .header,
+                .expr,
+                .statement,
+                .repl,
+                .snippet,
+                .mono,
+                .dev_object,
+                .docs,
+                => "file",
             };
             const meta = Meta{
                 .description = try std.fmt.allocPrint(allocator, "{s} module from {s}", .{ base_name, type_name }),
@@ -1020,7 +1045,17 @@ fn processSnapshotContent(
                     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
                     try czer.canonicalizeStatementForSnapshot(ast_stmt_idx);
                 },
-                else => unreachable,
+                .file,
+                .header,
+                .package,
+                .platform,
+                .app,
+                .repl,
+                .snippet,
+                .mono,
+                .dev_object,
+                .docs,
+                => unreachable,
             }
             if (content.meta.include_canonicalize_diagnostics) {
                 try can_ir.publishScratchDiagnostics();
@@ -1501,7 +1536,22 @@ fn collectWorkItems(gpa: Allocator, path: []const u8, work_list: *WorkList) Snap
                 std.log.err("file '{s}' is not a snapshot file (must end with .md)", .{canonical_path});
             }
         },
-        else => std.log.err("failed to access path '{s}': {s}", .{ canonical_path, @errorName(dir_err) }),
+        error.AccessDenied,
+        error.BadPathName,
+        error.Canceled,
+        error.FileNotFound,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.PermissionDenied,
+        error.ProcessFdQuotaExceeded,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        => {
+            std.log.err("failed to access path '{s}': {s}", .{ canonical_path, @errorName(dir_err) });
+        },
     }
 }
 
@@ -2406,174 +2456,6 @@ fn generateTypesSection(output: *DualOutput, can_ir: *ModuleEnv, maybe_expr_idx:
     try output.end_section();
 }
 
-/// Compute the correct type for a closure-transformed expression.
-/// Instead of copying the old function type, this builds the appropriate type
-/// based on the new expression's structure (e.g., tag union for closures).
-fn computeTransformedExprType(
-    can_ir: *ModuleEnv,
-    expr_idx: CIR.Expr.Idx,
-) Allocator.Error!types.Var {
-    const expr_var = ModuleEnv.varFrom(expr_idx);
-
-    // Ensure type var exists for this expression
-    if (@intFromEnum(expr_var) >= can_ir.types.len()) {
-        const current_len: usize = @intCast(can_ir.types.len());
-        const needed_len: usize = @intCast(@intFromEnum(expr_var) + 1);
-        var i: usize = current_len;
-        while (i < needed_len) : (i += 1) {
-            try can_ir.types.fresh();
-        }
-    }
-
-    const expr = can_ir.store.getExpr(expr_idx);
-
-    switch (expr) {
-        .e_tag => |tag| {
-            // A tag expression (e.g., Closure_1({ y: y }))
-            // Type: [TagName(PayloadType)]
-            const tag_args = can_ir.store.exprSlice(tag.args);
-            if (tag_args.len == 1) {
-                // Single arg is the capture record - compute its type
-                const record_expr_idx = tag_args[0];
-                const record_type = try computeTransformedExprType(can_ir, record_expr_idx);
-
-                // Build tag union type: [TagName(record_type)]
-                const tag_type = try can_ir.types.mkTag(tag.name, &[_]types.Var{record_type});
-                const ext_var = try can_ir.types.fresh();
-                const content = try can_ir.types.mkTagUnion(&[_]types.Tag{tag_type}, ext_var);
-                try can_ir.types.setVarContent(expr_var, content);
-            } else if (tag_args.len == 0) {
-                // Tag with no payload
-                const tag_type = try can_ir.types.mkTag(tag.name, &[_]types.Var{});
-                const ext_var = try can_ir.types.fresh();
-                const content = try can_ir.types.mkTagUnion(&[_]types.Tag{tag_type}, ext_var);
-                try can_ir.types.setVarContent(expr_var, content);
-            }
-            return expr_var;
-        },
-        .e_record => |record| {
-            // Record expression - build record type from field types
-            const fields_slice = can_ir.store.sliceRecordFields(record.fields);
-
-            // Build record fields for the type
-            var type_fields = std.ArrayList(types.RecordField).empty;
-            defer type_fields.deinit(can_ir.gpa);
-
-            for (fields_slice) |field_idx| {
-                const field = can_ir.store.getRecordField(field_idx);
-                // Get the type of the field value expression
-                const field_type = try computeTransformedExprType(can_ir, field.value);
-                try type_fields.append(can_ir.gpa, .{ .name = field.name, .var_ = field_type });
-            }
-
-            const fields_range = try can_ir.types.appendRecordFields(type_fields.items);
-            const ext_var = try can_ir.types.fresh();
-            const content = types.Content{ .structure = .{ .record = .{ .fields = fields_range, .ext = ext_var } } };
-            try can_ir.types.setVarContent(expr_var, content);
-            return expr_var;
-        },
-        .e_lambda => |lambda| {
-            // Lambda expression - build function type
-            // Get argument types from patterns
-            const arg_patterns = can_ir.store.slicePatterns(lambda.args);
-
-            var arg_types = std.ArrayList(types.Var).empty;
-            defer arg_types.deinit(can_ir.gpa);
-
-            for (arg_patterns) |pattern_idx| {
-                try arg_types.append(can_ir.gpa, ModuleEnv.varFrom(pattern_idx));
-            }
-
-            // Get return type from body (recursively compute it)
-            const ret_type = try computeTransformedExprType(can_ir, lambda.body);
-
-            // Build function type
-            const args_range = try can_ir.types.appendVars(arg_types.items);
-            const func = types.Func{ .args = args_range, .ret = ret_type };
-            const content = types.Content{ .structure = .{ .fn_pure = func } };
-            try can_ir.types.setVarContent(expr_var, content);
-            return expr_var;
-        },
-        .e_lookup_local => |local| {
-            // Lookup - find the definition for this pattern and use its expression's type
-            // This ensures we get the transformed type, not the original pattern type
-            const defs = can_ir.store.sliceDefs(can_ir.all_defs);
-            for (defs) |def_idx| {
-                const def = can_ir.store.getDef(def_idx);
-                if (def.pattern == local.pattern_idx) {
-                    // Found the definition - recursively compute the expression's type
-                    return try computeTransformedExprType(can_ir, def.expr);
-                }
-            }
-            // Fallback to pattern's type if definition not found
-            // Check if the pattern's type variable is within the type store's bounds
-            // (patterns created after type checking, like lifted function patterns, need fresh type vars)
-            const pattern_var = ModuleEnv.varFrom(local.pattern_idx);
-            if (@intFromEnum(pattern_var) >= can_ir.types.len()) {
-                // Create fresh type variables up to this index
-                const current_len: usize = @intCast(can_ir.types.len());
-                const needed_len: usize = @intCast(@intFromEnum(pattern_var) + 1);
-                var i: usize = current_len;
-                while (i < needed_len) : (i += 1) {
-                    try can_ir.types.fresh();
-                }
-            }
-            return pattern_var;
-        },
-        .e_call => |call| {
-            // Function call - the type is the return type of the function being called
-            // First compute the function's type
-            const func_type = try computeTransformedExprType(can_ir, call.func);
-            const func_resolved = can_ir.types.resolveVar(func_type);
-
-            // If it's a function type, set the call's type to the return type
-            // This is important for newly created call expressions (from closure transform)
-            // which may not have had their type vars initialized during type checking
-            if (func_resolved.desc.content == .structure) {
-                const flat_type = func_resolved.desc.content.structure;
-                switch (flat_type) {
-                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                        // Set the call expression's type to match the function's return type
-                        const ret_resolved = can_ir.types.resolveVar(func.ret);
-                        try can_ir.types.setVarContent(expr_var, ret_resolved.desc.content);
-                        return expr_var;
-                    },
-                    else => {},
-                }
-            }
-            // Fall back to original expression type
-            return expr_var;
-        },
-        .e_num => {
-            // Numeric literal - use the original expression's type (with numeral constraint)
-            return expr_var;
-        },
-        .e_block => |block| {
-            // Block - the type is the type of the final expression
-            return try computeTransformedExprType(can_ir, block.final_expr);
-        },
-        .e_binop => |binop| {
-            // Binary operation - the result type is typically the same as the operand types
-            // For arithmetic operations, use the left operand's type (both should be the same)
-            return try computeTransformedExprType(can_ir, binop.lhs);
-        },
-        .e_match => |match_expr| {
-            // Match expression - the type is the type of the branch bodies
-            // All branches should have the same type, so we use the first branch
-            const branches = can_ir.store.sliceMatchBranches(match_expr.branches);
-            if (branches.len > 0) {
-                const first_branch = can_ir.store.getMatchBranch(branches[0]);
-                return try computeTransformedExprType(can_ir, first_branch.value);
-            }
-            return expr_var;
-        },
-        else => {
-            // For other expressions, use the original type from type-checking
-            return expr_var;
-        },
-    }
-}
-
 /// Get the defaulted (monomorphized) type string for an expression.
 /// This defaults flex vars with from_numeral constraint to Dec.
 /// Uses a seen set for cycle detection.
@@ -2608,7 +2490,7 @@ fn getDefaultedTypeStringWithSeen(
         .flex => {
             // Fall through to TypeWriter. `finalizeLiteralDefaults` already
             // committed concrete `Dec` to the store for any defaulted numeral
-            // before MONO renders, so the live store is the source of truth —
+            // before MONO renders, so the live store is the source of truth—
             // no display-time `Dec` substitution is needed here.
         },
         .structure => |flat_type| {
@@ -2693,13 +2575,31 @@ fn getDefaultedTypeStringWithSeen(
                     try result.appendSlice("{ ");
                     const fields_slice = can_ir.types.getRecordFieldsSlice(record.fields);
                     const field_names = fields_slice.items(.name);
-                    const field_vars = fields_slice.items(.var_);
-                    for (field_names, field_vars, 0..) |field_name_idx, field_var, i| {
-                        if (i > 0) try result.appendSlice(", ");
+                    const field_presences = fields_slice.items(.presence);
+                    var wrote_any = false;
+                    for (field_names, field_presences) |field_name_idx, field_presence| {
+                        // An absent field is not on the record, so it is never rendered.
+                        const field_var = field_presence.typeVar();
+                        if (wrote_any) try result.appendSlice(", ");
+                        wrote_any = true;
 
                         const field_name = can_ir.getIdent(field_name_idx);
                         try result.appendSlice(field_name);
-                        try result.appendSlice(" : ");
+                        // Resolve the kind var like TypeWriter does: a
+                        // wrapper whose kind solved required/defaulted is a
+                        // plain field; only a solved `optional` renders `?:`
+                        // (a still-flex kind defaults to required at read
+                        // boundaries—design.md "Field Kinds").
+                        try result.appendSlice(switch (field_presence.decode()) {
+                            .required => " : ",
+                            .unknown => |unknown| switch (can_ir.types.resolveVar(unknown.presence).desc.content) {
+                                .field_presence => |fp| switch (fp) {
+                                    .required, .defaulted => " : ",
+                                    .optional => " ?: ",
+                                },
+                                .flex, .rigid, .alias, .structure, .err => " : ",
+                            },
+                        });
 
                         const field_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, field_var, seen, false);
                         defer allocator.free(field_type);
@@ -2709,10 +2609,15 @@ fn getDefaultedTypeStringWithSeen(
 
                     return result.toOwnedSlice();
                 },
-                else => {},
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .empty_record,
+                .empty_tag_union,
+                => {},
             }
         },
-        else => {},
+        .rigid, .alias, .field_presence, .err => {},
     }
 
     // Use TypeWriter for all other cases - it has proper cycle detection.
@@ -2762,67 +2667,57 @@ fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx:
         const resolved = can_ir.types.resolveVar(lambda_var);
 
         // Check if this is a function type
-        if (resolved.desc.content == .structure) {
-            const flat_type = resolved.desc.content.structure;
-            if (flat_type == .fn_pure or flat_type == .fn_effectful or flat_type == .fn_unbound) {
-                const func = switch (flat_type) {
-                    .fn_pure => |f| f,
-                    .fn_effectful => |f| f,
-                    .fn_unbound => |f| f,
-                    else => unreachable,
-                };
+        if (resolved.desc.content.unwrapFunc()) |func| {
+            var result = std.array_list.Managed(u8).init(allocator);
+            errdefer result.deinit();
 
-                var result = std.array_list.Managed(u8).init(allocator);
-                errdefer result.deinit();
+            // First, add non-top-level capture types (top-level captures are always in scope)
+            var emitted_captures: u32 = 0;
+            for (captures) |capture_idx| {
+                const capture = can_ir.store.getCapture(capture_idx);
 
-                // First, add non-top-level capture types (top-level captures are always in scope)
-                var emitted_captures: u32 = 0;
-                for (captures) |capture_idx| {
-                    const capture = can_ir.store.getCapture(capture_idx);
+                // Skip top-level captures - they're always in scope
+                if (isTopLevelPattern(can_ir, capture.pattern_idx)) continue;
 
-                    // Skip top-level captures - they're always in scope
-                    if (isTopLevelPattern(can_ir, capture.pattern_idx)) continue;
+                if (emitted_captures > 0) try result.appendSlice(", ");
+                emitted_captures += 1;
 
-                    if (emitted_captures > 0) try result.appendSlice(", ");
-                    emitted_captures += 1;
-
-                    const capture_var = ModuleEnv.varFrom(capture.pattern_idx);
-                    const capture_type = try getDefaultedTypeString(allocator, can_ir, capture_var);
-                    defer allocator.free(capture_type);
-                    try result.appendSlice(capture_type);
-                }
-
-                // Then add the lambda's own argument types
-                const arg_vars = can_ir.types.sliceVars(func.args);
-                for (arg_vars, 0..) |arg_var, i| {
-                    if (emitted_captures > 0 or i > 0) try result.appendSlice(", ");
-                    const arg_type = try getDefaultedTypeString(allocator, can_ir, arg_var);
-                    defer allocator.free(arg_type);
-                    try result.appendSlice(arg_type);
-                }
-
-                try result.appendSlice(" -> ");
-
-                // Get the return type - if the body is also a closure, recursively process it
-                const lambda_expr = can_ir.store.getExpr(closure.lambda_idx);
-                std.debug.assert(lambda_expr == .e_lambda);
-                const body_expr = can_ir.store.getExpr(lambda_expr.e_lambda.body);
-
-                const is_nested_function = body_expr == .e_closure;
-                const ret_type = if (is_nested_function)
-                    // Recursively process nested closures to include their captures
-                    try getMonoTypeString(allocator, can_ir, lambda_expr.e_lambda.body)
-                else
-                    try getDefaultedTypeString(allocator, can_ir, func.ret);
-                defer allocator.free(ret_type);
-
-                // Nested function types need parens in Roc
-                if (is_nested_function) try result.appendSlice("(");
-                try result.appendSlice(ret_type);
-                if (is_nested_function) try result.appendSlice(")");
-
-                return result.toOwnedSlice();
+                const capture_var = ModuleEnv.varFrom(capture.pattern_idx);
+                const capture_type = try getDefaultedTypeString(allocator, can_ir, capture_var);
+                defer allocator.free(capture_type);
+                try result.appendSlice(capture_type);
             }
+
+            // Then add the lambda's own argument types
+            const arg_vars = can_ir.types.sliceVars(func.args);
+            for (arg_vars, 0..) |arg_var, i| {
+                if (emitted_captures > 0 or i > 0) try result.appendSlice(", ");
+                const arg_type = try getDefaultedTypeString(allocator, can_ir, arg_var);
+                defer allocator.free(arg_type);
+                try result.appendSlice(arg_type);
+            }
+
+            try result.appendSlice(" -> ");
+
+            // Get the return type - if the body is also a closure, recursively process it
+            const lambda_expr = can_ir.store.getExpr(closure.lambda_idx);
+            std.debug.assert(lambda_expr == .e_lambda);
+            const body_expr = can_ir.store.getExpr(lambda_expr.e_lambda.body);
+
+            const is_nested_function = body_expr == .e_closure;
+            const ret_type = if (is_nested_function)
+                // Recursively process nested closures to include their captures
+                try getMonoTypeString(allocator, can_ir, lambda_expr.e_lambda.body)
+            else
+                try getDefaultedTypeString(allocator, can_ir, func.ret);
+            defer allocator.free(ret_type);
+
+            // Nested function types need parens in Roc
+            if (is_nested_function) try result.appendSlice("(");
+            try result.appendSlice(ret_type);
+            if (is_nested_function) try result.appendSlice(")");
+
+            return result.toOwnedSlice();
         }
     }
 
@@ -2910,25 +2805,19 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
     // Count only actual errors, not warnings
     var error_count: usize = 0;
     for (can_diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .shadowing_warning,
-            .unreachable_string_pattern_capture,
-            => {}, // Skip warnings
-            else => error_count += 1,
-        }
+        const diagnostic_tag = std.meta.activeTag(diagnostic);
+        if (diagnostic_tag != .shadowing_warning and
+            diagnostic_tag != .unreachable_string_pattern_capture) error_count += 1;
     }
 
     if (error_count > 0) {
         std.log.err("MONO CANONICALIZATION ERROR in {s}: {d} error(s) in generated MONO output:", .{ source_path, error_count });
         for (can_diagnostics) |diagnostic| {
-            switch (diagnostic) {
-                .shadowing_warning,
-                .unreachable_string_pattern_capture,
-                => {}, // Skip warnings in output too
-                else => {
-                    const tag_name = @tagName(diagnostic);
-                    std.log.err("  - {s}", .{tag_name});
-                },
+            const diagnostic_tag = std.meta.activeTag(diagnostic);
+            if (diagnostic_tag != .shadowing_warning and
+                diagnostic_tag != .unreachable_string_pattern_capture)
+            {
+                std.log.err("  - {s}", .{@tagName(diagnostic)});
             }
         }
         std.log.err("MONO source that failed canonicalization:\n{s}", .{mono_source});
@@ -3334,24 +3223,22 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
 
     // Parse the file to find section boundaries
     const content = extractSections(gpa, file_content) catch |err| {
-        switch (err) {
-            Error.MissingSnapshotHeader => {
-                std.log.err("file '{s}' is missing the META section header", .{snapshot_path});
-                std.log.err("add a META section like: ~~~META\\ndescription=My test\\ntype=expr\\n", .{});
-                return false;
-            },
-            Error.MissingSnapshotSource => {
-                std.log.err("file '{s}' is missing the SOURCE section", .{snapshot_path});
-                std.log.err("add a SOURCE section like: ~~~SOURCE\\nyour_roc_code_here\\n", .{});
-                return false;
-            },
-            Error.BadSectionHeader => {
-                std.log.err("file '{s}' has an invalid section header", .{snapshot_path});
-                std.log.err("section headers must be like: ~~~META, ~~~SOURCE, etc.", .{});
-                return false;
-            },
-            else => return err,
+        if (err == Error.MissingSnapshotHeader) {
+            std.log.err("file '{s}' is missing the META section header", .{snapshot_path});
+            std.log.err("add a META section like: ~~~META\\ndescription=My test\\ntype=expr\\n", .{});
+            return false;
         }
+        if (err == Error.MissingSnapshotSource) {
+            std.log.err("file '{s}' is missing the SOURCE section", .{snapshot_path});
+            std.log.err("add a SOURCE section like: ~~~SOURCE\\nyour_roc_code_here\\n", .{});
+            return false;
+        }
+        if (err == Error.BadSectionHeader) {
+            std.log.err("file '{s}' has an invalid section header", .{snapshot_path});
+            std.log.err("section headers must be like: ~~~META, ~~~SOURCE, etc.", .{});
+            return false;
+        }
+        return err;
     };
 
     // Validate trace-eval flag usage
@@ -3591,11 +3478,43 @@ fn processDocsSnapshot(
         module_docs_list.deinit(allocator);
     }
 
+    var public_type_projections = std.ArrayList(docs_mod.extract.PublicTypeProjection).empty;
+    defer public_type_projections.deinit(allocator);
+    {
+        const routing_modules = try build_env.getCompiledPublicModules(allocator);
+        defer allocator.free(routing_modules);
+        for (routing_modules) |mod| {
+            const source_decl = mod.public_type_decl orelse continue;
+            const artifact = mod.semantic.checked_artifact orelse unreachable;
+            try public_type_projections.append(allocator, .{
+                .public_name = mod.name,
+                .package_name = build_env.displayNameForPackage(mod.package_name),
+                .source_env = mod.semantic.env,
+                .source_identity = &artifact.key.module_identity_hash,
+                .source_decl = source_decl,
+                .public_order = mod.public_order,
+            });
+        }
+    }
+    docs_mod.extract.sortPublicTypeProjections(public_type_projections.items);
+
     for (modules) |mod| {
         // Docs show display names (root alias, or "app"/"module" for the
         // root itself), never internal identity keys (URLs, absolute paths).
         const display_pkg_name = build_env.displayNameForPackage(mod.package_name);
-        var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, display_pkg_name, mod.path) catch |err| {
+        var mod_docs = docs_mod.extract.extractModuleDocsWithOptions(allocator, mod.semantic.env, display_pkg_name, mod.path, .{
+            .exposed_names = mod.docs_exposed_names,
+            .public_type = if (mod.public_type_decl) |source_decl| .{
+                .public_name = mod.name,
+                .package_name = display_pkg_name,
+                .source_env = mod.semantic.env,
+                .source_identity = &(mod.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_decl = source_decl,
+                .public_order = mod.public_order,
+            } else null,
+            .public_types = public_type_projections.items,
+            .checked_artifact = mod.semantic.checked_artifact,
+        }) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
         };
@@ -3842,7 +3761,7 @@ fn snapshotProvidedEntrypointName(
 ) []const u8 {
     const def_idx = switch (root.source) {
         .def => |def| def,
-        else => {
+        .expr, .statement, .required_binding, .hoisted => {
             if (@import("builtin").mode == .Debug) {
                 std.debug.panic("snapshot invariant violated: exported platform root is not a definition", .{});
             }
@@ -4120,6 +4039,8 @@ fn processDevObjectSnapshot(
                 entrypoints,
                 static_data_exports,
                 lowered.lir_result.store.getProcSpecs(),
+                lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+                lowered.lir_result.boxy_erased_arg_desc_params.items,
                 target,
             )) |result| {
                 var hasher = Blake3.init(.{});
@@ -4420,7 +4341,16 @@ fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) Allocato
             .type_decl,
             .type_anno,
             => break :blk file_statement,
-            else => {},
+            .expr,
+            .crash,
+            .dbg,
+            .expect,
+            .@"for",
+            .@"while",
+            .@"return",
+            .@"break",
+            .malformed,
+            => {},
         }
         break :blk (try parseSnapshotReplLineAsStatement(allocator, line)) orelse file_statement;
     } else (try parseSnapshotReplLineAsStatement(allocator, line)) orelse return null;
@@ -4458,7 +4388,22 @@ fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) Alloca
             break :blk switch (pattern) {
                 .ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
                 .var_ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
-                else => null,
+                .tag,
+                .int,
+                .frac,
+                .typed_int,
+                .typed_frac,
+                .string,
+                .single_quote,
+                .record,
+                .list,
+                .list_rest,
+                .tuple,
+                .underscore,
+                .alternatives,
+                .as,
+                .malformed,
+                => null,
             };
         },
         .@"var" => |var_decl| .{ .kind = .value, .name = ast.resolve(var_decl.name) },
@@ -4469,10 +4414,19 @@ fn snapshotReplDefinitionIdentity(allocator: Allocator, line: []const u8) Alloca
         },
         .import => |import| .{
             .kind = .import,
-            .name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes),
+            .name = ast.resolveImportTarget(import.target),
         },
         .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
-        else => null,
+        .expr,
+        .crash,
+        .dbg,
+        .expect,
+        .@"for",
+        .@"while",
+        .@"return",
+        .@"break",
+        .malformed,
+        => null,
     };
 }
 
@@ -4553,16 +4507,13 @@ fn compileSnapshotReplInspectedModule(
 }
 
 fn snapshotReplProblemIsError(problem: check.problem.Problem) bool {
-    return switch (problem) {
-        .effectful_function_name,
-        .redundant_pattern,
-        .unmatchable_pattern,
-        .comptime_unused_branch,
-        .comptime_condition,
-        .literal_defaulted,
-        => false,
-        else => true,
-    };
+    const tag = std.meta.activeTag(problem);
+    return tag != .effectful_function_name and
+        tag != .redundant_pattern and
+        tag != .unmatchable_pattern and
+        tag != .comptime_unused_branch and
+        tag != .comptime_condition and
+        tag != .literal_defaulted;
 }
 
 fn snapshotReplCheckedModuleHasErrors(module: *const eval_mod.test_helpers.CheckedModule) bool {
@@ -4638,7 +4589,21 @@ fn renderSnapshotReplTypeProblems(
             const statement = parse_ast.store.getStatement(statement_idx);
             const expr_idx = switch (statement) {
                 .expr => |expr_stmt| expr_stmt.expr,
-                else => break :blk null,
+                .decl,
+                .@"var",
+                .crash,
+                .dbg,
+                .expect,
+                .@"for",
+                .@"while",
+                .@"return",
+                .@"break",
+                .import,
+                .file_import,
+                .type_decl,
+                .type_anno,
+                .malformed,
+                => break :blk null,
             };
             break :blk try czer.canonicalizeExpr(expr_idx);
         },
@@ -4689,7 +4654,148 @@ fn renderSnapshotReplTypeProblems(
     };
     check_result catch |err| switch (err) {
         error.TypeCheckError => {},
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BadSectionHeader,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.BufferTooSmall,
+        error.BuiltinArtifactVersionMismatch,
+        error.BuiltinLowLevelAnnotationMustBeFunction,
+        error.BuiltinModuleLeakedInSnapshots,
+        error.CacheRoundTripValidationFailed,
+        error.CacheVersionHashMismatch,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptArtifact,
+        error.CorruptBuiltinArtifact,
+        error.CorruptEmbeddedBuiltins,
+        error.CorruptSerializedModuleEnv,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.CurrentDirUnlinked,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.DownloadFailed,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.ErrFinalizingHTMLWriter,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.ExpectedPlatformString,
+        error.ExpectedString,
+        error.FileBusy,
+        error.FileError,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileSystem,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.HostedFunctionNotBound,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidDependency,
+        error.InvalidHandle,
+        error.InvalidHostedFunctionSignature,
+        error.InvalidLirImage,
+        error.InvalidMagicNumber,
+        error.InvalidNodeType,
+        error.InvalidNullByteInPath,
+        error.InvalidUrl,
+        error.InvalidUtf8,
+        error.IoError,
+        error.IsDir,
+        error.LinkFailed,
+        error.LinkQuotaExceeded,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.LowLevelOperationsNotFound,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingBuiltinModule,
+        error.MissingDynamicLinkingInformation,
+        error.MissingFilesDirectory,
+        error.MissingSnapshotHeader,
+        error.MissingSnapshotSource,
+        error.MissingTargetFile,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MonoFormattingFailed,
+        error.MonoValidationFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoCacheDir,
+        error.NoDevice,
+        error.NoPackageSource,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.OutOfMemory,
+        error.PageSizeQueryFailed,
+        error.ParseError,
+        error.ParseFailed,
+        error.PathAlreadyExists,
+        error.PathOutsideWorkspace,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SnapshotValidationFailed,
+        error.SocketUnconnected,
+        error.StaleEmbeddedBuiltins,
+        error.StreamTooLong,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempDirUnavailable,
+        error.TempFileError,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedBuiltinAnnotationOnly,
+        error.UnsupportedHeader,
+        error.UnsupportedHostedFunction,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => return err,
     };
 
     var reports = try generateAllReports(allocator, parse_ast, can_ir, &checker, "repl", can_ir);
@@ -4786,7 +4892,148 @@ fn snapshotReplDefinitionStep(
         }
         return switch (err) {
             error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .module, validation_with_main, config),
-            else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.BadSectionHeader,
+            error.BitcodeParseError,
+            error.BrokenPipe,
+            error.BufferTooSmall,
+            error.BuiltinArtifactVersionMismatch,
+            error.BuiltinLowLevelAnnotationMustBeFunction,
+            error.BuiltinModuleLeakedInSnapshots,
+            error.CacheRoundTripValidationFailed,
+            error.CacheVersionHashMismatch,
+            error.Canceled,
+            error.CompilationFailed,
+            error.ComptimeExhaustiveness,
+            error.ConnectionResetByPeer,
+            error.CorruptArtifact,
+            error.CorruptBuiltinArtifact,
+            error.CorruptEmbeddedBuiltins,
+            error.CorruptSerializedModuleEnv,
+            error.Crash,
+            error.CreateFileMappingFailed,
+            error.CurrentDirUnlinked,
+            error.DevBackendUnavailable,
+            error.DeviceBusy,
+            error.DiskQuota,
+            error.DivisionByZero,
+            error.DownloadFailed,
+            error.ElfHashTableNotFound,
+            error.ElfStringSectionNotFound,
+            error.ElfSymSectionNotFound,
+            error.EmptyCode,
+            error.EntrypointNotFound,
+            error.ErrFinalizingHTMLWriter,
+            error.EvaluationFailed,
+            error.ExpectErr,
+            error.ExpectedPlatformString,
+            error.ExpectedString,
+            error.FileBusy,
+            error.FileError,
+            error.FileLocksUnsupported,
+            error.FileNotFound,
+            error.FileSystem,
+            error.FileTooBig,
+            error.FtruncateFailed,
+            error.HostedFunctionNotBound,
+            error.InputOutput,
+            error.Internal,
+            error.InvalidDependency,
+            error.InvalidHandle,
+            error.InvalidHostedFunctionSignature,
+            error.InvalidLirImage,
+            error.InvalidMagicNumber,
+            error.InvalidNodeType,
+            error.InvalidNullByteInPath,
+            error.InvalidUrl,
+            error.InvalidUtf8,
+            error.IoError,
+            error.IsDir,
+            error.LinkFailed,
+            error.LinkQuotaExceeded,
+            error.LlvmBackendUnavailable,
+            error.LlvmModuleVerificationFailed,
+            error.LlvmObjectEmitFailed,
+            error.LockViolation,
+            error.LockedMemoryLimitExceeded,
+            error.LowLevelOperationsNotFound,
+            error.MapViewOfFileFailed,
+            error.MappingAlreadyExists,
+            error.MemfdCreateFailed,
+            error.MemoryMappingNotSupported,
+            error.MissingBuiltinBitcode,
+            error.MissingBuiltinModule,
+            error.MissingDynamicLinkingInformation,
+            error.MissingFilesDirectory,
+            error.MissingSnapshotHeader,
+            error.MissingSnapshotSource,
+            error.MissingTargetFile,
+            error.MmapFailed,
+            error.ModuleLinkFailed,
+            error.MonoFormattingFailed,
+            error.MonoValidationFailed,
+            error.MprotectFailed,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoBitcodeModules,
+            error.NoCacheDir,
+            error.NoDevice,
+            error.NoPackageSource,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.NotDynamicLibrary,
+            error.NotElfFile,
+            error.NotOpenForReading,
+            error.NotOpenForWriting,
+            error.OpenFileMappingFailed,
+            error.OutOfMemory,
+            error.PageSizeQueryFailed,
+            error.ParseError,
+            error.ParseFailed,
+            error.PathAlreadyExists,
+            error.PathOutsideWorkspace,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.RuntimeError,
+            error.ShmOpenFailed,
+            error.ShmUnlinkFailed,
+            error.SnapshotValidationFailed,
+            error.SocketUnconnected,
+            error.StaleEmbeddedBuiltins,
+            error.StreamTooLong,
+            error.Streaming,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.TempDirUnavailable,
+            error.TempFileError,
+            error.TempFileOpenFailed,
+            error.TempFileUnlinkFailed,
+            error.TestExpectedEqual,
+            error.TestUnexpectedResult,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            error.Unseekable,
+            error.UnsupportedBuiltinAnnotationOnly,
+            error.UnsupportedHeader,
+            error.UnsupportedHostedFunction,
+            error.UnsupportedLirImageVersion,
+            error.UnsupportedLlvmTriple,
+            error.UnsupportedLowLevel,
+            error.UnsupportedPlatform,
+            error.UnsupportedTarget,
+            error.UnwindRegistrationFailed,
+            error.VirtualAllocFailed,
+            error.VirtualProtectFailed,
+            error.WasmExecFailed,
+            error.WindowsSDKNotFound,
+            error.WouldBlock,
+            error.WriteFailed,
+            => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
         };
     };
     compiled.deinit(allocator);
@@ -4803,7 +5050,148 @@ fn compileAndEvaluateSnapshotReplExpr(
     var expr_compiled = compileSnapshotReplInspectedExpr(allocator, input) catch |expr_err| {
         return switch (expr_err) {
             error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .expr, input, config),
-            else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(expr_err)}),
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.BadSectionHeader,
+            error.BitcodeParseError,
+            error.BrokenPipe,
+            error.BufferTooSmall,
+            error.BuiltinArtifactVersionMismatch,
+            error.BuiltinLowLevelAnnotationMustBeFunction,
+            error.BuiltinModuleLeakedInSnapshots,
+            error.CacheRoundTripValidationFailed,
+            error.CacheVersionHashMismatch,
+            error.Canceled,
+            error.CompilationFailed,
+            error.ComptimeExhaustiveness,
+            error.ConnectionResetByPeer,
+            error.CorruptArtifact,
+            error.CorruptBuiltinArtifact,
+            error.CorruptEmbeddedBuiltins,
+            error.CorruptSerializedModuleEnv,
+            error.Crash,
+            error.CreateFileMappingFailed,
+            error.CurrentDirUnlinked,
+            error.DevBackendUnavailable,
+            error.DeviceBusy,
+            error.DiskQuota,
+            error.DivisionByZero,
+            error.DownloadFailed,
+            error.ElfHashTableNotFound,
+            error.ElfStringSectionNotFound,
+            error.ElfSymSectionNotFound,
+            error.EmptyCode,
+            error.EntrypointNotFound,
+            error.ErrFinalizingHTMLWriter,
+            error.EvaluationFailed,
+            error.ExpectErr,
+            error.ExpectedPlatformString,
+            error.ExpectedString,
+            error.FileBusy,
+            error.FileError,
+            error.FileLocksUnsupported,
+            error.FileNotFound,
+            error.FileSystem,
+            error.FileTooBig,
+            error.FtruncateFailed,
+            error.HostedFunctionNotBound,
+            error.InputOutput,
+            error.Internal,
+            error.InvalidDependency,
+            error.InvalidHandle,
+            error.InvalidHostedFunctionSignature,
+            error.InvalidLirImage,
+            error.InvalidMagicNumber,
+            error.InvalidNodeType,
+            error.InvalidNullByteInPath,
+            error.InvalidUrl,
+            error.InvalidUtf8,
+            error.IoError,
+            error.IsDir,
+            error.LinkFailed,
+            error.LinkQuotaExceeded,
+            error.LlvmBackendUnavailable,
+            error.LlvmModuleVerificationFailed,
+            error.LlvmObjectEmitFailed,
+            error.LockViolation,
+            error.LockedMemoryLimitExceeded,
+            error.LowLevelOperationsNotFound,
+            error.MapViewOfFileFailed,
+            error.MappingAlreadyExists,
+            error.MemfdCreateFailed,
+            error.MemoryMappingNotSupported,
+            error.MissingBuiltinBitcode,
+            error.MissingBuiltinModule,
+            error.MissingDynamicLinkingInformation,
+            error.MissingFilesDirectory,
+            error.MissingSnapshotHeader,
+            error.MissingSnapshotSource,
+            error.MissingTargetFile,
+            error.MmapFailed,
+            error.ModuleLinkFailed,
+            error.MonoFormattingFailed,
+            error.MonoValidationFailed,
+            error.MprotectFailed,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoBitcodeModules,
+            error.NoCacheDir,
+            error.NoDevice,
+            error.NoPackageSource,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.NotDynamicLibrary,
+            error.NotElfFile,
+            error.NotOpenForReading,
+            error.NotOpenForWriting,
+            error.OpenFileMappingFailed,
+            error.OutOfMemory,
+            error.PageSizeQueryFailed,
+            error.ParseError,
+            error.ParseFailed,
+            error.PathAlreadyExists,
+            error.PathOutsideWorkspace,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.RuntimeError,
+            error.ShmOpenFailed,
+            error.ShmUnlinkFailed,
+            error.SnapshotValidationFailed,
+            error.SocketUnconnected,
+            error.StaleEmbeddedBuiltins,
+            error.StreamTooLong,
+            error.Streaming,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.TempDirUnavailable,
+            error.TempFileError,
+            error.TempFileOpenFailed,
+            error.TempFileUnlinkFailed,
+            error.TestExpectedEqual,
+            error.TestUnexpectedResult,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            error.Unseekable,
+            error.UnsupportedBuiltinAnnotationOnly,
+            error.UnsupportedHeader,
+            error.UnsupportedHostedFunction,
+            error.UnsupportedLirImageVersion,
+            error.UnsupportedLlvmTriple,
+            error.UnsupportedLowLevel,
+            error.UnsupportedPlatform,
+            error.UnsupportedTarget,
+            error.UnwindRegistrationFailed,
+            error.VirtualAllocFailed,
+            error.VirtualProtectFailed,
+            error.WasmExecFailed,
+            error.WindowsSDKNotFound,
+            error.WouldBlock,
+            error.WriteFailed,
+            => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(expr_err)}),
         };
     };
     defer expr_compiled.deinit(allocator);
@@ -4842,7 +5230,148 @@ fn snapshotReplExpressionStep(
                     if (use_expr_fallback) {
                         switch (render_err) {
                             error.TypeCheckError => return compileAndEvaluateSnapshotReplExpr(allocator, input, config),
-                            else => {},
+                            error.AccessDenied,
+                            error.AntivirusInterference,
+                            error.BadPathName,
+                            error.BadSectionHeader,
+                            error.BitcodeParseError,
+                            error.BrokenPipe,
+                            error.BufferTooSmall,
+                            error.BuiltinArtifactVersionMismatch,
+                            error.BuiltinLowLevelAnnotationMustBeFunction,
+                            error.BuiltinModuleLeakedInSnapshots,
+                            error.CacheRoundTripValidationFailed,
+                            error.CacheVersionHashMismatch,
+                            error.Canceled,
+                            error.CompilationFailed,
+                            error.ComptimeExhaustiveness,
+                            error.ConnectionResetByPeer,
+                            error.CorruptArtifact,
+                            error.CorruptBuiltinArtifact,
+                            error.CorruptEmbeddedBuiltins,
+                            error.CorruptSerializedModuleEnv,
+                            error.Crash,
+                            error.CreateFileMappingFailed,
+                            error.CurrentDirUnlinked,
+                            error.DevBackendUnavailable,
+                            error.DeviceBusy,
+                            error.DiskQuota,
+                            error.DivisionByZero,
+                            error.DownloadFailed,
+                            error.ElfHashTableNotFound,
+                            error.ElfStringSectionNotFound,
+                            error.ElfSymSectionNotFound,
+                            error.EmptyCode,
+                            error.EntrypointNotFound,
+                            error.ErrFinalizingHTMLWriter,
+                            error.EvaluationFailed,
+                            error.ExpectErr,
+                            error.ExpectedPlatformString,
+                            error.ExpectedString,
+                            error.FileBusy,
+                            error.FileError,
+                            error.FileLocksUnsupported,
+                            error.FileNotFound,
+                            error.FileSystem,
+                            error.FileTooBig,
+                            error.FtruncateFailed,
+                            error.HostedFunctionNotBound,
+                            error.InputOutput,
+                            error.Internal,
+                            error.InvalidDependency,
+                            error.InvalidHandle,
+                            error.InvalidHostedFunctionSignature,
+                            error.InvalidLirImage,
+                            error.InvalidMagicNumber,
+                            error.InvalidNodeType,
+                            error.InvalidNullByteInPath,
+                            error.InvalidUrl,
+                            error.InvalidUtf8,
+                            error.IoError,
+                            error.IsDir,
+                            error.LinkFailed,
+                            error.LinkQuotaExceeded,
+                            error.LlvmBackendUnavailable,
+                            error.LlvmModuleVerificationFailed,
+                            error.LlvmObjectEmitFailed,
+                            error.LockViolation,
+                            error.LockedMemoryLimitExceeded,
+                            error.LowLevelOperationsNotFound,
+                            error.MapViewOfFileFailed,
+                            error.MappingAlreadyExists,
+                            error.MemfdCreateFailed,
+                            error.MemoryMappingNotSupported,
+                            error.MissingBuiltinBitcode,
+                            error.MissingBuiltinModule,
+                            error.MissingDynamicLinkingInformation,
+                            error.MissingFilesDirectory,
+                            error.MissingSnapshotHeader,
+                            error.MissingSnapshotSource,
+                            error.MissingTargetFile,
+                            error.MmapFailed,
+                            error.ModuleLinkFailed,
+                            error.MonoFormattingFailed,
+                            error.MonoValidationFailed,
+                            error.MprotectFailed,
+                            error.NameTooLong,
+                            error.NetworkNotFound,
+                            error.NoBitcodeModules,
+                            error.NoCacheDir,
+                            error.NoDevice,
+                            error.NoPackageSource,
+                            error.NoSpaceLeft,
+                            error.NotDir,
+                            error.NotDynamicLibrary,
+                            error.NotElfFile,
+                            error.NotOpenForReading,
+                            error.NotOpenForWriting,
+                            error.OpenFileMappingFailed,
+                            error.OutOfMemory,
+                            error.PageSizeQueryFailed,
+                            error.ParseError,
+                            error.ParseFailed,
+                            error.PathAlreadyExists,
+                            error.PathOutsideWorkspace,
+                            error.PermissionDenied,
+                            error.PipeBusy,
+                            error.ProcessFdQuotaExceeded,
+                            error.ReadOnlyFileSystem,
+                            error.RuntimeError,
+                            error.ShmOpenFailed,
+                            error.ShmUnlinkFailed,
+                            error.SnapshotValidationFailed,
+                            error.SocketUnconnected,
+                            error.StaleEmbeddedBuiltins,
+                            error.StreamTooLong,
+                            error.Streaming,
+                            error.SymLinkLoop,
+                            error.SystemFdQuotaExceeded,
+                            error.SystemResources,
+                            error.TempDirUnavailable,
+                            error.TempFileError,
+                            error.TempFileOpenFailed,
+                            error.TempFileUnlinkFailed,
+                            error.TestExpectedEqual,
+                            error.TestUnexpectedResult,
+                            error.ThreadQuotaExceeded,
+                            error.Unexpected,
+                            error.Unseekable,
+                            error.UnsupportedBuiltinAnnotationOnly,
+                            error.UnsupportedHeader,
+                            error.UnsupportedHostedFunction,
+                            error.UnsupportedLirImageVersion,
+                            error.UnsupportedLlvmTriple,
+                            error.UnsupportedLowLevel,
+                            error.UnsupportedPlatform,
+                            error.UnsupportedTarget,
+                            error.UnwindRegistrationFailed,
+                            error.VirtualAllocFailed,
+                            error.VirtualProtectFailed,
+                            error.WasmExecFailed,
+                            error.WindowsSDKNotFound,
+                            error.WouldBlock,
+                            error.WriteFailed,
+                            => {},
                         }
                     }
                     return render_err;
@@ -4851,8 +5380,8 @@ fn snapshotReplExpressionStep(
 
                 if (use_expr_fallback) {
                     // These titles are matched against markdown output, which
-                    // preserves the authored title case (the box/snapshot output
-                    // shouts them to ALL CAPS, but this is the markdown render).
+                    // preserves the authored title case (EXPECTED metadata uses
+                    // uppercase, but this is the markdown render).
                     const is_top_level_wrapper_problem =
                         std.mem.find(u8, module_problems, "Effectful Top Level Value") != null or
                         std.mem.find(u8, module_problems, "Polymorphic Value") != null;
@@ -4864,10 +5393,150 @@ fn snapshotReplExpressionStep(
                     allocator.free(module_problems);
                     return renderSnapshotReplTypeProblems(allocator, .expr, input, config);
                 }
-
                 return module_problems;
             },
-            else => return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.BadSectionHeader,
+            error.BitcodeParseError,
+            error.BrokenPipe,
+            error.BufferTooSmall,
+            error.BuiltinArtifactVersionMismatch,
+            error.BuiltinLowLevelAnnotationMustBeFunction,
+            error.BuiltinModuleLeakedInSnapshots,
+            error.CacheRoundTripValidationFailed,
+            error.CacheVersionHashMismatch,
+            error.Canceled,
+            error.CompilationFailed,
+            error.ComptimeExhaustiveness,
+            error.ConnectionResetByPeer,
+            error.CorruptArtifact,
+            error.CorruptBuiltinArtifact,
+            error.CorruptEmbeddedBuiltins,
+            error.CorruptSerializedModuleEnv,
+            error.Crash,
+            error.CreateFileMappingFailed,
+            error.CurrentDirUnlinked,
+            error.DevBackendUnavailable,
+            error.DeviceBusy,
+            error.DiskQuota,
+            error.DivisionByZero,
+            error.DownloadFailed,
+            error.ElfHashTableNotFound,
+            error.ElfStringSectionNotFound,
+            error.ElfSymSectionNotFound,
+            error.EmptyCode,
+            error.EntrypointNotFound,
+            error.ErrFinalizingHTMLWriter,
+            error.EvaluationFailed,
+            error.ExpectErr,
+            error.ExpectedPlatformString,
+            error.ExpectedString,
+            error.FileBusy,
+            error.FileError,
+            error.FileLocksUnsupported,
+            error.FileNotFound,
+            error.FileSystem,
+            error.FileTooBig,
+            error.FtruncateFailed,
+            error.HostedFunctionNotBound,
+            error.InputOutput,
+            error.Internal,
+            error.InvalidDependency,
+            error.InvalidHandle,
+            error.InvalidHostedFunctionSignature,
+            error.InvalidLirImage,
+            error.InvalidMagicNumber,
+            error.InvalidNodeType,
+            error.InvalidNullByteInPath,
+            error.InvalidUrl,
+            error.InvalidUtf8,
+            error.IoError,
+            error.IsDir,
+            error.LinkFailed,
+            error.LinkQuotaExceeded,
+            error.LlvmBackendUnavailable,
+            error.LlvmModuleVerificationFailed,
+            error.LlvmObjectEmitFailed,
+            error.LockViolation,
+            error.LockedMemoryLimitExceeded,
+            error.LowLevelOperationsNotFound,
+            error.MapViewOfFileFailed,
+            error.MappingAlreadyExists,
+            error.MemfdCreateFailed,
+            error.MemoryMappingNotSupported,
+            error.MissingBuiltinBitcode,
+            error.MissingBuiltinModule,
+            error.MissingDynamicLinkingInformation,
+            error.MissingFilesDirectory,
+            error.MissingSnapshotHeader,
+            error.MissingSnapshotSource,
+            error.MissingTargetFile,
+            error.MmapFailed,
+            error.ModuleLinkFailed,
+            error.MonoFormattingFailed,
+            error.MonoValidationFailed,
+            error.MprotectFailed,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoBitcodeModules,
+            error.NoCacheDir,
+            error.NoDevice,
+            error.NoPackageSource,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.NotDynamicLibrary,
+            error.NotElfFile,
+            error.NotOpenForReading,
+            error.NotOpenForWriting,
+            error.OpenFileMappingFailed,
+            error.OutOfMemory,
+            error.PageSizeQueryFailed,
+            error.ParseError,
+            error.ParseFailed,
+            error.PathAlreadyExists,
+            error.PathOutsideWorkspace,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.RuntimeError,
+            error.ShmOpenFailed,
+            error.ShmUnlinkFailed,
+            error.SnapshotValidationFailed,
+            error.SocketUnconnected,
+            error.StaleEmbeddedBuiltins,
+            error.StreamTooLong,
+            error.Streaming,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.TempDirUnavailable,
+            error.TempFileError,
+            error.TempFileOpenFailed,
+            error.TempFileUnlinkFailed,
+            error.TestExpectedEqual,
+            error.TestUnexpectedResult,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            error.Unseekable,
+            error.UnsupportedBuiltinAnnotationOnly,
+            error.UnsupportedHeader,
+            error.UnsupportedHostedFunction,
+            error.UnsupportedLirImageVersion,
+            error.UnsupportedLlvmTriple,
+            error.UnsupportedLowLevel,
+            error.UnsupportedPlatform,
+            error.UnsupportedTarget,
+            error.UnwindRegistrationFailed,
+            error.VirtualAllocFailed,
+            error.VirtualProtectFailed,
+            error.WasmExecFailed,
+            error.WindowsSDKNotFound,
+            error.WouldBlock,
+            error.WriteFailed,
+            => return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
         }
     };
     defer compiled.deinit(allocator);
@@ -5131,6 +5800,30 @@ test "snapshot markdown avoids removed keyword text" {
     try std.testing.expect(!containsModuleText(actual));
 }
 
+test "snapshot tool formats optional record fields" {
+    const allocator = std.testing.allocator;
+    var module_env = try ModuleEnv.init(allocator, "");
+    defer module_env.deinit();
+
+    const required_name = try module_env.insertIdent(base.Ident.for_text("required"));
+    const optional_name = try module_env.insertIdent(base.Ident.for_text("optional"));
+    const field_var = try module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const ext_var = try module_env.types.freshFromContent(.{ .structure = .empty_record });
+    const optional_presence = try module_env.types.freshFromContent(.{ .field_presence = .optional });
+    const fields = try module_env.types.appendRecordFields(&.{
+        .{ .name = required_name, .presence = .required(field_var) },
+        .{ .name = optional_name, .presence = .unknown(optional_presence, field_var) },
+    });
+    const record_var = try module_env.types.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = fields,
+        .ext = ext_var,
+    } } });
+
+    const formatted = try getDefaultedTypeString(allocator, &module_env, record_var);
+    defer allocator.free(formatted);
+    try std.testing.expectEqualStrings("{ required : {}, optional ?: {} }", formatted);
+}
+
 test "no Builtin module leaks in snapshots" {
     // IMPORTANT: The "Builtin" module is an implementation detail that should NEVER
     // appear in user-facing error messages. We consolidate all builtin types (Bool,
@@ -5202,7 +5895,16 @@ fn searchDirectoryForBuiltin(
                     }
                 }
             },
-            else => {},
+            .block_device,
+            .character_device,
+            .named_pipe,
+            .sym_link,
+            .unix_domain_socket,
+            .whiteout,
+            .door,
+            .event_port,
+            .unknown,
+            => {},
         }
     }
 }

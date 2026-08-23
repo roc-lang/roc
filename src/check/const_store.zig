@@ -1,6 +1,7 @@
 //! Checked compile-time constant store.
 
 const std = @import("std");
+const collections = @import("collections");
 
 const checked_ids = @import("checked_ids.zig");
 const names = @import("canonical_names.zig");
@@ -13,8 +14,8 @@ const Allocator = std.mem.Allocator;
 pub const ConstNodeId = enum(u32) { _ };
 /// Identifier for a function value in the checked const store.
 pub const ConstFnId = enum(u32) { _ };
-/// Identifier for stored string backing bytes in the checked const store.
-pub const ConstStrDataId = enum(u32) { _ };
+/// Identifier for stored immutable backing bytes in the checked const store.
+pub const ConstBlobDataId = enum(u32) { _ };
 /// Identifier for a stored monomorphic type used by checked constants.
 pub const ConstTypeId = enum(u32) { _ };
 
@@ -36,6 +37,53 @@ pub const ConstScalar = union(enum) {
     f32_bits: u32,
     f64_bits: u64,
     dec_bits: i128,
+};
+
+/// Target-independent scalar encoding used by a packed constant list.
+/// Multi-byte values use canonical little-endian bytes in `ConstStore`.
+pub const ConstPackedScalar = enum(u8) {
+    i8,
+    i16,
+    i32,
+    i64,
+    i128,
+    u8,
+    u16,
+    u32,
+    u64,
+    u128,
+    f32,
+    f64,
+    dec,
+    u8x16,
+    i8x16,
+    u16x8,
+    i16x8,
+    u32x4,
+    i32x4,
+    u64x2,
+    i64x2,
+
+    pub fn byteWidth(self: ConstPackedScalar) u32 {
+        return switch (self) {
+            .i8, .u8 => 1,
+            .i16, .u16 => 2,
+            .i32, .u32, .f32 => 4,
+            .i64, .u64, .f64 => 8,
+            .i128,
+            .u128,
+            .dec,
+            .u8x16,
+            .i8x16,
+            .u16x8,
+            .i16x8,
+            .u32x4,
+            .i32x4,
+            .u64x2,
+            .i64x2,
+            => 16,
+        };
+    }
 };
 
 /// Identity for a captured value inside a compile-time function value. This is
@@ -89,23 +137,7 @@ pub const IteratorRepresentation = enum(u8) {
 };
 
 /// Producer or adapter that minted a stored iterator representation.
-pub const IteratorKind = enum(u8) {
-    none,
-    custom,
-    list,
-    str,
-    single,
-    range_exclusive,
-    range_inclusive,
-    map,
-    keep_if,
-    drop_if,
-    take_first,
-    drop_first,
-    concat,
-    append,
-    forced_dynamic,
-};
+pub const IteratorKind = static_dispatch.IteratorKind;
 
 /// How much of a stored named type's backing type later stages may inspect.
 pub const TypeBackingUse = enum {
@@ -133,10 +165,21 @@ pub const TypeNamedKind = enum {
     alias,
 };
 
+/// `??` default identity carried on stored record type evidence, mirroring
+/// Monotype `Type.FieldDefault`: rows disagreeing about defaults are
+/// distinct monotypes, so restored evidence must reproduce the default to
+/// reproduce the type.
+pub const TypeFieldDefault = struct {
+    module: names.ModuleIdentityId,
+    expr_node: u32,
+};
+
 /// Record field entry for stored monomorphic type evidence.
 pub const TypeField = struct {
     name: names.RecordFieldNameId,
     ty: ConstTypeId,
+    value_ty: ?ConstTypeId = null,
+    default: ?TypeFieldDefault,
 };
 
 /// Tag-union variant entry for stored monomorphic type evidence.
@@ -177,21 +220,12 @@ pub const ConstType = union(enum) {
     zst,
 };
 
-/// Captured checked value inside a compile-time function value.
-pub const ConstCaptureValue = union(enum(u8)) {
-    node: ConstNodeId,
-    /// The runtime capture is the enclosing recursive constant's reserved
-    /// local. Its checked capture identity resolves that local when restored;
-    /// no cyclic value edge is stored in ConstStore.
-    recursive_const,
-};
-
 /// Checked capture identity, type, and stored value for a compile-time
 /// function value.
 pub const ConstCapture = struct {
     id: CaptureId,
     ty: ConstTypeId,
-    value: ConstCaptureValue,
+    value: ConstNodeId,
 };
 
 /// Durable source of a stored target's own evidence vector.
@@ -291,15 +325,28 @@ pub const FnDef = union(enum) {
     },
 };
 
-/// Stored string value.
-///
-/// `data` identifies the backing bytes. `offset` and `len` describe the string
-/// view into those bytes. This lets checked constants keep the sharing needed
-/// for readonly static slices while still storing only checked Roc values.
-pub const ConstStr = struct {
-    data: ConstStrDataId,
+/// A view into immutable bytes shared by strings and packed scalar lists.
+pub const ConstBlob = struct {
+    data: ConstBlobDataId,
     offset: u32,
     len: u32,
+};
+
+/// String view into immutable shared backing bytes.
+pub const ConstStr = ConstBlob;
+
+/// Packed scalar list whose bytes use the canonical encoding named by
+/// `element`. `bytes.len == len * element.byteWidth()`.
+pub const ConstPackedList = struct {
+    bytes: ConstBlob,
+    len: u32,
+    element: ConstPackedScalar,
+};
+
+/// List data stored either as child nodes or packed scalar bytes.
+pub const ConstList = union(enum) {
+    nodes: []const ConstNodeId,
+    scalar_bytes: ConstPackedList,
 };
 
 /// Compile-time constant stored in checked module data.
@@ -308,7 +355,7 @@ pub const ConstValue = union(enum) {
     zst,
     scalar: ConstScalar,
     str: ConstStr,
-    list: []const ConstNodeId,
+    list: ConstList,
     box: ConstNodeId,
     tuple: []const ConstNodeId,
     record: []const ConstNodeId,
@@ -332,7 +379,10 @@ const StoredValue = union(enum) {
     zst,
     scalar: ConstScalar,
     str: ConstStr,
-    list: ConstRange,
+    list: union(enum) {
+        nodes: ConstRange,
+        scalar_bytes: ConstPackedList,
+    },
     box: ConstNodeId,
     tuple: ConstRange,
     record: ConstRange,
@@ -363,7 +413,7 @@ pub const ConstTypeStore = struct {
     field_pool: std.ArrayList(TypeField),
     /// Flat pool of tag-union variants.
     tag_pool: std.ArrayList(TypeTag),
-    /// Flat pool of nominal declared field order entries.
+    /// Flat pool of nominal declared field entries.
     declared_field_pool: std.ArrayList(TypeDeclaredField),
     /// True for a store reconstructed from a serialized buffer.
     serialized: bool = false,
@@ -432,7 +482,7 @@ pub const ConstTypeStore = struct {
     }
 
     pub fn cloneTypeFrom(self: *ConstTypeStore, source: *const ConstTypeStore, ty: ConstTypeId) Allocator.Error!ConstTypeId {
-        var map = std.AutoHashMap(ConstTypeId, ConstTypeId).init(self.allocator);
+        var map = collections.DenseMap(ConstTypeId, ConstTypeId).init(self.allocator);
         defer map.deinit();
         return try self.cloneTypeFromInner(source, null, ty, &map);
     }
@@ -444,7 +494,7 @@ pub const ConstTypeStore = struct {
         target_names: *names.NameStore,
         ty: ConstTypeId,
     ) Allocator.Error!ConstTypeId {
-        var map = std.AutoHashMap(ConstTypeId, ConstTypeId).init(self.allocator);
+        var map = collections.DenseMap(ConstTypeId, ConstTypeId).init(self.allocator);
         defer map.deinit();
         return try self.cloneTypeFromInner(source, .{
             .source = source_names,
@@ -462,7 +512,7 @@ pub const ConstTypeStore = struct {
         source: *const ConstTypeStore,
         name_translation: ?NameTranslation,
         ty: ConstTypeId,
-        map: *std.AutoHashMap(ConstTypeId, ConstTypeId),
+        map: *collections.DenseMap(ConstTypeId, ConstTypeId),
     ) Allocator.Error!ConstTypeId {
         if (map.get(ty)) |existing| return existing;
 
@@ -500,6 +550,11 @@ pub const ConstTypeStore = struct {
                     cloned_fields[i] = .{
                         .name = try translateRecordFieldName(name_translation, field.name),
                         .ty = try self.cloneTypeFromInner(source, name_translation, field.ty, map),
+                        .value_ty = if (field.value_ty) |value_ty|
+                            try self.cloneTypeFromInner(source, name_translation, value_ty, map)
+                        else
+                            null,
+                        .default = try translateFieldDefault(name_translation, field.default),
                     };
                 }
                 break :blk ConstType{ .record = try self.appendFieldSpan(cloned_fields) };
@@ -564,6 +619,15 @@ pub const ConstTypeStore = struct {
     fn translateTagName(name_translation: ?NameTranslation, id: names.TagNameId) Allocator.Error!names.TagNameId {
         const translation = name_translation orelse return id;
         return translation.target.internTagLabel(translation.source.tagLabelText(id));
+    }
+
+    fn translateFieldDefault(name_translation: ?NameTranslation, default: ?TypeFieldDefault) Allocator.Error!?TypeFieldDefault {
+        const field_default = default orelse return null;
+        const translation = name_translation orelse return field_default;
+        return .{
+            .module = try translation.target.internModuleIdentity(translation.source.moduleIdentityBytes(field_default.module)),
+            .expr_node = field_default.expr_node,
+        };
     }
 
     fn translateTypeDef(name_translation: ?NameTranslation, def: TypeDef) Allocator.Error!TypeDef {
@@ -637,13 +701,19 @@ pub const ConstStore = struct {
     /// Flat evidence vectors referenced by stored functions.
     evidence_pool: std.ArrayList(ConstFnEvidence),
     evidence_frame_pool: std.ArrayList(ConstFnEvidenceFrame),
-    /// Flat pool of all string backing bytes; `str_views` indexes into it.
-    str_backing: std.ArrayList(u8),
-    /// `ConstStrDataId` -> range into `str_backing`.
-    str_views: std.ArrayList(ConstRange),
+    /// Flat pool of immutable backing bytes shared by strings and packed lists.
+    blob_backing: std.ArrayList(u8),
+    /// `ConstBlobDataId` -> range into `blob_backing`.
+    blob_views: std.ArrayList(ConstRange),
+    /// Build-only content index. Keys own separate bytes because `blob_backing`
+    /// may move while the store is being built.
+    blob_index: std.StringHashMap(ConstBlobDataId),
+    blob_index_keys: std.ArrayList([]u8) = .empty,
     /// True for a store reconstructed from a serialized buffer (pools point into
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
+
+    pub const serde_transient_fields = .{ "blob_index", "blob_index_keys" };
 
     pub fn init(allocator: Allocator) ConstStore {
         return .{
@@ -656,8 +726,9 @@ pub const ConstStore = struct {
             .capture_pool = .empty,
             .evidence_pool = .empty,
             .evidence_frame_pool = .empty,
-            .str_backing = .empty,
-            .str_views = .empty,
+            .blob_backing = .empty,
+            .blob_views = .empty,
+            .blob_index = std.StringHashMap(ConstBlobDataId).init(allocator),
         };
     }
 
@@ -675,10 +746,7 @@ pub const ConstStore = struct {
     /// pools; the caller retains ownership of the input slices and frees them.
     pub fn fill(self: *ConstStore, id: ConstNodeId, value: ConstValue) void {
         const slot = &self.values.items[@intFromEnum(id)];
-        switch (slot.*) {
-            .pending => {},
-            else => constStoreInvariant("const node filled more than once"),
-        }
+        if (slot.* != .pending) constStoreInvariant("const node filled more than once");
         slot.* = self.storeValue(value) catch constStoreInvariant("out of memory storing const value");
     }
 
@@ -694,7 +762,10 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
-            .list => |items| .{ .list = try self.appendNodes(items) },
+            .list => |list| .{ .list = switch (list) {
+                .nodes => |items| .{ .nodes = try self.appendNodes(items) },
+                .scalar_bytes => |scalar_bytes| .{ .scalar_bytes = scalar_bytes },
+            } },
             .tuple => |items| .{ .tuple = try self.appendNodes(items) },
             .record => |items| .{ .record = try self.appendNodes(items) },
             .tag => |tag| blk: {
@@ -803,10 +874,19 @@ pub const ConstStore = struct {
         try std.testing.expectEqual(@as(?usize, 1), evidenceVectorEnd(&evidence, 0, 1));
     }
 
-    pub fn addStrData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstStrDataId {
-        const id: ConstStrDataId = @enumFromInt(@as(u32, @intCast(self.str_views.items.len)));
-        const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.str_backing, self.allocator, bytes);
-        try self.str_views.append(self.allocator, view);
+    pub fn addBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
+        if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
+        if (self.blob_index.get(bytes)) |existing| return existing;
+
+        const id: ConstBlobDataId = @enumFromInt(@as(u32, @intCast(self.blob_views.items.len)));
+        const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
+        try self.blob_views.append(self.allocator, view);
+
+        const key = try self.allocator.dupe(u8, bytes);
+        errdefer self.allocator.free(key);
+        try self.blob_index_keys.append(self.allocator, key);
+        errdefer _ = self.blob_index_keys.pop();
+        try self.blob_index.put(key, id);
         return id;
     }
 
@@ -824,7 +904,10 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
-            .list => |r| .{ .list = self.nodeSlice(r) },
+            .list => |list| .{ .list = switch (list) {
+                .nodes => |r| .{ .nodes = self.nodeSlice(r) },
+                .scalar_bytes => |scalar_bytes| .{ .scalar_bytes = scalar_bytes },
+            } },
             .tuple => |r| .{ .tuple = self.nodeSlice(r) },
             .record => |r| .{ .record = self.nodeSlice(r) },
             .tag => |tag| .{ .tag = .{
@@ -847,13 +930,13 @@ pub const ConstStore = struct {
         };
     }
 
-    pub fn strData(self: *const ConstStore, id: ConstStrDataId) []const u8 {
+    pub fn blobData(self: *const ConstStore, id: ConstBlobDataId) []const u8 {
         const index = @intFromEnum(id);
-        if (@import("builtin").mode == .Debug and index >= self.str_views.items.len) {
-            constStoreInvariant("string backing id is out of range");
+        if (@import("builtin").mode == .Debug and index >= self.blob_views.items.len) {
+            constStoreInvariant("blob backing id is out of range");
         }
-        const view = self.str_views.items[index];
-        return self.str_backing.items[view.start .. view.start + view.len];
+        const view = self.blob_views.items[index];
+        return self.blob_backing.items[view.start .. view.start + view.len];
     }
 
     /// Relocatable serialized form. Every field is a `SafeList`-equivalent POD
@@ -867,8 +950,8 @@ pub const ConstStore = struct {
         capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
         evidence_pool: artifact_serialize.SerializedSlice(ConstFnEvidence) = .{},
         evidence_frame_pool: artifact_serialize.SerializedSlice(ConstFnEvidenceFrame) = .{},
-        str_backing: artifact_serialize.SerializedSlice(u8) = .{},
-        str_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
+        blob_backing: artifact_serialize.SerializedSlice(u8) = .{},
+        blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
 
         comptime {
             // 9 value/function side lists + 5 nested type-store lists.
@@ -882,11 +965,15 @@ pub const ConstStore = struct {
     };
 
     pub fn strBytes(self: *const ConstStore, str: ConstStr) []const u8 {
-        const backing = self.strData(str.data);
-        const offset: usize = str.offset;
-        const len: usize = str.len;
+        return self.blobBytes(str);
+    }
+
+    pub fn blobBytes(self: *const ConstStore, blob: ConstBlob) []const u8 {
+        const backing = self.blobData(blob.data);
+        const offset: usize = blob.offset;
+        const len: usize = blob.len;
         if (@import("builtin").mode == .Debug and (offset > backing.len or len > backing.len - offset)) {
-            constStoreInvariant("string view is outside backing data");
+            constStoreInvariant("blob view is outside backing data");
         }
         return backing[offset..][0..len];
     }
@@ -894,10 +981,7 @@ pub const ConstStore = struct {
     pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
         if (@import("builtin").mode != .Debug) return;
         for (self.values.items) |value| {
-            switch (value) {
-                .pending => std.debug.panic("const store invariant violated: completed store contains a pending node", .{}),
-                else => {},
-            }
+            if (value == .pending) std.debug.panic("const store invariant violated: completed store contains a pending node", .{});
         }
         const value_state = try self.allocator.alloc(VisitState, self.values.items.len);
         defer self.allocator.free(value_state);
@@ -907,17 +991,42 @@ pub const ConstStore = struct {
         defer self.allocator.free(fn_state);
         @memset(fn_state, .unseen);
 
+        const value_delayed_depth = try self.allocator.alloc(usize, self.values.items.len);
+        defer self.allocator.free(value_delayed_depth);
+        @memset(value_delayed_depth, 0);
+
+        const fn_delayed_depth = try self.allocator.alloc(usize, self.fns.items.len);
+        defer self.allocator.free(fn_delayed_depth);
+        @memset(fn_delayed_depth, 0);
+
         for (self.values.items, 0..) |_, index| {
-            self.verifyAcyclic(@enumFromInt(@as(u32, @intCast(index))), value_state, fn_state);
+            self.verifyGraph(
+                @enumFromInt(@as(u32, @intCast(index))),
+                value_state,
+                fn_state,
+                value_delayed_depth,
+                fn_delayed_depth,
+                0,
+            );
         }
         for (self.fns.items, 0..) |_, index| {
             validateEvidenceFrames(self.getFn(@enumFromInt(@as(u32, @intCast(index)))));
-            self.verifyFnAcyclic(@enumFromInt(@as(u32, @intCast(index))), value_state, fn_state);
+            self.verifyFnGraph(
+                @enumFromInt(@as(u32, @intCast(index))),
+                value_state,
+                fn_state,
+                value_delayed_depth,
+                fn_delayed_depth,
+                0,
+            );
         }
     }
 
     pub fn deinit(self: *ConstStore) void {
         self.type_store.deinit();
+        for (self.blob_index_keys.items) |key| self.allocator.free(key);
+        self.blob_index_keys.deinit(self.allocator);
+        self.blob_index.deinit();
         if (!self.serialized) {
             self.values.deinit(self.allocator);
             self.fns.deinit(self.allocator);
@@ -926,72 +1035,94 @@ pub const ConstStore = struct {
             self.capture_pool.deinit(self.allocator);
             self.evidence_pool.deinit(self.allocator);
             self.evidence_frame_pool.deinit(self.allocator);
-            self.str_backing.deinit(self.allocator);
-            self.str_views.deinit(self.allocator);
+            self.blob_backing.deinit(self.allocator);
+            self.blob_views.deinit(self.allocator);
         }
         self.* = ConstStore.init(self.allocator);
     }
 
-    fn verifyAcyclic(
+    fn verifyGraph(
         self: *const ConstStore,
         id: ConstNodeId,
         value_state: []VisitState,
         fn_state: []VisitState,
+        value_delayed_depth: []usize,
+        fn_delayed_depth: []usize,
+        delayed_depth: usize,
     ) void {
         const index = @intFromEnum(id);
         if (index >= self.values.items.len) constStoreInvariant("completed store contains an out-of-range value id");
         switch (value_state[index]) {
             .done => return,
-            .active => constStoreInvariant("completed store contains a cycle in const node edges"),
+            .active => {
+                if (delayed_depth > value_delayed_depth[index]) return;
+                constStoreInvariant("completed store contains a cycle without a delayed function capture");
+            },
             .unseen => {},
         }
 
         value_state[index] = .active;
+        value_delayed_depth[index] = delayed_depth;
         switch (self.get(id)) {
             .pending => constStoreInvariant("completed store contains a pending node"),
             .zst, .scalar => {},
             .str, .crash => |str| {
                 _ = self.strBytes(str);
             },
-            .fn_value => |fn_id| self.verifyFnAcyclic(fn_id, value_state, fn_state),
-            .box => |child| self.verifyAcyclic(child, value_state, fn_state),
-            .nominal => |nominal| self.verifyAcyclic(nominal.backing, value_state, fn_state),
-            .list,
+            .fn_value => |fn_id| self.verifyFnGraph(fn_id, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
+            .box => |child| self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
+            .nominal => |nominal| self.verifyGraph(nominal.backing, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth),
+            .list => |list| switch (list) {
+                .nodes => |children| for (children) |child| {
+                    self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth);
+                },
+                .scalar_bytes => |scalar_bytes| {
+                    const bytes = self.blobBytes(scalar_bytes.bytes);
+                    const expected_len = @as(u64, scalar_bytes.len) * scalar_bytes.element.byteWidth();
+                    if (bytes.len != expected_len) {
+                        constStoreInvariant("packed list byte length differs from its element encoding");
+                    }
+                },
+            },
             .tuple,
             .record,
             => |children| {
-                for (children) |child| self.verifyAcyclic(child, value_state, fn_state);
+                for (children) |child| self.verifyGraph(child, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth);
             },
             .tag => |tag| {
-                for (tag.payloads) |payload| self.verifyAcyclic(payload, value_state, fn_state);
+                for (tag.payloads) |payload| self.verifyGraph(payload, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth);
             },
         }
         value_state[index] = .done;
     }
 
-    fn verifyFnAcyclic(
+    fn verifyFnGraph(
         self: *const ConstStore,
         id: ConstFnId,
         value_state: []VisitState,
         fn_state: []VisitState,
+        value_delayed_depth: []usize,
+        fn_delayed_depth: []usize,
+        delayed_depth: usize,
     ) void {
         const index = @intFromEnum(id);
         if (index >= self.fns.items.len) constStoreInvariant("completed store contains an out-of-range function id");
         switch (fn_state[index]) {
             .done => return,
-            .active => constStoreInvariant("completed store contains a recursive function value"),
+            .active => {
+                if (delayed_depth > fn_delayed_depth[index]) return;
+                constStoreInvariant("completed store contains a function cycle without a delayed capture");
+            },
             .unseen => {},
         }
 
         fn_state[index] = .active;
+        fn_delayed_depth[index] = delayed_depth;
         for (self.getFn(id).captures) |capture| {
             if (@intFromEnum(capture.ty) >= self.type_store.types.items.len) {
                 constStoreInvariant("completed store contains an out-of-range capture type id");
             }
-            switch (capture.value) {
-                .node => |node| self.verifyAcyclic(node, value_state, fn_state),
-                .recursive_const => {},
-            }
+            self.verifyGraph(capture.value, value_state, fn_state, value_delayed_depth, fn_delayed_depth, delayed_depth + 1);
         }
         fn_state[index] = .done;
     }
@@ -1022,15 +1153,21 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     // owns and frees the slices it hands to `append`/`appendFn`.
     const list_items = try gpa.dupe(ConstNodeId, &.{ a, b });
     defer gpa.free(list_items);
-    const list = try store.append(.{ .list = list_items });
+    const list = try store.append(.{ .list = .{ .nodes = list_items } });
     const tag_payloads = try gpa.dupe(ConstNodeId, &.{a});
     defer gpa.free(tag_payloads);
     const tag_name = try gpa.dupe(u8, "Ok");
     defer gpa.free(tag_name);
     const tag = try store.append(.{ .tag = .{ .tag_name = tag_name, .payloads = tag_payloads } });
-    // A string backing + a str value (exercises str_backing + str_views).
-    const sd = try store.addStrData("hello world");
+    // Strings and packed lists share one content-deduplicated blob backing.
+    const sd = try store.addBlobData("hello world");
+    try std.testing.expectEqual(sd, try store.addBlobData("hello world"));
     const str = try store.append(.{ .str = .{ .data = sd, .offset = 0, .len = 5 } });
+    const packed_list = try store.append(.{ .list = .{ .scalar_bytes = .{
+        .bytes = .{ .data = sd, .offset = 0, .len = 11 },
+        .len = 11,
+        .element = .u8,
+    } } });
     // A function value with a capture (exercises capture_pool).
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
     const private_backing_ty = try store.type_store.append(.{ .record = .{} });
@@ -1046,8 +1183,8 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         },
     } });
     const caps = try gpa.dupe(ConstCapture, &.{
-        .{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = .{ .node = a } },
-        .{ .id = CaptureId.fromBinder(@enumFromInt(2)), .ty = capture_ty, .value = .recursive_const },
+        .{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = a },
+        .{ .id = CaptureId.fromBinder(@enumFromInt(2)), .ty = capture_ty, .value = a },
     });
     defer gpa.free(caps);
     var target_view: names.CheckedModuleDigest = .{};
@@ -1109,27 +1246,24 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(@as(u64, 7), loaded.get(a).scalar.u64);
     try std.testing.expectEqual(@as(i32, -3), loaded.get(b).scalar.i32);
     // List range resolves to the same node ids
-    try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list);
+    try std.testing.expectEqualSlices(ConstNodeId, &.{ a, b }, loaded.get(list).list.nodes);
     // Tag name + payloads
     const loaded_tag = loaded.get(tag).tag;
     try std.testing.expectEqualStrings("Ok", loaded_tag.tag_name);
     try std.testing.expectEqualSlices(ConstNodeId, &.{a}, loaded_tag.payloads);
     // String backing
     try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
+    const loaded_packed = loaded.get(packed_list).list.scalar_bytes;
+    try std.testing.expectEqual(sd, loaded_packed.bytes.data);
+    try std.testing.expectEqualStrings("hello world", loaded.blobBytes(loaded_packed.bytes));
     // Function captures
     const loaded_fn = loaded.getFn(fn_id);
     try std.testing.expectEqual(@as(usize, 2), loaded_fn.captures.len);
     try std.testing.expectEqual(capture_ty, loaded_fn.captures[0].ty);
     try std.testing.expectEqual(ConstType{ .primitive = .u64 }, loaded.type_store.get(loaded_fn.captures[0].ty));
     try std.testing.expectEqual(TypeBackingAuthority.generated_private, loaded.type_store.get(private_named_ty).named.backing.?.authority);
-    switch (loaded_fn.captures[0].value) {
-        .node => |node| try std.testing.expectEqual(a, node),
-        .recursive_const => try std.testing.expect(false),
-    }
-    switch (loaded_fn.captures[1].value) {
-        .node => try std.testing.expect(false),
-        .recursive_const => {},
-    }
+    try std.testing.expectEqual(a, loaded_fn.captures[0].value);
+    try std.testing.expectEqual(a, loaded_fn.captures[1].value);
     try loaded.verifyComplete();
     try std.testing.expectEqual(evidence.len, loaded_fn.evidence.len);
     const loaded_target = loaded_fn.evidence[0].target;
@@ -1190,6 +1324,55 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expect(!ConstStore.evidenceFramesValid(corrupt_range));
 }
 
+test "ConstStore: exact function capture back-edge survives serialization" {
+    const gpa = std.testing.allocator;
+    const CompactWriter = @import("collections").CompactWriter;
+
+    var store = ConstStore.init(gpa);
+    defer store.deinit();
+
+    const unit_ty = try store.type_store.append(.zst);
+    const fn_ty = try store.type_store.append(.{ .func = .{ .args = .{}, .ret = unit_ty } });
+    const fn_node = try store.reserve();
+    const captures = [_]ConstCapture{.{
+        .id = CaptureId.fromBinder(@enumFromInt(1)),
+        .ty = fn_ty,
+        .value = fn_node,
+    }};
+    const evidence_frames = [_]ConstFnEvidenceFrame{
+        ConstFnEvidenceFrame.init(.root, null, 0, 0),
+    };
+    const fn_id = try store.appendFn(.{
+        .fn_def = .{ .local_template = .{ .proc_base = @enumFromInt(1), .template = @enumFromInt(2) } },
+        .source_fn_ty = @enumFromInt(3),
+        .source_fn_key = .{},
+        .captures = &captures,
+        .evidence_frames = &evidence_frames,
+        .evidence_frame_head = 0,
+    });
+    store.fill(fn_node, .{ .fn_value = fn_id });
+    try store.verifyComplete();
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var writer = CompactWriter.init();
+    const header = try writer.appendAlloc(arena.allocator(), ConstStore.Serialized);
+    try header.serialize(&store, arena.allocator(), &writer);
+
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", writer.total_bytes);
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+
+    const serialized: *const ConstStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var loaded = serialized.deserialize(@intFromPtr(buffer.ptr), gpa);
+    defer loaded.deinit();
+
+    const loaded_fn_id = loaded.get(fn_node).fn_value;
+    try std.testing.expectEqual(fn_id, loaded_fn_id);
+    try std.testing.expectEqual(fn_node, loaded.getFn(loaded_fn_id).captures[0].value);
+    try loaded.verifyComplete();
+}
+
 test "ConstStore.appendFn: no leak or double-free under allocation failure" {
     // `appendFn` copies `captures` into the pool and does not free the input; the
     // caller owns it. Drive every allocation in that path to fail in turn and assert
@@ -1202,8 +1385,8 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
             const a = try store.append(.{ .scalar = .{ .u64 = 7 } });
             const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
             const caps = try allocator.dupe(ConstCapture, &.{
-                .{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = .{ .node = a } },
-                .{ .id = CaptureId.fromBinder(@enumFromInt(2)), .ty = capture_ty, .value = .{ .node = a } },
+                .{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = a },
+                .{ .id = CaptureId.fromBinder(@enumFromInt(2)), .ty = capture_ty, .value = a },
             });
             defer allocator.free(caps);
             const evidence_frames = [_]ConstFnEvidenceFrame{

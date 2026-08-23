@@ -6,8 +6,12 @@
  *
  * Hosted argument ownership:
  * Roc transfers ownership of refcounted arguments to the hosted function.
- * The hosted function must decref owned refcounted arguments when done,
+ * The hosted function must release owned refcounted arguments when done,
  * or retain/transfer ownership explicitly when storing or returning them.
+ * Releasing a container releases its elements only when the container's own
+ * count reaches zero, which is what compiled Roc code does when it drops one
+ * it owns. Releasing the elements unconditionally double-frees them whenever
+ * the Roc caller still holds the container.
  */
 
 #ifndef ROC_PLATFORM_ABI_H
@@ -138,7 +142,8 @@ typedef void* RocBox;
 
 struct RocOps;
 
-typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture);
+/* `reuse` is nullable. Non-null must be the callable data pointer whose inline capture begins at `capture`; it transfers one owned reference to the callee. The caller must not use or decref that ownership unit after the call. The callee consumes it exactly once, whether or not the result can reuse the allocation. */
+typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture, uint8_t* reuse, const void** ret_desc);
 typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);
 typedef struct {
     RocErasedCallableFn callable_fn_ptr;
@@ -326,7 +331,7 @@ typedef void (*HostedFn)(void);
 
 // Hosted Function Count
 
-#define HOSTED_FUNCTION_COUNT 17
+#define HOSTED_FUNCTION_COUNT 22
 
 
 #define HOSTED_IDX_BUILDER_PRINT_VALUE 0
@@ -336,16 +341,21 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_HOST_BOXED_RECURSIVE_TREE 4
 #define HOSTED_IDX_HOST_BOXED_WITH_BOXED_CAPTURE 5
 #define HOSTED_IDX_HOST_CALL_BOXED 6
-#define HOSTED_IDX_HOST_GET_GREETING 7
-#define HOSTED_IDX_HOST_RELEASE_STORED_BOXED 8
-#define HOSTED_IDX_HOST_RESET_BOXED_DROP_REPORT 9
-#define HOSTED_IDX_HOST_ROUNDTRIP_BOXED 10
-#define HOSTED_IDX_HOST_STORE_BOXED 11
-#define HOSTED_IDX_HOST_STORED_BOXED_CALL 12
-#define HOSTED_IDX_PADDED_CHECK 13
-#define HOSTED_IDX_STDERR_LINE 14
-#define HOSTED_IDX_STDIN_LINE 15
-#define HOSTED_IDX_STDOUT_LINE 16
+#define HOSTED_IDX_HOST_CALL_BOXED_TRANSITION 7
+#define HOSTED_IDX_HOST_GET_GREETING 8
+#define HOSTED_IDX_HOST_RELEASE_STORED_BOXED 9
+#define HOSTED_IDX_HOST_RESET_BOXED_DROP_REPORT 10
+#define HOSTED_IDX_HOST_ROUNDTRIP_BOXED 11
+#define HOSTED_IDX_HOST_BOXED_TRANSITION 12
+#define HOSTED_IDX_HOST_STORE_BOXED 13
+#define HOSTED_IDX_HOST_STORE_SEED 14
+#define HOSTED_IDX_HOST_TAKE_SEED 15
+#define HOSTED_IDX_HOST_STORED_BOXED_CALL 16
+#define HOSTED_IDX_HOST_SUM_STR_BYTES 17
+#define HOSTED_IDX_PADDED_CHECK 18
+#define HOSTED_IDX_STDERR_LINE 19
+#define HOSTED_IDX_STDIN_LINE 20
+#define HOSTED_IDX_STDOUT_LINE 21
 
 // Argument Structures
 
@@ -419,6 +429,15 @@ typedef struct {
 } HostCallBoxedArgs;
 
 /**
+ * Arguments for Host.call_boxed_transition!
+ * Roc signature: Box({} -> Box({} -> I64)) => I64
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    RocErasedCallable arg0;
+} HostCallBoxedTransitionArgs;
+
+/**
  * Arguments for Host.get_greeting!
  * Roc signature: Host => Str
  * Refcounted fields are owned by the hosted function.
@@ -447,6 +466,15 @@ typedef struct {
 } HostRoundtripBoxedArgs;
 
 /**
+ * Arguments for Host.boxed_transition!
+ * Roc signature: I64 => Box({} -> Box({} -> I64))
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    int64_t arg0;
+} HostBoxedTransitionArgs;
+
+/**
  * Arguments for Host.store_boxed!
  * Roc signature: Box(I64 -> I64) => {}
  * Refcounted fields are owned by the hosted function.
@@ -456,6 +484,15 @@ typedef struct {
 } HostStoreBoxedArgs;
 
 /**
+ * Arguments for Host.store_seed!
+ * Roc signature: Box(rigid) => {}
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    RocBox arg0;
+} HostStoreSeedArgs;
+
+/**
  * Arguments for Host.stored_boxed_call!
  * Roc signature: I64 => I64
  * Refcounted fields are owned by the hosted function.
@@ -463,6 +500,15 @@ typedef struct {
 typedef struct {
     int64_t arg0;
 } HostStoredBoxedCallArgs;
+
+/**
+ * Arguments for Host.sum_str_bytes!
+ * Roc signature: List(Str) => U64
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    RocList arg0;
+} HostSumStrBytesArgs;
 
 /**
  * Arguments for Padded.check!
@@ -529,6 +575,9 @@ extern RocErasedCallable roc_host_boxed_with_boxed_capture(RocErasedCallable arg
 /* Host.call_boxed!: Box(I64 -> I64), I64 => I64 */
 extern int64_t roc_host_call_boxed(RocErasedCallable arg0, int64_t arg1);
 
+/* Host.call_boxed_transition!: Box({} -> Box({} -> I64)) => I64 */
+extern int64_t roc_host_call_boxed_transition(RocErasedCallable arg0);
+
 /* Host.get_greeting!: Host => Str */
 extern RocStr roc_host_get_greeting(Host arg0);
 
@@ -541,11 +590,23 @@ extern void roc_host_reset_boxed_drop_report(void);
 /* Host.roundtrip_boxed!: Box(I64 -> I64) => Box(I64 -> I64) */
 extern RocErasedCallable roc_host_roundtrip_boxed(RocErasedCallable arg0);
 
+/* Host.boxed_transition!: I64 => Box({} -> Box({} -> I64)) */
+extern RocErasedCallable roc_host_boxed_transition(int64_t arg0);
+
 /* Host.store_boxed!: Box(I64 -> I64) => {} */
 extern void roc_host_store_boxed(RocErasedCallable arg0);
 
+/* Host.store_seed!: Box(rigid) => {} */
+extern void roc_host_store_seed(RocBox arg0);
+
+/* Host.take_seed!: {} => Box(rigid) */
+extern RocBox roc_host_take_seed(void);
+
 /* Host.stored_boxed_call!: I64 => I64 */
 extern int64_t roc_host_stored_boxed_call(int64_t arg0);
+
+/* Host.sum_str_bytes!: List(Str) => U64 */
+extern uint64_t roc_host_sum_str_bytes(RocList arg0);
 
 /* Padded.check!: Padded => Str */
 extern RocStr roc_padded_check(Padded arg0);
@@ -580,16 +641,21 @@ typedef struct {
     HostedFn host_boxed_recursive_tree_bang;  /* index 4, C name: host_boxed_recursive_tree */
     HostedFn host_boxed_with_boxed_capture_bang;  /* index 5, C name: host_boxed_with_boxed_capture */
     HostedFn host_call_boxed_bang;  /* index 6, C name: host_call_boxed */
-    HostedFn host_get_greeting_bang;  /* index 7, C name: host_get_greeting */
-    HostedFn host_release_stored_boxed_bang;  /* index 8, C name: host_release_stored_boxed */
-    HostedFn host_reset_boxed_drop_report_bang;  /* index 9, C name: host_reset_boxed_drop_report */
-    HostedFn host_roundtrip_boxed_bang;  /* index 10, C name: host_roundtrip_boxed */
-    HostedFn host_store_boxed_bang;  /* index 11, C name: host_store_boxed */
-    HostedFn host_stored_boxed_call_bang;  /* index 12, C name: host_stored_boxed_call */
-    HostedFn padded_check_bang;  /* index 13, C name: padded_check */
-    HostedFn stderr_line_bang;  /* index 14, C name: stderr_line */
-    HostedFn stdin_line_bang;  /* index 15, C name: stdin_line */
-    HostedFn stdout_line_bang;  /* index 16, C name: stdout_line */
+    HostedFn host_call_boxed_transition_bang;  /* index 7, C name: host_call_boxed_transition */
+    HostedFn host_get_greeting_bang;  /* index 8, C name: host_get_greeting */
+    HostedFn host_release_stored_boxed_bang;  /* index 9, C name: host_release_stored_boxed */
+    HostedFn host_reset_boxed_drop_report_bang;  /* index 10, C name: host_reset_boxed_drop_report */
+    HostedFn host_roundtrip_boxed_bang;  /* index 11, C name: host_roundtrip_boxed */
+    HostedFn host_boxed_transition_bang;  /* index 12, C name: host_boxed_transition */
+    HostedFn host_store_boxed_bang;  /* index 13, C name: host_store_boxed */
+    HostedFn host_store_seed_bang;  /* index 14, C name: host_store_seed */
+    HostedFn host_take_seed_bang;  /* index 15, C name: host_take_seed */
+    HostedFn host_stored_boxed_call_bang;  /* index 16, C name: host_stored_boxed_call */
+    HostedFn host_sum_str_bytes_bang;  /* index 17, C name: host_sum_str_bytes */
+    HostedFn padded_check_bang;  /* index 18, C name: padded_check */
+    HostedFn stderr_line_bang;  /* index 19, C name: stderr_line */
+    HostedFn stdin_line_bang;  /* index 20, C name: stdin_line */
+    HostedFn stdout_line_bang;  /* index 21, C name: stdout_line */
 } HostedFunctions;
 
 

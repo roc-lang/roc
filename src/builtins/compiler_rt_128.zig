@@ -263,13 +263,9 @@ fn udivmod(comptime T: type, a_: T, b_: T) DivMod(T) {
 // Multiplication helpers
 
 fn DoubleInt(comptime T: type) type {
-    return switch (T) {
-        u32 => i64,
-        u64 => i128,
-        i32 => i64,
-        i64 => i128,
-        else => unreachable,
-    };
+    if (T == u32 or T == i32) return i64;
+    if (T == u64 or T == i64) return i128;
+    unreachable;
 }
 
 fn muldXi(comptime T: type, a: T, b: T) DoubleInt(T) {
@@ -508,11 +504,12 @@ fn u128_to_f64_impl(x: u128) f64 {
 fn float_to_i128(comptime Float: type, x: Float) i128 {
     if (std.math.isNan(x)) return 0;
 
-    const Bits = switch (Float) {
-        f32 => u32,
-        f64 => u64,
-        else => @compileError("float_to_i128 supports only f32 and f64"),
-    };
+    const Bits = if (Float == f32)
+        u32
+    else if (Float == f64)
+        u64
+    else
+        @compileError("float_to_i128 supports only f32 and f64");
     const fraction_bits: u6 = if (Float == f32) 23 else 52;
     const exponent_bits: u6 = if (Float == f32) 8 else 11;
     const exponent_bias: i64 = if (Float == f32) 127 else 1023;
@@ -554,11 +551,12 @@ fn float_to_i128(comptime Float: type, x: Float) i128 {
 fn float_to_u128(comptime Float: type, x: Float) u128 {
     if (std.math.isNan(x)) return 0;
 
-    const Bits = switch (Float) {
-        f32 => u32,
-        f64 => u64,
-        else => @compileError("float_to_u128 supports only f32 and f64"),
-    };
+    const Bits = if (Float == f32)
+        u32
+    else if (Float == f64)
+        u64
+    else
+        @compileError("float_to_u128 supports only f32 and f64");
     const fraction_bits: u6 = if (Float == f32) 23 else 52;
     const exponent_bits: u6 = if (Float == f32) 8 else 11;
     const exponent_bias: i64 = if (Float == f32) 127 else 1023;
@@ -692,10 +690,14 @@ pub fn int_to_str(comptime T: type, buf: []u8, val: T) []const u8 {
 // Uses Roc's vendored Ryu binary-to-decimal conversion followed by manual
 // decimal formatting, avoiding Zig formatting symbols in compiled programs.
 
+/// Buffer size that `f32_to_str` and `f64_to_str` always fit within: a
+/// subnormal f64 in decimal notation is the longest output either produces.
+pub const float_string_capacity = 400;
+
 /// Format an f64 as a decimal string into the provided buffer.
 /// Uses Ryu binary-to-decimal conversion (u64-only).
 /// Returns the slice of `buf` that contains the formatted number.
-/// Buffer must be at least 400 bytes.
+/// Buffer must be at least `float_string_capacity` bytes.
 pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
     return formatFloatDecimal(buf, @bitCast(val), false);
 }
@@ -703,7 +705,7 @@ pub fn f64_to_str(buf: []u8, val: f64) []const u8 {
 /// Format an f32 as a decimal string into the provided buffer.
 /// Uses Ryu binary-to-decimal conversion (u64-only).
 /// Returns the slice of `buf` that contains the formatted number.
-/// Buffer must be at least 400 bytes.
+/// Buffer must be at least `float_string_capacity` bytes.
 pub fn f32_to_str(buf: []u8, val: f32) []const u8 {
     return formatFloatDecimal(buf, @as(u64, @as(u32, @bitCast(val))), true);
 }
@@ -786,7 +788,7 @@ pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
         writeU64Digits(buf[pos..], exp_abs, exp_digits);
         pos += exp_digits;
     } else if (dp_offset <= 0) {
-        // 0.000001234 — number is less than 1
+        // 0.000001234—number is less than 1
         buf[pos] = '0';
         buf[pos + 1] = '.';
         pos += 2;
@@ -798,7 +800,7 @@ pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
     } else {
         const dp_uoffset: usize = @intCast(dp_offset);
         if (dp_uoffset >= olength) {
-            // 123456000 — integer, possibly with trailing zeros
+            // 123456000—integer, possibly with trailing zeros
             writeU64Digits(buf[pos..], mantissa, olength);
             pos += olength;
             const trailing = dp_uoffset - olength;
@@ -807,7 +809,7 @@ pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
                 pos += trailing;
             }
         } else {
-            // 123.456 — decimal point within digits
+            // 123.456—decimal point within digits
             const frac_len = olength - dp_uoffset;
             var m = mantissa;
 
@@ -888,7 +890,9 @@ pub fn pow10_i128(exp: u6) i128 {
 // On wasm32, Zig codegen emits calls to these for native i128 multiply ops.
 // We provide them ourselves so the builtins module is fully self-contained.
 comptime {
-    if (is_wasm) {
+    const root = @import("root");
+    const omit_wasm_exports = @hasDecl(root, "roc_omit_wasm_compiler_rt_exports") and root.roc_omit_wasm_compiler_rt_exports;
+    if (is_wasm and !omit_wasm_exports) {
         @export(&wasm_multi3, .{ .name = "__multi3", .linkage = .strong });
         @export(&wasm_muloti4, .{ .name = "__muloti4", .linkage = .strong });
     }

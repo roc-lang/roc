@@ -10,21 +10,18 @@ d=(0->X .a)
 # EXPECTED
 TYPE MISMATCH - fuzz_crash_092.md:1:4:1:8
 # PROBLEMS
+── ✗ type mismatch ─────────────────────────────────────── fuzz_crash_092.md:1:4
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This is not a record, so it does not have any fields to ───┐
-└┬──────────────┘  access.                                                    │
- │                                                                            │
- │  d=(0->X .a)                                                               │
- │     ‾‾‾‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_092.md:1:4 ┘
+This is not a record, so it does not have any fields to access.
 
-    It is:
+d=(0->X .a)
+   ^^^^
 
-        [X(b), ..] where [b.from_numeral : Numeral -> Try(b,
-        [InvalidNumeral(Str)])]
+It is:
 
-    But I need a record with a `a` field.
+    [X(b), ..] where [b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]
+
+But I need a record with a a field.
 
 # TOKENS
 ~~~zig
@@ -40,31 +37,28 @@ EndOfFile,
 			(p-ident (raw "d"))
 			(e-tuple
 				(e-field-access
-					(e-arrow-call
-						(e-int (raw "0"))
-						(e-tag (raw "X")))
-					(e-ident (raw ".a")))))))
+					(receiver
+						(e-arrow-call
+							(e-int (raw "0"))
+							(e-tag (raw "X"))))
+					(segment (mode "required") (field "a")))))))
 ~~~
 # FORMATTED
 ~~~roc
-d = ((0->X).a)
+d = ((0 |> X).a)
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "d"))
-		(e-field-access (field "a")
-			(receiver
-				(e-tag (name "X")
-					(args
-						(e-num (value "0"))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_b")))
+		(patt (type "Error")))
 	(expressions
-		(expr (type "_b"))))
+		(expr (type "Error"))))
 ~~~

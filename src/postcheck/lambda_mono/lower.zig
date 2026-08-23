@@ -76,6 +76,10 @@ pub fn run(
     errdefer program.deinit();
 
     const solved_view = movedSolvedView(&owned, &program);
+    try program.field_access_segments.ensureUnusedCapacity(allocator, solved_view.lifted.field_access_segments.len);
+    for (solved_view.lifted.field_access_segments) |segment| {
+        program.field_access_segments.appendAssumeCapacity(.{ .field = segment.field });
+    }
     var lowerer = try Lowerer.init(allocator, solved_view, &program, options);
     defer lowerer.folded_matches.deinit(allocator);
     for (folded_matches) |folded| {
@@ -114,6 +118,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .typed_locals = lifted.typed_locals,
             .stmt_ids = lifted.stmt_ids,
             .field_exprs = lifted.field_exprs,
+            .field_access_segments = lifted.field_access_segments,
             .fn_def_captures = lifted.fn_def_captures,
             .capture_operands = lifted.capture_operands,
             .record_destructs = lifted.record_destructs,
@@ -179,13 +184,13 @@ fn specializationIdentityCaptureStart(span: CaptureSpanId) u32 {
     };
 }
 
-const CaptureTypeId = struct {
+const CaptureTypeKey = struct {
     source: CaptureSpanSource,
     start: u32,
     len: u32,
     solved_fn_ty: SolvedType.TypeVarId,
 
-    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeId {
+    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeKey {
         return .{
             .source = span.source,
             .start = span.start,
@@ -231,10 +236,10 @@ const FnSpecContext = struct {
     }
 };
 
-const CaptureTypeMap = std.HashMap(CaptureTypeId, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
+const CaptureTypeMap = std.HashMap(CaptureTypeKey, Type.TypeId, CaptureSpanContext, std.hash_map.default_max_load_percentage);
 
 const CaptureSpanContext = struct {
-    pub fn hash(_: CaptureSpanContext, span: CaptureTypeId) u64 {
+    pub fn hash(_: CaptureSpanContext, span: CaptureTypeKey) u64 {
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, span.source);
         std.hash.autoHash(&hasher, span.start);
@@ -243,7 +248,7 @@ const CaptureSpanContext = struct {
         return hasher.final();
     }
 
-    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeId, rhs: CaptureTypeId) bool {
+    pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeKey, rhs: CaptureTypeKey) bool {
         return lhs.source == rhs.source and
             lhs.start == rhs.start and
             lhs.len == rhs.len and
@@ -255,7 +260,7 @@ const Lowerer = struct {
     allocator: Allocator,
     solved: Solved.ProgramView,
     program: *Ast.Program,
-    type_map: std.AutoHashMap(SolvedType.TypeVarId, Type.TypeId),
+    type_map: collections.DenseMap(SolvedType.TypeVarId, Type.TypeId),
     local_map: []?Ast.LocalId,
     expr_map: []?Ast.ExprId,
     pat_map: []?Ast.PatId,
@@ -266,7 +271,7 @@ const Lowerer = struct {
     fn_written: std.ArrayList(bool),
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     capture_types: CaptureTypeMap,
-    captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
+    captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
     own_captures: std.ArrayList(SolvedType.Capture),
     own_capture_spans: []?CaptureSpanId,
     symbols: Common.SymbolGen,
@@ -318,7 +323,7 @@ const Lowerer = struct {
             .allocator = allocator,
             .solved = solved,
             .program = program,
-            .type_map = std.AutoHashMap(SolvedType.TypeVarId, Type.TypeId).init(allocator),
+            .type_map = collections.DenseMap(SolvedType.TypeVarId, Type.TypeId).init(allocator),
             .local_map = local_map,
             .expr_map = expr_map,
             .pat_map = pat_map,
@@ -329,7 +334,7 @@ const Lowerer = struct {
             .fn_written = .empty,
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
-            .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
+            .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
             .own_captures = .empty,
             .own_capture_spans = own_capture_spans,
             .symbols = .{ .next = solved.lifted.next_symbol },
@@ -417,7 +422,7 @@ const Lowerer = struct {
         const solved_fn_ty = spec.solved_fn_ty;
         const func = switch (self.solved.types.rootContent(solved_fn_ty)) {
             .func => |func| func,
-            else => Common.invariant("Lambda Mono function table contains a non-function type"),
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("Lambda Mono function table contains a non-function type"),
         };
 
         const solved_args = self.solved.types.span(func.args);
@@ -489,7 +494,7 @@ const Lowerer = struct {
         const solved_fn_ty = self.solved.types.root(self.solved.fn_tys[@intFromEnum(fn_id)]);
         switch (self.solved.types.rootContent(solved_fn_ty)) {
             .func => {},
-            else => Common.invariant("Lambda Mono function table contains a non-function type"),
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("Lambda Mono function table contains a non-function type"),
         }
         return try self.ensureFnSpec(fn_id, solved_fn_ty, abi, try self.ownCaptureSpanForFn(fn_id));
     }
@@ -537,7 +542,7 @@ const Lowerer = struct {
 
         const ret_ty = try self.lowerType(switch (self.solved.types.rootContent(spec.solved_fn_ty)) {
             .func => |func| func.ret,
-            else => Common.invariant("Lambda Mono function table contains a non-function type"),
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("Lambda Mono function table contains a non-function type"),
         });
 
         self.program.setFn(fn_id, .{
@@ -600,7 +605,7 @@ const Lowerer = struct {
         const captures = self.captureSpan(captures_id);
         const fields = switch (self.program.types.get(capture_ty)) {
             .capture_record => |fields| self.program.types.captureFieldSpan(fields),
-            else => Common.invariant("function capture argument was not a capture record"),
+            .primitive, .named, .record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("function capture argument was not a capture record"),
         };
         if (captures.len != fields.len) Common.invariant("function capture argument arity differed from capture slots");
 
@@ -666,6 +671,10 @@ const Lowerer = struct {
             .list => |items| .{ .list = try self.lowerExprSpan(items) },
             .tuple => |items| .{ .tuple = try self.lowerExprSpan(items) },
             .record => |fields| .{ .record = try self.lowerFieldExprSpan(fields) },
+            .record_update => |update| .{ .record_update = .{
+                .base = try self.lowerExpr(update.base),
+                .fields = try self.lowerFieldExprSpan(update.fields),
+            } },
             .tag => |tag| .{ .tag = .{
                 .name = tag.name,
                 .payloads = try self.lowerExprSpan(tag.payloads),
@@ -703,7 +712,7 @@ const Lowerer = struct {
             } },
             .field_access => |field| .{ .field_access = .{
                 .receiver = try self.lowerExpr(field.receiver),
-                .field = field.field,
+                .segments = self.lowerFieldAccessSegmentSpan(field.segments),
             } },
             .tuple_access => |access| .{ .tuple_access = .{
                 .tuple = try self.lowerExpr(access.tuple),
@@ -863,7 +872,7 @@ const Lowerer = struct {
                 }
                 Common.invariant("erased callable type did not contain referenced function");
             },
-            else => Common.invariant("function value lowered to non-callable Lambda Mono type"),
+            .primitive, .named, .record, .capture_record, .tuple, .tag_union, .list, .box, .erased_capture_ptr, .zst => Common.invariant("function value lowered to non-callable Lambda Mono type"),
         };
     }
 
@@ -873,12 +882,12 @@ const Lowerer = struct {
         const callable = switch (self.solved.types.rootContent(expr_ty)) {
             .func => |func| func.callable,
             .lambda_set, .erased => expr_ty,
-            else => Common.invariant("function reference expression had no callable Lambda Solved type"),
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .mono => Common.invariant("function reference expression had no callable Lambda Solved type"),
         };
         const members = switch (self.solved.types.rootContent(callable)) {
             .lambda_set => |members| members,
             .erased => |erased| erased.members,
-            else => Common.invariant("function reference callable slot was unresolved before Lambda Mono"),
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .zst, .mono => Common.invariant("function reference callable slot was unresolved before Lambda Mono"),
         };
         for (self.solved.types.memberSpan(members)) |member| {
             if (member.lambda == fn_symbol) return CaptureSpanId.fromSolved(member.captures);
@@ -954,7 +963,7 @@ const Lowerer = struct {
                     if (payload_pat) |pat_id| {
                         const bind_local = switch (self.program.getPat(pat_id).data) {
                             .bind => |local| local,
-                            else => unreachable,
+                            .wildcard, .as, .record, .tuple, .list, .tag, .callable, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
                         };
                         call_args[args.len] = try self.program.addExpr(.{
                             .ty = variant.capture_ty.?,
@@ -984,7 +993,7 @@ const Lowerer = struct {
                 .callee = callee,
                 .args = try self.program.addExprSpan(args),
             } },
-            else => Common.invariant("value call callee had no callable Lambda Mono representation"),
+            .primitive, .named, .record, .capture_record, .tuple, .tag_union, .list, .box, .erased_capture_ptr, .zst => Common.invariant("value call callee had no callable Lambda Mono representation"),
         };
     }
 
@@ -1006,7 +1015,7 @@ const Lowerer = struct {
                 Type.CaptureField,
                 self.program.types.captureFieldSpan(field_span),
             ),
-            else => Common.invariant("callable capture payload was not a capture record"),
+            .primitive, .named, .record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("callable capture payload was not a capture record"),
         };
         defer self.allocator.free(fields);
         if (captures.len != fields.len) Common.invariant("callable capture payload arity differed from captured locals");
@@ -1194,7 +1203,12 @@ const Lowerer = struct {
                 const lowered = try self.allocator.alloc(Type.Field, fields.len);
                 defer self.allocator.free(lowered);
                 for (self.solved.types.fieldSpan(fields), 0..) |field, i| {
-                    lowered[i] = .{ .name = field.name, .ty = try self.lowerType(field.ty) };
+                    lowered[i] = .{
+                        .name = field.name,
+                        .ty = try self.lowerType(field.ty),
+                        .value_ty = if (field.value_ty) |value_ty| try self.lowerType(value_ty) else null,
+                        .default = field.default,
+                    };
                 }
                 break :blk .{ .record = try self.program.types.addFields(lowered) };
             },
@@ -1244,7 +1258,7 @@ const Lowerer = struct {
                 .source_fn_ty = erased.source_fn_ty,
                 .members = try self.lowerFnMembers(erased.members, .erased, solved_fn_ty),
             } },
-            else => Common.invariant("function callable slot was unresolved before Lambda Mono"),
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .zst, .mono => Common.invariant("function callable slot was unresolved before Lambda Mono"),
         };
     }
 
@@ -1320,7 +1334,7 @@ const Lowerer = struct {
         captures: CaptureSpanId,
         solved_fn_ty: SolvedType.TypeVarId,
     ) Allocator.Error!Type.TypeId {
-        const id = CaptureTypeId.from(captures, self.solved.types.root(solved_fn_ty));
+        const id = CaptureTypeKey.from(captures, self.solved.types.root(solved_fn_ty));
         if (self.capture_types.get(id)) |existing| return existing;
 
         const capture_items = self.captureSpan(captures);
@@ -1428,6 +1442,14 @@ const Lowerer = struct {
         return try self.program.addFieldExprSpan(lowered);
     }
 
+    fn lowerFieldAccessSegmentSpan(
+        _: *Lowerer,
+        span: Lifted.Span(Lifted.FieldAccessSegment),
+    ) Ast.Span(Ast.FieldAccessSegment) {
+        if (span.len == 0) Common.invariant("field access path had no segments");
+        return .{ .start = span.start, .len = span.len };
+    }
+
     fn lowerRecordDestructSpan(self: *Lowerer, span: Lifted.Span(Lifted.RecordDestruct)) Allocator.Error!Ast.Span(Ast.RecordDestruct) {
         const input_items = self.solved.lifted.recordDestructSpan(span);
         const lowered = try self.allocator.alloc(Ast.RecordDestruct, input_items.len);
@@ -1450,6 +1472,7 @@ const Lowerer = struct {
             const branch = GuardedList.at(input_items, i);
             lowered[i] = .{
                 .pat = try self.lowerPat(branch.pat),
+                .bindings = try self.lowerStmtSpan(branch.bindings),
                 .guard = if (branch.guard) |guard| try self.lowerExpr(guard) else null,
                 .body = try self.lowerExpr(branch.body),
             };

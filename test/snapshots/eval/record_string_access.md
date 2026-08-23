@@ -19,11 +19,12 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (e-field-access
-	(e-record
-		(field (field "foo")
-			(e-string
-				(e-string-part (raw "Hello")))))
-	(e-ident (raw "foo")))
+	(receiver
+		(e-record
+			(field (field "foo")
+				(e-string
+					(e-string-part (raw "Hello"))))))
+	(segment (mode "required") (field "foo")))
 ~~~
 # FORMATTED
 ~~~roc
@@ -31,13 +32,15 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-field-access (field "foo")
+(e-field-access
 	(receiver
 		(e-record
 			(fields
 				(field (name "foo")
 					(e-string
-						(e-literal (string "Hello"))))))))
+						(e-literal (string "Hello")))))))
+	(segments
+		(segment (name "foo") (mode "required"))))
 ~~~
 # TYPES
 ~~~clojure

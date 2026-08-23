@@ -117,7 +117,21 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+RBMut(k) := [
+	Empty,
+	Node(RBMut(k)),
+].{
+	delA : RBMut(k) -> RBMut(k)
+	delA = |inner| match inner {
+		RBMut.Node(x) => x |> delB
+		Empty => Empty
+	}
+	delB : RBMut(k) -> RBMut(k)
+	delB = |t| match t {
+		RBMut.Node(inner) => inner |> delA
+		_ => t
+	}
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -139,7 +153,7 @@ NO CHANGE
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-call (constraint-fn-var 283)
+								(e-call (constraint-fn-var 294)
 									(e-lookup-local
 										(p-assign (ident "RBMut.delB")))
 									(e-lookup-local
@@ -173,7 +187,7 @@ NO CHANGE
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-call (constraint-fn-var 316)
+								(e-call (constraint-fn-var 328)
 									(e-lookup-local
 										(p-assign (ident "RBMut.delA")))
 									(e-lookup-local

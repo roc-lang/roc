@@ -50,14 +50,13 @@ fn titleContainsIgnoreCase(title: []const u8, needle: []const u8) bool {
 ///   - title case outside backticks: every non-minor word begins with a capital
 ///     letter (or a digit), every word contains only alphanumeric characters,
 ///     except for `UTF-` prefixed words such as `UTF-8`, and the title has at
-///     least one lowercase letter (so it reads as `Title Case`, not `ALL CAPS`
-///     — the box/HTML/LSP renderers shout it back to ALL CAPS, while markdown
-///     keeps the authored case);
+///     least one lowercase letter (so source code reads as `Title Case`, not
+///     `ALL CAPS`; diagnostic renderers display it in lowercase);
 ///   - allowed to contain backticked inline code spans, whose contents must be
 ///     non-empty and trimmed, but are not title-cased;
 ///   - free of the word "comptime", which is a Zig term, not a Roc one, and so
 ///     must never reach user-facing text;
-///   - free of any pairing of "annotation" with "need" or "miss" — Roc never
+///   - free of any pairing of "annotation" with "need" or "miss"—Roc never
 ///     tells users they must annotate their types (see the panic below).
 fn isTrimmed(text: []const u8) bool {
     return std.mem.eql(u8, text, std.mem.trim(u8, text, " \t\r\n"));
@@ -232,12 +231,10 @@ fn assertValidTitleAndDescription(title: []const u8, description: []const u8) vo
 /// A structured report containing error information and formatted content.
 pub const Report = struct {
     title: []const u8,
-    /// One-sentence summary shown in the report's headline slot: the box's top
-    /// edge in the terminal/snapshot layout, or a line under the title in the
-    /// markdown/HTML/LSP renderers. Rich content, so inline code, type names,
-    /// and operators keep their styling. Builders with a plain headline pass it
-    /// as the `headline` string to `init`; builders that need inline styling
-    /// pass `""` and add to this document directly.
+    /// One-sentence summary shown below the terminal header, or below the title
+    /// in markdown/HTML/LSP. Rich content preserves inline code, type names, and
+    /// operators. Builders with a plain headline pass it to `init`; builders
+    /// that need inline styling pass `""` and add to this document directly.
     headline: Document,
     severity: Severity,
     document: Document,
@@ -445,7 +442,22 @@ pub const Report = struct {
                         .end_col_idx = underlines_data.display_region.end_column,
                     };
                 },
-                else => {},
+                .text,
+                .annotated,
+                .line_break,
+                .indent,
+                .space,
+                .horizontal_rule,
+                .annotation_start,
+                .annotation_end,
+                .raw,
+                .reflowing_text,
+                .link,
+                .vertical_stack,
+                .horizontal_concat,
+                .source_code_multi_region,
+                .source_location,
+                => {},
             }
         }
         return null;
@@ -460,10 +472,7 @@ pub const Report = struct {
     pub fn getLineCount(self: *const Report) usize {
         var count: usize = 2; // Title + blank line
         for (self.document.elements.items) |element| {
-            switch (element) {
-                .line_break => count += 1,
-                else => {},
-            }
+            if (element == .line_break) count += 1;
         }
         return count;
     }

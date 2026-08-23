@@ -196,9 +196,9 @@ pub const DependencyGraph = struct {
             const node = self.modules.getPtr(module_state.path) orelse continue;
 
             // Add imports (local modules within same package)
-            for (module_state.imports.items) |import_id| {
-                if (import_id < pkg.modules.items.len) {
-                    const imported_module = &pkg.modules.items[import_id];
+            for (module_state.imports.items) |edge| {
+                if (edge.module_id < pkg.modules.items.len) {
+                    const imported_module = &pkg.modules.items[edge.module_id];
                     try node.addImport(self.allocator, imported_module.path);
 
                     // Add reverse dependency
@@ -278,13 +278,9 @@ pub const DependencyGraph = struct {
             const def = module_env.store.getDef(def_idx);
             // Get the definition name from its pattern
             const pattern = module_env.store.getPattern(def.pattern);
-            switch (pattern) {
-                .assign => |assign| {
-                    const name = module_env.common.idents.getText(assign.ident);
-                    try export_names.append(allocator, name);
-                },
-                else => {},
-            }
+            if (std.meta.activeTag(pattern) != .assign) continue;
+            const name = module_env.common.idents.getText(pattern.assign.ident);
+            try export_names.append(allocator, name);
         }
 
         // Sort names for stable hash (same exports in different order = same hash)

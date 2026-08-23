@@ -142,26 +142,23 @@ const CheckOccurs = struct {
 
                         // Classify using only the edges inside that cycle.
                         const classified = self.classifyCycle(match_idx, start.edge);
-                        switch (classified) {
-                            .valid => {
-                                // It the recursion was valid (ie passed thru
-                                // nominal) then continue processing
-                                continue;
-                            },
-                            else => {
-                                // If the recursion observed is invalid (infinite or
-                                // anonymous) then return the error immediately.
-
-                                // Report the deepest var on the seen stack (the
-                                // parent of the cycle-closing edge) as the error
-                                // var.
-                                const seen_len: usize = @intCast(self.scratch.seen.len());
-                                std.debug.assert(seen_len > 0);
-                                self.scratch.err_var = self.scratch.seen.items.items[seen_len - 1].var_;
-
-                                return classified;
-                            },
+                        if (classified == .valid) {
+                            // It the recursion was valid (ie passed thru
+                            // nominal) then continue processing
+                            continue;
                         }
+
+                        // If the recursion observed is invalid (infinite or
+                        // anonymous) then return the error immediately.
+
+                        // Report the deepest var on the seen stack (the
+                        // parent of the cycle-closing edge) as the error
+                        // var.
+                        const seen_len: usize = @intCast(self.scratch.seen.len());
+                        std.debug.assert(seen_len > 0);
+                        self.scratch.err_var = self.scratch.seen.items.items[seen_len - 1].var_;
+
+                        return classified;
                     } else {
                         // Push this var to the seen stack
                         try self.scratch.pushSeen(root_var, start.edge);
@@ -231,11 +228,15 @@ const CheckOccurs = struct {
                                     .record => |record| {
                                         try self.pushVarToProcess(record.ext, Edge.none);
                                         const fields = self.types_store.getRecordFieldsSlice(record.fields);
-                                        try self.pushVarsToProcess(fields.items(.var_), Edge.recursion);
+                                        for (fields.items(.presence)) |presence| {
+                                            try self.pushFieldPresenceToProcess(presence);
+                                        }
                                     },
                                     .record_unbound => |fields| {
                                         const fields_slice = self.types_store.getRecordFieldsSlice(fields);
-                                        try self.pushVarsToProcess(fields_slice.items(.var_), Edge.recursion);
+                                        for (fields_slice.items(.presence)) |presence| {
+                                            try self.pushFieldPresenceToProcess(presence);
+                                        }
                                     },
                                     .tag_union => |tag_union| {
                                         try self.pushVarToProcess(tag_union.ext, Edge.none);
@@ -263,6 +264,12 @@ const CheckOccurs = struct {
                                 // self-referential constraints. Only structural content is checked.
                             },
                             .rigid => {},
+                            .field_presence => {
+                                // A resolved field kind is a leaf: the field's
+                                // type lives on the field slot, not here, so
+                                // there is nothing to recurse into for cycle
+                                // detection.
+                            },
                             .err => {},
                         }
                     }
@@ -315,6 +322,22 @@ const CheckOccurs = struct {
             .var_ = sub_var,
             .edge = edge,
         } });
+    }
+
+    /// Push a record field's reachable variables onto the work stack.
+    ///
+    /// Both axes of a field live in a recursion-allowed position (the field
+    /// slot): the value type may legitimately close a recursive cycle through
+    /// the record, and the presence variable rides the same slot. Absent fields
+    /// and resolved presence facts contribute no variables.
+    fn pushFieldPresenceToProcess(self: *Self, presence: types.RecordField.Presence) std.mem.Allocator.Error!void {
+        {
+            const type_var = presence.typeVar();
+            try self.pushVarToProcess(type_var, Edge.recursion);
+        }
+        if (presence.presenceVar()) |presence_var| {
+            try self.pushVarToProcess(presence_var, Edge.recursion);
+        }
     }
 
     /// Push a slice of sub vars onto the work stack to be processed later.
@@ -833,7 +856,7 @@ test "occurs: value graph never traverses a nominal's backing (args only)" {
     // Root = ( N, )   where   N := Inner   and   Inner = [ Cons(Inner), Nil ]
     //
     // The only cycle lives in N's backing structure. Backing structure is
-    // declaration data — its recursion is validated by the declaration-graph
+    // declaration data—its recursion is validated by the declaration-graph
     // pass (`occursDeclarationGraph`), and the checker poisons invalid
     // declarations before any use exists. The value-graph occurs check
     // therefore does not traverse backings at all, and this graph is valid
@@ -902,7 +925,7 @@ fn testRegisterDecl(
 }
 
 test "occursDeclarationGraph: valid recursion through a tag payload" {
-    // List := [ Nil, Cons(List) ] — the template's recursive reference is an
+    // List := [ Nil, Cons(List) ]—the template's recursive reference is an
     // application of the same declaration key.
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);
@@ -934,7 +957,7 @@ test "occursDeclarationGraph: valid recursion through a tag payload" {
 }
 
 test "occursDeclarationGraph: self-recursion through a tuple is infinite" {
-    // T := (T,) — the cycle never passes a recursion-allowed position.
+    // T := (T,)—the cycle never passes a recursion-allowed position.
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);
     defer types_store.deinit();
@@ -961,7 +984,7 @@ test "occursDeclarationGraph: self-recursion through a tuple is infinite" {
 }
 
 test "occursDeclarationGraph: mutual recursion closes by declaration key" {
-    // T := (U,)   U := (T,) — each template references the OTHER declaration
+    // T := (U,)   U := (T,)—each template references the OTHER declaration
     // by key. Per-use instantiation copies would disconnect this cycle; the
     // declaration table closes it.
     const gpa = std.testing.allocator;
@@ -1007,7 +1030,7 @@ test "occursDeclarationGraph: mutual recursion closes by declaration key" {
 }
 
 test "occursDeclarationGraph: anonymous recursion inside a template is rejected" {
-    // N := Inner where Inner = [ Cons(Inner), Nil ] — the cycle inside the
+    // N := Inner where Inner = [ Cons(Inner), Nil ]—the cycle inside the
     // template passes a tag payload but never re-enters a nominal backing.
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);

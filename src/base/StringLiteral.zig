@@ -22,9 +22,10 @@ pub const Idx = enum(u32) {
 /// Durable storage for string literals.
 pub const Store = struct {
     /// An Idx points to the first byte of the string. The entry immediately
-    /// before it stores the string length in canonical little-endian form:
+    /// before it stores the byte length and maximum required runtime alignment
+    /// in canonical little-endian form:
     ///
-    /// | len: u32 little-endian | bytes... |
+    /// | len: u32 little-endian | alignment: u32 little-endian | bytes... |
     ///
     /// This store is checked/cache data, not runtime static data. Target-specific
     /// string emission is responsible for building any runtime `RocStr` headers
@@ -38,11 +39,13 @@ pub const Store = struct {
     buffer: Buffer = .{},
 
     const len_size = @sizeOf(u32);
-    const entry_header_size = len_size;
+    const alignment_size = @sizeOf(u32);
+    const entry_header_size = len_size + alignment_size;
 
     pub const Entry = struct {
         idx: Idx,
         bytes: []const u8,
+        alignment: u32,
     };
 
     pub const Iterator = struct {
@@ -56,6 +59,7 @@ pub const Store = struct {
                 if (self.pos + entry_header_size > buffer_items.len) return null;
 
                 const str_len = std.mem.readInt(u32, buffer_items[self.pos..][0..len_size], .little);
+                const entry_alignment = std.mem.readInt(u32, buffer_items[self.pos + len_size ..][0..alignment_size], .little);
                 const content_start = self.pos + entry_header_size;
                 if (str_len > buffer_items.len - content_start) return null;
                 const content_end = content_start + str_len;
@@ -64,6 +68,7 @@ pub const Store = struct {
                 return .{
                     .idx = @enumFromInt(@as(u32, @intCast(content_start))),
                     .bytes = buffer_items[content_start..content_end],
+                    .alignment = entry_alignment,
                 };
             }
         }
@@ -249,6 +254,14 @@ pub const Store = struct {
             assertAppendRange(expected_start, str_len_bytes.len, start, str_len_bytes.len);
         }
 
+        var alignment_bytes: [alignment_size]u8 = undefined;
+        std.mem.writeInt(u32, &alignment_bytes, 1, .little);
+        {
+            const expected_start = self.buffer.items.items.len;
+            const start = try self.buffer.appendSlice(gpa, &alignment_bytes);
+            assertAppendRange(expected_start, alignment_bytes.len, start, alignment_bytes.len);
+        }
+
         const string_content_start = self.buffer.len();
         const idx = checkedU32(string_content_start, "string literal content offset");
 
@@ -267,6 +280,24 @@ pub const Store = struct {
         const len_start = idx_usize - entry_header_size;
         const str_len = std.mem.readInt(u32, self.buffer.items.items[len_start..][0..len_size], .little);
         return self.buffer.items.items[idx_usize .. idx_usize + str_len];
+    }
+
+    pub fn alignment(self: *const Store, idx: Idx) u32 {
+        const idx_usize: usize = @intFromEnum(idx);
+        const alignment_start = idx_usize - alignment_size;
+        return std.mem.readInt(u32, self.buffer.items.items[alignment_start..][0..alignment_size], .little);
+    }
+
+    fn requireAlignment(self: *Store, idx: Idx, required: u32) void {
+        if (required == 0 or !std.math.isPowerOfTwo(required)) {
+            if (builtin.mode == .Debug) std.debug.panic("string literal alignment must be a nonzero power of two", .{});
+            unreachable;
+        }
+        const idx_usize: usize = @intFromEnum(idx);
+        const alignment_start = idx_usize - alignment_size;
+        const slot = self.buffer.items.items[alignment_start..][0..alignment_size];
+        const current = std.mem.readInt(u32, slot, .little);
+        if (required > current) std.mem.writeInt(u32, slot, required, .little);
     }
 
     /// Serialize this Store to the given CompactWriter. The resulting Store
@@ -333,8 +364,14 @@ pub const BuilderState = struct {
     }
 
     pub fn insert(self: *BuilderState, store: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
+        return try self.insertAligned(store, gpa, string, 1);
+    }
+
+    pub fn insertAligned(self: *BuilderState, store: *Store, gpa: std.mem.Allocator, string: []const u8, alignment: u32) std.mem.Allocator.Error!Idx {
         var owner = BuilderOwner{ .store = store };
-        return self.index.insert(&owner, gpa, string);
+        const id = try self.index.insert(&owner, gpa, string);
+        store.requireAlignment(id, alignment);
+        return id;
     }
 };
 
@@ -450,21 +487,35 @@ test "store uses exact portable length-prefixed bytes" {
     const abc = try builder.insert(&store, gpa, "abc");
     const binary = try builder.insert(&store, gpa, "\x00\x01abc");
 
-    try testing.expectEqual(@as(u32, 4), @intFromEnum(empty));
-    try testing.expectEqual(@as(u32, 8), @intFromEnum(abc));
-    try testing.expectEqual(@as(u32, 15), @intFromEnum(binary));
+    try testing.expectEqual(@as(u32, 8), @intFromEnum(empty));
+    try testing.expectEqual(@as(u32, 16), @intFromEnum(abc));
+    try testing.expectEqual(@as(u32, 27), @intFromEnum(binary));
     try testing.expectEqualStrings("", store.get(empty));
     try testing.expectEqualStrings("abc", store.get(abc));
     try testing.expectEqualStrings("\x00\x01abc", store.get(binary));
 
     const expected = [_]u8{
-        0x00, 0x00, 0x00, 0x00,
-        0x03, 0x00, 0x00, 0x00,
-        'a',  'b',  'c',  0x05,
-        0x00, 0x00, 0x00, 0x00,
-        0x01, 'a',  'b',  'c',
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        'a',  'b',  'c',  0x05, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x01, 'a',  'b',  'c',
     };
     try testing.expectEqualSlices(u8, &expected, store.buffer.items.items);
+}
+
+test "deduplicated literal backing keeps maximum requested alignment" {
+    const gpa = std.testing.allocator;
+
+    var store = Store{};
+    defer store.deinit(gpa);
+    var builder = BuilderState{};
+    defer builder.deinit(gpa);
+
+    const plain = try builder.insert(&store, gpa, "shared bytes");
+    const aligned = try builder.insertAligned(&store, gpa, "shared bytes", 16);
+
+    try testing.expectEqual(plain, aligned);
+    try testing.expectEqual(@as(u32, 16), store.alignment(plain));
 }
 
 test "Store empty CompactWriter roundtrip" {

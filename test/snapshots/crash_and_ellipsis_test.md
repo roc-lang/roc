@@ -35,41 +35,35 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:20:5:20:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:21:5:21:12
 UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 # PROBLEMS
+── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:20:5
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result1` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result1 = testEllipsis(42)                                                │
- │  ‾‾‾‾‾‾‾                                                                   │
- └─────────────────────────────────────────── crash_and_ellipsis_test.md:20:5 ┘
+Variable result1 is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result1` to suppress this warning.
+result1 = testEllipsis(42)
+^^^^^^^
 
+If you don't need this variable, prefix it with an underscore like _result1 to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result2` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result2 = testCrash(42)                                                   │
- │  ‾‾‾‾‾‾‾                                                                   │
- └─────────────────────────────────────────── crash_and_ellipsis_test.md:21:5 ┘
+── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:21:5
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result2` to suppress this warning.
+Variable result2 is defined here and then never used:
 
+result2 = testCrash(42)
+^^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result3` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result3 = testCrashSimple(42)                                             │
- │  ‾‾‾‾‾‾‾                                                                   │
- └─────────────────────────────────────────── crash_and_ellipsis_test.md:22:5 ┘
+If you don't need this variable, prefix it with an underscore like _result2 to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result3` to suppress this warning.
+── ● unused variable ─────────────────────────── crash_and_ellipsis_test.md:22:5
+
+Variable result3 is defined here and then never used:
+
+result3 = testCrashSimple(42)
+^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like _result3 to
+suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -215,7 +209,10 @@ main! = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-crash (msg "This is a crash message"))))
+				(e-run-low-level (op "crash")
+					(args
+						(e-string
+							(e-literal (string "This is a crash message")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -226,7 +223,10 @@ main! = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-crash (msg "oops"))))
+				(e-run-low-level (op "crash")
+					(args
+						(e-string
+							(e-literal (string "oops")))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -239,19 +239,19 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 271)
+					(e-call (constraint-fn-var 303)
 						(e-lookup-local
 							(p-assign (ident "testEllipsis")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 293)
+					(e-call (constraint-fn-var 311)
 						(e-lookup-local
 							(p-assign (ident "testCrash")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 315)
+					(e-call (constraint-fn-var 319)
 						(e-lookup-local
 							(p-assign (ident "testCrashSimple")))
 						(e-num (value "42"))))

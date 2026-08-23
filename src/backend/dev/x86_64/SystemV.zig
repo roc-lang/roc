@@ -74,10 +74,7 @@ pub const RED_ZONE_SIZE: u8 = 128;
 
 /// Check if a general register is callee-saved
 pub fn isCalleeSaved(reg: GeneralReg) bool {
-    return switch (reg) {
-        .RBX, .RBP, .R12, .R13, .R14, .R15 => true,
-        else => false,
-    };
+    return reg == .RBX or reg == .RBP or reg == .R12 or reg == .R13 or reg == .R14 or reg == .R15;
 }
 
 /// Check if a float register is callee-saved

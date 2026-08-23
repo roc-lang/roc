@@ -18,61 +18,55 @@ EXPOSED BUT NOT DEFINED - platform.md:3:11:3:13
 EXPOSED BUT NOT DEFINED - platform.md:3:15:3:17
 INVALID HOSTED SECTION - :0:0:0:0
 # PROBLEMS
+── ✗ exposed but not defined ────────────────────────────────── platform.md:5:13
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `pr1` is exposed, ───┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }       │
- │             ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                     │
- └────────────────────────────────────────────────────────── platform.md:5:13 ┘
+The mod header says that pr1 is exposed, but it is not defined anywhere in
+this mod.
 
-    You can fix this by either defining `pr1` in this mod, or by removing it
-    from the list of exposed values.
+provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+You can fix this by either defining pr1 in this mod, or by removing it from
+the list of exposed values.
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `pr2` is exposed, ───┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }       │
- │                                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾         │
- └────────────────────────────────────────────────────────── platform.md:5:41 ┘
+── ✗ exposed but not defined ────────────────────────────────── platform.md:5:41
 
-    You can fix this by either defining `pr2` in this mod, or by removing it
-    from the list of exposed values.
+The mod header says that pr2 is exposed, but it is not defined anywhere in
+this mod.
 
+provides { "roc_not implemented": pr1, "roc_not implemented": pr2 }
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `E1` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  exposes [E1, E2]                                                          │
- │           ‾‾                                                               │
- └────────────────────────────────────────────────────────── platform.md:3:11 ┘
+You can fix this by either defining pr2 in this mod, or by removing it from
+the list of exposed values.
 
-    You can fix this by either defining `E1` in this mod, or by removing it
-    from the list of exposed values.
+── ✗ exposed but not defined ────────────────────────────────── platform.md:3:11
 
+The mod header says that E1 is exposed, but it is not defined anywhere in
+this mod.
 
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `E2` is exposed, ────┐
-└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
- │                                                                            │
- │  exposes [E1, E2]                                                          │
- │               ‾‾                                                           │
- └────────────────────────────────────────────────────────── platform.md:3:15 ┘
+exposes [E1, E2]
+         ^^
 
-    You can fix this by either defining `E2` in this mod, or by removing it
-    from the list of exposed values.
+You can fix this by either defining E1 in this mod, or by removing it from
+the list of exposed values.
 
+── ✗ exposed but not defined ────────────────────────────────── platform.md:3:15
 
-INVALID HOSTED SECTION
+The mod header says that E2 is exposed, but it is not defined anywhere in
+this mod.
 
-The platform header uses the linker symbol `roc_not implemented`, but linker
+exposes [E1, E2]
+             ^^
+
+You can fix this by either defining E2 in this mod, or by removing it from
+the list of exposed values.
+
+── ✗ invalid hosted section ────────────────────────────────────────────────────
+
+The platform header uses the linker symbol roc_not implemented, but linker
 symbols in platform headers must be valid C identifiers: start with a letter or
 underscore, followed by only letters, digits, and underscores.
-
 
 # TOKENS
 ~~~zig

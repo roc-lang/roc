@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=repro for https://github.com/roc-lang/roc/issues/9725 — a record must be usable as a Dict key (structural to_hash), like it is as a Set element
+description=repro for https://github.com/roc-lang/roc/issues/9725—a record must be usable as a Dict key (structural to_hash), like it is as a Set element
 type=file
 ~~~
 # SOURCE
@@ -76,9 +76,9 @@ main! = |_args| {
 				(p-assign (ident "_args")))
 			(e-block
 				(s-dbg
-					(e-dispatch-call (method "insert") (constraint-fn-var 261)
+					(e-dispatch-call (method "insert") (constraint-fn-var 273)
 						(receiver
-							(e-call (constraint-fn-var 238)
+							(e-call (constraint-fn-var 248)
 								(e-lookup-external
 									(builtin))))
 						(args

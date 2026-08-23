@@ -14,22 +14,20 @@ Wrap :: { a : U8, b : U8 }.{
 # EXPECTED
 INVALID NOMINAL RECORD - issue_10195_nominal_record_update_rewrapped.md:4:22:4:47
 # PROBLEMS
+── ✗ invalid nominal record ─ issue_10195_nominal_record_update_rewrapped.md:4:22
 
-┌────────────────────────┐
-│ INVALID NOMINAL RECORD ├─ I'm having trouble with this nominal type that ───┐
-└┬───────────────────────┘  wraps a record.                                   │
- │                                                                            │
- │  inc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }                             │
- │                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                             │
- └─────────────────────── issue_10195_nominal_record_update_rewrapped.md:4:22 ┘
+I'm having trouble with this nominal type that wraps a record.
 
-    The record I found is:
+inc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        Wrap
+The record I found is:
 
-    But the nominal type expects:
+    Wrap
 
-        { a: U8, b: U8 }
+But the nominal type expects:
+
+    { a: U8, b: U8 }
 
 # TOKENS
 ~~~zig
@@ -70,8 +68,9 @@ EndOfFile,
 									(field (field "a")
 										(e-binop (op "+")
 											(e-field-access
-												(e-ident (raw "wrap"))
-												(e-ident (raw "a")))
+												(receiver
+													(e-ident (raw "wrap")))
+												(segment (mode "required") (field "a")))
 											(e-int (raw "1")))))))))))))
 ~~~
 # FORMATTED

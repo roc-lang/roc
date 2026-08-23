@@ -10,15 +10,12 @@ main! = |_| True.not()
 # EXPECTED
 DOES NOT EXIST - builtins.md:1:13:1:21
 # PROBLEMS
+── ✗ does not exist ─────────────────────────────────────────── builtins.md:1:13
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `True.not` does not exist. ───────────────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  main! = |_| True.not()                                                    │
- │              ‾‾‾‾‾‾‾‾                                                      │
- └────────────────────────────────────────────────────────── builtins.md:1:13 ┘
+True.not does not exist.
 
+main! = |_| True.not()
+            ^^^^^^^^
 
 # TOKENS
 ~~~zig

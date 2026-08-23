@@ -43,6 +43,7 @@ pub const BuildWithMainError = BuildError || CompileDiscoveredError;
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
+const Can = can.Can;
 const SemanticModuleData = compile_package.SemanticModuleData;
 const ModuleTimingInfo = compile_package.TimingInfo;
 const CacheManager = @import("cache_manager.zig").CacheManager;
@@ -51,6 +52,7 @@ const compiler_platforms = @import("compiler_platforms.zig");
 const package_resolution = @import("package_resolution.zig");
 const package_identity = @import("package_identity.zig");
 const watch_inputs = @import("watch_inputs.zig");
+const module_discovery = @import("module_discovery.zig");
 
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
@@ -84,7 +86,35 @@ fn nativeFetchUrlImpl(_: ?*anyopaque, std_io: std.Io, allocator: Allocator, url:
     }) catch |err| switch (err) {
         error.ExpandedSizeLimitExceeded => error.ExpandedSizeLimitExceeded,
         error.OutOfMemory => error.OutOfMemory,
-        else => error.DownloadFailed,
+        error.AmbiguousVersion,
+        error.ChecksumFailure,
+        error.DecompressionFailed,
+        error.DictionaryIdFlagUnsupported,
+        error.DirectoryCreateFailed,
+        error.EndOfStream,
+        error.FileCreateFailed,
+        error.FileError,
+        error.FileTooLarge,
+        error.FileWriteFailed,
+        error.HashMismatch,
+        error.HttpError,
+        error.InvalidFilename,
+        error.InvalidHash,
+        error.InvalidPath,
+        error.InvalidProxyUrl,
+        error.InvalidTarHeader,
+        error.InvalidUrl,
+        error.InvalidVersion,
+        error.LocalhostWasNotLoopback,
+        error.MalformedBlock,
+        error.MalformedFrame,
+        error.NetworkError,
+        error.NoDataExtracted,
+        error.NoHashInUrl,
+        error.ReadFailed,
+        error.UnexpectedEndOfStream,
+        error.WriteFailed,
+        => error.DownloadFailed,
     };
 }
 
@@ -200,6 +230,13 @@ pub const BuildEnv = struct {
     /// Compiler role to assign to the root module of this build.
     root_module_role: ModuleEnv.ModuleRole = .user,
 
+    /// Post-canonicalization validation to apply to the root module of this
+    /// build. `roc test` sets `.explicit_roots` because it runs the root file's
+    /// top-level `expect`s, which are compile-time roots in their own right: a
+    /// headerless root that is neither a type module nor a default app is a
+    /// plain module there rather than a file missing its `main!`.
+    root_validation: Can.Validation = .checking,
+
     /// Optional source directory used to resolve imports from the root module.
     root_source_dir_override: ?[]const u8 = null,
 
@@ -214,7 +251,7 @@ pub const BuildEnv = struct {
     synthetic_root_platform_identity: bool = false,
 
     /// The bundle URL the root itself came from, when the build was launched
-    /// from a URL or installed source. The URL — never the extracted path —
+    /// from a URL or installed source. The URL—never the extracted path—
     /// is then the root's package identity, so direct-URL use and installed
     /// use of the same URL share one identity, and moving the extracted
     /// directory cannot change it.
@@ -453,6 +490,10 @@ pub const BuildEnv = struct {
         self.root_module_role = role;
     }
 
+    pub fn setRootValidation(self: *BuildEnv, validation: Can.Validation) void {
+        self.root_validation = validation;
+    }
+
     pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
         self.root_source_dir_override = source_dir;
     }
@@ -620,7 +661,7 @@ pub const BuildEnv = struct {
                 try self.build(root_file);
             } else {
                 // The main file is the discovery root here, so its bundle
-                // provenance — not the checked file's — is the root identity.
+                // provenance—not the checked file's—is the root identity.
                 if (self.main_url) |*main_url| {
                     if (self.root_url) |*existing| {
                         existing.deinit(self.gpa);
@@ -673,7 +714,7 @@ pub const BuildEnv = struct {
             .hosted => .hosted,
             .type_module => if (ast.hasMainBangDecl()) .default_app else .type_module,
             .default_app => .default_app,
-            else => null,
+            .malformed => null,
         };
     }
 
@@ -735,12 +776,10 @@ pub const BuildEnv = struct {
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
 
-        const is_executable = header_info.kind == .app or header_info.kind == .default_app;
-        // Allow all module types: app, module, type_module, package, platform
-        // Package and platform modules can also be tested
-        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module and header_info.kind != .package and header_info.kind != .platform) {
-            return error.UnsupportedHeader;
-        }
+        // Every header kind names a module this build can root at: apps and
+        // default apps produce programs, and the rest are compiled for their own
+        // definitions and `expect`s. A file whose header parsed into none of them
+        // already failed in `parseHeaderDeps`.
 
         // Create package entry keyed by stable package identity. Real roots use
         // their canonical path; URL-launched roots use their bundle URL because
@@ -785,7 +824,7 @@ pub const BuildEnv = struct {
         }
         if (header_info.kind == .package or header_info.kind == .platform) {
             if (self.packages.getPtr(key_pkg)) |pkg| {
-                self.moveHeaderPublicModulesToPackage(pkg, &header_info);
+                self.moveHeaderPublicSurfaceToPackage(pkg, &header_info);
             }
         }
 
@@ -843,6 +882,15 @@ pub const BuildEnv = struct {
             else
                 try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
             try coord_pkg.setRootInput(self.gpa, pkg.root_file, pkg.root_file_state);
+            for (pkg.public_surface.modules.items) |public_module| {
+                try coord_pkg.addPublicModule(
+                    self.gpa,
+                    public_module.name,
+                    public_module.target,
+                    public_module.nested_type,
+                );
+            }
+            try coord_pkg.finishPublicModules(self.gpa);
 
             // The coordinator gates the hosted transform (and app-root artifact
             // lookups) on knowing which package is the app; app modules must
@@ -887,6 +935,7 @@ pub const BuildEnv = struct {
         const module_name = base.module_path.getModuleName(pkg_root_file);
         const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
         coord_pkg.modules.items[root_id].module_role = self.root_module_role;
+        coord_pkg.modules.items[root_id].validation = self.root_validation;
         if (self.root_source_dir_override) |source_dir| {
             coord_pkg.modules.items[root_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
         }
@@ -911,7 +960,7 @@ pub const BuildEnv = struct {
                 const entry_module_name = base.module_path.getModuleName(entry_file);
                 const entry_id = try coord_pkg.ensureModule(self.gpa, entry_module_name, entry_file);
                 const entry_module = &coord_pkg.modules.items[entry_id];
-                entry_module.validate_as_explicit_roots = true;
+                entry_module.validation = .explicit_roots;
                 if (entry_module.phase == .Parse) {
                     entry_module.depth = 0;
                     coord_pkg.remaining_modules += 1;
@@ -1041,6 +1090,8 @@ pub const BuildEnv = struct {
         ffi_symbol: []const u8,
     };
 
+    const PublicSurface = module_discovery.PublicSurface;
+
     const PackageRef = struct {
         name: []const u8, // Package name (alias in workspace)
         root_file: []const u8, // Absolute path to root module of the package
@@ -1054,18 +1105,15 @@ pub const BuildEnv = struct {
         root_dir: []u8,
         url: ?package_source.UrlSource = null,
         shorthands: std.StringHashMapUnmanaged(PackageRef) = .{},
-        /// Modules in the public API declared by a package or platform header.
-        public_modules: std.ArrayListUnmanaged([]const u8) = .empty,
+        /// Source-local public declarations from a package or platform header.
+        public_surface: PublicSurface = .{},
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
         targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *Package, gpa: Allocator) void {
             if (self.url) |*url| url.deinit(gpa);
             if (self.targets_config) |tc| tc.deinit(gpa);
-            for (self.public_modules.items) |module_name| {
-                freeConstSlice(gpa, module_name);
-            }
-            self.public_modules.deinit(gpa);
+            self.public_surface.deinit(gpa);
             for (self.provides_entries.items) |entry| {
                 freeConstSlice(gpa, entry.roc_ident);
                 freeConstSlice(gpa, entry.ffi_symbol);
@@ -1087,8 +1135,8 @@ pub const BuildEnv = struct {
     const HeaderInfo = struct {
         kind: PackageKind,
         source_file_state: ?watch_inputs.State,
-        /// Modules in the public API declared by a package or platform header.
-        public_modules: std.ArrayListUnmanaged([]const u8) = .empty,
+        /// Source-local public declarations from a package or platform header.
+        public_surface: PublicSurface = .{},
         resolver_root: package_resolution.FetchedPackage,
         /// Platform provides entries (roc_ident -> ffi_symbol mapping)
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
@@ -1098,10 +1146,7 @@ pub const BuildEnv = struct {
         fn deinit(self: *HeaderInfo, gpa: Allocator) void {
             if (self.targets_config) |tc| tc.deinit(gpa);
             self.resolver_root.deinit(gpa);
-            for (self.public_modules.items) |module_name| {
-                freeConstSlice(gpa, module_name);
-            }
-            self.public_modules.deinit(gpa);
+            self.public_surface.deinit(gpa);
             for (self.provides_entries.items) |entry| {
                 freeConstSlice(gpa, entry.roc_ident);
                 freeConstSlice(gpa, entry.ffi_symbol);
@@ -1110,38 +1155,31 @@ pub const BuildEnv = struct {
         }
     };
 
-    fn clearPackagePublicModules(self: *BuildEnv, pkg: *Package) void {
-        for (pkg.public_modules.items) |module_name| {
-            freeConstSlice(self.gpa, module_name);
-        }
-        pkg.public_modules.deinit(self.gpa);
-        pkg.public_modules = .empty;
+    fn clearPackagePublicSurface(self: *BuildEnv, pkg: *Package) void {
+        pkg.public_surface.deinit(self.gpa);
+        pkg.public_surface = .{};
     }
 
-    fn moveHeaderPublicModulesToPackage(self: *BuildEnv, pkg: *Package, header_info: *HeaderInfo) void {
-        self.clearPackagePublicModules(pkg);
-        pkg.public_modules = header_info.public_modules;
-        header_info.public_modules = .empty;
+    fn moveHeaderPublicSurfaceToPackage(self: *BuildEnv, pkg: *Package, header_info: *HeaderInfo) void {
+        self.clearPackagePublicSurface(pkg);
+        pkg.public_surface = header_info.public_surface;
+        header_info.public_surface = .{};
     }
 
-    fn appendHeaderPublicModules(
+    fn setHeaderPublicSurface(
         self: *BuildEnv,
         info: *HeaderInfo,
         ast: *const parse.AST,
         exposes: parse.AST.Collection.Idx,
-    ) Allocator.Error!void {
-        const collection = ast.store.getCollection(exposes);
-        for (ast.store.exposedItemSlice(.{ .span = collection.span })) |item_idx| {
-            const item = ast.store.getExposedItem(item_idx);
-            const token_idx = switch (item) {
-                .upper_ident => |upper| upper.ident,
-                .upper_ident_star => |upper| upper.ident,
-                .lower_ident, .malformed => continue,
-            };
-            const module_name = try self.gpa.dupe(u8, ast.resolve(token_idx));
-            errdefer self.gpa.free(module_name);
-            try info.public_modules.append(self.gpa, module_name);
-        }
+        kind: module_discovery.PublicSurfaceKind,
+    ) (Allocator.Error || error{PathOutsideWorkspace})!void {
+        var surface = module_discovery.extractPublicSurface(ast, exposes, kind, self.gpa) catch |err| switch (err) {
+            error.ImportEscapesPackageRoot => return error.PathOutsideWorkspace,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        errdefer surface.deinit(self.gpa);
+        info.public_surface.deinit(self.gpa);
+        info.public_surface = surface;
     }
 
     fn parseHeaderDeps(self: *BuildEnv, file_path: []const u8) BuildError!HeaderInfo {
@@ -1158,14 +1196,18 @@ pub const BuildEnv = struct {
                     break :blk report;
                 },
 
-                else => {
+                error.AccessDenied,
+                error.IoError,
+                error.OutOfMemory,
+                error.StreamTooLong,
+                => {
                     const headline = try std.fmt.allocPrint(self.gpa, "I could not read the file {s}.", .{file_abs});
                     defer self.gpa.free(headline);
-                    var report = try Report.init(self.gpa, "Could Not Read File", headline, .fatal);
-                    try report.document.addText("I did get the following error: ");
-                    try report.addErrorMessage(@errorName(err));
-                    try report.document.addText("Make sure the file can be read.");
-                    break :blk report;
+                    var other_report = try Report.init(self.gpa, "Could Not Read File", headline, .fatal);
+                    try other_report.document.addText("I did get the following error: ");
+                    try other_report.addErrorMessage(@errorName(err));
+                    try other_report.document.addText("Make sure the file can be read.");
+                    break :blk other_report;
                 },
             };
             try self.sink.emitReport("main", file_abs, report);
@@ -1229,11 +1271,11 @@ pub const BuildEnv = struct {
             },
             .package => |p| {
                 info.kind = .package;
-                try self.appendHeaderPublicModules(&info, ast, p.exposes);
+                try self.setHeaderPublicSurface(&info, ast, p.exposes, .package);
             },
             .platform => |p| {
                 info.kind = .platform;
-                try self.appendHeaderPublicModules(&info, ast, p.exposes);
+                try self.setHeaderPublicSurface(&info, ast, p.exposes, .platform);
 
                 // Extract provides entries (roc_ident -> linker symbol mapping)
                 for (ast.store.symbolMapEntrySlice(p.provides)) |entry_idx| {
@@ -1266,7 +1308,7 @@ pub const BuildEnv = struct {
                 info.kind = .default_app;
                 // Default app headers are for REPL-style execution
             },
-            else => return error.UnsupportedHeader,
+            .malformed => return error.UnsupportedHeader,
         }
 
         return info;
@@ -1281,7 +1323,10 @@ pub const BuildEnv = struct {
         const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.FileNotFound,
+            error.AccessDenied,
+            error.IoError,
+            error.StreamTooLong,
+            => return error.FileNotFound,
         };
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
@@ -1374,8 +1419,8 @@ pub const BuildEnv = struct {
         return error.NoCacheDir;
     }
 
-    fn dottedToPath(self: *BuildEnv, root_dir: []const u8, dotted: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
-        var parts = std.mem.splitScalar(u8, dotted, '.');
+    fn logicalModuleToPath(self: *BuildEnv, root_dir: []const u8, logical_name: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
+        var parts = std.mem.splitScalar(u8, logical_name, '/');
         var segs = std.ArrayList([]const u8).empty;
         defer segs.deinit(self.gpa);
 
@@ -1489,7 +1534,32 @@ pub const BuildEnv = struct {
         if (self.package_cache_dir == null) {
             self.package_cache_dir = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => null,
+                error.AccessDenied,
+                error.BuiltinLowLevelAnnotationMustBeFunction,
+                error.DownloadFailed,
+                error.ExpectedPlatformString,
+                error.ExpectedString,
+                error.FileError,
+                error.FileNotFound,
+                error.Internal,
+                error.InvalidDependency,
+                error.InvalidNullByteInPath,
+                error.InvalidUrl,
+                error.IoError,
+                error.LockedMemoryLimitExceeded,
+                error.LowLevelOperationsNotFound,
+                error.MissingFilesDirectory,
+                error.MissingTargetFile,
+                error.NoCacheDir,
+                error.NoPackageSource,
+                error.PathOutsideWorkspace,
+                error.StreamTooLong,
+                error.SystemResources,
+                error.ThreadQuotaExceeded,
+                error.Unexpected,
+                error.UnsupportedBuiltinAnnotationOnly,
+                error.UnsupportedHeader,
+                => null,
             };
         }
 
@@ -1568,37 +1638,38 @@ pub const BuildEnv = struct {
             }
         }
 
-        // Transfer provides entries and targets config from platform headers,
-        // and register the root app platform's exposed modules.
+        // Transfer each dependency package's public-name-to-source-target map.
+        // Platform headers additionally provide target metadata and expose
+        // modules directly to their root application.
         for (resolved_packages, 0..) |package, i| {
             if (i == package_resolution.Resolved.root_index) continue;
-            if (package.kind != .platform) continue;
+            if (package.kind != .package and package.kind != .platform) continue;
 
             var child_info = try self.parseHeaderDeps(package.root_file);
             defer child_info.deinit(self.gpa);
 
-            if (self.packages.getPtr(package_keys.identity(i))) |plat_pkg| {
-                if (plat_pkg.provides_entries.items.len == 0) {
-                    plat_pkg.provides_entries = child_info.provides_entries;
+            if (self.packages.getPtr(package_keys.identity(i))) |child_pkg| {
+                if (package.kind == .platform and child_pkg.provides_entries.items.len == 0) {
+                    child_pkg.provides_entries = child_info.provides_entries;
                     child_info.provides_entries = .empty; // Prevent double-free in deinit
                 }
-                if (plat_pkg.targets_config == null) {
-                    plat_pkg.targets_config = child_info.targets_config;
+                if (package.kind == .platform and child_pkg.targets_config == null) {
+                    child_pkg.targets_config = child_info.targets_config;
                     child_info.targets_config = null; // Prevent double-free in deinit
                 }
             }
 
-            // Find the root's platform alias for this package (if any).
-            for (resolved_packages[package_resolution.Resolved.root_index].deps) |root_dep| {
-                if (!root_dep.is_platform) continue;
-                if (root_dep.target != i) continue;
-                try self.registerPlatformExposes(root_pkg_name, root_dep.alias, package.root_dir, &child_info);
+            if (package.kind == .platform) {
+                // Find the root's platform alias for this package (if any).
+                for (resolved_packages[package_resolution.Resolved.root_index].deps) |root_dep| {
+                    if (!root_dep.is_platform) continue;
+                    if (root_dep.target != i) continue;
+                    try self.registerPlatformExposes(root_pkg_name, root_dep.alias, package.root_dir, &child_info);
+                }
             }
 
-            if (self.packages.getPtr(package_keys.identity(i))) |plat_pkg| {
-                if (plat_pkg.public_modules.items.len == 0) {
-                    self.moveHeaderPublicModulesToPackage(plat_pkg, &child_info);
-                }
+            if (self.packages.getPtr(package_keys.identity(i))) |child_pkg| {
+                self.moveHeaderPublicSurfaceToPackage(child_pkg, &child_info);
             }
         }
 
@@ -1628,12 +1699,9 @@ pub const BuildEnv = struct {
         platform_dir: []const u8,
         child_info: *const HeaderInfo,
     ) BuildError!void {
-        for (child_info.public_modules.items) |module_name| {
-            // Create path to the module file (e.g., Stdout.roc)
-            const module_filename = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{module_name});
-            defer self.gpa.free(module_filename);
-
-            const module_path = try std.fs.path.join(self.gpa, &.{ platform_dir, module_filename });
+        for (child_info.public_surface.modules.items) |public_module| {
+            const module_name = public_module.name;
+            const module_path = try self.logicalModuleToPath(platform_dir, public_module.target);
             defer self.gpa.free(module_path);
 
             // Register this module as a package
@@ -1855,7 +1923,7 @@ pub const BuildEnv = struct {
 
     fn moduleToPath(self: *BuildEnv, pkg_name: []const u8, module_name: []const u8) (Allocator.Error || error{ InvalidPackageName, PathOutsideWorkspace })![]const u8 {
         if (self.packages.get(pkg_name)) |pkg| {
-            return try self.dottedToPath(pkg.root_dir, module_name);
+            return try self.logicalModuleToPath(pkg.root_dir, module_name);
         }
         return error.InvalidPackageName;
     }
@@ -1934,7 +2002,34 @@ pub const BuildEnv = struct {
                     }
                 }
             },
-            else => {},
+            .source_location => |*location| {
+                const original_path = self.synthetic_root_original_path orelse return;
+                const filename = location.filename orelse return;
+                if (self.syntheticRootDisplayPath(filename) == null) return;
+
+                const header_lines = self.synthetic_root_header_lines;
+                if (header_lines > 0 and location.line <= header_lines) return;
+
+                const owned_filename = try allocator.dupe(u8, original_path);
+                if (location.filename) |old_filename| allocator.free(old_filename);
+                location.filename = owned_filename;
+                if (location.line > header_lines) location.line -= header_lines;
+            },
+            .text,
+            .annotated,
+            .line_break,
+            .indent,
+            .space,
+            .horizontal_rule,
+            .annotation_start,
+            .annotation_end,
+            .raw,
+            .reflowing_text,
+            .link,
+            .vertical_stack,
+            .horizontal_concat,
+            .source_code_multi_region,
+            => {},
         }
     }
 
@@ -2334,6 +2429,22 @@ pub const BuildEnv = struct {
         provides_entries: []const ProvidesEntry = &.{},
     };
 
+    /// Compact borrowed view used only by public docs and API extraction.
+    /// General compiled-module consumers do not pay for this routing metadata.
+    pub const PublicModuleInfo = struct {
+        name: []const u8,
+        path: []const u8,
+        semantic: SemanticModuleData,
+        package_name: []const u8,
+        /// Root-owned names to retain when extracting documentation.
+        docs_exposed_names: ?[]const []const u8 = null,
+        /// Exact type declaration represented by this public module view.
+        /// This is transient post-build routing data, not retained per CIR node.
+        public_type_decl: ?CIR.Statement.Idx = null,
+        /// Declaration order within the owning package's public surface.
+        public_order: u32 = 0,
+    };
+
     /// Get all compiled modules from the Coordinator (after build completes).
     /// Returns modules in arbitrary order - use getModulesInSerializationOrder() for sorted order.
     /// The alias the root package uses for `pkg_name`, if any. Packages are
@@ -2363,7 +2474,7 @@ pub const BuildEnv = struct {
                 if (self.packages.getPtr(root_name)) |root_pkg| {
                     return switch (root_pkg.kind) {
                         .app, .default_app => "app",
-                        else => "module",
+                        .package, .platform, .module, .hosted, .type_module => "module",
                     };
                 }
             }
@@ -2444,7 +2555,7 @@ pub const BuildEnv = struct {
 
     /// Resolve the root package or platform's explicit public module list to
     /// completed compiler outputs. Dependency modules are deliberately absent.
-    pub fn getPublicRootModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {
+    pub fn getPublicRootModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
             std.debug.panic("build env invariant violated: public modules requested before dependency discovery", .{});
         };
@@ -2461,11 +2572,18 @@ pub const BuildEnv = struct {
             std.debug.panic("build env invariant violated: public-module root coordinator package is unavailable", .{});
         };
 
-        var public_modules = std.ArrayList(CompiledModuleInfo).empty;
+        var public_modules = std.ArrayList(PublicModuleInfo).empty;
         errdefer public_modules.deinit(allocator);
 
-        for (root_pkg.public_modules.items) |module_name| {
-            const module_id = root_coord_pkg.getModuleId(module_name) orelse {
+        for (root_pkg.public_surface.modules.items, 0..) |public_module, public_index| {
+            const module_name = public_module.name;
+            const public_target = root_coord_pkg.getPublicModuleTarget(module_name) orelse {
+                std.debug.panic(
+                    "build env invariant violated: public module '{s}' has no source target",
+                    .{module_name},
+                );
+            };
+            const module_id = root_coord_pkg.getPublicModuleId(module_name) orelse {
                 std.debug.panic(
                     "build env invariant violated: public module '{s}' was not compiled",
                     .{module_name},
@@ -2479,25 +2597,73 @@ pub const BuildEnv = struct {
                 );
             };
             try public_modules.append(allocator, .{
-                .name = module_state.name,
+                .name = module_name,
                 .path = module_state.path,
                 .semantic = module_data,
-                .source = module_data.env.common.source,
                 .package_name = root_name,
-                .is_platform_main = false,
-                .is_app = false,
-                .is_platform_sibling = root_pkg.kind == .platform,
-                .depth = module_state.depth,
+                .public_order = @intCast(public_index),
+                .public_type_decl = switch (public_target.selection) {
+                    .type_decl => |statement| statement,
+                    .whole_module => null,
+                    .unresolved_nested_type => std.debug.panic(
+                        "build env invariant violated: public module '{s}' has an unresolved nested type",
+                        .{module_name},
+                    ),
+                },
             });
         }
 
         return public_modules.toOwnedSlice(allocator);
     }
 
+    /// Return every compiled public module view in the resolved package graph.
+    /// Consumers use the public spelling here instead of exposing private
+    /// source-module names; type views additionally carry their exact root.
+    pub fn getCompiledPublicModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
+        const coord = self.coordinator orelse {
+            std.debug.panic("build env invariant violated: public modules requested before coordinator initialization", .{});
+        };
+
+        var public_modules = std.ArrayList(PublicModuleInfo).empty;
+        errdefer public_modules.deinit(allocator);
+
+        var packages = self.packages.iterator();
+        while (packages.next()) |package_entry| {
+            const package_name = package_entry.key_ptr.*;
+            const package = package_entry.value_ptr;
+            const coord_package = coord.packages.get(package_name) orelse continue;
+
+            for (package.public_surface.modules.items, 0..) |public_module, public_index| {
+                const module_id = coord_package.getPublicModuleId(public_module.name) orelse continue;
+                const module_state = coord_package.getModule(module_id) orelse continue;
+                const semantic = module_state.semanticData() orelse continue;
+                const public_target = coord_package.getPublicModuleTarget(public_module.name) orelse unreachable;
+                const source_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
+                    .type_decl => |statement| statement,
+                    .whole_module => null,
+                    .unresolved_nested_type => std.debug.panic(
+                        "build env invariant violated: compiled public module '{s}' has an unresolved nested type",
+                        .{public_module.name},
+                    ),
+                };
+                try public_modules.append(allocator, .{
+                    .name = public_module.name,
+                    .path = module_state.path,
+                    .semantic = semantic,
+                    .package_name = package_name,
+                    .public_type_decl = source_decl,
+                    .public_order = @intCast(public_index),
+                });
+            }
+        }
+
+        return public_modules.toOwnedSlice(allocator);
+    }
+
     /// Return the compiled modules that belong in generated documentation.
-    /// Package and platform roots use their explicit public module list.
-    /// Other roots retain the CLI surface of all compiled documentable modules.
-    pub fn getDocumentationModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {
+    /// Package roots use their public modules. Platform roots additionally use
+    /// their root module when the header exposes root-owned names.
+    pub fn getDocumentationModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
             std.debug.panic("build env invariant violated: documentation requested before dependency discovery", .{});
         };
@@ -2505,25 +2671,70 @@ pub const BuildEnv = struct {
             std.debug.panic("build env invariant violated: documentation root package is unavailable", .{});
         };
 
-        if (root_pkg.kind == .package or root_pkg.kind == .platform) {
+        if (root_pkg.kind == .package) {
             return self.getPublicRootModules(allocator);
         }
 
-        const all_modules = try self.getCompiledModules(allocator);
-        errdefer allocator.free(all_modules);
+        if (root_pkg.kind == .platform) {
+            const public_modules = try self.getPublicRootModules(allocator);
+            defer allocator.free(public_modules);
 
-        var docs_modules = std.ArrayList(CompiledModuleInfo).empty;
+            var docs_modules = try std.ArrayList(PublicModuleInfo).initCapacity(
+                allocator,
+                public_modules.len + @intFromBool(root_pkg.public_surface.root_names.items.len > 0),
+            );
+            errdefer docs_modules.deinit(allocator);
+            docs_modules.appendSliceAssumeCapacity(public_modules);
+
+            if (root_pkg.public_surface.root_names.items.len > 0) {
+                const root_module = self.rootModule(root_name) orelse {
+                    std.debug.panic("build env invariant violated: platform documentation root module is unavailable", .{});
+                };
+                const root_data = root_module.semanticData() orelse {
+                    std.debug.panic("build env invariant violated: platform documentation root module has no completed compiler output", .{});
+                };
+                docs_modules.appendAssumeCapacity(.{
+                    .name = root_module.name,
+                    .path = root_module.path,
+                    .semantic = root_data,
+                    .package_name = root_name,
+                    .docs_exposed_names = root_pkg.public_surface.root_names.items,
+                });
+            }
+
+            return docs_modules.toOwnedSlice(allocator);
+        }
+
+        const all_modules = try self.getCompiledModules(allocator);
+        defer allocator.free(all_modules);
+        const public_modules = try self.getCompiledPublicModules(allocator);
+        defer allocator.free(public_modules);
+
+        var docs_modules = std.ArrayList(PublicModuleInfo).empty;
         errdefer docs_modules.deinit(allocator);
 
+        // The root's own compiled modules are its documentation surface.
         for (all_modules) |mod| {
+            if (!std.mem.eql(u8, mod.package_name, root_name)) continue;
             switch (mod.semantic.env.module_kind) {
                 .package, .platform => continue,
-                else => {},
+                .type_module, .default_app, .app, .hosted, .module, .malformed => {},
             }
+            try docs_modules.append(allocator, .{
+                .name = mod.name,
+                .path = mod.path,
+                .semantic = mod.semantic,
+                .package_name = mod.package_name,
+            });
+        }
+
+        // Dependencies contribute only explicit public views. Their private
+        // source module names and transitive implementation helpers stay out.
+        for (public_modules) |mod| {
+            if (std.mem.eql(u8, mod.package_name, root_name)) continue;
             try docs_modules.append(allocator, mod);
         }
 
-        allocator.free(all_modules);
         return docs_modules.toOwnedSlice(allocator);
     }
 
@@ -2777,7 +2988,6 @@ pub const BuildEnv = struct {
         for (drained) |mod| {
             for (mod.reports) |*report| {
                 switch (report.severity) {
-                    .info => {},
                     .runtime_error, .fatal => total_error_count += 1,
                     .warning => total_warning_count += 1,
                 }
@@ -2956,6 +3166,7 @@ pub const BuildEnv = struct {
             .s_import,
             .s_alias_decl,
             .s_nominal_decl,
+            .s_where_alias_decl,
             .s_type_anno,
             .s_type_var_alias,
             .s_runtime_error,
@@ -3081,6 +3292,9 @@ pub const BuildEnv = struct {
             .e_bytes_literal,
             .e_lookup_local,
             .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_empty_list,
             .e_empty_record,
@@ -3639,10 +3853,10 @@ pub const OrderedSink = struct {
     }
 };
 
-test "issue 9737: dottedToPath frees its scratch path exactly once on the PathOutsideWorkspace error path" {
+test "issue 9737: logicalModuleToPath frees its scratch path exactly once on the PathOutsideWorkspace error path" {
     const gpa = std.testing.allocator;
 
-    // dottedToPath only reads `gpa` and `workspace_roots`, so a minimal BuildEnv
+    // logicalModuleToPath only reads `gpa` and `workspace_roots`, so a minimal BuildEnv
     // with just those fields set is enough to exercise it.
     var env: BuildEnv = undefined;
     env.gpa = gpa;
@@ -3650,8 +3864,8 @@ test "issue 9737: dottedToPath frees its scratch path exactly once on the PathOu
     defer env.workspace_roots.deinit();
 
     // No workspace roots are registered, so the resolved "<root>/Mod.roc" is
-    // outside the workspace and dottedToPath takes its error path. On that path
+    // outside the workspace and logicalModuleToPath takes its error path. On that path
     // it must free its `with_ext` scratch allocation exactly once; freeing it a
     // second time is a double free that the testing allocator detects.
-    try std.testing.expectError(error.PathOutsideWorkspace, env.dottedToPath("/tmp/roc-issue-9737", "Mod"));
+    try std.testing.expectError(error.PathOutsideWorkspace, env.logicalModuleToPath("/tmp/roc-issue-9737", "Mod"));
 }

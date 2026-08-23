@@ -4,7 +4,7 @@
 
 - [**installation** guide](https://www.roc-lang.org/install)
 - [**tutorial**](docs/mini-tutorial-new-compiler.md)
-- [**docs** for the standard library](https://roc-lang.org/builtins/main/)
+- [**docs** for the standard library](https://roc-lang.org/docs/main/)
 - [**examples**](test/echo/all_syntax_test.roc)
 - [**faq**: frequently asked questions](https://www.roc-lang.org/faq)
 - [**group chat**](https://roc.zulipchat.com) for help, questions and discussions

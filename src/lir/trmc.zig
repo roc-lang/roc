@@ -14,7 +14,7 @@
 //! - leaves the proc untouched.
 //!
 //! Without this pass, list builders like `repeat`, `map`, and `filter` grow a
-//! stack frame per element and overflow on large inputs — a correctness
+//! stack frame per element and overflow on large inputs—a correctness
 //! issue, not just performance.
 //!
 //! ## Value holes (vs. the old Rust compiler's pointer holes)
@@ -25,7 +25,7 @@
 //! interior field addresses. This compiler represents a recursive union as a
 //! by-value blob (payload struct + in-cell discriminant); recursion is broken
 //! only at struct-field edges, which have layout `box(Union)`, and the heap
-//! allocation in LIR is the `box_box` low-level — not the tag construction.
+//! allocation in LIR is the `box_box` low-level—not the tag construction.
 //!
 //! The hole here is therefore "a pointer to where a child union VALUE lives":
 //! initially a stack slot for the result (`ptr_alloca`), afterwards the
@@ -46,7 +46,7 @@
 //! ARC; the cell keeps its `box(U)` layout and ARC accounts it exactly like
 //! the `box_box` it replaced. `ptr_store` consumes its value operand
 //! (ownership moves into the structure), and the stored local is always the
-//! chain head — dead on every loop path — so no protective retain is needed.
+//! chain head—dead on every loop path—so no protective retain is needed.
 //! Zero-filled cells are decref-safe: in-flight box fields read as null, and
 //! the RC runtime treats null as a no-op.
 //!
@@ -111,10 +111,10 @@ fn transformProc(
     var construct_count: usize = 0;
     var tail_count: usize = 0;
     for (scratch.candidates.items) |candidate| {
-        switch (candidate.state) {
-            .confirmed_construct => construct_count += 1,
-            .confirmed_tail => tail_count += 1,
-            else => {},
+        if (candidate.state == .confirmed_construct) {
+            construct_count += 1;
+        } else if (candidate.state == .confirmed_tail) {
+            tail_count += 1;
         }
     }
 
@@ -165,6 +165,8 @@ const Edge = union(enum) {
     switch_branch: struct { stmt: CFStmtId, index: u16 },
     switch_default: CFStmtId,
     switch_continuation: CFStmtId,
+    boxy_tag_on_match: CFStmtId,
+    boxy_tag_on_miss: CFStmtId,
     initialized_payload_branch: struct { stmt: CFStmtId, initialized: bool },
 };
 
@@ -198,7 +200,7 @@ const Candidate = struct {
     call_args: LIR.LocalSpan,
     /// The box_box statement (rewritten to box_alloc_zeroed). Valid from .boxed.
     box_stmt: CFStmtId,
-    /// The assign_tag target — what gets stored through the hole. Valid from .tagged.
+    /// The assign_tag target—what gets stored through the hole. Valid from .tagged.
     head_local: LocalId,
     /// Alias-hop statements after the tag (unlinked on the rewritten path),
     /// with their incoming edges as recorded during the walk.
@@ -238,7 +240,7 @@ const WorkItem = struct { stmt: CFStmtId, edge: Edge };
 /// Per-run reusable buffers for detection: the containers that would
 /// otherwise be allocated and freed for every proc. The ArrayLists clear in
 /// O(1) via clearRetainingCapacity, and the visited marks clear by bumping
-/// `generation` — so after the high-water marks are reached, a proc's walk
+/// `generation`—so after the high-water marks are reached, a proc's walk
 /// allocates nothing and costs one array load per statement instead of a
 /// hash probe. (A reused hashmap would be worse than no reuse for the
 /// visited set: its clearRetainingCapacity is O(capacity), which stays at
@@ -302,7 +304,7 @@ const Detection = struct {
     eligible_trmc: bool = false,
     /// Set when the proc exceeds a pass limit; the proc is left untouched.
     bail: bool = false,
-    joins: std.AutoHashMap(JoinPointId, JoinInfo),
+    joins: collections.DenseMap(JoinPointId, JoinInfo),
     max_join_id: u32 = 0,
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch: *Scratch) Detection {
@@ -312,7 +314,7 @@ const Detection = struct {
             .layouts = layouts,
             .proc_id = proc_id,
             .scratch = scratch,
-            .joins = std.AutoHashMap(JoinPointId, JoinInfo).init(scratch.gpa),
+            .joins = collections.DenseMap(JoinPointId, JoinInfo).init(scratch.gpa),
         };
     }
 
@@ -341,11 +343,10 @@ const Detection = struct {
         while (steps < limit) : (steps += 1) {
             const params = self.store.getLocalSpan(join.params);
             if (params.len != 1 or GuardedList.at(params, 0) != local) return false;
-            switch (self.store.getCFStmt(join.body)) {
-                .ret => |s| return s.value == local,
-                .jump => |s| join = self.joins.get(s.target) orelse return false,
-                else => return false,
-            }
+            const stmt = self.store.getCFStmt(join.body);
+            if (stmt == .ret) return stmt.ret.value == local;
+            if (stmt != .jump) return false;
+            join = self.joins.get(stmt.jump.target) orelse return false;
         }
         return false;
     }
@@ -361,14 +362,14 @@ const Detection = struct {
     ///
     /// Fusing join collection with the candidate walk is sound because a jump
     /// may only target an enclosing join point, and every enclosing join's
-    /// statement is an ancestor on every DFS path to the jump — so it is
+    /// statement is an ancestor on every DFS path to the jump—so it is
     /// recorded before the jump (or any returnsLocal forwarding chase through
     /// it) is processed.
     ///
     /// Statement graphs are DAGs, not trees: lowering shares linear tails
     /// (two predecessors pointing at the same `next` chain), so the visited
-    /// stamps are what guarantees each statement is processed — and each ret
-    /// epilogue-rewritten — exactly once.
+    /// stamps are what guarantees each statement is processed—and each ret
+    /// epilogue-rewritten—exactly once.
     fn walk(self: *Detection, body: CFStmtId) ResourceError!void {
         const gpa = self.scratch.gpa;
         const work = &self.scratch.work;
@@ -394,13 +395,12 @@ const Detection = struct {
             stamp.* = gen;
 
             const stmt = self.store.getCFStmt(item.stmt);
-            switch (stmt) {
-                .join => |s| {
-                    try self.joins.put(s.id, .{ .params = s.params, .body = s.body });
-                    self.max_join_id = @max(self.max_join_id, @intFromEnum(s.id));
-                },
-                .ret => try self.scratch.rets.append(gpa, item.stmt),
-                else => {},
+            if (stmt == .join) {
+                const s = stmt.join;
+                try self.joins.put(s.id, .{ .params = s.params, .body = s.body });
+                self.max_join_id = @max(self.max_join_id, @intFromEnum(s.id));
+            } else if (stmt == .ret) {
+                try self.scratch.rets.append(gpa, item.stmt);
             }
 
             try self.processStmt(item.stmt, item.edge, stmt);
@@ -441,8 +441,12 @@ const Detection = struct {
                         try work.append(gpa, .{ .stmt = GuardedList.at(arms, i).on_match, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
                     }
                 },
+                .boxy_tag_match => |s| {
+                    try work.append(gpa, .{ .stmt = s.on_miss, .edge = .{ .boxy_tag_on_miss = item.stmt } });
+                    try work.append(gpa, .{ .stmt = s.on_match, .edge = .{ .boxy_tag_on_match = item.stmt } });
+                },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
                 },
             }
@@ -506,8 +510,12 @@ const Detection = struct {
                 for (0..arms.len) |index| try self.appendSharedSuccessor(work, GuardedList.at(arms, index).on_match);
                 try self.appendSharedSuccessor(work, s.on_miss);
             },
+            .boxy_tag_match => |s| {
+                try self.appendSharedSuccessor(work, s.on_match);
+                try self.appendSharedSuccessor(work, s.on_miss);
+            },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try self.appendSharedSuccessor(work, s.next);
             },
         }
@@ -518,7 +526,7 @@ const Detection = struct {
         // blessed next step for at most ONE candidate: when two candidates'
         // chains meet (e.g. `Node(build(a), v, build(b))` placing two cells in
         // one payload struct), the first claims the constructor and the others
-        // see it as an ordinary use of their tracked cell and drop out — their
+        // see it as an ordinary use of their tracked cell and drop out—their
         // recursive calls remain real calls, exactly like the old Rust pass.
         var claimed = false;
         for (self.scratch.candidates.items) |*candidate| {
@@ -618,12 +626,14 @@ const Detection = struct {
             },
             .assign_ref => |s| {
                 if (candidate.state != .tagged) return false;
-                const source = switch (s.op) {
-                    .local => |src| src,
-                    .nominal => |n| n.backing_ref,
-                    .list_reinterpret => |l| l.backing_ref,
-                    else => return false,
-                };
+                const source = if (s.op == .local)
+                    s.op.local
+                else if (s.op == .nominal)
+                    s.op.nominal.backing_ref
+                else if (s.op == .list_reinterpret)
+                    s.op.list_reinterpret.backing_ref
+                else
+                    return false;
                 if (source != candidate.current()) return false;
                 if (candidate.alias_len == max_alias_stmts or !candidate.push(s.target)) {
                     candidate.state = .invalid;
@@ -642,7 +652,46 @@ const Detection = struct {
                 if (!self.returnsLocal(s.target, candidate.current())) return false;
                 return confirmAtTerminal(candidate, stmt_id);
             },
-            else => return false,
+            .init_uninitialized,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_list,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .crash,
+            => return false,
         }
     }
 
@@ -664,7 +713,7 @@ const Detection = struct {
                 candidate.state = .invalid;
                 return true;
             },
-            else => return false,
+            .confirmed_construct, .confirmed_tail, .invalid => return false,
         }
     }
 
@@ -696,14 +745,40 @@ const Detection = struct {
                 .list_reinterpret => |l| c.chainContains(l.backing_ref),
                 .nominal => |n| c.chainContains(n.backing_ref),
             },
-            .assign_literal, .assign_packed_erased_fn => false,
+            .assign_literal => false,
+            .assign_packed_erased_fn => |s| (s.capture != null and c.chainContains(s.capture.?)) or
+                (s.reuse != null and c.chainContains(s.reuse.?)) or
+                (s.result_desc != null and self.descRefTouchesChain(s.result_desc.?, c)),
             .init_uninitialized => |s| c.chainContains(s.target),
             .assign_call => |s| self.spanTouchesChain(s.args, c),
-            .assign_call_erased => |s| c.chainContains(s.closure) or self.spanTouchesChain(s.args, c),
+            .assign_call_erased => |s| c.chainContains(s.closure) or
+                (s.reuse_source != null and c.chainContains(s.reuse_source.?)) or
+                self.spanTouchesChain(s.args, c),
+            .assign_boxy_desc_ref => |s| self.descRefTouchesChain(s.desc, c) or
+                (s.tag_residual_for != null and self.descRefTouchesChain(s.tag_residual_for.?, c)) or
+                self.spanTouchesChain(s.captures, c),
+            .assign_boxy_dict_ref => |s| self.dictRefTouchesChain(s.dict, c),
+            .assign_boxy_box => |s| c.chainContains(s.payload) or if (s.payload_desc) |desc| self.descRefTouchesChain(desc, c) else false,
+            .assign_boxy_reuse_box => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.desc, c),
+            .assign_boxy_unbox => |s| c.chainContains(s.source) or
+                self.descRefTouchesChain(s.source_desc, c) or
+                (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)),
+            .assign_boxy_adapt => |s| c.chainContains(s.source) or
+                (s.source_desc != null and self.descRefTouchesChain(s.source_desc.?, c)) or
+                (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)),
+            .assign_boxy_inspect => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
+            .assign_boxy_eq => |s| c.chainContains(s.lhs) or c.chainContains(s.rhs) or self.descRefTouchesChain(s.source_desc, c),
+            .assign_boxy_tag => |s| self.descRefTouchesChain(s.target_desc, c) or
+                (s.payload != null and c.chainContains(s.payload.?)) or
+                (s.payload_desc != null and self.descRefTouchesChain(s.payload_desc.?, c)),
+            .assign_boxy_tag_payload => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
+            .boxy_tag_match => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
+            .assign_call_dict => |s| self.dictRefTouchesChain(s.dict, c) or self.spanTouchesChain(s.args, c) or self.spanTouchesChain(s.arg_descs, c) or self.spanTouchesChain(s.hidden_args, c),
             .assign_low_level => |s| self.spanTouchesChain(s.args, c),
             .assign_list => |s| self.spanTouchesChain(s.elems, c),
             .assign_struct => |s| self.spanTouchesChain(s.fields, c),
-            .assign_tag => |s| if (s.payload) |payload| c.chainContains(payload) else false,
+            .assign_tag => |s| (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)) or
+                (if (s.payload) |payload| c.chainContains(payload) else false),
             .store_struct => |s| c.chainContains(s.dest) or self.spanTouchesChain(s.fields, c),
             .store_tag => |s| c.chainContains(s.dest) or if (s.payload) |payload| c.chainContains(payload) else false,
             // Reading the value is a use; overwriting a tracked local would
@@ -721,7 +796,8 @@ const Detection = struct {
             .str_match_set => true,
             .ret => |s| c.chainContains(s.value),
             .expect_err => |s| c.chainContains(s.message),
-            .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
+            .crash => |s| if (s.msg.localId()) |message| c.chainContains(message) else false,
+            .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
         };
     }
 
@@ -731,11 +807,21 @@ const Detection = struct {
         return false;
     }
 
+    fn descRefTouchesChain(_: *const Detection, desc: LIR.BoxyDescRef, candidate: *const Candidate) bool {
+        const local = desc.localOrNull() orelse return false;
+        return candidate.chainContains(local);
+    }
+
+    fn dictRefTouchesChain(_: *const Detection, dict: LIR.BoxyDictRef, candidate: *const Candidate) bool {
+        const local = dict.localOrNull() orelse return false;
+        return candidate.chainContains(local);
+    }
+
     fn invalidateSharedRewriteCandidates(self: *Detection) void {
         for (self.scratch.candidates.items) |*candidate| {
             switch (candidate.state) {
                 .confirmed_construct, .confirmed_tail => {},
-                else => continue,
+                .active, .boxed, .in_struct, .tagged, .invalid => continue,
             }
             if (self.candidateTouchesSharedRewritePath(candidate)) {
                 candidate.state = .invalid;
@@ -771,6 +857,8 @@ const Detection = struct {
             .switch_branch => |info| self.isSharedPath(info.stmt),
             .switch_default => |stmt| self.isSharedPath(stmt),
             .switch_continuation => |stmt| self.isSharedPath(stmt),
+            .boxy_tag_on_match => |stmt| self.isSharedPath(stmt),
+            .boxy_tag_on_miss => |stmt| self.isSharedPath(stmt),
             .initialized_payload_branch => |info| self.isSharedPath(info.stmt),
         };
     }
@@ -787,7 +875,7 @@ const Detection = struct {
         for (self.scratch.candidates.items) |candidate| {
             switch (candidate.state) {
                 .confirmed_construct, .confirmed_tail => {},
-                else => continue,
+                .active, .boxed, .in_struct, .tagged, .invalid => continue,
             }
             if (self.candidateTouchesSharedRewritePath(&candidate)) {
                 std.debug.panic(
@@ -864,7 +952,7 @@ const Transform = struct {
             switch (candidate.state) {
                 .confirmed_construct => try self.rewriteConstructSite(candidate, ptr_ret),
                 .confirmed_tail => try self.rewriteTailSite(candidate),
-                else => {},
+                .active, .boxed, .in_struct, .tagged, .invalid => {},
             }
         }
 
@@ -889,7 +977,7 @@ const Transform = struct {
                 .confirmed_construct, .confirmed_tail => {
                     if (candidate.terminal_stmt == stmt_id) return true;
                 },
-                else => {},
+                .active, .boxed, .in_struct, .tagged, .invalid => {},
             }
         }
         return false;
@@ -1164,16 +1252,46 @@ const Transform = struct {
 
     fn nextOf(self: *const Transform, stmt_id: CFStmtId) CFStmtId {
         return switch (self.store.getCFStmt(stmt_id)) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
-            else => unreachable,
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .boxy_tag_match,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => unreachable,
         };
     }
 
     fn setNext(self: *Transform, stmt_id: CFStmtId, next: CFStmtId) void {
         const ptr = self.store.getCFStmtPtr(stmt_id);
         switch (ptr.*) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |*s| s.next = next,
-            else => unreachable,
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |*s| s.next = next,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .boxy_tag_match,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => unreachable,
         }
     }
 
@@ -1189,6 +1307,8 @@ const Transform = struct {
             },
             .switch_default => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.default_branch = replacement,
             .switch_continuation => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.continuation = replacement,
+            .boxy_tag_on_match => |stmt| self.store.getCFStmtPtr(stmt).boxy_tag_match.on_match = replacement,
+            .boxy_tag_on_miss => |stmt| self.store.getCFStmtPtr(stmt).boxy_tag_match.on_miss = replacement,
             .initialized_payload_branch => |info| {
                 const switch_stmt = &self.store.getCFStmtPtr(info.stmt).switch_initialized_payload;
                 if (info.initialized) {

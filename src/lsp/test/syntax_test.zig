@@ -25,7 +25,7 @@ fn platformPath(allocator: std.mem.Allocator) integration_spec.SpecError![]u8 {
 // Test Harness
 
 /// Shared setup for syntax checker tests. Manages allocator, SyntaxChecker,
-/// temporary directory, platform path, and file URI — eliminating the
+/// temporary directory, platform path, and file URI—eliminating the
 /// boilerplate that every test otherwise repeats.
 const TestHarness = struct {
     allocator: std.mem.Allocator,
@@ -141,6 +141,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "record field completion in sub module", .run = recordFieldCompletionInSubModule },
     .{ .name = "record field completion works for nested nominal submodule", .run = recordFieldCompletionWorksForNestedNominalSubmodule },
     .{ .name = "record field completion works", .run = recordFieldCompletionWorks },
+    .{ .name = "optional record field completion inserts optional access", .run = optionalRecordFieldCompletionInsertsOptionalAccess },
     .{ .name = "tuple index completion works", .run = tupleIndexCompletionWorks },
     .{ .name = "record field completion with partial field name", .run = recordFieldCompletionWithPartialFieldName },
     .{ .name = "static dispatch completion for nominal type methods", .run = staticDispatchCompletionForNominalTypeMethods },
@@ -400,7 +401,7 @@ pub fn recordFieldCompletionWorksForModules() integration_spec.SpecError!void {
     );
     defer h.allocator.free(incomplete);
 
-    // Line 6: "get_foo = my_record." — character 20 is right after the dot
+    // Line 6: "get_foo = my_record."—character 20 is right after the dot
     const items = try h.getCompletions(incomplete, 6, 20);
     defer h.freeCompletions(items);
 
@@ -438,7 +439,7 @@ pub fn recordFieldCompletionInSubModule() integration_spec.SpecError!void {
     );
     defer h.allocator.free(incomplete);
 
-    // Line 6: "get_foo = my_record." — character 20 is right after the dot
+    // Line 6: "get_foo = my_record."—character 20 is right after the dot
     const items = try h.getCompletions(incomplete, 6, 17);
     defer h.freeCompletions(items);
 
@@ -485,7 +486,7 @@ pub fn recordFieldCompletionWorksForNestedNominalSubmodule() integration_spec.Sp
     );
     defer h.allocator.free(incomplete);
 
-    // Line 9: "test = MyType.Sub." — character 18 is right after the dot.
+    // Line 9: "test = MyType.Sub."—character 18 is right after the dot.
     const items = try h.getCompletions(incomplete, 9, 18);
     defer h.freeCompletions(items);
 
@@ -518,11 +519,56 @@ pub fn recordFieldCompletionWorks() integration_spec.SpecError!void {
     );
     defer h.allocator.free(incomplete);
 
-    // Line 4: "get_foo = my_record." — character 20 is right after the dot
+    // Line 4: "get_foo = my_record."—character 20 is right after the dot
     const items = try h.getCompletions(incomplete, 4, 20);
     defer h.freeCompletions(items);
 
     try TestHarness.expectHasLabels(items, &.{ "foo", "bar" });
+}
+
+/// Verifies accepting an optional-field completion after `.` produces `.?field`.
+pub fn optionalRecordFieldCompletionInsertsOptionalAccess() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const clean = try h.formatSource(
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\get_fields = |r| {{ a: r.?a, b: r.b }}
+        \\main = "ok"
+        \\
+    );
+    defer h.allocator.free(clean);
+
+    try h.writeFile("optional_record_completion.roc", clean);
+    try h.check(clean);
+
+    const incomplete = try h.formatSource(
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\get_fields = |r| r.
+        \\main = "ok"
+        \\
+    );
+    defer h.allocator.free(incomplete);
+
+    const items = try h.getCompletions(incomplete, 2, 19);
+    defer h.freeCompletions(items);
+    try TestHarness.expectHasLabels(items, &.{ "a", "b" });
+
+    var found_optional = false;
+    var found_required = false;
+    for (items) |item| {
+        if (std.mem.eql(u8, item.label, "a")) {
+            found_optional = true;
+            try std.testing.expectEqualStrings("?a", item.insertText orelse "");
+        } else if (std.mem.eql(u8, item.label, "b")) {
+            found_required = true;
+            try std.testing.expect(item.insertText == null);
+        }
+    }
+    try std.testing.expect(found_optional);
+    try std.testing.expect(found_required);
 }
 
 /// Verifies tuple index completions appear after a tuple dot.
@@ -553,7 +599,7 @@ pub fn tupleIndexCompletionWorks() integration_spec.SpecError!void {
     );
     defer h.allocator.free(incomplete);
 
-    // Line 4: "get_first = my_tuple." — character 21 is right after the dot
+    // Line 4: "get_first = my_tuple."—character 21 is right after the dot
     const items = try h.getCompletions(incomplete, 4, 21);
     defer h.freeCompletions(items);
 
@@ -593,7 +639,7 @@ pub fn recordFieldCompletionWithPartialFieldName() integration_spec.SpecError!vo
     );
     defer h.allocator.free(partial);
 
-    // Both fields returned — client-side filtering narrows to "of" prefix
+    // Both fields returned—client-side filtering narrows to "of" prefix
     const items = try h.getCompletions(partial, 5, 23);
     defer h.freeCompletions(items);
 
@@ -642,7 +688,7 @@ pub fn staticDispatchCompletionForNominalTypeMethods() integration_spec.SpecErro
     );
     defer h.allocator.free(incomplete);
 
-    // Line 12: "result = val." — character 14 is right after the dot
+    // Line 12: "result = val."—character 14 is right after the dot
     const items = try h.getCompletions(incomplete, 12, 14);
     defer h.freeCompletions(items);
 
@@ -691,7 +737,7 @@ pub fn staticDispatchCompletionForChainedCall() integration_spec.SpecError!void 
     );
     defer h.allocator.free(incomplete);
 
-    // Line 12: "result = val.step()." — character 21 is right after the dot
+    // Line 12: "result = val.step()."—character 21 is right after the dot
     const items = try h.getCompletions(incomplete, 12, 21);
     defer h.freeCompletions(items);
 
@@ -736,7 +782,7 @@ pub fn completionIncludesDocCommentsFromSource() integration_spec.SpecError!void
     );
     defer h.allocator.free(incomplete);
 
-    // Line 7: "main = a" — character 8 is at the end after 'a'
+    // Line 7: "main = a"—character 8 is at the end after 'a'
     const items = try h.getCompletions(incomplete, 7, 8);
     defer h.freeCompletions(items);
 

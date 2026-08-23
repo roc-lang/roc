@@ -234,6 +234,53 @@ import Color as CC
 import json.Parser as JP
 ```
 
+### Modules in subdirectories
+
+Use `/` for source-directory traversal and `.` for types nested inside a
+module. Binding clauses do not change which source file is selected. For
+example:
+
+```roc
+import Src/Widget as Widget
+import Internal/Http/Client exposing [send]
+```
+
+These imports load `Src/Widget.roc` and `Internal/Http/Client.roc`, respectively,
+relative to the importing file. A bare target and a target beginning with `./`
+use that base; `../` moves toward the package root, and a leading `/` starts at
+the package root:
+
+```roc
+import Helper
+import ./Internal/Parser
+import ../Shared/Codec
+import /Public/Api
+```
+
+In every form, a dot begins nested-type selection. `import Url.ParseErr` loads
+`Url.roc` and imports `ParseErr`; `import Url/ParseErr` loads
+`Url/ParseErr.roc`. Adding `as` or `exposing` never changes that distinction.
+
+A package can expose a module stored in a subdirectory by naming its import
+alias in the package header:
+
+```roc
+package [Widget] {}
+
+import Src/Widget as Widget
+```
+
+Package-qualified imports use one dot after the lowercase package alias, then
+the public module name. Further dots select nested types:
+
+```roc
+import json.Parser
+import json.Parser.ParseErr as PE
+```
+
+Directory traversal is private to the package that declares the public module;
+consumers use its public name rather than its internal source path.
+
 ### Importing types from packages
 
 Packages contain a collection of modules that are imported by applications, platforms or packages. Package dependencies are specified in the module header:
@@ -485,6 +532,34 @@ app [main!] {
 }
 ```
 
+### Pinning a Roc version
+
+Any app, package or platform header may pin the version of the Roc compiler it
+is written for, using the reserved `roc` entry in its packages record:
+
+```roc
+app [main!] {
+    pf: platform "../basic-cli/main.roc",
+    roc: "nightly-2026-08-05-24f0b47"
+}
+```
+
+This is optional. When present, the value must be a version string of the kind
+`roc version` prints: either a nightly tag such as
+`nightly-2026-08-05-24f0b47` or a release version such as `0.1.0`. Because
+`roc` names the compiler version, it cannot also be used as the shorthand for a
+platform or package.
+
+Compiling a file whose pin names a different compiler than the one you are
+running reports a warning; it does not stop the build.
+
+`roc fmt` keeps a pinned nightly up to date: when the compiler running it is a
+nightly at least as new as the pin, it rewrites the pin to name that compiler.
+A pinned release version is left alone, since pinning a release is a deliberate
+choice rather than a snapshot of whatever nightly was current. Because this is
+part of formatting, `roc fmt --check` reports a file whose nightly pin is out
+of date as needing formatting.
+
 ### Nominal type identity across packages
 
 A nominal type's identity is determined by the *content* of the module that
@@ -494,9 +569,9 @@ they have the same declared name and their declaring modules have
 byte-identical content all the way down through their imports.
 
 A practical consequence: if the same module content is reached through two
-different package downloads — two versions of a package where that module did
+different package downloads—two versions of a package where that module did
 not change, the same package fetched from two mirror URLs, or a vendored copy
-of a dependency — the types it declares are all the same type, and values of
+of a dependency—the types it declares are all the same type, and values of
 those types interoperate freely. A type that did not change keeps working
 across a version bump. Conversely, if the declaring module (or anything it
 imports) changed at all, its types are new, distinct types, even when every

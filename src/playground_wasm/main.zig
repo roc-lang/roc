@@ -31,7 +31,7 @@ const unbundle = @import("unbundle");
 const fmt = @import("fmt");
 const WasmFilesystem = @import("WasmFilesystem.zig");
 
-// WASM filesystem context — module-level so it persists across compilations.
+// WASM filesystem context—module-level so it persists across compilations.
 var wasm_ctx: WasmFilesystem.WasmContext = .{};
 const layout = @import("layout");
 const compiled_builtins = @import("compiled_builtins");
@@ -49,7 +49,7 @@ var allocator: Allocator = std.heap.wasm_allocator;
 const PlaygroundCompileError =
     Allocator.Error ||
     fmt.FormatAstError ||
-    eval.test_helpers.TestHelperError ||
+    eval.Inspected.Error ||
     check.CheckedArtifact.CompileTimeFinalizer.Error ||
     error{
         ErrFinalizingHTMLWriter,
@@ -608,7 +608,19 @@ fn handleStartState(message_type: MessageType, _: std.json.Value, response_buffe
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        else => {
+        .LOAD_SOURCE,
+        .QUERY_TOKENS,
+        .QUERY_AST,
+        .QUERY_CIR,
+        .QUERY_TYPES,
+        .QUERY_FORMATTED,
+        .GET_HOVER_INFO,
+        .EVALUATE_TESTS,
+        .RESET,
+        .INIT_REPL,
+        .REPL_STEP,
+        .CLEAR_REPL,
+        => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -676,7 +688,17 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        else => {
+        .INIT,
+        .QUERY_TOKENS,
+        .QUERY_AST,
+        .QUERY_CIR,
+        .QUERY_TYPES,
+        .QUERY_FORMATTED,
+        .GET_HOVER_INFO,
+        .EVALUATE_TESTS,
+        .REPL_STEP,
+        .CLEAR_REPL,
+        => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -719,7 +741,7 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
             const compiler_version = build_options.compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
-        else => {
+        .INIT, .LOAD_SOURCE, .INIT_REPL, .REPL_STEP, .CLEAR_REPL => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -803,7 +825,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
             };
             try writeFormattedResponse(response_buffer, data);
         },
-        else => {
+        .INIT, .LOAD_SOURCE, .EVALUATE_TESTS, .INIT_REPL => {
             try writeErrorResponse(response_buffer, .INVALID_STATE, "INVALID_STATE");
         },
     }
@@ -868,7 +890,22 @@ fn replDefinitionIdentity(line: []const u8) std.mem.Allocator.Error!?ReplDefinit
             break :blk switch (pattern) {
                 .ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
                 .var_ident => |ident| .{ .kind = .value, .name = ast.resolve(ident.ident_tok) },
-                else => null,
+                .tag,
+                .int,
+                .frac,
+                .typed_int,
+                .typed_frac,
+                .string,
+                .single_quote,
+                .record,
+                .list,
+                .list_rest,
+                .tuple,
+                .underscore,
+                .alternatives,
+                .as,
+                .malformed,
+                => null,
             };
         },
         .@"var" => |var_decl| .{ .kind = .value, .name = ast.resolve(var_decl.name) },
@@ -879,10 +916,10 @@ fn replDefinitionIdentity(line: []const u8) std.mem.Allocator.Error!?ReplDefinit
         },
         .import => |import| .{
             .kind = .import,
-            .name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes),
+            .name = ast.resolveImportTarget(import.target),
         },
         .file_import => |file_import| .{ .kind = .file_import, .name = ast.resolve(file_import.name_tok) },
-        else => null,
+        .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .malformed => null,
     };
 }
 
@@ -934,7 +971,7 @@ fn buildReplModuleSource(
 }
 
 const ReplCompiledModule = struct {
-    lowered: eval.test_helpers.LoweredProgram,
+    lowered: eval.Inspected.LoweredProgram,
 
     fn deinit(self: *@This()) void {
         self.lowered.deinit(allocator);
@@ -948,7 +985,23 @@ fn findDefByName(module_env: *const ModuleEnv, name: []const u8) ?can.CIR.Def.Id
         const ident = switch (pattern) {
             .assign => |assign| assign.ident,
             .as => |as_pattern| as_pattern.ident,
-            else => continue,
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .record_destructure,
+            .list,
+            .tuple,
+            .num_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .num_from_numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            .underscore,
+            .runtime_error,
+            => continue,
         };
         if (std.mem.eql(u8, module_env.getIdent(ident), name)) return def_idx;
     }
@@ -1007,7 +1060,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
-    const lowered = try eval.test_helpers.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
+    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
 
     root_artifact.deinitRetainingModuleEnv(allocator);
     import_artifacts[0].deinitRetainingModuleEnv(allocator);
@@ -1020,7 +1073,7 @@ fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
     for (reports.items) |report| {
         switch (report.severity) {
             .runtime_error, .fatal => return true,
-            .info, .warning => {},
+            .warning => {},
         }
     }
     return false;
@@ -1140,7 +1193,7 @@ fn runReplExpression(
     };
     defer compiled.deinit();
 
-    const output = eval.test_helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
+    const output = eval.Inspected.lirInterpreterInspectedStr(allocator, &compiled.lowered) catch |err| {
         try writeReplStaticError(response_buffer, @errorName(err), .interpreter);
         return;
     };
@@ -1185,12 +1238,7 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
     return compileSourceWithValidation(source, module_name, .checking);
 }
 
-const SourceValidationMode = enum {
-    checking,
-    explicit_roots,
-};
-
-fn compileSourceWithValidation(source: []const u8, module_name: []const u8, validation_mode: SourceValidationMode) PlaygroundCompileError!CompilerStageData {
+fn compileSourceWithValidation(source: []const u8, module_name: []const u8, validation_mode: Can.Validation) PlaygroundCompileError!CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
@@ -1370,6 +1418,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
             .builtin_module_env = builtin_module.env,
             .builtin_indices = builtin_indices,
         },
+        .validation = validation_mode,
     });
     defer czer.deinit();
 
@@ -1380,16 +1429,10 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         return err;
     };
 
-    switch (validation_mode) {
-        .checking => czer.validateForChecking() catch |err| {
-            logDebug("compileSource: validateForChecking failed: {}\n", .{err});
-            return err;
-        },
-        .explicit_roots => czer.validateForExplicitRoots() catch |err| {
-            logDebug("compileSource: validateForExplicitRoots failed: {}\n", .{err});
-            return err;
-        },
-    }
+    czer.runValidation() catch |err| {
+        logDebug("compileSource: validation failed: {}\n", .{err});
+        return err;
+    };
     logDebug("compileSource: Canonicalization complete\n", .{});
 
     // Copy the modified AST back into the main result to ensure state consistency
@@ -1787,7 +1830,9 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) (Allocato
     try ModuleEnv.pushToSExprTree(mutable_cir, null, &tree);
     tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.WriteFailed,
+        error.ErrFinalizingHTMLWriter,
+        error.WriteFailed,
+        => return error.WriteFailed,
     };
     try sexpr_writer_allocating.writer.flush();
 
@@ -1830,13 +1875,13 @@ fn argLayoutsForProc(
 }
 
 fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError![]u8 {
-    var resources = try eval.test_helpers.parseAndCanonicalizeProgramPublishedRoots(
+    var resources = try eval.Inspected.parseAndCanonicalizeProgramPublishedRoots(
         allocator,
         .module,
         data.module_env.common.source,
         &.{},
     );
-    defer eval.test_helpers.cleanupParseAndCanonical(allocator, resources);
+    defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
 
     const test_roots = try collectPlaygroundTestRootRequests(allocator, &resources.checked_artifact);
     defer allocator.free(test_roots);
@@ -1874,10 +1919,11 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var interpreter = try eval.LirInterpreter.init(
+    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         runtime_env.get_ops(),
         .preserve,
     );
@@ -1976,27 +2022,21 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
         return;
     };
 
-    const line_num = switch (line_val) {
-        .integer => |i| @as(u32, @intCast(i)) - 1, // Convert from 1-based to 0-based index
-        else => {
-            try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid line parameter");
-            return;
-        },
-    };
-    const ch_num = switch (ch_val) {
-        .integer => |i| @as(u32, @intCast(i)) - 1, // Convert from 1-based to 0-based
-        else => {
-            try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid ch parameter");
-            return;
-        },
-    };
-    const ident_str = switch (identifier_val) {
-        .string => |s| s,
-        else => {
-            try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid identifier parameter");
-            return;
-        },
-    };
+    if (std.meta.activeTag(line_val) != .integer) {
+        try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid line parameter");
+        return;
+    }
+    const line_num = @as(u32, @intCast(line_val.integer)) - 1; // Convert from 1-based to 0-based index
+    if (std.meta.activeTag(ch_val) != .integer) {
+        try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid ch parameter");
+        return;
+    }
+    const ch_num = @as(u32, @intCast(ch_val.integer)) - 1; // Convert from 1-based to 0-based
+    if (std.meta.activeTag(identifier_val) != .string) {
+        try writeErrorResponse(response_buffer, .INVALID_MESSAGE, "Invalid identifier parameter");
+        return;
+    }
+    const ident_str = identifier_val.string;
 
     if (data.solver == null) {
         try writeErrorResponse(response_buffer, .ERROR, "Type checking not completed.");
@@ -2020,7 +2060,8 @@ fn writeHoverInfoResponse(response_buffer: []u8, data: CompilerStageData, messag
 
     var maybe_hover_info = findHoverInfoAtPosition(data, byte_offset, ident_str) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => {
+        error.WriteFailed,
+        => {
             try writeErrorResponse(response_buffer, .ERROR, "Failed to find hover information");
             return;
         },
@@ -2109,7 +2150,24 @@ fn findHoverInfoAtPosition(data: CompilerStageData, byte_offset: u32, identifier
                         };
                     }
                 },
-                else => {},
+                .as,
+                .applied_tag,
+                .nominal,
+                .nominal_external,
+                .record_destructure,
+                .list,
+                .tuple,
+                .num_literal,
+                .frac_f32_literal,
+                .frac_f64_literal,
+                .small_dec_literal,
+                .dec_literal,
+                .num_from_numeral_literal,
+                .str_literal,
+                .str_interpolation,
+                .underscore,
+                .runtime_error,
+                => {},
             }
         }
     }
@@ -2145,7 +2203,9 @@ fn writeTypesResponse(response_buffer: []u8, data: CompilerStageData) (Allocator
     };
     tree.toHtml(&sexpr_writer_allocating.writer, .include_linecol) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.WriteFailed,
+        error.ErrFinalizingHTMLWriter,
+        error.WriteFailed,
+        => return error.WriteFailed,
     };
     try sexpr_writer_allocating.writer.flush();
 
@@ -2165,7 +2225,6 @@ fn countDiagnostics(reports: []reporting.Report) struct { errors: u32, warnings:
     var warnings: u32 = 0;
     for (reports) |report| {
         switch (report.severity) {
-            .info => {},
             .warning => warnings += 1,
             .runtime_error, .fatal => errors += 1,
         }
@@ -2193,7 +2252,6 @@ fn extractDiagnosticsFromReports(
         const message = try report.addOwnedString(report.title);
         for (@constCast(message)) |*c| c.* = std.ascii.toUpper(c.*);
         const diagnostic_severity = switch (report.severity) {
-            .info => DiagnosticSeverity.info,
             .warning => DiagnosticSeverity.warning,
             .runtime_error => DiagnosticSeverity.@"error",
             .fatal => DiagnosticSeverity.@"error",

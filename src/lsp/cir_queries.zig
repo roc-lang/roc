@@ -22,6 +22,60 @@ const types = @import("types");
 const base = @import("base");
 const Region = base.Region;
 
+fn statementAnnotation(statement: CIR.Statement) ?CIR.Annotation.Idx {
+    return switch (statement) {
+        .s_decl => |decl| decl.anno,
+        .s_var => |var_stmt| var_stmt.anno,
+        .s_var_uninitialized => |var_stmt| var_stmt.anno,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
+    };
+}
+
+fn statementPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
+    return switch (statement) {
+        .s_decl => |decl| decl.pattern,
+        .s_var => |var_stmt| var_stmt.pattern_idx,
+        .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => null,
+    };
+}
+
 // Result Types
 
 /// Result of finding a type at an offset.
@@ -44,10 +98,30 @@ pub const LspRange = struct {
     end_col: u32,
 };
 
-/// Result of finding a lookup expression at an offset.
-pub const LookupResult = struct {
+/// One field-name lookup inside a flattened record-access path.
+pub const FieldAccessLookup = struct {
+    /// The enclosing path expression.
     expr_idx: CIR.Expr.Idx,
-    region: Region,
+    /// The exact segment selected by the source offset.
+    segment_idx: CIR.Expr.FieldAccessSegment.Idx,
+};
+
+/// Result of finding a lookup at an offset.
+///
+/// Field-access segments are auxiliary CIR nodes rather than expressions, so
+/// their identity must remain explicit instead of being replaced with the
+/// enclosing path expression.
+pub const LookupResult = union(enum) {
+    expr: CIR.Expr.Idx,
+    field_access: FieldAccessLookup,
+
+    /// Return the type variable owned by the selected lookup site.
+    pub fn typeVar(self: LookupResult) types.Var {
+        return switch (self) {
+            .expr => |expr_idx| ModuleEnv.varFrom(expr_idx),
+            .field_access => |field_access| ModuleEnv.varFrom(field_access.segment_idx),
+        };
+    }
 };
 
 // Helper Functions
@@ -61,6 +135,63 @@ pub fn regionContainsOffset(region: Region, offset: u32) bool {
 /// Calculate the size (span) of a region in bytes.
 pub fn regionSize(region: Region) u32 {
     return region.end.offset - region.start.offset;
+}
+
+const FieldAccessSegmentMatch = struct {
+    idx: CIR.Expr.FieldAccessSegment.Idx,
+    position: u32,
+    region: Region,
+};
+
+/// Find the source-ordered field-name segment containing an offset.
+fn findFieldAccessSegmentAtOffset(
+    store: *const NodeStore,
+    segments: CIR.Expr.FieldAccessSegment.Span,
+    target_offset: u32,
+) ?FieldAccessSegmentMatch {
+    // Find the rightmost segment whose start is at or before the target. Field
+    // access regions are source-adjacent, so one segment's exclusive end is
+    // the next segment's inclusive start. Preferring the latter makes shared
+    // boundaries deterministic while retaining the final segment's inclusive
+    // end for cursor queries.
+    var lower: u32 = 0;
+    var upper = segments.len;
+    while (lower < upper) {
+        const position = lower + (upper - lower) / 2;
+        const segment_idx = store.fieldAccessSegmentAt(segments, position);
+        const region = store.getFieldAccessSegmentRegion(segment_idx);
+        if (target_offset < region.start.offset) {
+            upper = position;
+        } else {
+            lower = position + 1;
+        }
+    }
+
+    if (lower == 0) return null;
+    const position = lower - 1;
+    const segment_idx = store.fieldAccessSegmentAt(segments, position);
+    const region = store.getFieldAccessSegmentRegion(segment_idx);
+    if (target_offset > region.end.offset) return null;
+
+    return .{
+        .idx = segment_idx,
+        .position = position,
+        .region = region,
+    };
+}
+
+/// Return the receiver type variable for one source-ordered path segment.
+fn fieldAccessSegmentReceiverVar(
+    store: *const NodeStore,
+    receiver: CIR.Expr.Idx,
+    segments: CIR.Expr.FieldAccessSegment.Span,
+    segment_position: u32,
+) types.Var {
+    std.debug.assert(segment_position < segments.len);
+    if (segment_position == 0) {
+        return ModuleEnv.varFrom(receiver);
+    }
+    return ModuleEnv.varFrom(store.fieldAccessSegmentAt(segments, segment_position - 1));
 }
 
 /// Convert a Region to an LspRange using line starts from ModuleEnv.
@@ -117,7 +248,7 @@ const FindTypeContext = struct {
     }
 
     /// Pre-visit callback for expressions.
-    fn visitExprPre(ctx: *FindTypeContext, expr_idx: CIR.Expr.Idx, _: CIR.Expr) VisitAction {
+    fn visitExprPre(ctx: *FindTypeContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
         const region = ctx.store.getExprRegion(expr_idx);
 
         // Early exit if region doesn't contain target
@@ -131,6 +262,20 @@ const FindTypeContext = struct {
                 .type_var = ModuleEnv.varFrom(expr_idx),
                 .region = region,
             };
+        }
+
+        // Field-access paths are flattened into one expression, but every
+        // source segment has its own node, region, and type variable.
+        if (expr == .e_field_access) {
+            const field_access = expr.e_field_access;
+            if (findFieldAccessSegmentAtOffset(ctx.store, field_access.segments, ctx.target_offset)) |segment| {
+                if (ctx.checkAndUpdate(segment.region)) {
+                    ctx.result = .{
+                        .type_var = ModuleEnv.varFrom(segment.idx),
+                        .region = segment.region,
+                    };
+                }
+            }
         }
 
         return .continue_traversal;
@@ -159,24 +304,14 @@ const FindTypeContext = struct {
     /// Pre-visit callback for statements (to check annotations).
     fn visitStmtPre(ctx: *FindTypeContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
         // Check if cursor is in a type annotation
-        const anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
-            .s_decl => |d| d.anno,
-            .s_var => |v| v.anno,
-            .s_var_uninitialized => |v| v.anno,
-            else => null,
-        };
+        const anno_idx = statementAnnotation(stmt);
 
         if (anno_idx) |anno| {
             const annotation = ctx.store.getAnnotation(anno);
             const type_anno_region = ctx.store.getTypeAnnoRegion(annotation.anno);
             if (ctx.checkAndUpdate(type_anno_region)) {
                 // Get the pattern for this statement to get the type var
-                const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
-                    .s_decl => |d| d.pattern,
-                    .s_var => |v| v.pattern_idx,
-                    .s_var_uninitialized => |v| v.pattern_idx,
-                    else => null,
-                };
+                const pattern_idx = statementPattern(stmt);
                 if (pattern_idx) |pat| {
                     ctx.result = .{
                         .type_var = ModuleEnv.varFrom(pat),
@@ -188,12 +323,7 @@ const FindTypeContext = struct {
             // Also check the annotation identifier region
             const anno_region = ctx.store.getAnnotationRegion(anno);
             if (ctx.checkAndUpdate(anno_region)) {
-                const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
-                    .s_decl => |d| d.pattern,
-                    .s_var => |v| v.pattern_idx,
-                    .s_var_uninitialized => |v| v.pattern_idx,
-                    else => null,
-                };
+                const pattern_idx = statementPattern(stmt);
                 if (pattern_idx) |pat| {
                     ctx.result = .{
                         .type_var = ModuleEnv.varFrom(pat),
@@ -212,7 +342,7 @@ const FindLookupContext = struct {
     store: *const NodeStore,
     target_offset: u32,
     best_size: u32 = std.math.maxInt(u32),
-    result: ?CIR.Expr.Idx = null,
+    result: ?LookupResult = null,
 
     /// Pre-visit callback for expressions.
     fn visitExprPre(ctx: *FindLookupContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
@@ -224,32 +354,28 @@ const FindLookupContext = struct {
         }
 
         // Check if this expression is a lookup or relevant field access.
-        switch (expr) {
-            .e_lookup_local, .e_lookup_external => {
-                const size = regionSize(region);
-                if (size < ctx.best_size) {
-                    ctx.best_size = size;
-                    ctx.result = expr_idx;
-                }
-            },
-            .e_method_call, .e_dispatch_call, .e_type_method_call, .e_type_dispatch_call, .e_structural_eq, .e_structural_hash, .e_method_eq => {
-                const size = regionSize(region);
-                if (size < ctx.best_size) {
-                    ctx.best_size = size;
-                    ctx.result = expr_idx;
-                }
-            },
-            .e_field_access => |field_access| {
-                // Check if cursor is on the field name.
-                if (regionContainsOffset(field_access.field_name_region, ctx.target_offset)) {
-                    const size = regionSize(field_access.field_name_region);
-                    if (size < ctx.best_size) {
-                        ctx.best_size = size;
-                        ctx.result = expr_idx;
-                    }
-                }
-            },
-            else => {},
+        if (expr == .e_lookup_local or expr == .e_lookup_external or
+            expr == .e_method_call or expr == .e_dispatch_call or expr == .e_type_method_call or
+            expr == .e_type_dispatch_call or expr == .e_structural_eq or expr == .e_structural_hash or
+            expr == .e_method_eq)
+        {
+            const size = regionSize(region);
+            if (size < ctx.best_size) {
+                ctx.best_size = size;
+                ctx.result = .{ .expr = expr_idx };
+            }
+        } else if (expr == .e_field_access) {
+            const field_access = expr.e_field_access;
+            const segment = findFieldAccessSegmentAtOffset(ctx.store, field_access.segments, ctx.target_offset) orelse
+                return .continue_traversal;
+            const size = regionSize(segment.region);
+            if (size < ctx.best_size) {
+                ctx.best_size = size;
+                ctx.result = .{ .field_access = .{
+                    .expr_idx = expr_idx,
+                    .segment_idx = segment.idx,
+                } };
+            }
         }
 
         return .continue_traversal;
@@ -271,19 +397,14 @@ const CollectReferencesContext = struct {
 
     /// Pre-visit callback for expressions.
     fn visitExprPre(ctx: *CollectReferencesContext, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
-        switch (expr) {
-            .e_lookup_local => |lookup| {
-                if (@intFromEnum(lookup.pattern_idx) == @intFromEnum(ctx.target_pattern)) {
-                    const region = ctx.store.getExprRegion(expr_idx);
-                    if (regionToRange(ctx.module_env, region)) |range| {
-                        ctx.results.append(ctx.allocator, range) catch |err| {
-                            ctx.oom = err;
-                            return .stop;
-                        };
-                    }
-                }
-            },
-            else => {},
+        if (std.meta.activeTag(expr) == .e_lookup_local and @intFromEnum(expr.e_lookup_local.pattern_idx) == @intFromEnum(ctx.target_pattern)) {
+            const region = ctx.store.getExprRegion(expr_idx);
+            if (regionToRange(ctx.module_env, region)) |range| {
+                ctx.results.append(ctx.allocator, range) catch |err| {
+                    ctx.oom = err;
+                    return .stop;
+                };
+            }
         }
         return .continue_traversal;
     }
@@ -325,22 +446,20 @@ const FindFieldAccessReceiverContext = struct {
 
     /// Pre-visit callback for expressions.
     fn visitExprPre(ctx: *FindFieldAccessReceiverContext, _: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
-        const region = switch (expr) {
-            .e_field_access => |field_access| field_access.field_name_region,
-            else => return .continue_traversal,
-        };
-
-        // Early exit if region doesn't contain target
-        if (!regionContainsOffset(region, ctx.target_offset)) {
-            return .continue_traversal;
-        }
-
-        // Check if this is a better match (cursor is on field name)
-        const size = regionSize(region);
-        if (size < ctx.best_size) {
-            ctx.best_size = size;
-            // Return the type of the receiver
-            ctx.result = ModuleEnv.varFrom(expr.e_field_access.receiver);
+        if (expr == .e_field_access) {
+            const field_access = expr.e_field_access;
+            const segment = findFieldAccessSegmentAtOffset(ctx.store, field_access.segments, ctx.target_offset) orelse
+                return .continue_traversal;
+            const size = regionSize(segment.region);
+            if (size < ctx.best_size) {
+                ctx.best_size = size;
+                ctx.result = fieldAccessSegmentReceiverVar(
+                    ctx.store,
+                    field_access.receiver,
+                    field_access.segments,
+                    segment.position,
+                );
+            }
         }
 
         return .continue_traversal;
@@ -445,12 +564,11 @@ pub fn findTypeAtOffset(module_env: *ModuleEnv, offset: u32) ?TypeAtOffsetResult
     return ctx.result;
 }
 
-/// Find a variable lookup (local or external) at the given offset.
+/// Find a variable, dispatch, or record-field lookup at the given offset.
 ///
-/// Returns the expression index of the lookup if found, which can be used
-/// to get the pattern it references (for local lookups) or the external
-/// module/function it references.
-pub fn findLookupAtOffset(module_env: *ModuleEnv, offset: u32) ?CIR.Expr.Idx {
+/// Expression-backed lookups retain their expression identity. Record-field
+/// lookups retain both their enclosing path and exact segment identity.
+pub fn findLookupAtOffset(module_env: *ModuleEnv, offset: u32) ?LookupResult {
     var ctx = FindLookupContext{
         .store = &module_env.store,
         .target_offset = offset,
@@ -640,4 +758,117 @@ test "regionSize calculation" {
     };
 
     try std.testing.expectEqual(@as(u32, 15), regionSize(region));
+}
+
+test "field access query segments preserve ordered type, receiver, and lookup identities" {
+    const gpa = std.testing.allocator;
+    var store = try NodeStore.init(gpa);
+    defer store.deinit();
+
+    const receiver_idx = try store.addExpr(
+        .{ .e_empty_record = .{} },
+        .{ .start = .{ .offset = 0 }, .end = .{ .offset = 4 } },
+    );
+    const segment_regions = [_]Region{
+        .{ .start = .{ .offset = 2 }, .end = .{ .offset = 5 } },
+        .{ .start = .{ .offset = 5 }, .end = .{ .offset = 7 } },
+        .{ .start = .{ .offset = 7 }, .end = .{ .offset = 10 } },
+    };
+
+    const builder = try store.startFieldAccessPath(segment_regions.len);
+    for (segment_regions, 0..) |segment_region, position| {
+        _ = store.appendFieldAccessPathSegmentAssumeCapacity(builder, .{
+            .name = @bitCast(@as(u32, @intCast(position + 1))),
+            .mode = if (position == 1) .optional else .required,
+        }, segment_region);
+    }
+    const segments = store.finishFieldAccessPath(builder);
+    const access_idx = try store.addExpr(.{ .e_field_access = .{
+        .receiver = receiver_idx,
+        .segments = segments,
+    } }, .{ .start = .{ .offset = 0 }, .end = .{ .offset = 10 } });
+    const access_expr = store.getExpr(access_idx);
+
+    for (segment_regions, 0..) |segment_region, segment_position_usize| {
+        const segment_position: u32 = @intCast(segment_position_usize);
+        const segment_idx = store.fieldAccessSegmentAt(segments, segment_position);
+        const target_offset = segment_region.start.offset + 1;
+
+        var type_ctx = FindTypeContext{
+            .store = &store,
+            .target_offset = target_offset,
+        };
+        _ = FindTypeContext.visitExprPre(&type_ctx, access_idx, access_expr);
+        const type_result = type_ctx.result.?;
+        try std.testing.expectEqual(ModuleEnv.varFrom(segment_idx), type_result.type_var);
+        try std.testing.expectEqualDeep(segment_region, type_result.region);
+
+        var receiver_ctx = FindFieldAccessReceiverContext{
+            .store = &store,
+            .target_offset = target_offset,
+        };
+        _ = FindFieldAccessReceiverContext.visitExprPre(&receiver_ctx, access_idx, access_expr);
+        try std.testing.expectEqual(
+            fieldAccessSegmentReceiverVar(&store, receiver_idx, segments, segment_position),
+            receiver_ctx.result.?,
+        );
+
+        var lookup_ctx = FindLookupContext{
+            .store = &store,
+            .target_offset = target_offset,
+        };
+        _ = FindLookupContext.visitExprPre(&lookup_ctx, access_idx, access_expr);
+        const lookup = lookup_ctx.result.?;
+        try std.testing.expectEqualDeep(LookupResult{ .field_access = .{
+            .expr_idx = access_idx,
+            .segment_idx = segment_idx,
+        } }, lookup);
+        try std.testing.expectEqual(ModuleEnv.varFrom(segment_idx), lookup.typeVar());
+    }
+
+    for (segment_regions[1..], 1..) |segment_region, segment_position_usize| {
+        const segment_position: u32 = @intCast(segment_position_usize);
+        const segment = findFieldAccessSegmentAtOffset(
+            &store,
+            segments,
+            segment_region.start.offset,
+        ).?;
+        try std.testing.expectEqual(segment_position, segment.position);
+        try std.testing.expectEqual(
+            store.fieldAccessSegmentAt(segments, segment_position),
+            segment.idx,
+        );
+    }
+
+    const required_region = Region{
+        .start = .{ .offset = 29 },
+        .end = .{ .offset = 34 },
+    };
+    const required_builder = try store.startFieldAccessPath(1);
+    const required_segment = store.appendFieldAccessPathSegmentAssumeCapacity(required_builder, .{
+        .name = @bitCast(@as(u32, 99)),
+        .mode = .required,
+    }, required_region);
+    const required_idx = try store.addExpr(.{ .e_field_access = .{
+        .receiver = receiver_idx,
+        .segments = store.finishFieldAccessPath(required_builder),
+    } }, .{ .start = .{ .offset = 0 }, .end = .{ .offset = 34 } });
+    const required_expr = store.getExpr(required_idx);
+
+    var required_receiver_ctx = FindFieldAccessReceiverContext{
+        .store = &store,
+        .target_offset = 30,
+    };
+    _ = FindFieldAccessReceiverContext.visitExprPre(&required_receiver_ctx, required_idx, required_expr);
+    try std.testing.expectEqual(ModuleEnv.varFrom(receiver_idx), required_receiver_ctx.result.?);
+
+    var required_lookup_ctx = FindLookupContext{
+        .store = &store,
+        .target_offset = 30,
+    };
+    _ = FindLookupContext.visitExprPre(&required_lookup_ctx, required_idx, required_expr);
+    try std.testing.expectEqualDeep(LookupResult{ .field_access = .{
+        .expr_idx = required_idx,
+        .segment_idx = required_segment,
+    } }, required_lookup_ctx.result.?);
 }

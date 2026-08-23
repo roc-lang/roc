@@ -162,7 +162,7 @@ fn signedVectorLane(raw: u64, lane_bits: u8) i64 {
     };
 }
 
-/// Lightweight context for formatting values — carries only layout metadata.
+/// Lightweight context for formatting values—carries only layout metadata.
 pub const FormatContext = struct {
     layout_store: *const layout.Store,
     ident_store: ?*const Ident.Store = null,
@@ -197,7 +197,7 @@ pub fn format(self: RocValue, allocator: std.mem.Allocator, ctx: FormatContext) 
                 const precision = scalar.getInt();
                 return switch (precision) {
                     .u64, .u128 => try std.fmt.allocPrint(allocator, "{d}", .{self.readU128()}),
-                    else => try std.fmt.allocPrint(allocator, "{d}", .{self.readI128()}),
+                    .u8, .i8, .u16, .i16, .u32, .i32, .i64, .i128 => try std.fmt.allocPrint(allocator, "{d}", .{self.readI128()}),
                 };
             },
             .frac => {

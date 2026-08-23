@@ -10,10 +10,8 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 
 fn getBinop(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) error{NotABinop}!CIR.Expr.Binop {
     const expr = module_env.store.getExpr(expr_idx);
-    return switch (expr) {
-        .e_binop => |binop| binop,
-        else => error.NotABinop,
-    };
+    if (expr != .e_binop) return error.NotABinop;
+    return expr.e_binop;
 }
 
 test "canonicalize exclusive range to range_exclusive binop" {

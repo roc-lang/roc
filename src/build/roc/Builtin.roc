@@ -49,8 +49,8 @@ Builtin :: [].{
 	# parse_dict_after_key between a key and its value, and
 	# parse_dict_after_entry.
 	#
-	# A dict key that the format renders as a key string — a Str, a Bool, a
-	# number, or a tag union whose tags all lack payloads — is read and written
+	# A dict key that the format renders as a key string—a Str, a Bool, a
+	# number, or a tag union whose tags all lack payloads—is read and written
 	# by the parse_key_* and encode_key_* methods. Any other key is read and
 	# written by the key type's own codec, after parse_key_start or
 	# encode_key_start opens the key position. A format whose key position only
@@ -99,70 +99,70 @@ Builtin :: [].{
 		JsonContainerEncodeState :: { output : List(U8), needs_comma : Bool }
 
 		Json :: {}.{
-			parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str)])
+			parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_str = |encoding, state| JsonEncoding.parse_str(encoding, state)
 
-			parse_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str)])
+			parse_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_bool = |encoding, state| JsonEncoding.parse_bool(encoding, state)
 
-			parse_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str)])
+			parse_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_u8 = |encoding, state| JsonEncoding.parse_u8(encoding, state)
 
-			parse_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str)])
+			parse_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_i8 = |encoding, state| JsonEncoding.parse_i8(encoding, state)
 
-			parse_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str)])
+			parse_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_u16 = |encoding, state| JsonEncoding.parse_u16(encoding, state)
 
-			parse_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str)])
+			parse_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_i16 = |encoding, state| JsonEncoding.parse_i16(encoding, state)
 
-			parse_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str)])
+			parse_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_u32 = |encoding, state| JsonEncoding.parse_u32(encoding, state)
 
-			parse_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str)])
+			parse_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_i32 = |encoding, state| JsonEncoding.parse_i32(encoding, state)
 
-			parse_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str)])
+			parse_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_u64 = |encoding, state| JsonEncoding.parse_u64(encoding, state)
 
-			parse_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str)])
+			parse_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_i64 = |encoding, state| JsonEncoding.parse_i64(encoding, state)
 
-			parse_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str)])
+			parse_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_u128 = |encoding, state| JsonEncoding.parse_u128(encoding, state)
 
-			parse_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str)])
+			parse_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_i128 = |encoding, state| JsonEncoding.parse_i128(encoding, state)
 
-			parse_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str)])
+			parse_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_dec = |encoding, state| JsonEncoding.parse_dec(encoding, state)
 
-			parse_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str)])
+			parse_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_f32 = |encoding, state| JsonEncoding.parse_f32(encoding, state)
 
-			parse_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str)])
+			parse_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str), ..])
 			parse_f64 = |encoding, state| JsonEncoding.parse_f64(encoding, state)
 
-			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
+			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
 			parse_null = |encoding, state| JsonEncoding.parse_null(encoding, state)
 
-			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str)])
+			parse_list_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
 			parse_list_start = |encoding, state| JsonEncoding.parse_list_start(encoding, state)
 
-			parse_list_next : JsonEncoding, JsonState -> Try([Item(JsonState), Done(JsonState)], [InvalidJson(Str)])
+			parse_list_next : JsonEncoding, JsonState -> Try([Item(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
 			parse_list_next = |encoding, state| JsonEncoding.parse_list_next(encoding, state)
 
-			parse_list_after_item : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str)])
+			parse_list_after_item : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
 			parse_list_after_item = |encoding, state| JsonEncoding.parse_list_after_item(encoding, state)
 
-			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_start : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
 			parse_tuple_start = |encoding, state, len| JsonEncoding.parse_tuple_start(encoding, state, len)
 
-			parse_tuple_next : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_next : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str), ..])
 			parse_tuple_next = |encoding, state, index, len| JsonEncoding.parse_tuple_next(encoding, state, index, len)
 
-			parse_tuple_end : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
+			parse_tuple_end : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
 			parse_tuple_end = |encoding, state, len| JsonEncoding.parse_tuple_end(encoding, state, len)
 
 			encode_str : JsonEncoding, Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
@@ -204,10 +204,10 @@ Builtin :: [].{
 			encode_dec : JsonEncoding, Dec, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_dec = |_, value, state| JsonEncoding.encode_dec(value, state)
 
-			encode_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_f32 = |_, value, state| JsonEncoding.encode_f32(value, state)
 
-			encode_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_f64 = |_, value, state| JsonEncoding.encode_f64(value, state)
 
 			encode_null : JsonEncoding, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
@@ -498,14 +498,14 @@ Builtin :: [].{
 				}
 			}
 
-			dec_from_json_number : Str -> Try(Dec, [BadNumStr])
+			dec_from_json_number : Str -> Try(Dec, [BadNumStr, ..])
 			dec_from_json_number = |value|
 				match Json.split_json_number_exponent(value) {
 					Ok(split) => Json.dec_from_json_exponent_parts(split.mantissa, split.exponent)
 					Err(NotFound) => dec_from_str(value)
 				}
 
-			split_json_number_exponent : Str -> Try({ mantissa : Str, exponent : Str }, [NotFound])
+			split_json_number_exponent : Str -> Try({ mantissa : Str, exponent : Str }, [NotFound, ..])
 			split_json_number_exponent = |value|
 				match Str.split_first(value, "e") {
 					Ok(split) => Ok({ mantissa: split.before, exponent: split.after })
@@ -516,7 +516,7 @@ Builtin :: [].{
 						}
 					}
 
-			dec_from_json_exponent_parts : Str, Str -> Try(Dec, [BadNumStr])
+			dec_from_json_exponent_parts : Str, Str -> Try(Dec, [BadNumStr, ..])
 			dec_from_json_exponent_parts = |mantissa, exponent_text| {
 				exponent_digits = if Str.starts_with(exponent_text, "+") {
 					Str.drop_prefix(exponent_text, "+")
@@ -586,7 +586,7 @@ Builtin :: [].{
 				}
 			}
 
-			normalize_json_dec_digits : Bool, Str, I64 -> Try(Str, [BadNumStr])
+			normalize_json_dec_digits : Bool, Str, I64 -> Try(Str, [BadNumStr, ..])
 			normalize_json_dec_digits = |negative, digits, point| {
 				sign = if negative "-" else ""
 
@@ -1828,7 +1828,7 @@ Builtin :: [].{
 			encode_dec : Dec, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_dec = |value, state| Json.encode_json_number(json_dec_to_str(value), state)
 
-			encode_f32 : F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_f32 : F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_f32 = |value, state| {
 				if json_f32_is_nan(value) {
 					Err(NaN)
@@ -1843,7 +1843,7 @@ Builtin :: [].{
 				}
 			}
 
-			encode_f64 : F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_f64 : F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_f64 = |value, state| {
 				if json_f64_is_nan(value) {
 					Err(NaN)
@@ -2009,7 +2009,7 @@ Builtin :: [].{
 			encode_key_dec : JsonEncoding, Dec, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_key_dec = |_, key, state| JsonEncoding.encode_str(json_dec_to_str(key), state)
 
-			encode_key_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_key_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_key_f32 = |_, key, state| {
 				if json_f32_is_nan(key) {
 					Err(NaN)
@@ -2024,7 +2024,7 @@ Builtin :: [].{
 				}
 			}
 
-			encode_key_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_key_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity, ..])
 			encode_key_f64 = |_, key, state| {
 				if json_f64_is_nan(key) {
 					Err(NaN)
@@ -2391,7 +2391,7 @@ Builtin :: [].{
 		## expect "Cache-Control: max-age=0".drop_prefix_caseless_ascii("cache-control") == Ok(": max-age=0")
 		## expect "X-Api-Key".drop_prefix_caseless_ascii("x_api_key") == Err(NotFound)
 		## ```
-		drop_prefix_caseless_ascii : Str, Str -> Try(Str, [NotFound])
+		drop_prefix_caseless_ascii : Str, Str -> Try(Str, [NotFound, ..])
 		drop_prefix_caseless_ascii = |source, prefix| {
 			split = str_drop_prefix_caseless_ascii_raw(source, prefix)
 
@@ -2420,7 +2420,7 @@ Builtin :: [].{
 		## expect "foo: bar".split_first(":") == Ok({ before: "foo", after: " bar" })
 		## expect "foo".split_first(":") == Err(NotFound)
 		## ```
-		split_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		split_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound, ..])
 		split_first = |source, delimiter| {
 			split = str_split_first_raw(source, delimiter)
 
@@ -2440,7 +2440,7 @@ Builtin :: [].{
 		## expect "a.b.c".split_last(".") == Ok({ before: "a.b", after: "c" })
 		## expect "foo".split_last(":") == Err(NotFound)
 		## ```
-		split_last : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		split_last : Str, Str -> Try({ before : Str, after : Str }, [NotFound, ..])
 		split_last = |source, delimiter| {
 			split = str_split_last_raw(source, delimiter)
 
@@ -2644,7 +2644,7 @@ Builtin :: [].{
 		## difference. The benefit is most pronounced when reallocation would
 		## otherwise force a full copy of the string.
 		##
-		## [Str.reserve] is not free — when more capacity is needed, it always
+		## [Str.reserve] is not free—when more capacity is needed, it always
 		## performs a heap allocation. Only use it when you actually expect to make
 		## use of the extra capacity.
 		##
@@ -2714,7 +2714,7 @@ Builtin :: [].{
 		## ```roc
 		## expect Str.from_quote("Roc") == Ok("Roc")
 		## ```
-		from_quote : Str -> Try(Str, [BadQuotedBytes(Str)])
+		from_quote : Str -> Try(Str, [BadQuotedBytes(Str), ..])
 		from_quote = |str| Ok(str)
 
 		## Assembles an interpolated string literal.
@@ -3045,99 +3045,6 @@ Builtin :: [].{
 					},
 			)
 
-		## Iterator over `num` values from `start` up to but not including `end`.
-		## Returns an empty iterator if `start >= end`. Generic sugar for the
-		## `range_exclusive` method that `start..<end` dispatches on the bound type.
-		range_exclusive : num, num -> Iter(num)
-			where [num.range_exclusive : num, num -> Iter(num)]
-		range_exclusive = |start, end| start.range_exclusive(end)
-
-		## Iterator over `num` values from `start` up to and including `end`.
-		## Returns an empty iterator if `start > end`. Generic sugar for the
-		## `range_inclusive` method that `start..=end` dispatches on the bound type.
-		range_inclusive : num, num -> Iter(num)
-			where [num.range_inclusive : num, num -> Iter(num)]
-		range_inclusive = |start, end| start.range_inclusive(end)
-
-		# Flat step loop behind the numeric types' `range_exclusive` methods. The
-		# self-recursive `rest` builds the same monomorphic range iterator (never
-		# a distinct chain component), so an adapter wrapping a range carries its
-		# state by value. `len_if_known`, when `Known`, is the exact remaining
-		# yield count: each step decrements it and the final `range_done()` is
-		# `Known(0)`, which `Iter.take_last`/`drop_last` rely on.
-		exclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
-			where [
-				num.is_lt : num, num -> Bool,
-				num.plus_try : num, num -> Try(num, [Overflow]),
-				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-			]
-		exclusive_range = |start, end, len_if_known|
-			iter_from_step(
-				len_if_known,
-				||
-					if start < end {
-						One({
-							item: start,
-							rest: match start.plus_try(1) {
-								Ok(next) => if next < end {
-									Iter.exclusive_range(
-										next,
-										end,
-										match len_if_known {
-											Known(l) => Known(l - 1)
-											Unknown => Unknown
-										},
-									)
-								} else {
-									range_done()
-								}
-								Err(Overflow) => range_done()
-							},
-						})
-					} else {
-						Done
-					},
-			)
-
-		# Flat step loop behind the numeric types' `range_inclusive` methods; same
-		# `len_if_known` contract as `exclusive_range`. Each step yields `start`
-		# and continues from `start + 1`; the final value is yielded before `Done`,
-		# including when stepping past it would overflow (that step reaches
-		# `range_done()` after the yield rather than before it).
-		inclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
-			where [
-				num.is_lte : num, num -> Bool,
-				num.plus_try : num, num -> Try(num, [Overflow]),
-				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-			]
-		inclusive_range = |start, end, len_if_known|
-			iter_from_step(
-				len_if_known,
-				||
-					if start <= end {
-						One({
-							item: start,
-							rest: match start.plus_try(1) {
-								Ok(next) => if next <= end {
-									Iter.inclusive_range(
-										next,
-										end,
-										match len_if_known {
-											Known(l) => Known(l - 1)
-											Unknown => Unknown
-										},
-									)
-								} else {
-									range_done()
-								}
-								Err(Overflow) => range_done()
-							},
-						})
-					} else {
-						Done
-					},
-			)
-
 		iter : Iter(item) -> Iter(item)
 		iter = |self| self
 
@@ -3333,7 +3240,7 @@ Builtin :: [].{
 		## the rest, so a single-item iterator returns that item without calling
 		## either method, and `default` does not need to be an identity value for `plus`.
 		## ```roc
-		## expect (1..=4).sum() == 10
+		## expect (1..=4).iter().sum() == 10
 		##
 		## expect [42.I64].iter().sum() == 42
 		##
@@ -3358,13 +3265,13 @@ Builtin :: [].{
 		## not for `times`, so there is no value it could return for an empty iterator
 		## that would keep `product` consistent with multiplication.
 		## ```roc
-		## expect (1..=4).product() == Ok(24)
+		## expect (1..=4).iter().product() == Ok(24)
 		##
 		## expect [42.I64].iter().product() == Ok(42)
 		##
 		## expect [7.I64].iter().drop_first(1).product() == Err(IterWasEmpty)
 		## ```
-		product : Iter(item) -> Try(item, [IterWasEmpty])
+		product : Iter(item) -> Try(item, [IterWasEmpty, ..])
 			where [item.times : item, item -> item]
 		product = |iterator|
 			match Iter.next(iterator) {
@@ -3380,7 +3287,7 @@ Builtin :: [].{
 		##
 		## expect [7.I64].iter().drop_first(1).min() == Err(IterWasEmpty)
 		## ```
-		min : Iter(item) -> Try(item, [IterWasEmpty])
+		min : Iter(item) -> Try(item, [IterWasEmpty, ..])
 			where [item.min : item, item -> item]
 		min = |iterator|
 			match Iter.next(iterator) {
@@ -3396,7 +3303,7 @@ Builtin :: [].{
 		##
 		## expect [7.I64].iter().drop_first(1).max() == Err(IterWasEmpty)
 		## ```
-		max : Iter(item) -> Try(item, [IterWasEmpty])
+		max : Iter(item) -> Try(item, [IterWasEmpty, ..])
 			where [item.max : item, item -> item]
 		max = |iterator|
 			match Iter.next(iterator) {
@@ -3500,54 +3407,6 @@ Builtin :: [].{
 					)
 				}
 
-		## Returns an iterator that yields the last `n` items of this iterator.
-		## If the source has fewer than `n` items, all of them are yielded.
-		##
-		## When the source iterator's length is unknown, this materializes the
-		## source into a list to find where the last `n` items begin. Avoid
-		## calling this on iterators whose length is unknown and might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.take_last(List.iter([1, 2, 3, 4, 5]), 3), [], |acc, item| acc.append(item)) == [3, 4, 5]
-		##
-		## expect Iter.fold(Iter.take_last(List.iter([1, 2]), 5), [], |acc, item| acc.append(item)) == [1, 2]
-		## ```
-		take_last : Iter(item), U64 -> Iter(item)
-		take_last = |iterator, n|
-			match iterator.len_if_known {
-				Known(len) =>
-					if len <= n {
-						iterator
-					} else {
-						Iter.drop_first(iterator, len - n)
-					}
-				Unknown =>
-					List.iter(List.take_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
-				}
-
-		## Returns an iterator that yields all items except the last `n`.
-		## If the source has `n` or fewer items, the result is empty.
-		##
-		## When the source iterator's length is unknown, this materializes the
-		## source into a list to find where the last `n` items begin. Avoid
-		## calling this on iterators whose length is unknown and might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.drop_last(List.iter([1, 2, 3, 4, 5]), 2), [], |acc, item| acc.append(item)) == [1, 2, 3]
-		##
-		## expect Iter.fold(Iter.drop_last(List.iter([1, 2, 3]), 10), [], |acc, item| acc.append(item)) == []
-		## ```
-		drop_last : Iter(item), U64 -> Iter(item)
-		drop_last = |iterator, n|
-			match iterator.len_if_known {
-				Known(len) =>
-					if len <= n {
-						range_done()
-					} else {
-						Iter.take_first(iterator, len - n)
-					}
-				Unknown =>
-					List.iter(List.drop_last(Iter.fold(iterator, [], |acc, item| acc.append(item)), n))
-				}
-
 		## Returns an iterator that yields the first item and then every `n`th item
 		## after it, skipping the `n - 1` items in between. A step of `0` yields an
 		## empty iterator.
@@ -3591,21 +3450,6 @@ Builtin :: [].{
 							},
 					)
 				}
-
-		## Returns an iterator that yields this iterator's items in reverse order.
-		##
-		## Because an [Iter] only moves forward, this materializes the source into a
-		## list to reverse it. The result always has a known length, so collecting it
-		## is efficient. Avoid calling this on iterators whose length is unknown and
-		## might be huge.
-		## ```roc
-		## expect Iter.fold(Iter.rev(List.iter([1, 2, 3])), [], |acc, item| acc.append(item)) == [3, 2, 1]
-		##
-		## expect Iter.fold(Iter.rev(List.iter([])), [], |acc, item| acc.append(item)) == []
-		## ```
-		rev : Iter(item) -> Iter(item)
-		rev = |iterator|
-			List.iter(List.rev(Iter.fold(iterator, [], |acc, item| acc.append(item))))
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
@@ -3682,7 +3526,7 @@ Builtin :: [].{
 			# `Known(n)` guarantees exactly n items (count-changing combinators
 			# report `Unknown`), so reserve up front and use the unchecked append.
 			# When the length is unknown, start empty and grow with the reserving
-			# append — the unchecked append would corrupt a zero-capacity list.
+			# append—the unchecked append would corrupt a zero-capacity list.
 			length = Stream.size_hint(stream)
 			cap = match length {
 				Known(n) => n
@@ -3747,6 +3591,33 @@ Builtin :: [].{
 			}
 
 			make(0)
+		}
+
+		## Iterate over the list from last to first.
+		##
+		## This walks the list backwards in place; it does not build a reversed
+		## copy the way [List.rev] does.
+		## ```roc
+		## expect Iter.fold([1, 2, 3].iter_rev(), [], |acc, item| acc.append(item)) == [3, 2, 1]
+		##
+		## expect Iter.fold([].iter_rev(), [], |acc, item| acc.append(item)) == []
+		## ```
+		iter_rev : List(item) -> Iter(item)
+		iter_rev = |list| {
+			# `remaining` is both the number of items still to yield and the index
+			# just past the next one, so the length stays exact as it counts down.
+			make = |remaining|
+				iter_from_step(
+					Known(remaining),
+					||
+						if remaining == 0 {
+							Done
+						} else {
+							One({ item: list_get_unsafe(list, remaining - 1), rest: make(remaining - 1) })
+						},
+				)
+
+			make(List.len(list))
 		}
 
 		## Build a list from a pure [Iter], pre-sizing the allocation from the
@@ -3826,10 +3697,144 @@ Builtin :: [].{
 			$joined
 		}
 
-		## Create a list with space for at least capacity items
+		## Map each item to a list and concatenate the results, preserving order.
+		##
+		## You may know a similar function named `flat_map` or `concat_map` in other languages.
+		## ```roc
+		## expect [1.I64, 2, 3].join_map(|n| [n, n * 10]) == [1, 10, 2, 20, 3, 30]
+		##
+		## expect ["a", "b"].join_map(|s| [s, s]) == ["a", "a", "b", "b"]
+		## ```
+		join_map : List(a), (a -> List(b)) -> List(b)
+		join_map = |list, transform| List.join(List.map(list, transform))
+
+		## Insert a separator between every pair of items in a list.
+		## ```roc
+		## expect [1.I64, 2, 3].intersperse(0) == [1, 0, 2, 0, 3]
+		##
+		## expect [1.I64].intersperse(0) == [1]
+		## ```
+		intersperse : List(a), a -> List(a)
+		intersperse = |list, separator| {
+			len = List.len(list)
+
+			if len < 2 {
+				list
+			} else {
+				# `2 * len - 1` counts exactly the items appended below, so every
+				# unchecked append stays in bounds.
+				var $new_list = List.with_capacity(2 * len - 1)
+				var $index = 0
+				for item in list {
+					if $index > 0 {
+						$new_list = list_append_unsafe($new_list, separator)
+					}
+					$new_list = list_append_unsafe($new_list, item)
+					$index = $index + 1
+				}
+				$new_list
+			}
+		}
+
+		## Returns a list of the specified capacity without any items.
+		##
+		## This is like calling [List.reserve] on an empty list. It's intended for
+		## building up a list incrementally, for example by calling [List.append] on it:
+		##
+		## ```roc
+		## expect {
+		##     var $squares = List.with_capacity(5)
+		##     for n in 1..=5 {
+		##         $squares = $squares.append(n * n)
+		##     }
+		##     $squares == [1, 4, 9, 16, 25]
+		## }
+		## ```
+		##
+		## When the final length is known up front, [List.with_capacity] guarantees that
+		## the appends which follow will not need to reallocate. Whether this is faster
+		## than starting from `[]` is often marginal: [List.append] grows capacity
+		## geometrically on its own, so the reallocations it performs are few and
+		## amortized. The benefit is most pronounced when reallocation would otherwise
+		## force a full copy of the list.
+		##
+		## If you don't know the exact capacity, passing a value larger than necessary
+		## still avoids reallocation, at the cost of using more memory than is needed.
+		##
+		## For more details, see [List.reserve].
 		with_capacity : U64 -> List(item)
 
-		## Ensure this list has room for at least spare additional items.
+		## Increase a list's capacity by at least the given number of additional items.
+		##
+		## When you already know how many items you are about to append, one
+		## [List.reserve] up front replaces every reallocation those appends would
+		## otherwise perform along the way:
+		##
+		## ```roc
+		## expect {
+		##     ids = [1.U64, 2, 3]
+		##
+		##     # 1000 more items are coming, so make room for them all at once
+		##     var $all = ids.reserve(1000)
+		##     for id in 4..=1003 {
+		##         $all = $all.append(id)
+		##     }
+		##
+		##     $all.len() == 1003
+		## }
+		## ```
+		##
+		## `reserve(spare)` aims for a capacity of `List.len(list) + spare` items; it
+		## trusts the request rather than rounding it up. If the list is not shared and
+		## already has room for `spare` more items, it does nothing. Otherwise it asks
+		## the allocator to grow the list to that size. The one exception is reserving
+		## a single item beyond the current capacity: that is indistinguishable from an
+		## ordinary [List.append] outgrowing the list, so the capacity grows
+		## geometrically instead of by one.
+		##
+		## Note that the reserve above sits before the loop. Because [List.reserve] aims
+		## for the exact size requested, it is a poor fit for use inside one: a reserve
+		## that then gets filled completely leaves no room for the next one, so every
+		## iteration goes back to the allocator, and the loop risks taking quadratic time
+		## in the final length:
+		##
+		## ```roc
+		## expect {
+		##     # The two appends fill the list back up to its exact capacity, so the
+		##     # next `reserve(2)` has to grow it again: one reallocation per iteration.
+		##     var $xs = []
+		##     while $xs.len() < 10 {
+		##         $xs = $xs.reserve(2)
+		##         $xs = $xs.append(0)
+		##         $xs = $xs.append(0)
+		##     }
+		##     $xs.len() == 10
+		## }
+		## ```
+		##
+		## Reserve the whole amount once before the loop instead, or start from
+		## [List.with_capacity]. A loop of plain [List.append] calls needs no help at
+		## all: when an append has to grow the list, it grows the capacity
+		## geometrically, which keeps such a loop linear in the number of items
+		## appended.
+		##
+		## Whether reserving is actually faster depends on the system allocator: many
+		## allocators can extend an existing allocation in place, in which case the
+		## reallocations that appends do on their own are cheap and [List.reserve] makes
+		## little observable difference. The benefit is most pronounced when reallocation
+		## would otherwise force a full copy of the list.
+		##
+		## [List.reserve] is not free—when more capacity is needed, it calls into the
+		## allocator, which may or may not have to move the existing items. Only use it
+		## when you actually expect to make use of the extra capacity.
+		##
+		## When you don't know exactly how many items you'll need, choosing a value
+		## somewhat higher than necessary is usually safe; a value that's too low may
+		## force later reallocation, while a value much higher than necessary just wastes
+		## memory.
+		##
+		## If you plan to use [List.reserve] on an empty list, use [List.with_capacity]
+		## instead.
 		reserve : List(item), U64 -> List(item)
 		reserve = |list, spare| list_reserve(list, spare)
 
@@ -3941,6 +3946,87 @@ Builtin :: [].{
 		## ```
 		append_if_ok : List(a), Try(a, err) -> List(a)
 		append_if_ok = |list, maybe_item| list_append_if_ok(list, maybe_item)
+
+		## Append `count` items to the end of the list, copying them from the
+		## list itself beginning at index `start`.
+		##
+		## The items are copied one at a time, and an item this call has just
+		## appended can itself be copied. So if the copy reaches the original
+		## end of the list, it keeps going into the freshly appended items,
+		## which repeats the items from `start` onward for as long as
+		## requested—copying 4 items from the last index of `[1, 2]`
+		## appends `2, 2, 2, 2`, and copying 3 items from index 0 of `[1, 2]`
+		## appends `1, 2, 1`.
+		##
+		## Returns `Err(OutOfBounds)` if `start` is not an index in the list,
+		## unless `count` is zero, which appends nothing.
+		## ```roc
+		## expect [1, 2, 3].append_range_within(1, 2) == Ok([1, 2, 3, 2, 3])
+		##
+		## expect [1, 2, 3].append_range_within(2, 4) == Ok([1, 2, 3, 3, 3, 3, 3])
+		##
+		## expect [1, 2].append_range_within(0, 3) == Ok([1, 2, 1, 2, 1])
+		##
+		## expect [1, 2].append_range_within(5, 1) == Err(OutOfBounds)
+		## ```
+		append_range_within : List(a), U64, U64 -> Try(List(a), [OutOfBounds, ..])
+		append_range_within = |list, start, count| {
+			if count == 0 {
+				Ok(list)
+			} else if start >= List.len(list) {
+				Err(OutOfBounds)
+			} else {
+				Ok(list_append_range_within(list, start, count))
+			}
+		}
+
+		## Copy `count` items within this list, from `src_index` onward to
+		## `dest_index` onward, overwriting what was there. The ranges may
+		## overlap; the result is as if every source item were read before any
+		## destination item were overwritten.
+		##
+		## Returns `Err(OutOfBounds)` unless both whole ranges lie inside the
+		## list, except that a zero `count` copies nothing.
+		## ```roc
+		## expect [1, 2, 3, 4].copy_range_within(2, 0, 2) == Ok([1, 2, 1, 2])
+		##
+		## expect [1, 2, 3, 4].copy_range_within(0, 1, 3) == Ok([2, 3, 4, 4])
+		##
+		## expect [1, 2, 3].copy_range_within(2, 0, 2) == Err(OutOfBounds)
+		## ```
+		copy_range_within : List(a), U64, U64, U64 -> Try(List(a), [OutOfBounds, ..])
+		copy_range_within = |list, dest_index, src_index, count| {
+			len = List.len(list)
+			# Compare each start against a limit rather than subtracting from it;
+			# wrapping is safe because the first check has already ruled out
+			# `count > len`.
+			if count == 0 {
+				Ok(list)
+			} else if count > len or dest_index > len.minus_wrap(count) or src_index > len.minus_wrap(count) {
+				Err(OutOfBounds)
+			} else {
+				Ok(list_copy_range_within(list, dest_index, src_index, count))
+			}
+		}
+
+		## Append a range of another list to this one, without building the
+		## sublist as its own list first. Out-of-bounds ranges are clamped
+		## exactly as [List.sublist] clamps them, producing a shorter or empty
+		## append.
+		## ```roc
+		## expect [1, 2].append_sublist([3, 4, 5, 6], { start: 1, len: 2 }) == [1, 2, 4, 5]
+		##
+		## expect [1, 2].append_sublist([3, 4], { start: 1, len: 10 }) == [1, 2, 4]
+		##
+		## expect [1, 2].append_sublist([3, 4], { start: 10, len: 2 }) == [1, 2]
+		## ```
+		append_sublist : List(a), List(a), { start : U64, len : U64 } -> List(a)
+		append_sublist = |list, src, range| {
+			src_len = List.len(src)
+			start = range.start.min(src_len)
+			count = range.len.min(src_len - start)
+			list_append_sublist(list, src, start, count)
+		}
 
 		## Add the `Ok` payload to the beginning of a list, or leave the list unchanged
 		## if the value is `Err`.
@@ -4130,10 +4216,11 @@ Builtin :: [].{
 		## ```
 		map : List(a), (a -> b) -> List(b)
 		map = |list, transform| {
-			match list_map_can_reuse(list, transform) {
+			prepared_list = list_map_prepare_reuse(list)
+			match list_map_can_reuse(prepared_list, transform) {
 				1 => {
-					len = list.len()
-					var $out = list_map_cast_unsafe(list)
+					len = prepared_list.len()
+					var $out = list_map_cast_unsafe(prepared_list)
 					var $index = 0
 					while $index < len {
 						item = list_map_extract_unsafe($out, $index)
@@ -4143,8 +4230,8 @@ Builtin :: [].{
 					$out
 				}
 				_ => {
-					var $new_list = List.with_capacity(list.len())
-					for item in list {
+					var $new_list = List.with_capacity(prepared_list.len())
+					for item in prepared_list {
 						$new_list = list_append_unsafe($new_list, transform(item))
 					}
 					$new_list
@@ -4703,6 +4790,34 @@ Builtin :: [].{
 		## ```
 		sublist : List(a), { start : U64, len : U64 } -> List(a)
 
+		## Split a list into chunks of at most `chunk_size` items, in order. The
+		## final chunk is shorter when the length is not a multiple of `chunk_size`,
+		## and a `chunk_size` of 0 produces an empty list.
+		## ```roc
+		## expect [1.I64, 2, 3, 4, 5].chunks_of(2) == [[1, 2], [3, 4], [5]]
+		##
+		## expect [1.I64, 2, 3].chunks_of(10) == [[1, 2, 3]]
+		## ```
+		chunks_of : List(a), U64 -> List(List(a))
+		chunks_of = |list, chunk_size| {
+			len = List.len(list)
+
+			if chunk_size == 0 or len == 0 {
+				[]
+			} else {
+				# `(len - 1) / chunk_size + 1` is an overflow-safe ceil of `len / chunk_size`,
+				# counting exactly the chunks appended below so every unchecked append stays
+				# in bounds.
+				var $chunks = List.with_capacity((len - 1) / chunk_size + 1)
+				var $start = 0
+				while ($start < len) {
+					$chunks = list_append_unsafe($chunks, List.sublist(list, { start: $start, len: chunk_size }))
+					$start = $start + chunk_size
+				}
+				$chunks
+			}
+		}
+
 		## Return the first `n` items of the list. If the list has fewer than `n`
 		## items, the entire list is returned.
 		## ```roc
@@ -4776,7 +4891,7 @@ Builtin :: [].{
 		## ```
 		## expect [1, 2, 3, 4].find_first(|x| x % 2 == 0) == Ok(2)
 		## ```
-		find_first : List(a), (a -> Bool) -> Try(a, [NotFound])
+		find_first : List(a), (a -> Bool) -> Try(a, [NotFound, ..])
 		find_first = |list, predicate| {
 			for item in list if predicate(item) {
 				return Ok(item)
@@ -4788,9 +4903,9 @@ Builtin :: [].{
 		## ```
 		## expect [1, 2, 3, 4].find_last(|x| x % 2 == 0) == Ok(4)
 		## ```
-		find_last : List(a), (a -> Bool) -> Try(a, [NotFound])
+		find_last : List(a), (a -> Bool) -> Try(a, [NotFound, ..])
 		find_last = |list, predicate| {
-			for item in list.rev() if predicate(item) {
+			for item in list.iter_rev() if predicate(item) {
 				return Ok(item)
 			}
 			return Err(NotFound)
@@ -4800,7 +4915,7 @@ Builtin :: [].{
 		## ```
 		## expect [1, 2, 3, 4].find_first_index(|x| x > 1) == Ok(1)
 		## ```
-		find_first_index : List(a), (a -> Bool) -> Try(U64, [NotFound])
+		find_first_index : List(a), (a -> Bool) -> Try(U64, [NotFound, ..])
 		find_first_index = |list, predicate| {
 			var $idx = 0
 			for item in list {
@@ -4816,7 +4931,7 @@ Builtin :: [].{
 		## ```
 		## expect [1, 2, 3, 4].find_last_index(|x| x < 4) == Ok(2)
 		## ```
-		find_last_index : List(a), (a -> Bool) -> Try(U64, [NotFound])
+		find_last_index : List(a), (a -> Bool) -> Try(U64, [NotFound, ..])
 		find_last_index = |list, predicate| {
 			var $idx = list.len()
 
@@ -4854,7 +4969,7 @@ Builtin :: [].{
 		## expect [1, 1, 2].split_on(1) == [[], [], [2]]
 		## ```
 		split_on : List(a), a -> List(List(a)) where [a.is_eq : a, a -> Bool]
-		split_on = |list, delim| list->split_if(|x| x == delim)
+		split_on = |list, delim| list |> split_if(|x| x == delim)
 
 		## Split a list into sublists using a predicate function to identify delimiters.
 		##
@@ -4918,10 +5033,10 @@ Builtin :: [].{
 		## ```
 		## expect [0, 1, 2, 1, 2].split_first(2) == Ok({ before: [0, 1], after: [1, 2] })
 		## ```
-		split_first : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
+		split_first : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound, ..])
 			where [a.is_eq : a, a -> Bool]
 		split_first = |list, delim|
-			match list->find_first_index(|x| x == delim) {
+			match list |> find_first_index(|x| x == delim) {
 				Ok(index) => Ok({
 					before: list.sublist({ start: 0, len: index }),
 					after: list.drop_first(index + 1),
@@ -4933,10 +5048,10 @@ Builtin :: [].{
 		## ```
 		## expect [0, 1, 2, 1, 2].split_last(1) == Ok({ before: [0, 1, 2], after: [2] })
 		## ```
-		split_last : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound])
+		split_last : List(a), a -> Try({ before : List(a), after : List(a) }, [NotFound, ..])
 			where [a.is_eq : a, a -> Bool]
 		split_last = |list, delim|
-			match list->find_last_index(|x| x == delim) {
+			match list |> find_last_index(|x| x == delim) {
 				Ok(index) => Ok({
 					before: list.sublist({ start: 0, len: index }),
 					after: list.drop_first(index + 1),
@@ -4981,7 +5096,7 @@ Builtin :: [].{
 
 		## Find the minimum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `min`.
-		min : List(a) -> Try(a, [ListWasEmpty])
+		min : List(a) -> Try(a, [ListWasEmpty, ..])
 			where [a.min : a, a -> a]
 		min = |list|
 			match List.first(list) {
@@ -5000,7 +5115,7 @@ Builtin :: [].{
 
 		## Find the maximum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `max`.
-		max : List(a) -> Try(a, [ListWasEmpty])
+		max : List(a) -> Try(a, [ListWasEmpty, ..])
 			where [a.max : a, a -> a]
 		max = |list|
 			match List.first(list) {
@@ -5315,7 +5430,7 @@ Builtin :: [].{
 		}
 
 		## If the result is `Err`, runs a recovery function on the value it holds. That
-		## function returns a new result, so recovering can itself fail — with a
+		## function returns a new result, so recovering can itself fail—with a
 		## different error type if you like. If the result is `Ok`, this has no effect.
 		## Use [Try.map_err] when you only want to transform the error without
 		## recovering from it.
@@ -5534,6 +5649,15 @@ Builtin :: [].{
 			}
 		}
 
+		## Returns a human-readable representation of a [Dict], with keys and values
+		## rendered using [Str.inspect].
+		## ```roc
+		## expect Str.inspect(Dict.from_list([("one", 1.I64), ("two", 2)])) ==
+		## 	"Dict.from_list([(\"one\", 1), (\"two\", 2)])"
+		## ```
+		to_inspect : Dict(k, v) -> Str
+		to_inspect = |dict| "Dict.from_list(${Str.inspect(dict.to_list())})"
+
 		## Returns an empty `Dict`.
 		## ```roc
 		## empty_dict = Dict.empty()
@@ -5560,6 +5684,10 @@ Builtin :: [].{
 		}
 
 		## Ensure this dictionary has room for at least this many additional entries.
+		##
+		## Like [List.reserve], this aims for the exact size requested rather than
+		## rounding up, so call it once with the total number of entries you expect to
+		## add rather than repeatedly inside a loop.
 		reserve : Dict(k, v), U64 -> Dict(k, v)
 			where [k.to_hash : k, Hasher -> Hasher]
 		reserve = |dict, additional| match dict {
@@ -5646,6 +5774,23 @@ Builtin :: [].{
 			}
 		}
 
+		## Alias for [Dict.get], enabling the future `dict[key]` subscript operator.
+		## Returns the value for a given key.
+		##
+		## Returns `Err KeyNotFound` if the dictionary has no value for the key.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Apples") == Ok(12)
+		##
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .subscript("Oranges") == Err(KeyNotFound)
+		## ```
+		subscript : Dict(k, v), k -> Try(v, [KeyNotFound, ..])
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		subscript = |dict, key| Dict.get(dict, key)
+
 		## Check if the dictionary has a value for a specified key.
 		## ```roc
 		## expect Dict.empty().insert(1234, "5678").contains(1234)
@@ -5682,7 +5827,9 @@ Builtin :: [].{
 			}
 		}
 
-		## Remove a value from the dictionary for a specified key.
+		## Remove a value from the dictionary for a specified key. Removal may
+		## change the iteration order of the remaining key-value pairs because
+		## the last pair can be moved into the removed pair's position.
 		## ```roc
 		## expect Dict.empty()
 		##            .insert("Some", "Value")
@@ -5709,6 +5856,30 @@ Builtin :: [].{
 			HashMap(data) => data.entries
 		}
 
+		## Iterate over the dictionary's key-value pairs in their current internal
+		## order. This matches insertion order until an entry is removed;
+		## [Dict.remove] may reorder the remaining pairs.
+		## ```roc
+		## expect Iter.fold(Dict.single(1, "One").insert(2, "Two").iter(), [], |acc, pair| acc.append(pair)) == [(1, "One"), (2, "Two")]
+		## ```
+		iter : Dict(k, v) -> Iter((k, v))
+		iter = |dict| match dict {
+			HashMap(data) => List.iter(data.entries)
+		}
+
+		## Iterate over the dictionary's key-value pairs in reverse current
+		## internal order. This is reverse insertion order until an entry is
+		## removed; [Dict.remove] may reorder the remaining pairs. Like
+		## [List.iter_rev], this reads the entries in place rather than building a
+		## reversed copy.
+		## ```roc
+		## expect Iter.fold(Dict.single(1, "One").insert(2, "Two").iter_rev(), [], |acc, pair| acc.append(pair)) == [(2, "Two"), (1, "One")]
+		## ```
+		iter_rev : Dict(k, v) -> Iter((k, v))
+		iter_rev = |dict| match dict {
+			HashMap(data) => List.iter_rev(data.entries)
+		}
+
 		## Create a `Dict` from a `List` of key-value pairs. If the list
 		## contains duplicate keys, later values overwrite earlier ones.
 		## ```roc
@@ -5719,6 +5890,37 @@ Builtin :: [].{
 			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		from_list = |list|
 			List.fold(list, Dict.with_capacity(List.len(list)), |dict, (k, v)| Dict.insert(dict, k, v))
+
+		## Create a `Dict` from an [Iter] of key-value pairs. If the iterator
+		## yields duplicate keys, later values overwrite earlier ones.
+		## ```roc
+		## expect Dict.from_iter([(1, "One"), (2, "Two")].iter()) ==
+		## 	Dict.single(1, "One").insert(2, "Two")
+		## ```
+		from_iter : Iter((k, v)) -> Dict(k, v)
+			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
+		from_iter = |iterator| {
+			var $dict = match iterator.len_if_known {
+				Known(n) => Dict.with_capacity(n)
+				Unknown => Dict.empty()
+			}
+			var $rest = iterator
+			while Bool.True {
+				match Iter.next($rest) {
+					Done => {
+						break
+					}
+					Skip({ rest }) => {
+						$rest = rest
+					}
+					One({ item: (key, value), rest }) => {
+						$dict = Dict.insert($dict, key, value)
+						$rest = rest
+					}
+				}
+			}
+			$dict
+		}
 
 		## Returns the keys of a dictionary as a `List`.
 		## ```roc
@@ -5770,6 +5972,36 @@ Builtin :: [].{
 				var $state = init
 				for (key, value) in data.entries {
 					$state = step($state, key, value)
+				}
+				$state
+			}
+		}
+
+		## Same as [Dict.fold], except you can stop folding early.
+		## ```roc
+		## expect Dict.empty()
+		##            .insert("Apples", 12.U64)
+		##            .insert("Oranges", 24)
+		##            .fold_until(0, |count, _key, qty| if count + qty >= 30 {
+		##                Break(count + qty)
+		##            } else {
+		##                Continue(count + qty)
+		##            }) == 36
+		## ```
+		fold_until : Dict(k, v), state, (state, k, v -> [Continue(state), Break(state)]) -> state
+		fold_until = |dict, init, step| match dict {
+			HashMap(data) => {
+				var $state = init
+				for (key, value) in data.entries {
+					match step($state, key, value) {
+						Continue(new_state) => {
+							$state = new_state
+						}
+						Break(final_state) => {
+							$state = final_state
+							break
+						}
+					}
 				}
 				$state
 			}
@@ -6019,6 +6251,14 @@ Builtin :: [].{
 			}
 		}
 
+		## Returns a human-readable representation of a [Set], with items rendered
+		## using [Str.inspect].
+		## ```roc
+		## expect Str.inspect(Set.from_list([1.I64, 2, 3])) == "Set.from_list([1, 2, 3])"
+		## ```
+		to_inspect : Set(a) -> Str
+		to_inspect = |set| "Set.from_list(${Str.inspect(set.to_list())})"
+
 		## Creates a new empty `Set`.
 		empty : () -> Set(_item)
 		empty = || Items([])
@@ -6075,6 +6315,44 @@ Builtin :: [].{
 		to_list : Set(a) -> List(a)
 		to_list = |set| match set {
 			Items(list) => list
+		}
+
+		## Build a value by folding through each value in the set. Starting with
+		## a given `state` value, this runs the given `step` function on each
+		## value, using its return value as the new `state`. It returns the final
+		## `state` at the end.
+		## ```roc
+		## expect Set.from_list([1, 2, 3.U64]).fold(0, |sum, item| sum + item) == 6
+		##
+		## expect Set.empty().fold(0, |sum, item| sum + item) == 0.U64
+		## ```
+		fold : Set(a), state, (state, a -> state) -> state
+		fold = |set, init, step| match set {
+			Items(list) => List.fold(list, init, step)
+		}
+
+		## Iterate over the set's values in their current backing order.
+		## [Set.from_list] keeps the first insertion order, but inserting a value
+		## that is already present removes and re-appends it, which changes that
+		## value's position.
+		## ```roc
+		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter(), [], |acc, item| acc.append(item)) == [1, 2, 3]
+		## ```
+		iter : Set(a) -> Iter(a)
+		iter = |set| match set {
+			Items(list) => List.iter(list)
+		}
+
+		## Iterate over the set's values in reverse current backing order. Like
+		## [List.iter_rev], this reads the values in place rather than building a
+		## reversed copy. Inserting an already-present value can change this order,
+		## as described by [Set.iter].
+		## ```roc
+		## expect Iter.fold(Set.from_list([1, 2, 3.U64]).iter_rev(), [], |acc, item| acc.append(item)) == [3, 2, 1]
+		## ```
+		iter_rev : Set(a) -> Iter(a)
+		iter_rev = |set| match set {
+			Items(list) => List.iter_rev(list)
 		}
 
 		## Create a `Set` from a `List` of values.
@@ -6193,7 +6471,7 @@ Builtin :: [].{
 		## ```roc
 		## expect Set.from_list([1, 2, 3]).map(|n| n * 2) == Set.from_list([2, 4, 6])
 		##
-		## # Duplicates in the mapped output are collapsed — the result is a Set.
+		## # Duplicates in the mapped output are collapsed—the result is a Set.
 		## expect Set.from_list([1, -1, 2, -2]).map(|n| n * n) == Set.from_list([1, 4])
 		## ```
 		map : Set(a), (a -> b) -> Set(b)
@@ -6218,6 +6496,91 @@ Builtin :: [].{
 	}
 
 	Num :: {}.{
+
+		## A reusable numeric range description. Range syntax constructs one of these
+		## values; call [Range.iter] to iterate it, or use it directly in a `for` loop.
+		##
+		## `lower` anchors the range's members even when `direction` is `From`. The
+		## `upper_bound` therefore always applies to `upper`, and [Range.step_by]
+		## replaces `step` rather than composing it with the previous step.
+		Range(num) :: {
+			lower : num,
+			upper : num,
+			step : num,
+			upper_bound : [Exclusive, Inclusive],
+			direction : [To, From],
+			len_if_known : [Known(U64), Unknown],
+		}.{
+
+			## Construct a range description for a builtin or third-party numeric type.
+			## A `Known` length must be the exact number of values the range will yield.
+			custom : {
+				lower : num,
+				upper : num,
+				step : num,
+				upper_bound : [Exclusive, Inclusive],
+				direction : [To, From],
+				len_if_known : [Known(U64), Unknown],
+			} -> Range(num)
+			custom = |config|
+				Range.{
+					lower: config.lower,
+					upper: config.upper,
+					step: config.step,
+					upper_bound: config.upper_bound,
+					direction: config.direction,
+					len_if_known: config.len_if_known,
+				}
+
+			## Return the exact range length when it fits in a [U64].
+			size_hint : Range(num) -> [Known(U64), Unknown]
+			size_hint = |Range.{ len_if_known, .. }| len_if_known
+
+			## Replace this range's absolute step. The new step is expressed in the
+			## range's numeric type so third-party numbers need no [U64] conversion.
+			step_by : Range(num), num -> Range(num)
+				where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
+			step_by = |Range.{ lower, upper, upper_bound, direction, .. }, new_step|
+				Range.{
+					lower,
+					upper,
+					step: new_step,
+					upper_bound,
+					direction,
+					len_if_known: lower.range_len_if_known(upper, new_step, upper_bound),
+				}
+
+			## Iterate this range in its stored direction.
+			iter : Range(num) -> Iter(num)
+				where [num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)]
+			iter = |Range.{ lower, upper, step, upper_bound, direction, len_if_known }|
+				lower.range_iter(upper, step, upper_bound, direction, len_if_known)
+
+			## Iterate this range in the opposite direction. Reversal reconstructs the
+			## corresponding range through the numeric type's `_to`/`_from` methods,
+			## which means a type can support forward ranges without claiming that its
+			## ranges are exactly reversible.
+			iter_rev : Range(num) -> Iter(num)
+				where [
+					num.range_exclusive_to : num, num -> Range(num),
+					num.range_inclusive_to : num, num -> Range(num),
+					num.range_exclusive_from : num, num -> Range(num),
+					num.range_inclusive_from : num, num -> Range(num),
+					num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown],
+					num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num),
+				]
+			iter_rev = |Range.{ lower, upper, step, upper_bound, direction, .. }| {
+				reversed = match (direction, upper_bound) {
+					(To, Exclusive) => upper.range_exclusive_from(lower)
+					(To, Inclusive) => upper.range_inclusive_from(lower)
+					(From, Exclusive) => lower.range_exclusive_to(upper)
+					(From, Inclusive) => lower.range_inclusive_to(upper)
+				}
+
+				Range.iter(Range.step_by(reversed, step))
+			}
+		}
+
 		Numeral :: [
 			Literal(
 				{ # TODO get rid of this wrapper once we have nominal records"
@@ -6428,31 +6791,28 @@ Builtin :: [].{
 			plus_try : U8, U8 -> Try(U8, [Overflow, ..])
 			plus_try = |a, b| unsigned_plus_try(U8.highest, a, b)
 
-			## Iterator over [U8] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U8] values.
-			range_exclusive : U8, U8 -> Iter(U8)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : U8, U8, U8, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U8, U8, U8, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U8)
+			range_iter = range_iter_standard
 
-			## Iterator over [U8] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U8] values.
-			range_inclusive : U8, U8 -> Iter(U8)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : U8, U8 -> Range(U8)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U8, U8 -> Range(U8)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U8, U8 -> Range(U8)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U8, U8 -> Range(U8)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U8] values, saturating at [U8.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -6723,13 +7083,13 @@ Builtin :: [].{
 			## ```roc
 			## expect U8.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U8, [OutOfRange])
+			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..])
 			from_int_digits = |digits| u8_from_int_digits(digits)
 
 			## Convert a numeric literal into a [U8]. This is the hook the
 			## compiler uses when a literal is given type [U8]; most code should
 			## parse user text with [U8.from_str] instead.
-			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u8_from_str(str))
 
 			## Parse a [U8] from a [Str]. Returns `Err(BadNumStr)` if the string is
@@ -7112,31 +7472,28 @@ Builtin :: [].{
 			plus_try : I8, I8 -> Try(I8, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(I8.lowest, I8.highest, 0, a, b)
 
-			## Iterator over [I8] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I8] values.
-			range_exclusive : I8, I8 -> Iter(I8)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : I8, I8, I8, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I8, I8, I8, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I8)
+			range_iter = range_iter_standard
 
-			## Iterator over [I8] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I8] values.
-			range_inclusive : I8, I8 -> Iter(I8)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : I8, I8 -> Range(I8)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I8, I8 -> Range(I8)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I8, I8 -> Range(I8)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I8, I8 -> Range(I8)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I8] values, saturating at [I8.highest] or [I8.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -7520,13 +7877,13 @@ Builtin :: [].{
 			## ```roc
 			## expect I8.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I8, [OutOfRange])
+			from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..])
 			from_int_digits = |digits| i8_from_int_digits(digits)
 
 			## Convert a numeric literal into an [I8]. This is the hook the
 			## compiler uses when a literal is given type [I8]; most code should
 			## parse user text with [I8.from_str] instead.
-			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| i8_from_str(str))
 
 			## Parse an [I8] from a [Str]. Returns `Err(BadNumStr)` if the string
@@ -7868,31 +8225,28 @@ Builtin :: [].{
 			plus_try : U16, U16 -> Try(U16, [Overflow, ..])
 			plus_try = |a, b| unsigned_plus_try(U16.highest, a, b)
 
-			## Iterator over [U16] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U16] values.
-			range_exclusive : U16, U16 -> Iter(U16)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : U16, U16, U16, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U16, U16, U16, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U16)
+			range_iter = range_iter_standard
 
-			## Iterator over [U16] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U16] values.
-			range_inclusive : U16, U16 -> Iter(U16)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : U16, U16 -> Range(U16)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U16, U16 -> Range(U16)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U16, U16 -> Range(U16)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U16, U16 -> Range(U16)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U16] values, saturating at [U16.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -8255,13 +8609,13 @@ Builtin :: [].{
 			## ```roc
 			## expect U16.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U16, [OutOfRange])
+			from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..])
 			from_int_digits = |digits| u16_from_int_digits(digits)
 
 			## Convert a numeric literal into a [U16]. This is the hook the
 			## compiler uses when a literal is given type [U16]; most code should
 			## parse user text with [U16.from_str] instead.
-			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u16_from_str(str))
 
 			## Parse a [U16] from a [Str]. Returns `Err(BadNumStr)` if the string is
@@ -8611,31 +8965,28 @@ Builtin :: [].{
 			plus_try : I16, I16 -> Try(I16, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(I16.lowest, I16.highest, 0, a, b)
 
-			## Iterator over [I16] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I16] values.
-			range_exclusive : I16, I16 -> Iter(I16)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : I16, I16, I16, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I16, I16, I16, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I16)
+			range_iter = range_iter_standard
 
-			## Iterator over [I16] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I16] values.
-			range_inclusive : I16, I16 -> Iter(I16)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : I16, I16 -> Range(I16)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I16, I16 -> Range(I16)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I16, I16 -> Range(I16)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I16, I16 -> Range(I16)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I16] values, saturating at [I16.highest] or [I16.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -9045,13 +9396,13 @@ Builtin :: [].{
 			## ```roc
 			## expect I16.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I16, [OutOfRange])
+			from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..])
 			from_int_digits = |digits| i16_from_int_digits(digits)
 
 			## Convert a numeric literal into an [I16]. This is the hook the
 			## compiler uses when a literal is given type [I16]; most code should
 			## parse user text with [I16.from_str] instead.
-			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| i16_from_str(str))
 
 			## Parse an [I16] from a [Str]. Returns `Err(BadNumStr)` if the string
@@ -9408,31 +9759,28 @@ Builtin :: [].{
 			plus_try : U32, U32 -> Try(U32, [Overflow, ..])
 			plus_try = |a, b| unsigned_plus_try(U32.highest, a, b)
 
-			## Iterator over [U32] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U32] values.
-			range_exclusive : U32, U32 -> Iter(U32)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : U32, U32, U32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U32, U32, U32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U32)
+			range_iter = range_iter_standard
 
-			## Iterator over [U32] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U32] values.
-			range_inclusive : U32, U32 -> Iter(U32)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : U32, U32 -> Range(U32)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U32, U32 -> Range(U32)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U32, U32 -> Range(U32)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U32, U32 -> Range(U32)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U32] values, saturating at [U32.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -9795,13 +10143,13 @@ Builtin :: [].{
 			## ```roc
 			## expect U32.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U32, [OutOfRange])
+			from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..])
 			from_int_digits = |digits| u32_from_int_digits(digits)
 
 			## Convert a numeric literal into a [U32]. This is the hook the
 			## compiler uses when a literal is given type [U32]; most code should
 			## parse user text with [U32.from_str] instead.
-			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u32_from_str(str))
 
 			## Parse a [U32] from a [Str]. Returns `Err(BadNumStr)` if the string is
@@ -10183,31 +10531,28 @@ Builtin :: [].{
 			plus_try : I32, I32 -> Try(I32, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(I32.lowest, I32.highest, 0, a, b)
 
-			## Iterator over [I32] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I32] values.
-			range_exclusive : I32, I32 -> Iter(I32)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end).to_u64())
-				else
+			range_len_if_known : I32, I32, I32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I32, I32, I32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I32)
+			range_iter = range_iter_standard
 
-			## Iterator over [I32] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I32] values.
-			range_inclusive : I32, I32 -> Iter(I32)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Known(start.abs_diff(end).to_u64() + 1)
-				else
-					Known(0)
+			range_exclusive_to : I32, I32 -> Range(I32)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I32, I32 -> Range(I32)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I32, I32 -> Range(I32)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I32, I32 -> Range(I32)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I32] values, saturating at [I32.highest] or [I32.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -10617,13 +10962,13 @@ Builtin :: [].{
 			## ```roc
 			## expect I32.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I32, [OutOfRange])
+			from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..])
 			from_int_digits = |digits| i32_from_int_digits(digits)
 
 			## Convert a numeric literal into an [I32]. This is the hook the
 			## compiler uses when a literal is given type [I32]; most code should
 			## parse user text with [I32.from_str] instead.
-			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| i32_from_str(str))
 
 			## Parse an [I32] from a [Str]. Returns `Err(BadNumStr)` if the string
@@ -10997,34 +11342,28 @@ Builtin :: [].{
 			plus_try : U64, U64 -> Try(U64, [Overflow, ..])
 			plus_try = |a, b| unsigned_plus_try(U64.highest, a, b)
 
-			## Iterator over [U64] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U64] values.
-			range_exclusive : U64, U64 -> Iter(U64)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end))
-				else
+			range_len_if_known : U64, U64, U64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper), step, upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U64, U64, U64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U64)
+			range_iter = range_iter_standard
 
-			## Iterator over [U64] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U64] values.
-			range_inclusive : U64, U64 -> Iter(U64)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).plus_try(1) {
-						Ok(len) => Known(len)
-						Err(Overflow) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : U64, U64 -> Range(U64)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U64, U64 -> Range(U64)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U64, U64 -> Range(U64)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U64, U64 -> Range(U64)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U64] values, saturating at [U64.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -11314,6 +11653,30 @@ Builtin :: [].{
 				}
 			}
 
+			## Append this U64's `count` lowest bytes to the end of the list,
+			## least significant byte first—that is, in
+			## [little-endian](https://en.wikipedia.org/wiki/Endianness) byte
+			## order, which is what the `le` in the name refers to.
+			##
+			## This is the writing mirror of [U64.from_le_bytes].
+			## Returns `Err(OutOfBounds)` when
+			## `count > 8`, since a `U64` has 8 bytes.
+			## ```roc
+			## expect 0x1234.U64.append_le_bytes_to([], 2) == Ok([0x34, 0x12])
+			##
+			## expect 0xFF.U64.append_le_bytes_to([9], 1) == Ok([9, 0xFF])
+			##
+			## expect 1.U64.append_le_bytes_to([], 9) == Err(OutOfBounds)
+			## ```
+			append_le_bytes_to : U64, List(U8), U8 -> Try(List(U8), [OutOfBounds, ..])
+			append_le_bytes_to = |value, bytes, count| {
+				if count > 8 {
+					Err(OutOfBounds)
+				} else {
+					Ok(list_append_le_bytes(bytes, value, count.to_u64()))
+				}
+			}
+
 			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
 			## Returns an empty iterator if this `U64` is greater than the other.
@@ -11390,13 +11753,13 @@ Builtin :: [].{
 			## ```roc
 			## expect U64.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U64, [OutOfRange])
+			from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..])
 			from_int_digits = |digits| u64_from_int_digits(digits)
 
 			## Convert a numeric literal into a [U64]. This is the hook the
 			## compiler uses when a literal is given type [U64]; most code should
 			## parse user text with [U64.from_str] instead.
-			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u64_from_str(str))
 
 			## Parse a [U64] from a [Str]. Returns `Err(BadNumStr)` if the string is
@@ -11814,34 +12177,28 @@ Builtin :: [].{
 			plus_try : I64, I64 -> Try(I64, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(I64.lowest, I64.highest, 0, a, b)
 
-			## Iterator over [I64] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I64] values.
-			range_exclusive : I64, I64 -> Iter(I64)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					Known(start.abs_diff(end))
-				else
+			range_len_if_known : I64, I64, I64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u64(lower.abs_diff(upper), step.abs_diff(0), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I64, I64, I64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I64)
+			range_iter = range_iter_standard
 
-			## Iterator over [I64] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I64] values.
-			range_inclusive : I64, I64 -> Iter(I64)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).plus_try(1) {
-						Ok(len) => Known(len)
-						Err(Overflow) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : I64, I64 -> Range(I64)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I64, I64 -> Range(I64)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I64, I64 -> Range(I64)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I64, I64 -> Range(I64)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I64] values, saturating at [I64.highest] or [I64.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -12260,13 +12617,13 @@ Builtin :: [].{
 			## ```roc
 			## expect I64.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I64, [OutOfRange])
+			from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..])
 			from_int_digits = |digits| i64_from_int_digits(digits)
 
 			## Convert a numeric literal into an [I64]. This is the hook the
 			## compiler uses when a literal is given type [I64]; most code should
 			## parse user text with [I64.from_str] instead.
-			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| i64_from_str(str))
 
 			## Parse an [I64] from a [Str]. Returns `Err(BadNumStr)` if the string
@@ -12653,40 +13010,28 @@ Builtin :: [].{
 			plus_try : U128, U128 -> Try(U128, [Overflow, ..])
 			plus_try = |a, b| unsigned_plus_try(U128.highest, a, b)
 
-			## Iterator over [U128] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [U128] values.
-			range_exclusive : U128, U128 -> Iter(U128)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => Known(steps)
-						Err(OutOfRange) => Unknown
-					}
-				else
+			range_len_if_known : U128, U128, U128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u128(lower.abs_diff(upper), step, upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : U128, U128, U128, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U128)
+			range_iter = range_iter_standard
 
-			## Iterator over [U128] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [U128] values.
-			range_inclusive : U128, U128 -> Iter(U128)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => match steps.plus_try(1) {
-							Ok(len) => Known(len)
-							Err(Overflow) => Unknown
-						}
-						Err(OutOfRange) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : U128, U128 -> Range(U128)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : U128, U128 -> Range(U128)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : U128, U128 -> Range(U128)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : U128, U128 -> Range(U128)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [U128] values, saturating at [U128.highest] on overflow rather than wrapping around.
 			## ```roc
@@ -13059,13 +13404,13 @@ Builtin :: [].{
 			## ```roc
 			## expect U128.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(U128, [OutOfRange])
+			from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..])
 			from_int_digits = |digits| u128_from_int_digits(digits)
 
 			## Convert a numeric literal into a [U128]. This is the hook the
 			## compiler uses when a literal is given type [U128]; most code should
 			## parse user text with [U128.from_str] instead.
-			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| u128_from_str(str))
 
 			## Parse a [U128] from a [Str]. Returns `Err(BadNumStr)` if the string is
@@ -13284,7 +13629,7 @@ Builtin :: [].{
 			# Conversion to Dec (can overflow)
 			## Convert a [U128] to a [Dec], returning `Err(OutOfRange)` if the
 			## integer value does not fit in [Dec]'s fixed-point range.
-			to_dec_try : U128 -> Try(Dec, [OutOfRange])
+			to_dec_try : U128 -> Try(Dec, [OutOfRange, ..])
 			to_dec_try = |num| out_of_range_try(u128_to_dec_try_unsafe(num))
 
 			# Encode a U128 using a format that provides encode_u128
@@ -13514,40 +13859,28 @@ Builtin :: [].{
 			plus_try : I128, I128 -> Try(I128, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(I128.lowest, I128.highest, 0, a, b)
 
-			## Iterator over [I128] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [I128] values.
-			range_exclusive : I128, I128 -> Iter(I128)
-			range_exclusive = |start, end| {
-				len_if_known = if start < end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => Known(steps)
-						Err(OutOfRange) => Unknown
-					}
-				else
+			range_len_if_known : I128, I128, I128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
 					Known(0)
+				} else {
+					range_len_u128(lower.abs_diff(upper), step.abs_diff(0), upper_bound)
+				}
 
-				range_exclusive_with_len(start, end, len_if_known)
-			}
+			range_iter : I128, I128, I128, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I128)
+			range_iter = range_iter_standard
 
-			## Iterator over [I128] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [I128] values.
-			range_inclusive : I128, I128 -> Iter(I128)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => match steps.plus_try(1) {
-							Ok(len) => Known(len)
-							Err(Overflow) => Unknown
-						}
-						Err(OutOfRange) => Unknown
-					}
-				else
-					Known(0)
+			range_exclusive_to : I128, I128 -> Range(I128)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_inclusive_to : I128, I128 -> Range(I128)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : I128, I128 -> Range(I128)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : I128, I128 -> Range(I128)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [I128] values, saturating at [I128.highest] or [I128.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -13974,13 +14307,13 @@ Builtin :: [].{
 			## ```roc
 			## expect I128.from_int_digits([1, 2, 3]) == Ok(123)
 			## ```
-			from_int_digits : List(U8) -> Try(I128, [OutOfRange])
+			from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..])
 			from_int_digits = |digits| i128_from_int_digits(digits)
 
 			## Convert a numeric literal into an [I128]. This is the hook the
 			## compiler uses when a literal is given type [I128]; most code should
 			## parse user text with [I128.from_str] instead.
-			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| i128_from_str(str))
 
 			## Parse an [I128] from a [Str]. Returns `Err(BadNumStr)` if the string
@@ -14199,8 +14532,10 @@ Builtin :: [].{
 			to_f64 : I128 -> F64
 
 			## Convert an [I128] to a [Dec], returning `Err(OutOfRange)` if the
-			## integer value does not fit in [Dec]'s fixed-point range.
-			to_dec_try : I128 -> Try(Dec, [OutOfRange])
+			## integer value does not fit in [Dec]'s fixed-point range. See
+			## [Dec.from_attos] to read an [I128] already scaled by 10^18, matching
+			## [Dec]'s internal representation.
+			to_dec_try : I128 -> Try(Dec, [OutOfRange, ..])
 			to_dec_try = |num| out_of_range_try(i128_to_dec_try_unsafe(num))
 
 			## Encode an I128 using a format that provides encode_i128
@@ -14264,6 +14599,26 @@ Builtin :: [].{
 			## decimal places.
 			tau : Dec
 			tau = 6.283185307179586476
+
+			## Convert a [Dec] to a count of attos (units of 10^-18). This operation is
+			## trivial, because a Dec is just a wrapper for an [I128] representing its
+			## value scaled by 10^18.
+			## ```roc
+			## expect Dec.to_attos(1.5) == 1500000000000000000
+			##
+			## expect Dec.to_attos(Dec.highest) == I128.highest
+			## ```
+			to_attos : Dec -> I128
+
+			## Convert a count of attos (units of 10^-18) to a [Dec]. This operation is
+			## trivial, because a Dec is just a wrapper for an [I128] representing its
+			## value scaled by 10^18.
+			## ```roc
+			## expect Dec.from_attos(1500000000000000000) == 1.5
+			##
+			## expect Dec.from_attos(Dec.to_attos(-0.25)) == -0.25
+			## ```
+			from_attos : I128 -> Dec
 
 			## Convert a [Dec] to its decimal string representation.
 			## ```roc
@@ -14389,7 +14744,8 @@ Builtin :: [].{
 			## ```
 			negate : Dec -> Dec
 
-			## Return the absolute value of a [Dec].
+			## Return the absolute value of a [Dec]. Crashes on [Dec.lowest], since
+			## its positive magnitude does not fit in a [Dec].
 			## ```roc
 			## expect Dec.abs(3.5) == 3.5
 			##
@@ -14408,28 +14764,23 @@ Builtin :: [].{
 			plus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
 			plus_try = |a, b| signed_plus_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
-			## Conservative placeholder: always returns `Unknown`. Counting the steps
-			## in a fractional `[start, end)` range advancing by `1` would require
-			## `ceil(end - start)`; until that is implemented, `Unknown` is always a
-			## correct (if imprecise) length hint.
-			## Iterator over [Dec] values from `start` up to but not including `end`.
-			## Returns an empty iterator if `start >= end`. This is what `start..<end`
-			## desugars to when the bounds are [Dec] values.
-			range_exclusive : Dec, Dec -> Iter(Dec)
-			range_exclusive = |start, end| range_exclusive_with_len(start, end, Unknown)
+			range_len_if_known : Dec, Dec, Dec, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = range_len_dec
 
-			## Iterator over [Dec] values from `start` up to and including `end`.
-			## Returns an empty iterator if `start > end`. This is what `start..=end`
-			## desugars to when the bounds are [Dec] values.
-			range_inclusive : Dec, Dec -> Iter(Dec)
-			range_inclusive = |start, end| {
-				len_if_known = if start <= end
-					Unknown
-				else
-					Known(0)
+			range_iter : Dec, Dec, Dec, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(Dec)
+			range_iter = range_iter_standard
 
-				range_inclusive_with_len(start, end, len_if_known)
-			}
+			range_exclusive_to : Dec, Dec -> Range(Dec)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
+
+			range_inclusive_to : Dec, Dec -> Range(Dec)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
+
+			range_exclusive_from : Dec, Dec -> Range(Dec)
+			range_exclusive_from = |upper, lower| range_with_step(lower, upper, 1, Exclusive, From)
+
+			range_inclusive_from : Dec, Dec -> Range(Dec)
+			range_inclusive_from = |upper, lower| range_with_step(lower, upper, 1, Inclusive, From)
 
 			## Add two [Dec] values, saturating at [Dec.highest] or [Dec.lowest] on overflow rather than wrapping around.
 			## ```roc
@@ -14598,211 +14949,211 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8_try : Dec -> Try(I8, [OutOfRange])
-			round_to_i8_try = |self| Dec.to_i8_try(dec_round_to_whole(self))
+			round_to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
+			round_to_i8_try = |self| I128.to_i8_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16_try : Dec -> Try(I16, [OutOfRange])
-			round_to_i16_try = |self| Dec.to_i16_try(dec_round_to_whole(self))
+			round_to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
+			round_to_i16_try = |self| I128.to_i16_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32_try : Dec -> Try(I32, [OutOfRange])
-			round_to_i32_try = |self| Dec.to_i32_try(dec_round_to_whole(self))
+			round_to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
+			round_to_i32_try = |self| I128.to_i32_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64_try : Dec -> Try(I64, [OutOfRange])
-			round_to_i64_try = |self| Dec.to_i64_try(dec_round_to_whole(self))
+			round_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
+			round_to_i64_try = |self| I128.to_i64_try(dec_round_to_i128(self))
 
-			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Every [Dec] rounds to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.round_to_i128_try(7.2) == Ok(7)
+			## expect Dec.round_to_i128(7.2) == 7
 			## ```
-			round_to_i128_try : Dec -> Try(I128, [OutOfRange])
-			round_to_i128_try = |self| Dec.to_i128_try(dec_round_to_whole(self))
+			round_to_i128 : Dec -> I128
+			round_to_i128 = |self| dec_round_to_i128(self)
 
 			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8_try : Dec -> Try(U8, [OutOfRange])
-			round_to_u8_try = |self| Dec.to_u8_try(dec_round_to_whole(self))
+			round_to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
+			round_to_u8_try = |self| I128.to_u8_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16_try : Dec -> Try(U16, [OutOfRange])
-			round_to_u16_try = |self| Dec.to_u16_try(dec_round_to_whole(self))
+			round_to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
+			round_to_u16_try = |self| I128.to_u16_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32_try : Dec -> Try(U32, [OutOfRange])
-			round_to_u32_try = |self| Dec.to_u32_try(dec_round_to_whole(self))
+			round_to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
+			round_to_u32_try = |self| I128.to_u32_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64_try : Dec -> Try(U64, [OutOfRange])
-			round_to_u64_try = |self| Dec.to_u64_try(dec_round_to_whole(self))
+			round_to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
+			round_to_u64_try = |self| I128.to_u64_try(dec_round_to_i128(self))
 
 			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128_try : Dec -> Try(U128, [OutOfRange])
-			round_to_u128_try = |self| Dec.to_u128_try(dec_round_to_whole(self))
+			round_to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
+			round_to_u128_try = |self| I128.to_u128_try(dec_round_to_i128(self))
 
 			## Round a [Dec] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8_try : Dec -> Try(I8, [OutOfRange])
-			floor_to_i8_try = |self| Dec.to_i8_try(dec_floor_to_whole(self))
+			floor_to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
+			floor_to_i8_try = |self| I128.to_i8_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16_try : Dec -> Try(I16, [OutOfRange])
-			floor_to_i16_try = |self| Dec.to_i16_try(dec_floor_to_whole(self))
+			floor_to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
+			floor_to_i16_try = |self| I128.to_i16_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32_try : Dec -> Try(I32, [OutOfRange])
-			floor_to_i32_try = |self| Dec.to_i32_try(dec_floor_to_whole(self))
+			floor_to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
+			floor_to_i32_try = |self| I128.to_i32_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64_try : Dec -> Try(I64, [OutOfRange])
-			floor_to_i64_try = |self| Dec.to_i64_try(dec_floor_to_whole(self))
+			floor_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
+			floor_to_i64_try = |self| I128.to_i64_try(dec_floor_to_i128(self))
 
-			## Round a [Dec] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] down to an [I128]. Every [Dec] rounds down to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.floor_to_i128_try(3.8) == Ok(3)
+			## expect Dec.floor_to_i128(3.8) == 3
 			## ```
-			floor_to_i128_try : Dec -> Try(I128, [OutOfRange])
-			floor_to_i128_try = |self| Dec.to_i128_try(dec_floor_to_whole(self))
+			floor_to_i128 : Dec -> I128
+			floor_to_i128 = |self| dec_floor_to_i128(self)
 
 			## Round a [Dec] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8_try : Dec -> Try(U8, [OutOfRange])
-			floor_to_u8_try = |self| Dec.to_u8_try(dec_floor_to_whole(self))
+			floor_to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
+			floor_to_u8_try = |self| I128.to_u8_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16_try : Dec -> Try(U16, [OutOfRange])
-			floor_to_u16_try = |self| Dec.to_u16_try(dec_floor_to_whole(self))
+			floor_to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
+			floor_to_u16_try = |self| I128.to_u16_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32_try : Dec -> Try(U32, [OutOfRange])
-			floor_to_u32_try = |self| Dec.to_u32_try(dec_floor_to_whole(self))
+			floor_to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
+			floor_to_u32_try = |self| I128.to_u32_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64_try : Dec -> Try(U64, [OutOfRange])
-			floor_to_u64_try = |self| Dec.to_u64_try(dec_floor_to_whole(self))
+			floor_to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
+			floor_to_u64_try = |self| I128.to_u64_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128_try : Dec -> Try(U128, [OutOfRange])
-			floor_to_u128_try = |self| Dec.to_u128_try(dec_floor_to_whole(self))
+			floor_to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
+			floor_to_u128_try = |self| I128.to_u128_try(dec_floor_to_i128(self))
 
 			## Round a [Dec] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8_try : Dec -> Try(I8, [OutOfRange])
-			ceiling_to_i8_try = |self| Dec.to_i8_try(dec_ceiling_to_whole(self))
+			ceiling_to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
+			ceiling_to_i8_try = |self| I128.to_i8_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16_try : Dec -> Try(I16, [OutOfRange])
-			ceiling_to_i16_try = |self| Dec.to_i16_try(dec_ceiling_to_whole(self))
+			ceiling_to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
+			ceiling_to_i16_try = |self| I128.to_i16_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32_try : Dec -> Try(I32, [OutOfRange])
-			ceiling_to_i32_try = |self| Dec.to_i32_try(dec_ceiling_to_whole(self))
+			ceiling_to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
+			ceiling_to_i32_try = |self| I128.to_i32_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange])
-			ceiling_to_i64_try = |self| Dec.to_i64_try(dec_ceiling_to_whole(self))
+			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
+			ceiling_to_i64_try = |self| I128.to_i64_try(dec_ceiling_to_i128(self))
 
-			## Round a [Dec] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
+			## Round a [Dec] up to an [I128]. Every [Dec] rounds up to a value an [I128] can hold, so this never fails.
 			## ```roc
-			## expect Dec.ceiling_to_i128_try(3.2) == Ok(4)
+			## expect Dec.ceiling_to_i128(3.2) == 4
 			## ```
-			ceiling_to_i128_try : Dec -> Try(I128, [OutOfRange])
-			ceiling_to_i128_try = |self| Dec.to_i128_try(dec_ceiling_to_whole(self))
+			ceiling_to_i128 : Dec -> I128
+			ceiling_to_i128 = |self| dec_ceiling_to_i128(self)
 
 			## Round a [Dec] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8_try : Dec -> Try(U8, [OutOfRange])
-			ceiling_to_u8_try = |self| Dec.to_u8_try(dec_ceiling_to_whole(self))
+			ceiling_to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
+			ceiling_to_u8_try = |self| I128.to_u8_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16_try : Dec -> Try(U16, [OutOfRange])
-			ceiling_to_u16_try = |self| Dec.to_u16_try(dec_ceiling_to_whole(self))
+			ceiling_to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
+			ceiling_to_u16_try = |self| I128.to_u16_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32_try : Dec -> Try(U32, [OutOfRange])
-			ceiling_to_u32_try = |self| Dec.to_u32_try(dec_ceiling_to_whole(self))
+			ceiling_to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
+			ceiling_to_u32_try = |self| I128.to_u32_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64_try : Dec -> Try(U64, [OutOfRange])
-			ceiling_to_u64_try = |self| Dec.to_u64_try(dec_ceiling_to_whole(self))
+			ceiling_to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
+			ceiling_to_u64_try = |self| I128.to_u64_try(dec_ceiling_to_i128(self))
 
 			## Round a [Dec] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128_try : Dec -> Try(U128, [OutOfRange])
-			ceiling_to_u128_try = |self| Dec.to_u128_try(dec_ceiling_to_whole(self))
+			ceiling_to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
+			ceiling_to_u128_try = |self| I128.to_u128_try(dec_ceiling_to_i128(self))
 
 			## Build a [Dec] from a list of base-10 digits, most significant
 			## first. Each item of the list must be a digit in the range `0`
@@ -14812,7 +15163,7 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.from_int_digits([1, 2, 3]) == Ok(123.0)
 			## ```
-			from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
+			from_int_digits : List(U8) -> Try(Dec, [OutOfRange, ..])
 			from_int_digits = |digits| dec_from_int_digits(digits)
 
 			## Build a [Dec] from a tuple of (integer digits, fractional digits),
@@ -14825,13 +15176,13 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.from_dec_digits(([1, 2], [5])) == Ok(12.5)
 			## ```
-			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
+			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange, ..])
 			from_dec_digits = |digits| dec_from_dec_digits(digits)
 
 			## Convert a numeric literal into a [Dec]. This is the hook the
 			## compiler uses when a literal is given type [Dec]; most code should
 			## parse user text with [Dec.from_str] instead.
-			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| dec_from_str(str))
 
 			## Parse a [Dec] from a [Str]. Returns `Err(BadNumStr)` if the
@@ -14869,7 +15220,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_i8_try(200.0) == Err(OutOfRange)
 			## ```
-			to_i8_try : Dec -> Try(I8, [OutOfRange])
+			to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
 			to_i8_try = |num| out_of_range_try(dec_to_i8_try_unsafe(num))
 
 			## Convert a [Dec] to an [I16]. The fractional part is truncated
@@ -14893,7 +15244,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_i16_try(40000.0) == Err(OutOfRange)
 			## ```
-			to_i16_try : Dec -> Try(I16, [OutOfRange])
+			to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
 			to_i16_try = |num| out_of_range_try(dec_to_i16_try_unsafe(num))
 
 			## Convert a [Dec] to an [I32]. The fractional part is truncated
@@ -14917,7 +15268,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_i32_try(3000000000.0) == Err(OutOfRange)
 			## ```
-			to_i32_try : Dec -> Try(I32, [OutOfRange])
+			to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
 			to_i32_try = |num| out_of_range_try(dec_to_i32_try_unsafe(num))
 
 			## Convert a [Dec] to an [I64]. The fractional part is truncated
@@ -14936,25 +15287,17 @@ Builtin :: [].{
 			## ```roc
 			## expect Dec.to_i64_try(42.5) == Ok(42)
 			## ```
-			to_i64_try : Dec -> Try(I64, [OutOfRange])
+			to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			to_i64_try = |num| out_of_range_try(dec_to_i64_try_unsafe(num))
 
 			## Convert a [Dec] to an [I128]. The fractional part is truncated
 			## toward zero. The entire integer part of any [Dec] fits in an
-			## [I128], so no wrapping occurs in practice.
+			## [I128], so this never fails. See [Dec.to_attos] to get the exact
+			## value (scaled by 10^18) instead.
 			## ```roc
-			## expect Dec.to_i128_wrap(42.5) == 42
+			## expect Dec.to_i128(42.5) == 42
 			## ```
-			to_i128_wrap : Dec -> I128
-
-			## Convert a [Dec] to an [I128], returning `Err(OutOfRange)` if the
-			## integer part does not fit. The fractional part is truncated toward
-			## zero.
-			## ```roc
-			## expect Dec.to_i128_try(42.5) == Ok(42)
-			## ```
-			to_i128_try : Dec -> Try(I128, [OutOfRange])
-			to_i128_try = |num| out_of_range_try(dec_to_i128_try_unsafe(num))
+			to_i128 : Dec -> I128
 
 			# Conversions to unsigned integers (all lossy - truncates fractional part)
 
@@ -14979,7 +15322,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u8_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u8_try : Dec -> Try(U8, [OutOfRange])
+			to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
 			to_u8_try = |num| out_of_range_try(dec_to_u8_try_unsafe(num))
 
 			## Convert a [Dec] to a [U16]. The fractional part is truncated
@@ -15003,7 +15346,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u16_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u16_try : Dec -> Try(U16, [OutOfRange])
+			to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
 			to_u16_try = |num| out_of_range_try(dec_to_u16_try_unsafe(num))
 
 			## Convert a [Dec] to a [U32]. The fractional part is truncated
@@ -15027,7 +15370,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u32_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u32_try : Dec -> Try(U32, [OutOfRange])
+			to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
 			to_u32_try = |num| out_of_range_try(dec_to_u32_try_unsafe(num))
 
 			## Convert a [Dec] to a [U64]. The fractional part is truncated
@@ -15050,7 +15393,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u64_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u64_try : Dec -> Try(U64, [OutOfRange])
+			to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
 			to_u64_try = |num| out_of_range_try(dec_to_u64_try_unsafe(num))
 
 			## Convert a [Dec] to a [U128]. The fractional part is truncated
@@ -15069,7 +15412,7 @@ Builtin :: [].{
 			##
 			## expect Dec.to_u128_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u128_try : Dec -> Try(U128, [OutOfRange])
+			to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
 			to_u128_try = |num| out_of_range_try(dec_to_u128_try_unsafe(num))
 
 			# Conversions to floating point (lossy - Dec has more precision)
@@ -15081,7 +15424,7 @@ Builtin :: [].{
 			## Convert a [Dec] to an [F32], returning `Err(OutOfRange)` if the
 			## value does not fit in the finite [F32] range. All current [Dec]
 			## values fit in that range, though precision may still be lost.
-			to_f32_try : Dec -> Try(F32, [OutOfRange])
+			to_f32_try : Dec -> Try(F32, [OutOfRange, ..])
 			to_f32_try = |num| out_of_range_try(dec_to_f32_try_unsafe(num))
 
 			## Convert a [Dec] to an [F64]. This conversion is lossy because
@@ -15599,210 +15942,210 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			round_to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
 			round_to_i8_try = |self| F32.to_i8_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			round_to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
 			round_to_i16_try = |self| F32.to_i16_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			round_to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
 			round_to_i32_try = |self| F32.to_i32_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			round_to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
 			round_to_i64_try = |self| F32.to_i64_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			round_to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
 			round_to_i128_try = |self| F32.to_i128_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			round_to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
 			round_to_u8_try = |self| F32.to_u8_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			round_to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
 			round_to_u16_try = |self| F32.to_u16_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			round_to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
 			round_to_u32_try = |self| F32.to_u32_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			round_to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
 			round_to_u64_try = |self| F32.to_u64_try(f32_round_to_whole(self))
 
 			## Round an [F32] to the nearest [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			round_to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
 			round_to_u128_try = |self| F32.to_u128_try(f32_round_to_whole(self))
 
 			## Round an [F32] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			floor_to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
 			floor_to_i8_try = |self| F32.to_i8_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			floor_to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
 			floor_to_i16_try = |self| F32.to_i16_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			floor_to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
 			floor_to_i32_try = |self| F32.to_i32_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			floor_to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
 			floor_to_i64_try = |self| F32.to_i64_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			floor_to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
 			floor_to_i128_try = |self| F32.to_i128_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			floor_to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
 			floor_to_u8_try = |self| F32.to_u8_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			floor_to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
 			floor_to_u16_try = |self| F32.to_u16_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			floor_to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
 			floor_to_u32_try = |self| F32.to_u32_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			floor_to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
 			floor_to_u64_try = |self| F32.to_u64_try(f32_floor_unsafe(self))
 
 			## Round an [F32] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			floor_to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
 			floor_to_u128_try = |self| F32.to_u128_try(f32_floor_unsafe(self))
 
 			## Round an [F32] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
 			ceiling_to_i8_try = |self| F32.to_i8_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
 			ceiling_to_i16_try = |self| F32.to_i16_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
 			ceiling_to_i32_try = |self| F32.to_i32_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
 			ceiling_to_i64_try = |self| F32.to_i64_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
 			ceiling_to_i128_try = |self| F32.to_i128_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
 			ceiling_to_u8_try = |self| F32.to_u8_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
 			ceiling_to_u16_try = |self| F32.to_u16_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
 			ceiling_to_u32_try = |self| F32.to_u32_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
 			ceiling_to_u64_try = |self| F32.to_u64_try(f32_ceiling_unsafe(self))
 
 			## Round an [F32] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F32.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
 			ceiling_to_u128_try = |self| F32.to_u128_try(f32_ceiling_unsafe(self))
 
 			## Build an [F32] from a list of base-10 digits, most significant
@@ -15814,7 +16157,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_str(F32.from_int_digits([1, 2, 3]).ok_or(0.0)) == "123"
 			## ```
-			from_int_digits : List(U8) -> Try(F32, [OutOfRange])
+			from_int_digits : List(U8) -> Try(F32, [OutOfRange, ..])
 			from_int_digits = |digits| f32_from_int_digits(digits)
 
 			## Build an [F32] from a tuple of (integer digits, fractional digits),
@@ -15827,58 +16170,27 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_str(F32.from_dec_digits(([1, 2], [5])).ok_or(0.0)) == "12.5"
 			## ```
-			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange, ..])
 			from_dec_digits = |digits| f32_from_dec_digits(digits)
 
 			## Convert a numeric literal into an [F32]. This is the hook the
 			## compiler uses when a literal is given type [F32]; most code should
 			## parse user text with [F32.from_str] instead.
-			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| f32_from_str(str))
 
-			## Iterator over [F32] values from `start` up to but not including `end`,
-			## incrementing by 1. Returns an empty iterator if `start >= end`.
-			## This is what `start..<end` desugars to when the bounds are [F32] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_exclusive : F32, F32 -> Iter(F32)
-			range_exclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done or cur >= end {
-							Err(NoMore)
-						} else {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						},
-				)
+			range_len_if_known : F32, F32, F32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) Known(0) else Unknown
 
-			## Iterator over [F32] values from `start` up to and including `end`,
-			## incrementing by 1. Returns an empty iterator if `start > end`.
-			## This is what `start..=end` desugars to when the bounds are [F32] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_inclusive : F32, F32 -> Iter(F32)
-			range_inclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done {
-							Err(NoMore)
-						} else if cur < end {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						} else if cur == end {
-							Ok((cur, (cur, True)))
-						} else {
-							Err(NoMore)
-						},
-				)
+			range_iter : F32, F32, F32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(F32)
+			range_iter = range_iter_float
+
+			range_exclusive_to : F32, F32 -> Range(F32)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
+
+			range_inclusive_to : F32, F32 -> Range(F32)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
 
 			## Parse an [F32] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -15914,7 +16226,7 @@ Builtin :: [].{
 			##
 			## expect F32.to_i8_try(200.0) == Err(OutOfRange)
 			## ```
-			to_i8_try : F32 -> Try(I8, [OutOfRange])
+			to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
 			to_i8_try = |num| out_of_range_try(f32_to_i8_try_unsafe(num))
 
 			## Convert an [F32] to an [I16]. The fractional part is truncated
@@ -15937,7 +16249,7 @@ Builtin :: [].{
 			##
 			## expect F32.to_i16_try(40000.0) == Err(OutOfRange)
 			## ```
-			to_i16_try : F32 -> Try(I16, [OutOfRange])
+			to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
 			to_i16_try = |num| out_of_range_try(f32_to_i16_try_unsafe(num))
 
 			## Convert an [F32] to an [I32]. The fractional part is truncated
@@ -15954,7 +16266,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_i32_try(42.5) == Ok(42)
 			## ```
-			to_i32_try : F32 -> Try(I32, [OutOfRange])
+			to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
 			to_i32_try = |num| out_of_range_try(f32_to_i32_try_unsafe(num))
 
 			## Convert an [F32] to an [I64]. The fractional part is truncated
@@ -15971,7 +16283,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_i64_try(42.5) == Ok(42)
 			## ```
-			to_i64_try : F32 -> Try(I64, [OutOfRange])
+			to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
 			to_i64_try = |num| out_of_range_try(f32_to_i64_try_unsafe(num))
 
 			## Convert an [F32] to an [I128]. The fractional part is truncated
@@ -15988,7 +16300,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_i128_try(42.5) == Ok(42)
 			## ```
-			to_i128_try : F32 -> Try(I128, [OutOfRange])
+			to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
 			to_i128_try = |num| out_of_range_try(f32_to_i128_try_unsafe(num))
 
 			# Conversions to unsigned integers (all lossy - truncation + range check)
@@ -16010,7 +16322,7 @@ Builtin :: [].{
 			##
 			## expect F32.to_u8_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u8_try : F32 -> Try(U8, [OutOfRange])
+			to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
 			to_u8_try = |num| out_of_range_try(f32_to_u8_try_unsafe(num))
 
 			## Convert an [F32] to a [U16]. The fractional part is truncated
@@ -16028,7 +16340,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u16_try(42.5) == Ok(42)
 			## ```
-			to_u16_try : F32 -> Try(U16, [OutOfRange])
+			to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
 			to_u16_try = |num| out_of_range_try(f32_to_u16_try_unsafe(num))
 
 			## Convert an [F32] to a [U32]. The fractional part is truncated
@@ -16046,7 +16358,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u32_try(42.5) == Ok(42)
 			## ```
-			to_u32_try : F32 -> Try(U32, [OutOfRange])
+			to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
 			to_u32_try = |num| out_of_range_try(f32_to_u32_try_unsafe(num))
 
 			## Convert an [F32] to a [U64]. The fractional part is truncated
@@ -16064,7 +16376,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u64_try(42.5) == Ok(42)
 			## ```
-			to_u64_try : F32 -> Try(U64, [OutOfRange])
+			to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
 			to_u64_try = |num| out_of_range_try(f32_to_u64_try_unsafe(num))
 
 			## Convert an [F32] to a [U128]. The fractional part is truncated
@@ -16082,7 +16394,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_u128_try(42.5) == Ok(42)
 			## ```
-			to_u128_try : F32 -> Try(U128, [OutOfRange])
+			to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
 			to_u128_try = |num| out_of_range_try(f32_to_u128_try_unsafe(num))
 
 			## No-op: leave an [F32] unchanged as an [F32].
@@ -16546,210 +16858,210 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			round_to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
 			round_to_i8_try = |self| F64.to_i8_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			round_to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
 			round_to_i16_try = |self| F64.to_i16_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			round_to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
 			round_to_i32_try = |self| F64.to_i32_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			round_to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
 			round_to_i64_try = |self| F64.to_i64_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			round_to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
 			round_to_i128_try = |self| F64.to_i128_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			round_to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
 			round_to_u8_try = |self| F64.to_u8_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			round_to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
 			round_to_u16_try = |self| F64.to_u16_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			round_to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
 			round_to_u32_try = |self| F64.to_u32_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			round_to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
 			round_to_u64_try = |self| F64.to_u64_try(f64_round_to_whole(self))
 
 			## Round an [F64] to the nearest [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			round_to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
 			round_to_u128_try = |self| F64.to_u128_try(f64_round_to_whole(self))
 
 			## Round an [F64] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			floor_to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
 			floor_to_i8_try = |self| F64.to_i8_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			floor_to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
 			floor_to_i16_try = |self| F64.to_i16_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			floor_to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
 			floor_to_i32_try = |self| F64.to_i32_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			floor_to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
 			floor_to_i64_try = |self| F64.to_i64_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			floor_to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
 			floor_to_i128_try = |self| F64.to_i128_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			floor_to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
 			floor_to_u8_try = |self| F64.to_u8_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			floor_to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
 			floor_to_u16_try = |self| F64.to_u16_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			floor_to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
 			floor_to_u32_try = |self| F64.to_u32_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			floor_to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
 			floor_to_u64_try = |self| F64.to_u64_try(f64_floor_unsafe(self))
 
 			## Round an [F64] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			floor_to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
 			floor_to_u128_try = |self| F64.to_u128_try(f64_floor_unsafe(self))
 
 			## Round an [F64] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
 			ceiling_to_i8_try = |self| F64.to_i8_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
 			ceiling_to_i16_try = |self| F64.to_i16_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
 			ceiling_to_i32_try = |self| F64.to_i32_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
 			ceiling_to_i64_try = |self| F64.to_i64_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
 			ceiling_to_i128_try = |self| F64.to_i128_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
 			ceiling_to_u8_try = |self| F64.to_u8_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
 			ceiling_to_u16_try = |self| F64.to_u16_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
 			ceiling_to_u32_try = |self| F64.to_u32_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
 			ceiling_to_u64_try = |self| F64.to_u64_try(f64_ceiling_unsafe(self))
 
 			## Round an [F64] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
 			## expect F64.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
 			ceiling_to_u128_try = |self| F64.to_u128_try(f64_ceiling_unsafe(self))
 
 			## Build an [F64] from a list of base-10 digits, most significant
@@ -16761,7 +17073,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_str(F64.from_int_digits([1, 2, 3]).ok_or(0.0)) == "123"
 			## ```
-			from_int_digits : List(U8) -> Try(F64, [OutOfRange])
+			from_int_digits : List(U8) -> Try(F64, [OutOfRange, ..])
 			from_int_digits = |digits| f64_from_int_digits(digits)
 
 			## Build an [F64] from a tuple of (integer digits, fractional digits),
@@ -16774,58 +17086,27 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_str(F64.from_dec_digits(([1, 2], [5])).ok_or(0.0)) == "12.5"
 			## ```
-			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange, ..])
 			from_dec_digits = |digits| f64_from_dec_digits(digits)
 
 			## Convert a numeric literal into an [F64]. This is the hook the
 			## compiler uses when a literal is given type [F64]; most code should
 			## parse user text with [F64.from_str] instead.
-			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
+			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| f64_from_str(str))
 
-			## Iterator over [F64] values from `start` up to but not including `end`,
-			## incrementing by 1. Returns an empty iterator if `start >= end`.
-			## This is what `start..<end` desugars to when the bounds are [F64] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_exclusive : F64, F64 -> Iter(F64)
-			range_exclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done or cur >= end {
-							Err(NoMore)
-						} else {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						},
-				)
+			range_len_if_known : F64, F64, F64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known = |lower, upper, step, upper_bound|
+				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) Known(0) else Unknown
 
-			## Iterator over [F64] values from `start` up to and including `end`,
-			## incrementing by 1. Returns an empty iterator if `start > end`.
-			## This is what `start..=end` desugars to when the bounds are [F64] values.
-			##
-			## Once the values are large enough that adding 1 can no longer produce a
-			## bigger float, the iterator yields that value once and then ends.
-			range_inclusive : F64, F64 -> Iter(F64)
-			range_inclusive = |start, end|
-				Iter.custom(
-					(start, False),
-					Unknown,
-					|(cur, done)|
-						if done {
-							Err(NoMore)
-						} else if cur < end {
-							next = cur + 1
-							if next > cur Ok((cur, (next, False))) else Ok((cur, (cur, True)))
-						} else if cur == end {
-							Ok((cur, (cur, True)))
-						} else {
-							Err(NoMore)
-						},
-				)
+			range_iter : F64, F64, F64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(F64)
+			range_iter = range_iter_float
+
+			range_exclusive_to : F64, F64 -> Range(F64)
+			range_exclusive_to = |lower, upper| range_with_step(lower, upper, 1, Exclusive, To)
+
+			range_inclusive_to : F64, F64 -> Range(F64)
+			range_inclusive_to = |lower, upper| range_with_step(lower, upper, 1, Inclusive, To)
 
 			## Parse an [F64] from a [Str]. Returns `Err(BadNumStr)` if the
 			## string is not a valid decimal number, or if the parsed value does
@@ -16861,7 +17142,7 @@ Builtin :: [].{
 			##
 			## expect F64.to_i8_try(200.0) == Err(OutOfRange)
 			## ```
-			to_i8_try : F64 -> Try(I8, [OutOfRange])
+			to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
 			to_i8_try = |num| out_of_range_try(f64_to_i8_try_unsafe(num))
 
 			## Convert an [F64] to an [I16]. The fractional part is truncated
@@ -16884,7 +17165,7 @@ Builtin :: [].{
 			##
 			## expect F64.to_i16_try(40000.0) == Err(OutOfRange)
 			## ```
-			to_i16_try : F64 -> Try(I16, [OutOfRange])
+			to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
 			to_i16_try = |num| out_of_range_try(f64_to_i16_try_unsafe(num))
 
 			## Convert an [F64] to an [I32]. The fractional part is truncated
@@ -16901,7 +17182,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_i32_try(42.5) == Ok(42)
 			## ```
-			to_i32_try : F64 -> Try(I32, [OutOfRange])
+			to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
 			to_i32_try = |num| out_of_range_try(f64_to_i32_try_unsafe(num))
 
 			## Convert an [F64] to an [I64]. The fractional part is truncated
@@ -16918,7 +17199,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_i64_try(42.5) == Ok(42)
 			## ```
-			to_i64_try : F64 -> Try(I64, [OutOfRange])
+			to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
 			to_i64_try = |num| out_of_range_try(f64_to_i64_try_unsafe(num))
 
 			## Convert an [F64] to an [I128]. The fractional part is truncated
@@ -16935,7 +17216,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_i128_try(42.5) == Ok(42)
 			## ```
-			to_i128_try : F64 -> Try(I128, [OutOfRange])
+			to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
 			to_i128_try = |num| out_of_range_try(f64_to_i128_try_unsafe(num))
 
 			# Conversions to unsigned integers (all lossy - truncation + range check)
@@ -16957,7 +17238,7 @@ Builtin :: [].{
 			##
 			## expect F64.to_u8_try(-1.0) == Err(OutOfRange)
 			## ```
-			to_u8_try : F64 -> Try(U8, [OutOfRange])
+			to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
 			to_u8_try = |num| out_of_range_try(f64_to_u8_try_unsafe(num))
 
 			## Convert an [F64] to a [U16]. The fractional part is truncated
@@ -16975,7 +17256,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u16_try(42.5) == Ok(42)
 			## ```
-			to_u16_try : F64 -> Try(U16, [OutOfRange])
+			to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
 			to_u16_try = |num| out_of_range_try(f64_to_u16_try_unsafe(num))
 
 			## Convert an [F64] to a [U32]. The fractional part is truncated
@@ -16993,7 +17274,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u32_try(42.5) == Ok(42)
 			## ```
-			to_u32_try : F64 -> Try(U32, [OutOfRange])
+			to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
 			to_u32_try = |num| out_of_range_try(f64_to_u32_try_unsafe(num))
 
 			## Convert an [F64] to a [U64]. The fractional part is truncated
@@ -17011,7 +17292,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u64_try(42.5) == Ok(42)
 			## ```
-			to_u64_try : F64 -> Try(U64, [OutOfRange])
+			to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
 			to_u64_try = |num| out_of_range_try(f64_to_u64_try_unsafe(num))
 
 			## Convert an [F64] to a [U128]. The fractional part is truncated
@@ -17029,7 +17310,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F64.to_u128_try(42.5) == Ok(42)
 			## ```
-			to_u128_try : F64 -> Try(U128, [OutOfRange])
+			to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
 			to_u128_try = |num| out_of_range_try(f64_to_u128_try_unsafe(num))
 
 			## Convert an [F64] to an [F32], narrowing the value. [F64] has more
@@ -17049,7 +17330,7 @@ Builtin :: [].{
 			## ```roc
 			## expect F32.to_str(F64.to_f32_try(1.5).ok_or(0.0)) == "1.5"
 			## ```
-			to_f32_try : F64 -> Try(F32, [OutOfRange])
+			to_f32_try : F64 -> Try(F32, [OutOfRange, ..])
 			to_f32_try = |num| out_of_range_try(f64_to_f32_try_unsafe(num))
 
 			## No-op: leave an [F64] unchanged as an [F64].
@@ -17154,10 +17435,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("U8x16(", Str.concat(Str.join_with(List.map(U8x16.to_list(vector), U8.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 8, (i + 1) * 8)`. Free at runtime — no instructions.
+			## `[i * 8, (i + 1) * 8)`. Free at runtime—no instructions.
 			to_u128_bits : U8x16 -> U128
 
-			## Build a [U8x16] from 128 raw bits. Free at runtime — no
+			## Build a [U8x16] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> U8x16
 
@@ -17419,7 +17700,7 @@ Builtin :: [].{
 			interleave_hi : U8x16, U8x16 -> U8x16
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -17466,7 +17747,7 @@ Builtin :: [].{
 			##
 			## Lowers to `pshufb` plus a one-instruction fixup on x86-64
 			## (`pshufb` alone wraps indices 16-127), `tbl` on AArch64 NEON,
-			## and `i8x16.swizzle` on wasm — the out-of-range-to-zero
+			## and `i8x16.swizzle` on wasm—the out-of-range-to-zero
 			## semantics here matches `tbl` and `swizzle` exactly.
 			## ```roc
 			## expect U8x16.splat(42).table_lookup(U8x16.splat(20)).get_lane(0) == 0
@@ -17700,10 +17981,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("I8x16(", Str.concat(Str.join_with(List.map(I8x16.to_list(vector), I8.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 8, (i + 1) * 8)`. Free at runtime — no instructions.
+			## `[i * 8, (i + 1) * 8)`. Free at runtime—no instructions.
 			to_u128_bits : I8x16 -> U128
 
-			## Build an [I8x16] from 128 raw bits. Free at runtime — no
+			## Build an [I8x16] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> I8x16
 
@@ -17982,7 +18263,7 @@ Builtin :: [].{
 			interleave_hi : I8x16, I8x16 -> I8x16
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -18181,10 +18462,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("U16x8(", Str.concat(Str.join_with(List.map(U16x8.to_list(vector), U16.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 16, (i + 1) * 16)`. Free at runtime — no instructions.
+			## `[i * 16, (i + 1) * 16)`. Free at runtime—no instructions.
 			to_u128_bits : U16x8 -> U128
 
-			## Build a [U16x8] from 128 raw bits. Free at runtime — no
+			## Build a [U16x8] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> U16x8
 
@@ -18460,7 +18741,7 @@ Builtin :: [].{
 			interleave_hi : U16x8, U16x8 -> U16x8
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -18674,10 +18955,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("I16x8(", Str.concat(Str.join_with(List.map(I16x8.to_list(vector), I16.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 16, (i + 1) * 16)`. Free at runtime — no instructions.
+			## `[i * 16, (i + 1) * 16)`. Free at runtime—no instructions.
 			to_u128_bits : I16x8 -> U128
 
-			## Build an [I16x8] from 128 raw bits. Free at runtime — no
+			## Build an [I16x8] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> I16x8
 
@@ -18807,7 +19088,7 @@ Builtin :: [].{
 			## 32-bit lanes of an [I32x4]: result lane i is
 			## `a(2i) * b(2i) + a(2i+1) * b(2i+1)`. The only input that wraps
 			## the 32-bit result is all four lanes `-32768`, matching the
-			## hardware. This is the DCT/IDCT/FIR workhorse — multiply-accumulate
+			## hardware. This is the DCT/IDCT/FIR workhorse—multiply-accumulate
 			## over signed 16-bit taps.
 			##
 			## Lowers to `pmaddwd` on x86-64, a `smull` + `smull2` +
@@ -19062,7 +19343,7 @@ Builtin :: [].{
 			interleave_hi : I16x8, I16x8 -> I16x8
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `pshufb`-based shuffles on x86-64, `uzp1` on AArch64
@@ -19211,10 +19492,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("U32x4(", Str.concat(Str.join_with(List.map(U32x4.to_list(vector), U32.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 32, (i + 1) * 32)`. Free at runtime — no instructions.
+			## `[i * 32, (i + 1) * 32)`. Free at runtime—no instructions.
 			to_u128_bits : U32x4 -> U128
 
-			## Build a [U32x4] from 128 raw bits. Free at runtime — no
+			## Build a [U32x4] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> U32x4
 
@@ -19465,7 +19746,7 @@ Builtin :: [].{
 			interleave_hi : U32x4, U32x4 -> U32x4
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `shufps`-class shuffles on x86-64, `uzp1` on AArch64
@@ -19649,10 +19930,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("I32x4(", Str.concat(Str.join_with(List.map(I32x4.to_list(vector), I32.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 32, (i + 1) * 32)`. Free at runtime — no instructions.
+			## `[i * 32, (i + 1) * 32)`. Free at runtime—no instructions.
 			to_u128_bits : I32x4 -> U128
 
-			## Build an [I32x4] from 128 raw bits. Free at runtime — no
+			## Build an [I32x4] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> I32x4
 
@@ -19966,7 +20247,7 @@ Builtin :: [].{
 			interleave_hi : I32x4, I32x4 -> I32x4
 
 			## The even-indexed lanes of a followed by the even-indexed lanes
-			## of b — the deinterleaving inverse of the interleave operations,
+			## of b—the deinterleaving inverse of the interleave operations,
 			## used to split interleaved channel data apart.
 			##
 			## Lowers to `shufps`-class shuffles on x86-64, `uzp1` on AArch64
@@ -20114,10 +20395,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("U64x2(", Str.concat(Str.join_with(List.map(U64x2.to_list(vector), U64.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 64, (i + 1) * 64)`. Free at runtime — no instructions.
+			## `[i * 64, (i + 1) * 64)`. Free at runtime—no instructions.
 			to_u128_bits : U64x2 -> U128
 
-			## Build a [U64x2] from 128 raw bits. Free at runtime — no
+			## Build a [U64x2] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> U64x2
 
@@ -20480,10 +20761,10 @@ Builtin :: [].{
 			to_inspect = |vector| Str.concat("I64x2(", Str.concat(Str.join_with(List.map(I64x2.to_list(vector), I64.to_str), ", "), ")"))
 
 			## The vector's 128 bits as a [U128]. Lane `i` occupies bits
-			## `[i * 64, (i + 1) * 64)`. Free at runtime — no instructions.
+			## `[i * 64, (i + 1) * 64)`. Free at runtime—no instructions.
 			to_u128_bits : I64x2 -> U128
 
-			## Build an [I64x2] from 128 raw bits. Free at runtime — no
+			## Build an [I64x2] from 128 raw bits. Free at runtime—no
 			## instructions.
 			from_u128_bits : U128 -> I64x2
 
@@ -21173,78 +21454,78 @@ dict_place_and_shift_up = |buckets, bucket, bucket_index| {
 	}
 }
 
-u8_from_str : Str -> Try(U8, [BadNumStr])
+u8_from_str : Str -> Try(U8, [BadNumStr, ..])
 
-i8_from_str : Str -> Try(I8, [BadNumStr])
+i8_from_str : Str -> Try(I8, [BadNumStr, ..])
 
-u16_from_str : Str -> Try(U16, [BadNumStr])
+u16_from_str : Str -> Try(U16, [BadNumStr, ..])
 
-i16_from_str : Str -> Try(I16, [BadNumStr])
+i16_from_str : Str -> Try(I16, [BadNumStr, ..])
 
-u32_from_str : Str -> Try(U32, [BadNumStr])
+u32_from_str : Str -> Try(U32, [BadNumStr, ..])
 
-i32_from_str : Str -> Try(I32, [BadNumStr])
+i32_from_str : Str -> Try(I32, [BadNumStr, ..])
 
-u64_from_str : Str -> Try(U64, [BadNumStr])
+u64_from_str : Str -> Try(U64, [BadNumStr, ..])
 
-i64_from_str : Str -> Try(I64, [BadNumStr])
+i64_from_str : Str -> Try(I64, [BadNumStr, ..])
 
-u128_from_str : Str -> Try(U128, [BadNumStr])
+u128_from_str : Str -> Try(U128, [BadNumStr, ..])
 
-i128_from_str : Str -> Try(I128, [BadNumStr])
+i128_from_str : Str -> Try(I128, [BadNumStr, ..])
 
-dec_from_str : Str -> Try(Dec, [BadNumStr])
+dec_from_str : Str -> Try(Dec, [BadNumStr, ..])
 
-f32_from_str : Str -> Try(F32, [BadNumStr])
+f32_from_str : Str -> Try(F32, [BadNumStr, ..])
 
-f64_from_str : Str -> Try(F64, [BadNumStr])
+f64_from_str : Str -> Try(F64, [BadNumStr, ..])
 
-u8_from_int_digits : List(U8) -> Try(U8, [OutOfRange])
+u8_from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..])
 u8_from_int_digits = |digits| int_from_digits(digits, |str| u8_from_str(str))
 
-i8_from_int_digits : List(U8) -> Try(I8, [OutOfRange])
+i8_from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..])
 i8_from_int_digits = |digits| int_from_digits(digits, |str| i8_from_str(str))
 
-u16_from_int_digits : List(U8) -> Try(U16, [OutOfRange])
+u16_from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..])
 u16_from_int_digits = |digits| int_from_digits(digits, |str| u16_from_str(str))
 
-i16_from_int_digits : List(U8) -> Try(I16, [OutOfRange])
+i16_from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..])
 i16_from_int_digits = |digits| int_from_digits(digits, |str| i16_from_str(str))
 
-u32_from_int_digits : List(U8) -> Try(U32, [OutOfRange])
+u32_from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..])
 u32_from_int_digits = |digits| int_from_digits(digits, |str| u32_from_str(str))
 
-i32_from_int_digits : List(U8) -> Try(I32, [OutOfRange])
+i32_from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..])
 i32_from_int_digits = |digits| int_from_digits(digits, |str| i32_from_str(str))
 
-u64_from_int_digits : List(U8) -> Try(U64, [OutOfRange])
+u64_from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..])
 u64_from_int_digits = |digits| int_from_digits(digits, |str| u64_from_str(str))
 
-i64_from_int_digits : List(U8) -> Try(I64, [OutOfRange])
+i64_from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..])
 i64_from_int_digits = |digits| int_from_digits(digits, |str| i64_from_str(str))
 
-u128_from_int_digits : List(U8) -> Try(U128, [OutOfRange])
+u128_from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..])
 u128_from_int_digits = |digits| int_from_digits(digits, |str| u128_from_str(str))
 
-i128_from_int_digits : List(U8) -> Try(I128, [OutOfRange])
+i128_from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..])
 i128_from_int_digits = |digits| int_from_digits(digits, |str| i128_from_str(str))
 
-dec_from_int_digits : List(U8) -> Try(Dec, [OutOfRange])
+dec_from_int_digits : List(U8) -> Try(Dec, [OutOfRange, ..])
 dec_from_int_digits = |digits| int_from_digits(digits, |str| dec_from_str(str))
 
-dec_from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange])
+dec_from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange, ..])
 dec_from_dec_digits = |digits| dec_from_digits(digits, |str| dec_from_str(str))
 
-f32_from_int_digits : List(U8) -> Try(F32, [OutOfRange])
+f32_from_int_digits : List(U8) -> Try(F32, [OutOfRange, ..])
 f32_from_int_digits = |digits| int_from_digits(digits, |str| f32_from_str(str))
 
-f32_from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange])
+f32_from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange, ..])
 f32_from_dec_digits = |digits| dec_from_digits(digits, |str| f32_from_str(str))
 
-f64_from_int_digits : List(U8) -> Try(F64, [OutOfRange])
+f64_from_int_digits : List(U8) -> Try(F64, [OutOfRange, ..])
 f64_from_int_digits = |digits| int_from_digits(digits, |str| f64_from_str(str))
 
-f64_from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange])
+f64_from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange, ..])
 f64_from_dec_digits = |digits| dec_from_digits(digits, |str| f64_from_str(str))
 
 json_u8_to_str : U8 -> Str
@@ -21304,7 +21585,7 @@ json_f64_is_infinite = |value| F64.is_infinite(value)
 json_f64_is_negative : F64 -> Bool
 json_f64_is_negative = |value| F64.is_negative(value)
 
-from_numeral_with : Num.Numeral, (Str -> Try(item, err)) -> Try(item, [InvalidNumeral(Str)])
+from_numeral_with : Num.Numeral, (Str -> Try(item, err)) -> Try(item, [InvalidNumeral(Str), ..])
 from_numeral_with = |numeral, parse|
 	match numeral_to_str(numeral) {
 		Err(err) => Err(err)
@@ -21315,7 +21596,7 @@ from_numeral_with = |numeral, parse|
 			}
 		}
 
-numeral_to_str : Num.Numeral -> Try(Str, [InvalidNumeral(Str)])
+numeral_to_str : Num.Numeral -> Try(Str, [InvalidNumeral(Str), ..])
 numeral_to_str = |numeral|
 	match numeral {
 		Literal({ is_negative, digits_before_pt, digits_after_pt, digits_after_pt_count }) => {
@@ -21530,7 +21811,7 @@ crypto_digest_to_hex = |bytes|
 	}
 
 ## The numeric value of an ASCII hex digit (either case).
-hex_digit_value : U8 -> Try(U8, [NotHex])
+hex_digit_value : U8 -> Try(U8, [NotHex, ..])
 hex_digit_value = |byte|
 	if byte >= '0' and byte <= '9' {
 		Ok(byte - '0')
@@ -21612,7 +21893,7 @@ dec_acos_unsafe : Dec -> Dec
 
 dec_atan_unsafe : Dec -> Dec
 
-out_of_range_try : { success : U8, val_or_memory_garbage : item } -> Try(item, [OutOfRange])
+out_of_range_try : { success : U8, val_or_memory_garbage : item } -> Try(item, [OutOfRange, ..])
 out_of_range_try = |answer|
 	if answer.success != 0 {
 		Ok(answer.val_or_memory_garbage)
@@ -21620,34 +21901,34 @@ out_of_range_try = |answer|
 		Err(OutOfRange)
 	}
 
-dec_round_to_whole : Dec -> Dec
-dec_round_to_whole = |self| {
-	truncated = Dec.div_trunc_by(self, 1.0)
-	remainder = self - truncated
-	if remainder >= 0.5 {
-		truncated + 1.0
-	} else if remainder <= -0.5 {
-		truncated - 1.0
+dec_attos_per_whole : I128
+dec_attos_per_whole = 1000000000000000000
+
+dec_round_to_i128 : Dec -> I128
+dec_round_to_i128 = |self| {
+	attos = Dec.to_attos(self)
+	truncated = I128.div_trunc_by(attos, dec_attos_per_whole)
+	remainder = I128.rem_by(attos, dec_attos_per_whole)
+	if remainder >= 500000000000000000 {
+		truncated + 1
+	} else if remainder <= -500000000000000000 {
+		truncated - 1
 	} else {
 		truncated
 	}
 }
+
+dec_floor_to_i128 : Dec -> I128
+dec_floor_to_i128 = |self| I128.div_floor_by(Dec.to_attos(self), dec_attos_per_whole)
+
+dec_ceiling_to_i128 : Dec -> I128
+dec_ceiling_to_i128 = |self| I128.div_ceil_by(Dec.to_attos(self), dec_attos_per_whole)
 
 dec_floor_to_whole : Dec -> Dec
 dec_floor_to_whole = |self| {
 	truncated = Dec.div_trunc_by(self, 1.0)
 	if self < truncated {
 		truncated - 1.0
-	} else {
-		truncated
-	}
-}
-
-dec_ceiling_to_whole : Dec -> Dec
-dec_ceiling_to_whole = |self| {
-	truncated = Dec.div_trunc_by(self, 1.0)
-	if self > truncated {
-		truncated + 1.0
 	} else {
 		truncated
 	}
@@ -21671,24 +21952,19 @@ f64_round_to_whole = |self| {
 	}
 }
 
-digits_to_bytes : List(U8) -> Try(List(U8), [OutOfRange])
-digits_to_bytes = |digits|
-	List.fold(
-		digits,
-		Ok([]),
-		|state, digit|
-			match state {
-				Err(OutOfRange) => Err(OutOfRange)
-				Ok(bytes) =>
-					if digit > 9 {
-						Err(OutOfRange)
-					} else {
-						Ok(List.append(bytes, digit + 48))
-					}
-				},
-	)
+digits_to_bytes : List(U8) -> Try(List(U8), [OutOfRange, ..])
+digits_to_bytes = |digits| {
+	var $bytes = []
+	for digit in digits {
+		if digit > 9 {
+			return Err(OutOfRange)
+		}
+		$bytes = List.append($bytes, digit + 48)
+	}
+	Ok($bytes)
+}
 
-int_from_digits : List(U8), (Str -> Try(item, err)) -> Try(item, [OutOfRange])
+int_from_digits : List(U8), (Str -> Try(item, err)) -> Try(item, [OutOfRange, ..])
 int_from_digits = |digits, parse|
 	match digits_to_str(digits) {
 		Ok(str) =>
@@ -21699,7 +21975,7 @@ int_from_digits = |digits, parse|
 		Err(OutOfRange) => Err(OutOfRange)
 	}
 
-dec_from_digits : (List(U8), List(U8)), (Str -> Try(item, err)) -> Try(item, [OutOfRange])
+dec_from_digits : (List(U8), List(U8)), (Str -> Try(item, err)) -> Try(item, [OutOfRange, ..])
 dec_from_digits = |digits, parse| {
 	(int_digits, frac_digits) = digits
 
@@ -21723,14 +21999,14 @@ dec_from_digits = |digits, parse| {
 		}
 }
 
-digits_to_str : List(U8) -> Try(Str, [OutOfRange])
+digits_to_str : List(U8) -> Try(Str, [OutOfRange, ..])
 digits_to_str = |digits|
 	match digits_to_bytes(digits) {
 		Err(OutOfRange) => Err(OutOfRange)
 		Ok(bytes) => bytes_to_str(bytes)
 	}
 
-bytes_to_str : List(U8) -> Try(Str, [OutOfRange])
+bytes_to_str : List(U8) -> Try(Str, [OutOfRange, ..])
 bytes_to_str = |bytes|
 	match Str.from_utf8(bytes) {
 		Ok(str) => Ok(str)
@@ -22150,6 +22426,257 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 
 numeric_compare : item, item -> [LT, EQ, GT]
 
+range_with_step : num, num, num, [Exclusive, Inclusive], [To, From] -> Num.Range(num)
+	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
+range_with_step = |lower, upper, step, upper_bound, direction|
+	Num.Range.custom({
+		lower,
+		upper,
+		step,
+		upper_bound,
+		direction,
+		len_if_known: lower.range_len_if_known(upper, step, upper_bound),
+	})
+
+range_len_u64 : U64, U64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_u64 = |distance, step, upper_bound|
+	if step == 0 {
+		Known(0)
+	} else {
+		match upper_bound {
+			Exclusive => Known((distance - 1) / step + 1)
+			Inclusive => match (distance / step).plus_try(1) {
+				Ok(len) => Known(len)
+				Err(Overflow) => Unknown
+			}
+		}
+	}
+
+range_len_u128 : U128, U128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_u128 = |distance, step, upper_bound|
+	if step == 0 {
+		Known(0)
+	} else {
+		base = match upper_bound {
+			Exclusive => (distance - 1) / step
+			Inclusive => distance / step
+		}
+		match base.plus_try(1) {
+			Err(Overflow) => Unknown
+			Ok(len_u128) => match len_u128.to_u64_try() {
+				Ok(len) => Known(len)
+				Err(OutOfRange) => Unknown
+			}
+		}
+	}
+
+range_len_dec : Dec, Dec, Dec, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_dec = |lower, upper, step, upper_bound| {
+	has_members = step > 0 and match upper_bound {
+		Exclusive => lower < upper
+		Inclusive => lower <= upper
+	}
+	if !has_members {
+		Known(0)
+	} else {
+		match upper.minus_try(lower) {
+			Err(Overflow) => Unknown
+			Ok(distance) => {
+				count_try = match upper_bound {
+					Exclusive => (distance / step).ceiling_to_u64_try()
+					Inclusive => match (distance / step).floor_to_u64_try() {
+						Err(OutOfRange) => Err(OutOfRange)
+						Ok(base) => base.plus_try(1)
+					}
+				}
+				match count_try {
+					Ok(len) => Known(len)
+					Err(_) => Unknown
+				}
+			}
+		}
+	}
+}
+
+# Return `value mod step` normalized into `[0, step)`. The explicit checked
+# arithmetic is shared by signed integers and Dec; unsigned remainders simply
+# take the nonnegative branch.
+range_nonnegative_rem : num, num -> Try(num, [NoMore])
+	where [
+		num.is_lt : num, num -> Bool,
+		num.plus_try : num, num -> Try(num, [Overflow]),
+		num.rem_by : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_nonnegative_rem = |value, step| {
+	raw = value.rem_by(step)
+	if raw < 0 {
+		match raw.plus_try(step) {
+			Ok(normalized) => Ok(normalized)
+			Err(Overflow) => Err(NoMore)
+		}
+	} else {
+		Ok(raw)
+	}
+}
+
+# Find the greatest member of the lower-anchored progression which satisfies
+# the upper bound. Computing the distance modulo `step` from endpoint
+# remainders avoids ever materializing `upper - lower`, which can overflow for
+# a full-width signed range even though the aligned final member is valid.
+range_standard_last : num, num, num, [Exclusive, Inclusive] -> Try(num, [NoMore])
+	where [
+		num.is_eq : num, num -> Bool,
+		num.is_lt : num, num -> Bool,
+		num.is_lte : num, num -> Bool,
+		num.is_gt : num, num -> Bool,
+		num.is_gte : num, num -> Bool,
+		num.minus : num, num -> num,
+		num.minus_try : num, num -> Try(num, [Overflow]),
+		num.plus_try : num, num -> Try(num, [Overflow]),
+		num.rem_by : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_standard_last = |lower, upper, step, upper_bound| {
+	has_members = step > 0 and match upper_bound {
+		Exclusive => lower < upper
+		Inclusive => lower <= upper
+	}
+
+	if !has_members {
+		Err(NoMore)
+	} else {
+		lower_rem = range_nonnegative_rem(lower, step)?
+		upper_rem = range_nonnegative_rem(upper, step)?
+		distance_rem = if upper_rem >= lower_rem {
+			upper_rem - lower_rem
+		} else {
+			step - (lower_rem - upper_rem)
+		}
+
+		amount_below_upper = match upper_bound {
+			Inclusive => distance_rem
+			Exclusive => if distance_rem == 0 step else distance_rem
+		}
+
+		match upper.minus_try(amount_below_upper) {
+			Ok(last) => if last >= lower Ok(last) else Err(NoMore)
+			Err(Overflow) => Err(NoMore)
+		}
+	}
+}
+
+# Shared range iterator for integers and Dec. Concrete numeric `range_iter`
+# methods call this helper after static dispatch has selected their arithmetic.
+# Both directions use one tagged seed shape, so the public Range source owns a
+# single flat iterator representation even when `direction` is only known at
+# runtime.
+range_iter_standard : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)
+	where [
+		num.is_eq : num, num -> Bool,
+		num.is_lt : num, num -> Bool,
+		num.is_lte : num, num -> Bool,
+		num.is_gt : num, num -> Bool,
+		num.is_gte : num, num -> Bool,
+		num.minus : num, num -> num,
+		num.minus_try : num, num -> Try(num, [Overflow]),
+		num.plus_try : num, num -> Try(num, [Overflow]),
+		num.rem_by : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_iter_standard = |lower, upper, step, upper_bound, direction, len_if_known| {
+	initial = match direction {
+		To => if step > 0 {
+			RangeAt(lower)
+		} else {
+			RangeDone
+		}
+		From => match range_standard_last(lower, upper, step, upper_bound) {
+			Ok(last) => RangeAt(last)
+			Err(NoMore) => RangeDone
+		}
+	}
+
+	Iter.custom(
+		initial,
+		len_if_known,
+		|state|
+			match state {
+				RangeDone => Err(NoMore)
+				RangeAt(current) => match direction {
+					To => {
+						within_upper = match upper_bound {
+							Exclusive => current < upper
+							Inclusive => current <= upper
+						}
+						if step > 0 and within_upper {
+							next_state = match current.plus_try(step) {
+								Ok(next) => if next > current RangeAt(next) else RangeDone
+								Err(Overflow) => RangeDone
+							}
+							Ok((current, next_state))
+						} else {
+							Err(NoMore)
+						}
+					}
+					From => if step > 0 and current >= lower {
+						next_state = if current == lower {
+							RangeDone
+						} else {
+							match current.minus_try(step) {
+								Ok(next) => if next < current and next >= lower RangeAt(next) else RangeDone
+								Err(Overflow) => RangeDone
+							}
+						}
+						Ok((current, next_state))
+					} else {
+						Err(NoMore)
+					}
+				}
+			},
+	)
+}
+
+# IEEE floats deliberately support only `_to` constructors. This helper keeps
+# their existing repeated-addition/stall semantics; a manually-constructed
+# `From` float range is empty because floats do not claim exact reversibility.
+range_iter_float : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)
+	where [
+		num.is_lt : num, num -> Bool,
+		num.is_lte : num, num -> Bool,
+		num.is_gt : num, num -> Bool,
+		num.plus : num, num -> num,
+		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
+	]
+range_iter_float = |current, upper, step, upper_bound, direction, len_if_known| {
+	initial = match direction {
+		From => RangeDone
+		To => if step > 0 RangeAt(current) else RangeDone
+	}
+	Iter.custom(
+		initial,
+		len_if_known,
+		|state|
+			match state {
+				RangeDone => Err(NoMore)
+				RangeAt(item) => {
+					within_upper = match upper_bound {
+						Exclusive => item < upper
+						Inclusive => item <= upper
+					}
+
+					if step > 0 and within_upper {
+						next = item + step
+						next_state = if next > item RangeAt(next) else RangeDone
+						Ok((item, next_state))
+					} else {
+						Err(NoMore)
+					}
+				}
+			},
+	)
+}
+
 iter_from_step : [Known(U64), Unknown], (() -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]) -> Iter(item)
 iter_from_step = |len_if_known, step| {
 	len_if_known,
@@ -22162,48 +22689,10 @@ range_done = || iter_from_step(
 	|| Done,
 )
 
-# Shared state machine behind the numeric types' `range_exclusive` methods.
-# Each caller supplies `len_if_known` computed from its own representation;
-# when it is `Known`, it must be the exact yield count
-# (`Iter.take_last`/`drop_last` rely on that).
-range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
-	where [
-		num.is_lt : num, num -> Bool,
-		num.plus_try : num, num -> Try(num, [Overflow]),
-		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-	]
-range_exclusive_with_len = |start, end, len_if_known|
-	Iter.custom(
-		start,
-		len_if_known,
-		|current|
-			if current < end {
-				match current.plus_try(1) {
-					Ok(next) => Ok((current, next))
-					Err(Overflow) => Ok((current, end))
-				}
-			} else {
-				Err(NoMore)
-			},
-	)
-
-# Shared step loop behind the numeric types' `range_inclusive` methods; same
-# `len_if_known` contract as `range_exclusive_with_len`. The construction is
-# `Iter.inclusive_range`, whose flat self-recursive shape keeps a range's state
-# unboxed when an adapter wraps it.
-range_inclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
-	where [
-		num.is_lte : num, num -> Bool,
-		num.plus_try : num, num -> Try(num, [Overflow]),
-		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
-	]
-range_inclusive_with_len = |start, end, len_if_known|
-	Iter.inclusive_range(start, end, len_if_known)
-
 ## The result of scanning a JSON string body; all fields are zero-copy slices.
 ## `after` is the text following the closing quote. The body is:
-## - `NoEscapes` — it contains no escapes, so it already IS the decoded value
-## - `HasEscapes` — left undecoded, since the caller may be discarding it anyway
+## - `NoEscapes`—it contains no escapes, so it already IS the decoded value
+## - `HasEscapes`—left undecoded, since the caller may be discarding it anyway
 ScannedJsonString : { after : Str, body : [NoEscapes(Str), HasEscapes(Str)] }
 
 ## Scan a JSON string body to its closing (unescaped) quote, validating escapes
@@ -22492,7 +22981,7 @@ str_substring_unsafe : Str, U64, U64 -> Str
 
 ## Drop `count` bytes from the front of a string as a zero-copy slice ("" when
 ## `count` is at or past the end). Bounds are handled; what is NOT checked is
-## that `count` falls on a UTF-8 boundary — the caller guarantees that, so the
+## that `count` falls on a UTF-8 boundary—the caller guarantees that, so the
 ## slice is a valid string. (`Str.drop_first_bytes` is the checked version.)
 str_drop_first_bytes_unsafe : Str, U64 -> Str
 str_drop_first_bytes_unsafe = |s, count| {
@@ -22504,8 +22993,12 @@ str_drop_first_bytes_unsafe = |s, count| {
 	}
 }
 
+# Implemented by the compiler. Moves the input list's ownership into the
+# returned list before List.map tests whether it can reuse the allocation.
+list_map_prepare_reuse : List(input) -> List(input)
+
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
-# the input list's allocation for its output: the input and output item
+# the prepared list's allocation for its output: the input and output item
 # layouts are interchangeable, and at runtime the list is uniquely owned and
 # not a seamless slice. Lowered to a constant 0 when the layouts are not
 # interchangeable, which lets lowering drop the in-place branch entirely.
@@ -22530,6 +23023,24 @@ list_map_write_unsafe : List(output), U64, output -> List(output)
 # Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
 
+# Implemented by the compiler. Appends count items copied from the list
+# itself beginning at start, reading through freshly appended items. The
+# caller has already verified start is in bounds and count is nonzero.
+list_append_range_within : List(item), U64, U64 -> List(item)
+
+# Implemented by the compiler. Copies count items within the list from
+# src_index onward to dest_index onward; the caller has already verified both
+# ranges lie inside the list. Overlap behaves like a memmove.
+list_copy_range_within : List(item), U64, U64, U64 -> List(item)
+
+# Implemented by the compiler. Appends len items of src beginning at start.
+# The caller has already clamped the range to src's length.
+list_append_sublist : List(item), List(item), U64, U64 -> List(item)
+
+# Implemented by the compiler. Appends the value's count lowest bytes, least
+# significant first. The caller has already verified count is at most 8.
+list_append_le_bytes : List(U8), U64, U64 -> List(U8)
+
 # Implemented by the compiler, trims unused list capacity
 list_release_excess_capacity : List(item) -> List(item)
 
@@ -22547,8 +23058,6 @@ dec_to_i16_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I16 }
 dec_to_i32_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I32 }
 
 dec_to_i64_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I64 }
-
-dec_to_i128_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : I128 }
 
 dec_to_u8_try_unsafe : Dec -> { success : U8, val_or_memory_garbage : U8 }
 

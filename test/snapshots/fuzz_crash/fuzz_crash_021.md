@@ -19,140 +19,123 @@ UNEXPECTED STATEMENT - fuzz_crash_021.md:1:14:1:16
 UNEXPECTED STATEMENT - fuzz_crash_021.md:1:16:1:16
 EXPECTED TYPE SEPARATOR - fuzz_crash_021.md:3:1:3:5
 # PROBLEMS
+── ✗ unclosed string ──────────────────────────────────── fuzz_crash_021.md:1:13
 
-┌─────────────────┐
-│ UNCLOSED STRING ├─ This string is missing a closing quote. ─────────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Fli/main.roc" }                                                           │
- │              ‾‾‾                                                           │
- └──────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
+This string is missing a closing quote.
 
+Fli/main.roc" }
+            ^^^
 
+── ✗ type application needs parentheses ────────────────── fuzz_crash_021.md:1:4
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  Fli/main.roc" }                                                           │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_021.md:1:4 ┘
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+Fli/main.roc" }
+   ^
 
-    For example:
-        List(U8)
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-    I found `/` here.
+For example:
+    List(U8)
 
+I found / here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Fli/main.roc" }                                                           │
- │      ‾‾‾‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_021.md:1:5 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_021.md:1:5
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+Fli/main.roc" }
+    ^^^^
 
-    I found `main` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Fli/main.roc" }                                                           │
- │          ‾‾‾‾                                                              │
- └───────────────────────────────────────────────────── fuzz_crash_021.md:1:9 ┘
+I found main here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_021.md:1:9
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `.roc` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+Fli/main.roc" }
+        ^^^^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Fli/main.roc" }                                                           │
- │              ‾                                                             │
- └──────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found .roc here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_021.md:1:13
 
-    I found `"` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+Fli/main.roc" }
+            ^
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Fli/main.roc" }                                                           │
- │               ‾‾                                                           │
- └──────────────────────────────────────────────────── fuzz_crash_021.md:1:14 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+For example:
+    answer = 42
 
-    For example:
-        answer = 42
+I found " here.
 
-    I found ` }` here.
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_021.md:1:14
 
+I was parsing a statement, and this token cannot start a statement here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  Fli/main.roc" }                                                           │
- │                 ‾                                                          │
- └──────────────────────────────────────────────────── fuzz_crash_021.md:1:16 ┘
+Fli/main.roc" }
+             ^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    For example:
-        answer = 42
+For example:
+    answer = 42
 
-    I reached the end of the file before this construct was complete.
+I found  } here.
 
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_021.md:1:16
 
-┌─────────────────────────┐
-│ EXPECTED TYPE SEPARATOR ├─ I was parsing type parameters, and I expected ───┐
-└┬────────────────────────┘  `,` or `)`.                                      │
- │                                                                            │
- │  Pair(a, b+ : (                                                            │
- │  ‾‾‾‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_021.md:3:1 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Separate type parameters with commas and close the parameter list with `)`.
+Fli/main.roc" }
+               ^
 
-    For example:
-        Result(ok, err)
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `Pair` here.
-    Names that start with uppercase letters are used for tags, type names, and
-    mod names in Roc.
+For example:
+    answer = 42
+
+I reached the end of the file before this construct was complete.
+
+── ✗ expected type separator ───────────────────────────── fuzz_crash_021.md:3:1
+
+I was parsing type parameters, and I expected `,` or `)`.
+
+Pair(a, b+ : (
+^^^^
+
+Separate type parameters with commas and close the parameter list with ).
+
+For example:
+    Result(ok, err)
+
+I found Pair here.
+Names that start with uppercase letters are used for tags, type names, and
+mod names in Roc.
 
 # TOKENS
 ~~~zig

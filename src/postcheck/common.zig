@@ -12,6 +12,12 @@ const LIR = lir_core.LIR;
 /// Resource failure while converting checked module data toward LIR.
 pub const LowerError = std.mem.Allocator.Error;
 
+/// Crash message for reaching a declaration that has a type annotation and no
+/// implementation. Checking reports this as a diagnostic and keeps the declared
+/// type, so the program still compiles and crashes only if the declaration is
+/// actually reached at runtime.
+pub const unimplemented_declaration_crash = "declaration has no implementation";
+
 /// Root module plus imported modules visible to post-check stages.
 pub const CheckedModules = struct {
     root: checked.LoweringModuleView,
@@ -24,6 +30,15 @@ pub const RootRequests = struct {
     layout_requests: []const checked.CheckedTypeId = &.{},
     static_data_requests: []const StaticDataRequest = &.{},
     test_plan_metadata: []const RootTestPlanMetadata = &.{},
+    procedure_template_root_grouping: ProcedureTemplateRootGrouping = .isolated,
+};
+
+/// Explicit grouping contract for adjacent procedure-template roots.
+pub const ProcedureTemplateRootGrouping = enum {
+    /// Seal each root in an independent instantiation graph.
+    isolated,
+    /// Share an instantiation graph across each adjacent template-root group.
+    shared_adjacent,
 };
 
 /// Checked const data that must produce a runtime layout and callable entries.
@@ -121,6 +136,19 @@ pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
         std.debug.panic("postcheck invariant violated: " ++ fmt, args);
     }
     unreachable;
+}
+
+/// Stop the build with a compiler-bug message in every build mode.
+///
+/// `invariant` compiles to `unreachable` outside debug builds, which is the
+/// right cost for a consistency check whose violation cannot change the code
+/// a release build emits. A violated host ABI contract is the other kind: the
+/// extern would be emitted at a layout the host was never compiled against and
+/// the host's return value would be misread at runtime, with no diagnostic and
+/// no crash. That check has to hold in release builds too, so this one reports
+/// and aborts instead of becoming undefined behavior.
+pub fn compilerBug(message: []const u8) noreturn {
+    std.debug.panic("compiler bug: {s}", .{message});
 }
 
 /// Monotonic symbol id generator for post-check stages.

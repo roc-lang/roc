@@ -333,12 +333,15 @@ fn expectBoxedAddOne(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostCheckF
 
     var args = I64Arg{ .arg0 = 41 };
     var result: i64 = undefined;
+    var ret_desc: ?*const anyopaque = null;
     const payload = builtins.erased_callable.payloadPtr(ptr);
     payload.callable_fn_ptr(
         roc_ops,
         @ptrCast(&result),
         @ptrCast(&args),
         builtins.erased_callable.capturePtr(ptr),
+        null,
+        &ret_desc,
     );
     try expectEqualI64(result, 42, "boxed_add_one call");
 
@@ -356,11 +359,14 @@ fn expectBoxedStaticLabel(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostC
 
     var args = I64Arg{ .arg0 = 0 };
     var result: RocStr = undefined;
+    var ret_desc: ?*const anyopaque = null;
     payload.callable_fn_ptr(
         roc_ops,
         @ptrCast(&result),
         @ptrCast(&args),
         builtins.erased_callable.capturePtr(ptr),
+        null,
+        &ret_desc,
     );
     try expectStr(result, expected, roc_ops, "boxed_static_label call");
 

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -136,6 +137,9 @@ pub const ArtifactPublicationInputs = struct {
     hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
     problem_store: ?*check.problem.Store = null,
     ctfe_options: eval.CompileTimeFinalization.Options = .{},
+    /// How this module's compile-time roots were established. Part of the
+    /// checked-artifact cache identity. See `Can.Validation`.
+    validation: Can.Validation = .checking,
 };
 
 fn importedArtifactsCoverImportedEnvs(
@@ -155,17 +159,26 @@ fn importedArtifactsCoverImportedEnvs(
     return true;
 }
 
-fn buildCheckOwnerEnvs(
+/// Build the semantic module-owner closure available while checking a module.
+pub fn buildCheckOwnerEnvs(
     allocator: Allocator,
     imported_envs: []const *ModuleEnv,
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
+    platform_requirements: ?Check.PlatformRequirementInput,
 ) Allocator.Error![]const *const ModuleEnv {
     var owner_envs = std.ArrayList(*const ModuleEnv).empty;
     errdefer owner_envs.deinit(allocator);
 
     for (imported_envs) |env| {
         try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, env);
+    }
+
+    if (platform_requirements) |requirements| {
+        try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, requirements.env);
+        for (requirements.owner_modules) |owner_env| {
+            try appendCheckOwnerEnvIfMissing(allocator, &owner_envs, owner_env);
+        }
     }
 
     var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
@@ -319,21 +332,84 @@ pub fn canonicalizeAndTypeCheckModule(
     return checker;
 }
 
-/// Determine the statement_idx for a sibling module in the module_envs_map.
-/// For type modules (where methods are stored under qualified names like "Color.to_str"),
-/// returns the type declaration statement index so Can.zig uses qualified lookup.
-/// For regular modules (where members are stored under plain names like "to_str"),
-/// returns null so Can.zig uses bare-name lookup.
-fn computeSiblingStatementIdx(sibling_env: *const ModuleEnv, sibling_name: []const u8) ?can.CIR.Statement.Idx {
+const ImportedTypeModule = struct {
+    source_ident: base.Ident.Idx,
+    statement_idx: can.CIR.Statement.Idx,
+};
+
+/// Return the exact type identity and declaration owned by an imported type
+/// module. The module name is dependency identity and may include a normalized
+/// source path, so it is not a source type name to parse or look up.
+fn importedTypeModule(sibling_env: *const ModuleEnv) ?ImportedTypeModule {
     // Only type modules store associated functions under qualified names.
     // Regular modules (deprecated_module, etc.) store them under plain names.
-    switch (sibling_env.module_kind) {
-        .type_module => {},
-        else => return null,
-    }
-    const type_ident_in_module = sibling_env.common.findIdent(sibling_name) orelse return null;
+    const type_ident_in_module = switch (sibling_env.module_kind) {
+        .type_module => |type_ident| type_ident,
+        .default_app,
+        .app,
+        .package,
+        .platform,
+        .hosted,
+        .module,
+        .malformed,
+        => return null,
+    };
     const type_node_idx = sibling_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse return null;
+    return .{
+        .source_ident = type_ident_in_module,
+        .statement_idx = @enumFromInt(type_node_idx),
+    };
+}
+
+/// Return the main declaration of a type module, if this is one.
+pub fn resolveMainType(sibling_env: *const ModuleEnv) ?can.CIR.Statement.Idx {
+    return if (importedTypeModule(sibling_env)) |selected| selected.statement_idx else null;
+}
+
+/// Resolve a nested public selection to its exact declaration in this CIR.
+pub fn resolveSelectedType(
+    sibling_env: *const ModuleEnv,
+    qualified_name: []const u8,
+) ?can.CIR.Statement.Idx {
+    const source_ident = sibling_env.common.findIdent(qualified_name) orelse return null;
+    const type_node_idx = sibling_env.getExposedTypeNodeIndexById(source_ident) orelse return null;
     return @enumFromInt(type_node_idx);
+}
+
+fn importedSelectedType(
+    sibling_env: *const ModuleEnv,
+    statement_idx: can.CIR.Statement.Idx,
+) ImportedTypeModule {
+    const statement = sibling_env.store.getStatement(statement_idx);
+    const header_idx = switch (statement) {
+        .s_alias_decl => |decl| decl.header,
+        .s_nominal_decl => |decl| decl.header,
+        .s_where_alias_decl => |decl| decl.header,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => unreachable,
+    };
+    const header = sibling_env.store.getTypeHeader(header_idx);
+    return .{
+        .source_ident = header.name,
+        .statement_idx = statement_idx,
+    };
 }
 
 /// Canonicalization function that also discovers sibling .roc files in the same directory
@@ -348,7 +424,7 @@ pub fn canonicalizeModuleWithSiblings(
     root_dir: []const u8,
     additional_known_modules: []const KnownModule,
     pre_resolved_imports: []const messages.CanonicalizeImport,
-    validate_as_explicit_roots: bool,
+    validation: Can.Validation,
 ) Allocator.Error!void {
     const gpa = roc_ctx.gpa;
 
@@ -359,12 +435,17 @@ pub fn canonicalizeModuleWithSiblings(
     // source import name. Package qualification is part of that identity:
     // `first.Random` and `second.Random` may name different modules even
     // though both end in `Random`.
-    var resolved_import_envs = std.StringHashMap(*const ModuleEnv).init(gpa);
+    const ResolvedImport = struct {
+        env: *const ModuleEnv,
+        selected_type_decl: ?can.CIR.Statement.Idx,
+    };
+    var resolved_import_envs = std.StringHashMap(ResolvedImport).init(gpa);
     defer resolved_import_envs.deinit();
     for (pre_resolved_imports) |pre| {
         const result = try resolved_import_envs.getOrPut(pre.import_name);
         if (result.found_existing) {
-            if (result.value_ptr.* != pre.module_env) {
+            const existing = result.value_ptr.*;
+            if (existing.env != pre.module_env or existing.selected_type_decl != pre.selected_type_decl) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic(
                         "canonicalization received conflicting environments for exact import '{s}'",
@@ -374,7 +455,7 @@ pub fn canonicalizeModuleWithSiblings(
                 unreachable;
             }
         } else {
-            result.value_ptr.* = pre.module_env;
+            result.value_ptr.* = .{ .env = pre.module_env, .selected_type_decl = pre.selected_type_decl };
         }
     }
 
@@ -382,34 +463,31 @@ pub fn canonicalizeModuleWithSiblings(
     // Canonicalization consumes concrete exposed-node data from dependencies.
     const sibling_imports = try module_discovery.extractImportsFromDeclIndex(parse_ast, gpa);
     defer {
-        for (sibling_imports) |imp| gpa.free(imp);
+        for (sibling_imports) |imp| gpa.free(imp.import_name);
         gpa.free(sibling_imports);
     }
 
-    for (sibling_imports) |sibling_name| {
+    for (sibling_imports) |sibling_import| {
+        const sibling_name = sibling_import.import_name;
         // Skip self
         if (std.mem.eql(u8, sibling_name, env.module_name)) continue;
 
         const sibling_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
-        const qualified_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
-
-        // Check if sibling file exists (via Io abstraction)
-        const file_name = try std.fmt.allocPrint(gpa, "{s}.roc", .{sibling_name});
-        defer gpa.free(file_name);
-        const file_path = try std.fs.path.join(gpa, &.{ root_dir, file_name });
-        defer gpa.free(file_path);
-        const exists = roc_ctx.fileExists(file_path);
-        if (!exists) continue;
-
         // Check pre-resolved imports first (e.g., from coordinator's built dependency list)
         const pre_resolved_env = resolved_import_envs.get(sibling_name);
 
-        if (pre_resolved_env) |sibling_env| {
-            const statement_idx = computeSiblingStatementIdx(sibling_env, sibling_name);
+        if (pre_resolved_env) |resolved| {
+            const sibling_env = resolved.env;
+            const type_module = importedTypeModule(sibling_env);
+            const qualified_type_name = if (type_module) |info|
+                sibling_env.getIdent(info.source_ident)
+            else
+                sibling_env.module_name;
+            const qualified_type_ident = try env.insertIdent(base.Ident.for_text(qualified_type_name));
             try module_envs_map.put(sibling_ident, .{
                 .env = sibling_env,
-                .statement_idx = statement_idx,
-                .qualified_type_ident = qualified_ident,
+                .statement_idx = if (type_module) |info| info.statement_idx else null,
+                .qualified_type_ident = qualified_type_ident,
                 .import_identity = .{ .module = sibling_ident },
             });
             continue;
@@ -430,20 +508,24 @@ pub fn canonicalizeModuleWithSiblings(
         const qualified_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
         const import_ident = try env.insertIdent(base.Ident.for_text(km.import_name));
 
-        const actual_env = resolved_import_envs.get(km.import_name) orelse continue;
+        const resolved = resolved_import_envs.get(km.import_name) orelse continue;
+        const actual_env = resolved.env;
 
-        // For platform type modules, set statement_idx so method lookups work correctly
-        const statement_idx: ?can.CIR.Statement.Idx = stmt_blk: {
-            // Look up the type in the module's exposed_items to get the actual node index
-            const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;
-            const type_node_idx = actual_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
-            break :stmt_blk @enumFromInt(type_node_idx);
-        };
+        // Public entries may project a nested type from one source module.
+        // Resolve that selection once and carry the exact declaration index.
+        const type_module = if (resolved.selected_type_decl) |statement_idx|
+            importedSelectedType(actual_env, statement_idx)
+        else
+            importedTypeModule(actual_env);
+        const qualified_type_ident = if (type_module) |info|
+            try env.insertIdent(base.Ident.for_text(actual_env.getIdent(info.source_ident)))
+        else
+            base_ident;
 
         const entry = Can.AutoImportedType{
             .env = actual_env,
-            .statement_idx = statement_idx,
-            .qualified_type_ident = base_ident,
+            .statement_idx = if (type_module) |info| info.statement_idx else null,
+            .qualified_type_ident = qualified_type_ident,
             .import_identity = .{ .module = import_ident },
         };
 
@@ -466,14 +548,12 @@ pub fn canonicalizeModuleWithSiblings(
             .builtin_indices = builtin_indices,
         },
         .imported_modules = &module_envs_map,
+        .compiler_version = build_options.compiler_version,
+        .validation = validation,
     });
     czer.source_dir = root_dir;
     try czer.canonicalizeFile();
-    if (validate_as_explicit_roots) {
-        try czer.validateForExplicitRoots();
-    } else {
-        try czer.validateForChecking();
-    }
+    try czer.runValidation();
     czer.deinit();
 }
 
@@ -493,6 +573,7 @@ pub fn typeCheckModule(
     platform_requirements: ?Check.PlatformRequirementInput,
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+    validation: Can.Validation,
     ctfe_options: eval.CompileTimeFinalization.Options,
     defer_publication: bool,
 ) TypeCheckModuleError!TypeCheckOutput {
@@ -510,7 +591,13 @@ pub fn typeCheckModule(
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
     errdefer module_envs_map.deinit();
 
-    const owner_envs = try buildCheckOwnerEnvs(check_alloc, imported_envs, imported_artifacts, available_artifacts);
+    const owner_envs = try buildCheckOwnerEnvs(
+        check_alloc,
+        imported_envs,
+        imported_artifacts,
+        available_artifacts,
+        platform_requirements,
+    );
     defer check_alloc.free(owner_envs);
 
     var checker = try Check.initWithOwnerModules(
@@ -524,6 +611,7 @@ pub fn typeCheckModule(
         module_builtin_ctx,
     );
     checker.platform_requirements = platform_requirements;
+    checker.validation = validation;
     checker.fixupTypeWriter();
     errdefer checker.deinit();
 
@@ -542,7 +630,7 @@ pub fn typeCheckModule(
     // The platform root of an app build does not publish here: finalization
     // publishes the relation-bearing platform root once, so a check-time
     // publish would be immediately superseded. The one exception is a
-    // requires signature that still carries erroneous type content — the
+    // requires signature that still carries erroneous type content—the
     // env-derived requirement context a deferred root needs is a canonical
     // key digest, and erroneous content has no canonical key, so those
     // shapes keep the check-time publish and its diagnostics.
@@ -567,6 +655,7 @@ pub fn typeCheckModule(
             .available_artifacts = available_artifacts,
             .problem_store = &checker.problems,
             .ctfe_options = ctfe_options,
+            .validation = validation,
         },
     );
     errdefer checked_artifact.deinit(artifact_alloc);
@@ -638,6 +727,7 @@ pub fn publishFromPrebuiltModules(
             .hoisted_roots = publication.hoisted_roots,
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
             .problem_store = publication.problem_store,
+            .validation = publication.validation,
         },
     );
 }

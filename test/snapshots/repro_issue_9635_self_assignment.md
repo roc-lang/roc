@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=repro for https://github.com/roc-lang/roc/issues/9635 — top-level value referenced multiple times on RHS of a nested binding is wrongly flagged as self-assignment
+description=repro for https://github.com/roc-lang/roc/issues/9635—top-level value referenced multiple times on RHS of a nested binding is wrongly flagged as self-assignment
 type=file
 ~~~
 # SOURCE
@@ -89,9 +89,9 @@ main! = |_args| Ok({})
 			(e-block
 				(s-let
 					(p-assign (ident "total"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 242)
+					(e-dispatch-call (method "plus") (constraint-fn-var 252)
 						(receiver
-							(e-dispatch-call (method "plus") (constraint-fn-var 240)
+							(e-dispatch-call (method "plus") (constraint-fn-var 250)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "base"))))

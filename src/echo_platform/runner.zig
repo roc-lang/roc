@@ -98,14 +98,14 @@ pub const Paths = struct {
 pub const RunOptions = struct {
     /// Single contiguous arena used for the entire pipeline (BuildEnv,
     /// lowering, LIR image, interpreter). Must own a flat virtual
-    /// region — `std.heap.ArenaAllocator` will not work because the
+    /// region—`std.heap.ArenaAllocator` will not work because the
     /// LIR image step computes offsets via `ptr - base_ptr` arithmetic
     /// (see `src/compile/README.md` "Runtime arena").
     runtime_fba: *std.heap.FixedBufferAllocator,
     /// Fallback Io that handles everything not served by EchoCtx (i.e. paths
     /// not in `Paths` and not in `extras`).
     fallback_io: Io,
-    /// `std.Io` instance used for any real OS I/O on native targets — passed
+    /// `std.Io` instance used for any real OS I/O on native targets—passed
     /// to `BuildEnv.init`, the WasmFilesystem fallback, and stored in
     /// `EchoEnv` so `echoHostedFn` can call `writeStreamingAll`. On WASM
     /// builds the value is unused (freestanding stubs trap), but callers
@@ -162,7 +162,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
 
     // BuildEnv stores std_io for any real-OS reads its workers initiate.
     // On WASM the echo pipeline only touches synthetic / extra paths served
-    // by EchoCtx, so the std_io is never actually dereferenced — but the
+    // by EchoCtx, so the std_io is never actually dereferenced—but the
     // field still must be a concrete value (no `undefined`) to avoid UB if
     // a future refactor adds a real-OS call path.
     var build_env = BuildEnv.init(allocator, .single_threaded, 1, opts.roc_target, opts.paths.cwd, opts.std_io) catch |err| {
@@ -194,7 +194,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     // Bail before lowering if canonicalization or type-checking produced
     // blocking-severity reports (e.g. `module_not_found`, `undefined_variable`).
     // The CIR contains runtime_error placeholder nodes in that state, and
-    // mono lowering asserts they don't appear as runtime values — proceeding
+    // mono lowering asserts they don't appear as runtime values—proceeding
     // would trap. The reports themselves are the user-facing output.
     if (try emitDiagnostics(&build_env, diag, allocator)) {
         return error.CompilationFailed;
@@ -267,7 +267,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         return err;
     };
 
-    const view = lir.LirImage.viewMappedImage(
+    var view = lir.LirImage.viewMappedImage(
         image_header,
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
@@ -276,6 +276,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         diag.step("LirImage.viewMappedImage", err);
         return err;
     };
+    defer view.deinit();
 
     return runEchoView(allocator, &view, diag, opts.std_io) catch |err| {
         diag.step("runEchoView", err);
@@ -290,11 +291,11 @@ fn runEchoView(
     std_io: std.Io,
 ) RunEchoError!u8 {
     // HostedFn array order matters: the interpreter calls
-    // `roc_ops.hosted_fns.fns[dispatch_index]`. Dispatch indices are sorted
-    // alphabetically by fully-qualified `Module.fn_name` (with trailing `!`
-    // stripped). The echo platform has only `Echo.line`, so order is
-    // trivially correct — but additions must respect alphabetical order or
-    // the wrong function will be called silently. See README "Host functions".
+    // `roc_ops.hosted_fns.fns[dispatch_index]`, and a dispatch index is the
+    // function's position in the platform header's `hosted` section. The echo
+    // platform's section lists only `Echo.line!`, so order is trivially
+    // correct—but additions must follow that section's order or the wrong
+    // function will be called silently. See README "Host functions".
     var hosted_fn_array = [_]HostedFn{echo_platform.echoLineHostedFn()};
     var echo_env: echo_platform.EchoEnv = .{ .std_io = std_io };
     var roc_ops = echo_platform.makeDefaultRocOps(&echo_env, &hosted_fn_array);
@@ -302,10 +303,11 @@ fn runEchoView(
     var cli_args_list = try echo_platform.buildCliArgs(&.{}, &roc_ops);
     var result_buf: [16]u8 align(16) = undefined;
 
-    var interpreter = eval.LirInterpreter.init(
+    var interpreter = eval.LirInterpreter.initWithBoxyTables(
         allocator,
         &view.store,
         &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(view),
         &roc_ops,
         .preserve,
     ) catch |err| {
@@ -339,6 +341,7 @@ fn runEchoView(
         // expect_err statements only occur in top-level expect test roots,
         // never in program entrypoints.
         error.ExpectErr => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
 
     if (echo_env.inline_expect_failed) return 1;
@@ -356,7 +359,7 @@ fn emitDiagnostics(build_env: *BuildEnv, diag: Diagnostics, gpa: Allocator) Allo
         for (mod.reports) |*report| {
             switch (report.severity) {
                 .runtime_error, .fatal => has_blocking_error = true,
-                .info, .warning => {},
+                .warning => {},
             }
             diag.emitReport(gpa, report);
         }

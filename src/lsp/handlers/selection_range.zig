@@ -20,50 +20,42 @@ pub fn handler(comptime ServerType: type) type {
                 return;
             };
 
-            const obj = switch (params) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "selectionRange params must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(params) != .object) {
+                try self.sendError(id, .invalid_params, "selectionRange params must be an object");
+                return;
+            }
+            const obj = params.object;
 
             // Extract textDocument.uri
             const text_doc_value = obj.get("textDocument") orelse {
                 try self.sendError(id, .invalid_params, "missing textDocument");
                 return;
             };
-            const text_doc = switch (text_doc_value) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "textDocument must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(text_doc_value) != .object) {
+                try self.sendError(id, .invalid_params, "textDocument must be an object");
+                return;
+            }
+            const text_doc = text_doc_value.object;
             const uri_value = text_doc.get("uri") orelse {
                 try self.sendError(id, .invalid_params, "missing uri");
                 return;
             };
-            const uri = switch (uri_value) {
-                .string => |s| s,
-                else => {
-                    try self.sendError(id, .invalid_params, "uri must be a string");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(uri_value) != .string) {
+                try self.sendError(id, .invalid_params, "uri must be a string");
+                return;
+            }
+            const uri = uri_value.string;
 
             // Extract positions array
             const positions_value = obj.get("positions") orelse {
                 try self.sendError(id, .invalid_params, "missing positions");
                 return;
             };
-            const positions = switch (positions_value) {
-                .array => |a| a,
-                else => {
-                    try self.sendError(id, .invalid_params, "positions must be an array");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(positions_value) != .array) {
+                try self.sendError(id, .invalid_params, "positions must be an array");
+                return;
+            }
+            const positions = positions_value.array;
 
             // Get the document text from the store
             const doc = self.doc_store.get(uri);
@@ -85,32 +77,44 @@ pub fn handler(comptime ServerType: type) type {
             }
 
             for (positions.items) |pos_value| {
-                const pos_obj = switch (pos_value) {
-                    .object => |o| o,
-                    else => {
-                        try results.append(self.allocator, null);
-                        continue;
-                    },
+                if (std.meta.activeTag(pos_value) != .object) {
+                    try self.sendError(id, .invalid_params, "position must be an object");
+                    return;
+                }
+                const pos_obj = pos_value.object;
+
+                const line_value = pos_obj.get("line") orelse {
+                    try self.sendError(id, .invalid_params, "missing line");
+                    return;
+                };
+                if (std.meta.activeTag(line_value) != .integer) {
+                    try self.sendError(id, .invalid_params, "line must be an integer");
+                    return;
+                }
+                const line = std.math.cast(u32, line_value.integer) orelse {
+                    try self.sendError(id, .invalid_params, "line must be a non-negative integer");
+                    return;
                 };
 
-                const line: u32 = blk: {
-                    const v = pos_obj.get("line") orelse break :blk 0;
-                    break :blk switch (v) {
-                        .integer => |i| @intCast(i),
-                        else => 0,
-                    };
+                const character_value = pos_obj.get("character") orelse {
+                    try self.sendError(id, .invalid_params, "missing character");
+                    return;
                 };
-                const character: u32 = blk: {
-                    const v = pos_obj.get("character") orelse break :blk 0;
-                    break :blk switch (v) {
-                        .integer => |i| @intCast(i),
-                        else => 0,
-                    };
+                if (std.meta.activeTag(character_value) != .integer) {
+                    try self.sendError(id, .invalid_params, "character must be an integer");
+                    return;
+                }
+                const character = std.math.cast(u32, character_value.integer) orelse {
+                    try self.sendError(id, .invalid_params, "character must be a non-negative integer");
+                    return;
                 };
 
                 const selection_range = computeSelectionRange(self.allocator, text, line, character) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    else => null,
+                    error.InvalidPosition,
+                    error.NoRangeFound,
+                    error.ParseFailed,
+                    => null,
                 };
                 try results.append(self.allocator, selection_range);
             }
@@ -402,7 +406,31 @@ fn collectContainingRegionsFromExpr(
             try collectContainingRegionsFromExpr(allocator, ast, b.right, target_offset, regions);
         },
         .field_access => |f| {
-            try collectContainingRegionsFromExpr(allocator, ast, f.left, target_offset, regions);
+            // A flat field-access node replaces the nested expression nodes that
+            // previously represented each prefix of a chain. Preserve those
+            // semantic selections directly from the receiver and segment token
+            // boundaries. The complete chain was appended above, so visit the
+            // proper prefixes from outermost to innermost before the receiver.
+            const receiver_region = ast.store.getExpr(f.receiver).to_tokenized_region();
+            const segments = ast.store.fieldAccessSegmentSlice(f.segments);
+
+            var prefix_len = segments.len -| 1;
+            while (prefix_len > 0) {
+                prefix_len -= 1;
+                const prefix_region = ast.tokenizedRegionToRegion(.{
+                    .start = receiver_region.start,
+                    .end = segments[prefix_len].field_token + 1,
+                });
+
+                if (rangeContainsOffset(prefix_region.start.offset, prefix_region.end.offset, target_offset)) {
+                    try regions.append(allocator, .{
+                        .start = prefix_region.start.offset,
+                        .end = prefix_region.end.offset,
+                    });
+                }
+            }
+
+            try collectContainingRegionsFromExpr(allocator, ast, f.receiver, target_offset, regions);
         },
         .method_call => |m| {
             try collectContainingRegionsFromExpr(allocator, ast, m.receiver, target_offset, regions);
@@ -447,6 +475,9 @@ fn collectContainingRegionsFromExpr(
         },
         .dbg => |d| {
             try collectContainingRegionsFromExpr(allocator, ast, d.expr, target_offset, regions);
+        },
+        .crash => |c| {
+            try collectContainingRegionsFromExpr(allocator, ast, c.expr, target_offset, regions);
         },
         .record_builder => |rb| {
             try collectContainingRegionsFromExpr(allocator, ast, rb.mapper, target_offset, regions);
@@ -515,4 +546,25 @@ fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) Position {
         .line = line,
         .character = offset - line_start,
     };
+}
+
+test "selection ranges preserve flat field access prefixes" {
+    const source = "main = root.first.?second.third\n";
+    const selection = try computeSelectionRange(std.testing.allocator, source, 0, 8);
+    defer freeSelectionRange(std.testing.allocator, selection);
+
+    try std.testing.expectEqual(@as(u32, 7), selection.range.start.character);
+    try std.testing.expectEqual(@as(u32, 11), selection.range.end.character);
+
+    const first_prefix = selection.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), first_prefix.range.start.character);
+    try std.testing.expectEqual(@as(u32, 17), first_prefix.range.end.character);
+
+    const second_prefix = first_prefix.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), second_prefix.range.start.character);
+    try std.testing.expectEqual(@as(u32, 25), second_prefix.range.end.character);
+
+    const full_chain = second_prefix.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), full_chain.range.start.character);
+    try std.testing.expectEqual(@as(u32, 31), full_chain.range.end.character);
 }

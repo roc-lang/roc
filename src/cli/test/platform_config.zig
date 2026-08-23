@@ -46,7 +46,9 @@ pub const PlatformConfig = struct {
 /// All available cross-compilation targets (superset)
 pub const all_cross_targets = [_][]const u8{
     "x64musl",
+    "x64v1musl",
     "arm64musl",
+    "arm64v1musl",
     "x64glibc",
     "arm64glibc",
 };
@@ -54,7 +56,9 @@ pub const all_cross_targets = [_][]const u8{
 /// Standard targets for platforms with glibc support
 const targets_with_glibc = [_]TargetInfo{
     .{ .name = "x64musl", .requires_linux = false },
+    .{ .name = "x64v1musl", .requires_linux = false },
     .{ .name = "arm64musl", .requires_linux = false },
+    .{ .name = "arm64v1musl", .requires_linux = false },
     .{ .name = "x64glibc", .requires_linux = true },
     .{ .name = "arm64glibc", .requires_linux = true },
 };
@@ -62,7 +66,9 @@ const targets_with_glibc = [_]TargetInfo{
 /// Targets for fx platforms (musl + Windows)
 const targets_fx = [_]TargetInfo{
     .{ .name = "x64musl", .requires_linux = false },
+    .{ .name = "x64v1musl", .requires_linux = false },
     .{ .name = "arm64musl", .requires_linux = false },
+    .{ .name = "arm64v1musl", .requires_linux = false },
     .{ .name = "x64win", .requires_linux = false },
     .{ .name = "arm64win", .requires_linux = false },
 };
@@ -84,6 +90,10 @@ const fx_open_tests = [_]SimpleTestSpec{
     .{
         .roc_file = "test/fx-open/issue_10270_named_map_err_closure.roc",
         .description = "Regression test: named closure using map_err compiles when its result is propagated with ? (issue 10270)",
+    },
+    .{
+        .roc_file = "test/fx-open/hosted_channels_declared.roc",
+        .description = "A hosted result flowing through an annotated binding, an argument, a record field, and a hand-written re-tag keeps the extern at its declared host ABI row",
     },
 };
 

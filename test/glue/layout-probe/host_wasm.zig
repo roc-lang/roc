@@ -1,16 +1,17 @@
-const std = @import("std");
 const abi = @import("roc_platform_abi.zig");
 
-const wasm_allocator = std.heap.wasm_allocator;
+const wasm_page_size = 65_536;
 var failure_count: usize = 0;
 var report: [512]u8 = [_]u8{0} ** 512;
 var report_len: usize = 0;
 var alloc_count: usize = 0;
 var dealloc_count: usize = 0;
+var heap_cursor: usize = 0;
 
-fn fail(comptime fmt: []const u8, args: anytype) void {
+fn fail(comptime message: []const u8) void {
     if (failure_count == 0) {
-        const text = std.fmt.bufPrint(&report, "FAIL layout-probe ZigGlue wasm32: " ++ fmt, args) catch "FAIL layout-probe ZigGlue wasm32: report overflow";
+        const text = "FAIL layout-probe ZigGlue wasm32: " ++ message;
+        @memcpy(report[0..text.len], text);
         report_len = text.len;
     }
     failure_count += 1;
@@ -23,17 +24,54 @@ fn finishPass() void {
 }
 
 fn allocRaw(length: usize, alignment: usize) ?*anyopaque {
-    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
-    const mem = wasm_allocator.rawAlloc(length, align_log2, @returnAddress()) orelse return null;
+    if (alignment == 0 or (alignment & (alignment - 1)) != 0) {
+        fail("invalid allocation alignment");
+        return null;
+    }
+    if (heap_cursor == 0) {
+        const heap_start = @mulWithOverflow(@wasmMemorySize(0), wasm_page_size);
+        if (heap_start[1] != 0) {
+            fail("wasm memory exhausted");
+            return null;
+        }
+        heap_cursor = heap_start[0];
+    }
+    const aligned = @addWithOverflow(heap_cursor, alignment - 1);
+    if (aligned[1] != 0) {
+        fail("allocation alignment overflow");
+        return null;
+    }
+    const ptr = aligned[0] & ~(alignment - 1);
+    const end_result = @addWithOverflow(ptr, length);
+    if (end_result[1] != 0) {
+        fail("allocation overflow");
+        return null;
+    }
+    const end = end_result[0];
+    const required_pages = wasmPagesForBytes(end);
+    const current_pages = @wasmMemorySize(0);
+    if (required_pages > current_pages and @wasmMemoryGrow(0, required_pages - current_pages) == -1) {
+        fail("memory grow failed");
+        return null;
+    }
+    heap_cursor = end;
     alloc_count += 1;
-    return @ptrCast(mem);
+    return @ptrFromInt(ptr);
 }
 
-fn deallocRaw(ptr: ?*anyopaque, length: usize, alignment: usize) void {
-    const p = ptr orelse return;
-    const align_log2: std.mem.Alignment = @enumFromInt(std.math.log2_int(usize, alignment));
-    const bytes: [*]u8 = @ptrCast(p);
-    wasm_allocator.rawFree(bytes[0..length], align_log2, @returnAddress());
+fn wasmPagesForBytes(byte_count: usize) usize {
+    return byte_count / wasm_page_size + @intFromBool(byte_count % wasm_page_size != 0);
+}
+
+comptime {
+    const max_usize = ~@as(usize, 0);
+    if (wasmPagesForBytes(max_usize) != max_usize / wasm_page_size + 1) {
+        @compileError("wasm page rounding must handle the usize limit");
+    }
+}
+
+fn deallocRaw(ptr: ?*anyopaque, _: usize, _: usize) void {
+    _ = ptr orelse return;
     dealloc_count += 1;
 }
 
@@ -49,10 +87,10 @@ export fn roc_realloc(ptr: ?*anyopaque, new_length: usize, alignment: usize) cal
 }
 export fn roc_dbg(_: [*]const u8, _: usize) callconv(.c) void {}
 export fn roc_expect_failed(_: [*]const u8, _: usize) callconv(.c) void {
-    fail("roc_expect_failed", .{});
+    fail("roc_expect_failed");
 }
 export fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
-    fail("roc_crashed", .{});
+    fail("roc_crashed");
 }
 
 export fn roc_probe_roundtrip(arg0: abi.ProbeLayoutProbe) callconv(.c) abi.ProbeLayoutProbe {
@@ -197,7 +235,10 @@ export fn roc_probe_compact_stack(
 }
 
 fn sameBytes(lhs: anytype, rhs: @TypeOf(lhs)) bool {
-    return std.mem.eql(u8, std.mem.asBytes(&lhs), std.mem.asBytes(&rhs));
+    const lhs_bytes: [*]const u8 = @ptrCast(&lhs);
+    const rhs_bytes: [*]const u8 = @ptrCast(&rhs);
+    for (0..@sizeOf(@TypeOf(lhs))) |i| if (lhs_bytes[i] != rhs_bytes[i]) return false;
+    return true;
 }
 
 fn checkProvidedAbi() void {
@@ -211,35 +252,35 @@ fn checkProvidedAbi() void {
     const u64x2: abi.RocU64x2 = @bitCast(bits);
     const i64x2: abi.RocI64x2 = @bitCast(bits);
 
-    if (!sameBytes(abi.roc_provide_u8x16(u8x16), u8x16)) fail("provided U8x16 mismatch", .{});
-    if (!sameBytes(abi.roc_provide_i8x16(i8x16), i8x16)) fail("provided I8x16 mismatch", .{});
-    if (!sameBytes(abi.roc_provide_u16x8(u16x8), u16x8)) fail("provided U16x8 mismatch", .{});
-    if (!sameBytes(abi.roc_provide_i16x8(i16x8), i16x8)) fail("provided I16x8 mismatch", .{});
-    if (!sameBytes(abi.roc_provide_u32x4(u32x4), u32x4)) fail("provided U32x4 mismatch", .{});
-    if (!sameBytes(abi.roc_provide_i32x4(i32x4), i32x4)) fail("provided I32x4 mismatch", .{});
-    if (!sameBytes(abi.roc_provide_u64x2(u64x2), u64x2)) fail("provided U64x2 mismatch", .{});
-    if (!sameBytes(abi.roc_provide_i64x2(i64x2), i64x2)) fail("provided I64x2 mismatch", .{});
+    if (!sameBytes(abi.roc_provide_u8x16(u8x16), u8x16)) fail("provided U8x16 mismatch");
+    if (!sameBytes(abi.roc_provide_i8x16(i8x16), i8x16)) fail("provided I8x16 mismatch");
+    if (!sameBytes(abi.roc_provide_u16x8(u16x8), u16x8)) fail("provided U16x8 mismatch");
+    if (!sameBytes(abi.roc_provide_i16x8(i16x8), i16x8)) fail("provided I16x8 mismatch");
+    if (!sameBytes(abi.roc_provide_u32x4(u32x4), u32x4)) fail("provided U32x4 mismatch");
+    if (!sameBytes(abi.roc_provide_i32x4(i32x4), i32x4)) fail("provided I32x4 mismatch");
+    if (!sameBytes(abi.roc_provide_u64x2(u64x2), u64x2)) fail("provided U64x2 mismatch");
+    if (!sameBytes(abi.roc_provide_i64x2(i64x2), i64x2)) fail("provided I64x2 mismatch");
 
     const wrapper: abi.ProbeVectorWrapper = .{ .only = u8x16 };
-    if (!sameBytes(abi.roc_provide_vector_wrapper(wrapper), wrapper)) fail("provided vector wrapper mismatch", .{});
+    if (!sameBytes(abi.roc_provide_vector_wrapper(wrapper), wrapper)) fail("provided vector wrapper mismatch");
 
     const record: abi.ProbeVectorRecord = .{ .bytes = u8x16, .words = i32x4, .before = 0x1020304050607080, .after = 0xa0b0c0d0 };
-    if (!sameBytes(abi.roc_provide_vector_record(record), record)) fail("provided vector record mismatch", .{});
+    if (!sameBytes(abi.roc_provide_vector_record(record), record)) fail("provided vector record mismatch");
 
     const quad: abi.ProbeVectorQuad = .{ .a = u8x16, .b = i16x8, .c = u32x4, .d = i64x2 };
-    if (!sameBytes(abi.roc_provide_vector_quad(quad), quad)) fail("provided vector quad mismatch", .{});
+    if (!sameBytes(abi.roc_provide_vector_quad(quad), quad)) fail("provided vector quad mismatch");
 
     const hva: abi.ProbeVectorHva = .{ .a = u8x16, .b = u8x16, .c = u8x16, .d = u8x16 };
-    if (!sameBytes(abi.roc_provide_vector_hva(hva), hva)) fail("provided vector HVA mismatch", .{});
+    if (!sameBytes(abi.roc_provide_vector_hva(hva), hva)) fail("provided vector HVA mismatch");
 
     const tuple: abi.__AnonStruct_fbe9eaebfd8c38fd = .{ ._1 = u8x16, ._2 = i16x8, ._0 = 0x1020304050607080 };
-    if (!sameBytes(abi.roc_provide_vector_tuple(tuple), tuple)) fail("provided vector tuple mismatch", .{});
+    if (!sameBytes(abi.roc_provide_vector_tuple(tuple), tuple)) fail("provided vector tuple mismatch");
 
     const tag = abi.roc_make_vector_tag();
-    if (!sameBytes(abi.roc_provide_vector_tag(tag), tag)) fail("provided vector tag mismatch", .{});
+    if (!sameBytes(abi.roc_provide_vector_tag(tag), tag)) fail("provided vector tag mismatch");
 
     const exhausted = abi.roc_provide_exhaust_registers(1, 2, 3, 4, 5, 6, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, u8x16);
-    if (!sameBytes(exhausted, u8x16)) fail("provided exhausted-register vector mismatch", .{});
+    if (!sameBytes(exhausted, u8x16)) fail("provided exhausted-register vector mismatch");
 }
 
 export fn wasm_main() [*]const u8 {

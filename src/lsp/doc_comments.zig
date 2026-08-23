@@ -176,7 +176,25 @@ pub fn docOffsetForStatement(store: *const NodeStore, stmt: CIR.Statement, stmt_
             store.getAnnotationRegion(a).start.offset
         else
             store.getPatternRegion(v.pattern_idx).start.offset,
-        else => store.getStatementRegion(stmt_idx).start.offset,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_alias_decl,
+        .s_nominal_decl,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => store.getStatementRegion(stmt_idx).start.offset,
     };
 }
 

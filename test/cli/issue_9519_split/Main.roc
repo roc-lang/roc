@@ -1,4 +1,4 @@
-# Regression fixture for https://github.com/roc-lang/roc/issues/9519 — the
+# Regression fixture for https://github.com/roc-lang/roc/issues/9519—the
 # split-file arrangement of the same repro as issue_9519_two_lifted_ids.roc.
 import Combine
 

@@ -13,19 +13,17 @@ f = |_x| {
 # EXPECTED
 INFINITE TYPE - local_binding_infinite_type.md:2:5:2:8
 # PROBLEMS
+── ✗ infinite type ────────────────────────── local_binding_infinite_type.md:2:5
 
-┌───────────────┐
-│ INFINITE TYPE ├─ I am inferring a weird self-referential type. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  bad = |x| bad([x])                                                        │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────────── local_binding_infinite_type.md:2:5 ┘
+I am inferring a weird self-referential type.
 
-    Here is my best effort at writing down the type. You will see
-    `<RecursiveType>` for parts of the type that repeat infinitely.
+bad = |x| bad([x])
+^^^
 
-        List(<RecursiveType>)
+Here is my best effort at writing down the type. You will see <RecursiveType>
+for parts of the type that repeat infinitely.
+
+    List(<RecursiveType>)
 
 # TOKENS
 ~~~zig
@@ -79,7 +77,7 @@ f = |_x| {
 					(e-lambda
 						(args
 							(p-assign (ident "x")))
-						(e-call (constraint-fn-var 206)
+						(e-call (constraint-fn-var 216)
 							(e-runtime-error (tag "erroneous_value_use"))
 							(e-list
 								(elems

@@ -76,41 +76,35 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:59:5:59:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:60:5:60:12
 UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 # PROBLEMS
+── ● unused variable ──────────────────── type_var_name_avoids_collision.md:59:5
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result3` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result3 = combine(result1, result2)                                       │
- │  ‾‾‾‾‾‾‾                                                                   │
- └──────────────────────────────────── type_var_name_avoids_collision.md:59:5 ┘
+Variable result3 is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result3` to suppress this warning.
+result3 = combine(result1, result2)
+^^^^^^^
 
+If you don't need this variable, prefix it with an underscore like _result3 to
+suppress this warning.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result4` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result4 = yetAnotherIdentity(True)                                        │
- │  ‾‾‾‾‾‾‾                                                                   │
- └──────────────────────────────────── type_var_name_avoids_collision.md:60:5 ┘
+── ● unused variable ──────────────────── type_var_name_avoids_collision.md:60:5
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result4` to suppress this warning.
+Variable result4 is defined here and then never used:
 
+result4 = yetAnotherIdentity(True)
+^^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `result5` is defined here and then never used. ─┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  result5 = finalIdentity(3.14)                                             │
- │  ‾‾‾‾‾‾‾                                                                   │
- └──────────────────────────────────── type_var_name_avoids_collision.md:61:5 ┘
+If you don't need this variable, prefix it with an underscore like _result4 to
+suppress this warning.
 
-    If you don't need this variable, prefix it with an underscore like
-    `_result5` to suppress this warning.
+── ● unused variable ──────────────────── type_var_name_avoids_collision.md:61:5
+
+Variable result5 is defined here and then never used:
+
+result5 = finalIdentity(3.14)
+^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like _result5 to
+suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -557,20 +551,20 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 535)
+					(e-call (constraint-fn-var 545)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "123"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 546)
+					(e-call (constraint-fn-var 556)
 						(e-lookup-local
 							(p-assign (ident "anotherIdentity")))
 						(e-string
 							(e-literal (string "test")))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 551)
+					(e-call (constraint-fn-var 561)
 						(e-lookup-local
 							(p-assign (ident "combine")))
 						(e-lookup-local
@@ -579,17 +573,17 @@ main! = |_| {
 							(p-assign (ident "result2")))))
 				(s-let
 					(p-assign (ident "result4"))
-					(e-call (constraint-fn-var 555)
+					(e-call (constraint-fn-var 565)
 						(e-lookup-local
 							(p-assign (ident "yetAnotherIdentity")))
 						(e-tag (name "True"))))
 				(s-let
 					(p-assign (ident "result5"))
-					(e-call (constraint-fn-var 565)
+					(e-call (constraint-fn-var 575)
 						(e-lookup-local
 							(p-assign (ident "finalIdentity")))
 						(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 566)
+				(e-dispatch-call (method "plus") (constraint-fn-var 576)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "a"))))

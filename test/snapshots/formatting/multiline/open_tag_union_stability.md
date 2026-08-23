@@ -15,31 +15,25 @@ r : [
 MALFORMED TYPE - open_tag_union_stability.md:2:2:2:3
 DECLARATION HAS NO VALUE - open_tag_union_stability.md:1:1:5:2
 # PROBLEMS
+── ✗ malformed type ──────────────────────────── open_tag_union_stability.md:2:2
 
-┌────────────────┐
-│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
-└┬───────────────┘  syntax.                                                   │
- │                                                                            │
- │  a,                                                                        │
- │  ‾                                                                         │
- └─────────────────────────────────────────── open_tag_union_stability.md:2:2 ┘
+This type annotation is malformed or contains invalid syntax.
 
+a,
+^
 
+── ● declaration has no value ────────────────── open_tag_union_stability.md:1:1
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  r : [                                                                     │
- │      a,                                                                    │
- │                                                                            │
- │      ..,                                                                   │
- │  ]                                                                         │
- │                                                                            │
- └─────────────────────────────────────────── open_tag_union_stability.md:1:1 ┘
+This declaration has a type annotation but no implementation.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+r : [
+    a,
+
+    ..,
+]
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -69,7 +63,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-tag-union
 				(ty-malformed)

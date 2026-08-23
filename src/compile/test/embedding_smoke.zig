@@ -24,7 +24,7 @@ const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
 
 // Allocator callbacks for the test's RocOps. The simple_success.roc app's
-// `main!` is empty, so these are unlikely to fire — but they must be valid
+// `main!` is empty, so these are unlikely to fire—but they must be valid
 // function pointers.
 fn testRocAlloc(_: *host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     const align_enum = std.mem.Alignment.fromByteUnits(@max(alignment, @alignOf(usize)));
@@ -35,7 +35,7 @@ fn testRocAlloc(_: *host_abi.RocOps, length: usize, alignment: usize) callconv(.
 }
 
 fn testRocDealloc(_: *host_abi.RocOps, _: *anyopaque, _: usize) callconv(.c) void {
-    // No-op for the smoke test — pages are reclaimed at exit.
+    // No-op for the smoke test—pages are reclaimed at exit.
 }
 
 fn testRocRealloc(_: *host_abi.RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
@@ -142,16 +142,17 @@ test "embedding API: full canonical sequence on simple_success app" {
     //    pointer-width independent, so the consumer supplies the target;
     //    viewMappedImage accepts `[*]align(1) const u8` so no @constCast is
     //    needed on the buffer pointer.
-    const view = try lir.LirImage.viewMappedImage(
+    var view = try lir.LirImage.viewMappedImage(
         image_header,
         runtime_buffer.ptr,
         runtime_fba.end_index,
         lowered.target_usize,
     );
+    defer view.deinit();
 
     // 9. Wire RocOps with empty hosted_fns (simple_success has no hosted-fn
     //    calls). For platforms with hosted functions, the dispatch index
-    //    rule applies — see README "Host functions".
+    //    rule applies—see README "Host functions".
     var hosted_fns = host_abi.emptyHostedFunctions();
     var roc_ops = host_abi.RocOps{
         .env = @ptrFromInt(0xdeadbeef), // unused by simple_success
@@ -166,10 +167,17 @@ test "embedding API: full canonical sequence on simple_success app" {
     _ = &hosted_fns;
 
     // 10. Initialize the interpreter and run the entrypoint.
-    var interp = try eval.LirInterpreter.init(gpa, &view.store, &view.layouts, &roc_ops, .preserve);
+    var interp = try eval.LirInterpreter.initWithBoxyTables(
+        gpa,
+        &view.store,
+        &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(&view),
+        &roc_ops,
+        .preserve,
+    );
     defer interp.deinit();
 
-    // simple_success has main! : () => {} — no args, returns unit.
+    // simple_success has main! : () => {}—no args, returns unit.
     var ret_buf: [16]u8 align(16) = undefined;
     _ = try interp.runEntrypoint(&view, 0, null, @ptrCast(&ret_buf));
 }

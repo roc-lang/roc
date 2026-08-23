@@ -89,9 +89,17 @@ pub const BuiltinKind = enum {
     str_from_utf8_result,
     list_append_unsafe,
     list_concat,
+    list_append_range_within,
+    list_append_range_within_unsafe,
+    list_copy_range_within,
+    list_append_sublist,
+    list_append_le_bytes,
+    list_slack_unique,
+    list_owned_unique,
     list_drop_at,
     list_reserve,
     list_replace,
+    list_set,
     list_swap,
     list_eq,
     list_str_eq,
@@ -100,6 +108,7 @@ pub const BuiltinKind = enum {
     simd_store_16,
     simd_append_16,
     allocate_with_refcount,
+    erased_callable_repack,
     i8_mod_by,
     u8_mod_by,
     i16_mod_by,
@@ -152,7 +161,7 @@ const RocOps = @import("builtins").host_abi.RocOps;
 /// `takes_roc_ops` flag is silent stack corruption at runtime, so every field is
 /// read straight from `@typeInfo` of the wrapper instead of written by hand. Each
 /// `BuiltinKind` resolves to the `builtin_registry.BuiltinFn` member of the same
-/// name — a missing member is a compile error, pinning this enum to the registry —
+/// name—a missing member is a compile error, pinning this enum to the registry—
 /// and that member supplies the symbol name (`symbolName()`) and the wrapper type
 /// the params, results, and `takes_roc_ops` flag are lowered from.
 pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = blk: {
@@ -262,6 +271,24 @@ fn wasmValTypeOf(comptime T: type) ValType {
         .pointer => .i32, // wasm32 pointer
         .optional => |o| if (@typeInfo(o.child) == .pointer) .i32 else @compileError("unsupported optional (non-pointer) builtin wrapper type: " ++ @typeName(T)),
         .@"enum" => |info| wasmValTypeOf(info.tag_type),
-        else => @compileError("unsupported builtin wrapper type: " ++ @typeName(T)),
+        .type,
+        .void,
+        .noreturn,
+        .array,
+        .@"struct",
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"union",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        => @compileError("unsupported builtin wrapper type: " ++ @typeName(T)),
     };
 }

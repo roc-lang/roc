@@ -12,45 +12,38 @@ TYPE APPLICATION NEEDS PARENTHESES - type_annotation_missing_parens.md:2:1:2:1
 TOO FEW ARGS - type_annotation_missing_parens.md:1:8:1:12
 DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 # PROBLEMS
+── ✗ type application needs parentheses ── type_annotation_missing_parens.md:2:1
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │                                                                            │
- │  ‾                                                                         │
- └───────────────────────────────────── type_annotation_missing_parens.md:2:1 ┘
-
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
-
-    For example:
-        List(U8)
-
-    I reached the end of the file before this construct was complete.
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
 
-┌──────────────┐
-│ TOO FEW ARGS ├─ The type List expects 1 argument, but got 0 instead. ───────┐
-└┬─────────────┘                                                              │
- │                                                                            │
- │  nums : List U8                                                            │
- │         ‾‾‾‾                                                               │
- └───────────────────────────────────── type_annotation_missing_parens.md:1:8 ┘
+^
 
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
+For example:
+    List(U8)
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  nums : List U8                                                            │
- │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
- └───────────────────────────────────── type_annotation_missing_parens.md:1:1 ┘
+I reached the end of the file before this construct was complete.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+── ✗ too few args ──────────────────────── type_annotation_missing_parens.md:1:8
+
+The type List expects 1 argument, but got 0 instead.
+
+nums : List U8
+       ^^^^
+
+── ● declaration has no value ──────────── type_annotation_missing_parens.md:1:1
+
+This declaration has a type annotation but no implementation.
+
+nums : List U8
+^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -75,7 +68,7 @@ nums : List
 (can-ir
 	(d-let
 		(p-assign (ident "nums"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "List") (builtin)))))
 ~~~

@@ -4,7 +4,7 @@
 //! default to?" is answered here and nowhere else. The checker's defaulting
 //! passes, the canonical-type-key builder, the checked artifact's
 //! default-phase scan, and monotype solving/lowering all call in here, so the
-//! decisions cannot drift apart between stages — there is no cross-module
+//! decisions cannot drift apart between stages—there is no cross-module
 //! "must agree" contract left to maintain, because there is only one
 //! implementation to agree with.
 
@@ -39,7 +39,7 @@ pub const LiteralMethodIdents = struct {
 /// hook carries that hook's kind. The two must be interchangeable here: a
 /// `where` clause like `b.from_numeral : Numeral -> ...` asserts exactly what a
 /// literal's own conversion constraint asserts (b is creatable from a numeral
-/// literal), and it is the only way an annotation can express that constraint —
+/// literal), and it is the only way an annotation can express that constraint—
 /// so if it were not defaulting-eligible, annotating a def with its own
 /// inferred type would strip callers of defaulting and change whether their
 /// programs check.
@@ -71,7 +71,7 @@ pub fn constraintLiteralKind(
 /// A var can carry several kinds at once (a flex/flex merge like
 /// `if c 1 else "s"` unions the two literals' constraint sets). Such a var can
 /// never type-check, but the kind chosen here decides which head default is
-/// attempted (Dec vs Str) and hence which literal-kind diagnostic fires — so
+/// attempted (Dec vs Str) and hence which literal-kind diagnostic fires—so
 /// it must not depend on constraint storage order (which unify side each
 /// literal arrived on), or mirror-image programs would get different keys and
 /// diagnostics.
@@ -101,11 +101,11 @@ pub fn defaultTargetForKind(kind: LiteralKind) DefaultTarget {
 }
 
 /// Candidate order for numeral defaulting (first satisfier wins). `Dec` (the
-/// canonical default) heads the list; then integers — signed before unsigned,
+/// canonical default) heads the list; then integers—signed before unsigned,
 /// `I64` first (Roc's historical integer default), wider before narrower so a
 /// tie never lands on a type that overflows sooner than it must; floats last.
 /// Order past `Dec` only matters when the constraints refute `Dec` yet accept
-/// several candidates — a pinned concrete arg or return admits exactly one
+/// several candidates—a pinned concrete arg or return admits exactly one
 /// regardless of order. That single-admission claim holds because builtin
 /// numeric methods are homogeneous (`T, T -> T`, e.g. `Dec.plus : Dec, Dec ->
 /// Dec`): every signature position is the dispatcher type itself, so pinning
@@ -129,7 +129,7 @@ pub const NumericDefaultPhase = enum(u8) {
 };
 
 /// The target a mono-specialization default phase materializes, or null for
-/// `checking_finalized` (which must never reach a consumer of this mapping —
+/// `checking_finalized` (which must never reach a consumer of this mapping—
 /// callers treat null as an invariant violation with their own reporting).
 pub fn defaultTargetForPhase(phase: NumericDefaultPhase) ?DefaultTarget {
     return switch (phase) {

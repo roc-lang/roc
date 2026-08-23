@@ -18,170 +18,152 @@ UNEXPECTED STATEMENT - fuzz_crash_094.md:1:16:1:17
 UNEXPECTED STATEMENT - fuzz_crash_094.md:1:17:1:18
 UNEXPECTED STATEMENT - fuzz_crash_094.md:1:18:1:19
 # PROBLEMS
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_094.md:1:1
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  dapkage[e,E.a.*]{}                                                        │
- │  ‾‾‾‾‾‾‾                                                                   │
- └───────────────────────────────────────────────────── fuzz_crash_094.md:1:1 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+dapkage[e,E.a.*]{}
+^^^^^^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `dapkage` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+For example:
+    answer = 42
 
+I found dapkage here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  dapkage[e,E.a.*]{}                                                        │
- │         ‾                                                                  │
- └───────────────────────────────────────────────────── fuzz_crash_094.md:1:8 ┘
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_094.md:1:8
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+dapkage[e,E.a.*]{}
+       ^
 
-    I found `[` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  dapkage[e,E.a.*]{}                                                        │
- │          ‾                                                                 │
- └───────────────────────────────────────────────────── fuzz_crash_094.md:1:9 ┘
+I found [ here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_094.md:1:9
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `e` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+dapkage[e,E.a.*]{}
+        ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  dapkage[e,E.a.*]{}                                                        │
- │           ‾                                                                │
- └──────────────────────────────────────────────────── fuzz_crash_094.md:1:10 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found e here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:10
 
-    I found `,` here.
-    A comma separates items, but there must be a valid item on both sides of it.
+I was parsing a statement, and this token cannot start a statement here.
 
+dapkage[e,E.a.*]{}
+         ^
 
-┌────────────────────────────────────┐
-│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
-└┬───────────────────────────────────┘  and I found a type argument without   │
- │                                      parentheses.                          │
- │                                                                            │
- │  dapkage[e,E.a.*]{}                                                        │
- │             ‾‾                                                             │
- └──────────────────────────────────────────────────── fuzz_crash_094.md:1:12 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    Roc type applications use parentheses around their arguments. Write
-    `List(U8)`, not `List U8`.
+For example:
+    answer = 42
 
-    For example:
-        List(U8)
+I found , here.
+A comma separates items, but there must be a valid item on both sides of it.
 
-    I found `.a` here.
-    Names that start with lowercase letters are value names or record field
-    names, depending on the surrounding syntax.
+── ✗ type application needs parentheses ───────────────── fuzz_crash_094.md:1:12
 
+I was parsing a type annotation, and I found a type argument without
+parentheses.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  dapkage[e,E.a.*]{}                                                        │
- │               ‾‾                                                           │
- └──────────────────────────────────────────────────── fuzz_crash_094.md:1:14 ┘
+dapkage[e,E.a.*]{}
+           ^^
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+Roc type applications use parentheses around their arguments. Write List(U8),
+not List U8.
 
-    For example:
-        answer = 42
+For example:
+    List(U8)
 
-    I found `.*` here.
+I found .a here.
+Names that start with lowercase letters are value names or record field names,
+depending on the surrounding syntax.
 
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:14
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  dapkage[e,E.a.*]{}                                                        │
- │                 ‾                                                          │
- └──────────────────────────────────────────────────── fuzz_crash_094.md:1:16 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+dapkage[e,E.a.*]{}
+             ^^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `]` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+For example:
+    answer = 42
 
+I found .* here.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  dapkage[e,E.a.*]{}                                                        │
- │                  ‾                                                         │
- └──────────────────────────────────────────────────── fuzz_crash_094.md:1:17 ┘
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:16
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+dapkage[e,E.a.*]{}
+               ^
 
-    I found `{` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  dapkage[e,E.a.*]{}                                                        │
- │                   ‾                                                        │
- └──────────────────────────────────────────────────── fuzz_crash_094.md:1:18 ┘
+I found ] here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:17
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+dapkage[e,E.a.*]{}
+                ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found { here.
+
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_094.md:1:18
+
+I was parsing a statement, and this token cannot start a statement here.
+
+dapkage[e,E.a.*]{}
+                 ^
+
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
+
+For example:
+    answer = 42
+
+I found } here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
 # TOKENS
 ~~~zig

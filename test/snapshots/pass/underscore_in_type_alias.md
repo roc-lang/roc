@@ -31,135 +31,115 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:11:15:11:15
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 # PROBLEMS
+── ✗ underscore in type alias ────────────────── underscore_in_type_alias.md:1:1
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  MyType : _                                                                │
- │  ‾                                                                         │
- └─────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
+Underscores are not allowed in type alias declarations.
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+MyType : _
+^
 
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  MyType : _                                                                │
- │  ‾                                                                         │
- └─────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
+── ✗ underscore in type alias ────────────────── underscore_in_type_alias.md:1:1
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+Underscores are not allowed in type alias declarations.
 
+MyType : _
+^
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  ComplexType := List(_)                                                    │
- │                      ‾                                                     │
- └────────────────────────────────────────── underscore_in_type_alias.md:5:21 ┘
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+── ✗ underscore in type alias ───────────────── underscore_in_type_alias.md:5:21
 
+Underscores are not allowed in type alias declarations.
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  ComplexType := List(_)                                                    │
- │                 ‾‾‾‾                                                       │
- └────────────────────────────────────────── underscore_in_type_alias.md:5:16 ┘
+ComplexType := List(_)
+                    ^
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
+── ✗ underscore in type alias ───────────────── underscore_in_type_alias.md:5:16
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  MyType : _                                                                │
- │  ‾                                                                         │
- └─────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
+Underscores are not allowed in type alias declarations.
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+ComplexType := List(_)
+               ^^^^
 
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  MyType : _                                                                │
- │  ‾                                                                         │
- └─────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
+── ✗ underscore in type alias ────────────────── underscore_in_type_alias.md:1:1
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+Underscores are not allowed in type alias declarations.
 
+MyType : _
+^
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  MyType : _                                                                │
- │  ‾                                                                         │
- └─────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+── ✗ underscore in type alias ────────────────── underscore_in_type_alias.md:1:1
 
+Underscores are not allowed in type alias declarations.
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  TupleType := (_, U32, _)                                                  │
- │                ‾                                                           │
- └───────────────────────────────────────── underscore_in_type_alias.md:11:15 ┘
+MyType : _
+^
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
+── ✗ underscore in type alias ────────────────── underscore_in_type_alias.md:1:1
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  MyType : _                                                                │
- │  ‾                                                                         │
- └─────────────────────────────────────────── underscore_in_type_alias.md:1:1 ┘
+Underscores are not allowed in type alias declarations.
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+MyType : _
+^
 
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
-┌──────────────────────────┐
-│ UNDERSCORE IN TYPE ALIAS ├─ Underscores are not allowed in type alias ──────┐
-└┬─────────────────────────┘  declarations.                                   │
- │                                                                            │
- │  TagType := [Some(_), None]                                                │
- │                   ‾                                                        │
- └───────────────────────────────────────── underscore_in_type_alias.md:13:18 ┘
+── ✗ underscore in type alias ──────────────── underscore_in_type_alias.md:11:15
 
-    Underscores in type annotations mean "I don't care about this type", which
-    doesn't make sense when declaring a type. If you need a placeholder type
-    variable, use a named type variable like `a` instead.
+Underscores are not allowed in type alias declarations.
+
+TupleType := (_, U32, _)
+              ^
+
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
+
+── ✗ underscore in type alias ────────────────── underscore_in_type_alias.md:1:1
+
+Underscores are not allowed in type alias declarations.
+
+MyType : _
+^
+
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
+
+── ✗ underscore in type alias ──────────────── underscore_in_type_alias.md:13:18
+
+Underscores are not allowed in type alias declarations.
+
+TagType := [Some(_), None]
+                 ^
+
+Underscores in type annotations mean "I don't care about this type", which
+doesn't make sense when declaring a type. If you need a placeholder type
+variable, use a named type variable like `a` instead.
 
 # TOKENS
 ~~~zig

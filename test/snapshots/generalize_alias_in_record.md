@@ -14,18 +14,16 @@ main = ((r.f)(1), (r.f)("a"))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_in_record.md:5:25:5:28
 # PROBLEMS
+── ✗ type mismatch ────────────────────────── generalize_alias_in_record.md:5:25
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  main = ((r.f)(1), (r.f)("a"))                                             │
- │                          ‾‾‾                                               │
- └──────────────────────────────────────── generalize_alias_in_record.md:5:25 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+main = ((r.f)(1), (r.f)("a"))
+                        ^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -56,14 +54,16 @@ EndOfFile,
 				(e-apply
 					(e-tuple
 						(e-field-access
-							(e-ident (raw "r"))
-							(e-ident (raw "f"))))
+							(receiver
+								(e-ident (raw "r")))
+							(segment (mode "required") (field "f"))))
 					(e-int (raw "1")))
 				(e-apply
 					(e-tuple
 						(e-field-access
-							(e-ident (raw "r"))
-							(e-ident (raw "f"))))
+							(receiver
+								(e-ident (raw "r")))
+							(segment (mode "required") (field "f"))))
 					(e-string
 						(e-string-part (raw "a"))))))))
 ~~~
@@ -92,17 +92,21 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 225)
-					(e-field-access (field "f")
+				(e-call (constraint-fn-var 238)
+					(e-field-access
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "r")))))
+								(p-assign (ident "r"))))
+						(segments
+							(segment (name "f") (mode "required"))))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 237)
-					(e-field-access (field "f")
+				(e-call (constraint-fn-var 250)
+					(e-field-access
 						(receiver
 							(e-lookup-local
-								(p-assign (ident "r")))))
+								(p-assign (ident "r"))))
+						(segments
+							(segment (name "f") (mode "required"))))
 					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES

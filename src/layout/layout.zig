@@ -191,12 +191,8 @@ pub const Idx = enum(std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(Layout
     /// Returns true if this layout represents a signed integer type.
     /// Used for determining signed vs unsigned operations (sdiv vs udiv, etc.)
     pub fn isSigned(self: Idx) bool {
-        return switch (self) {
-            .i8, .i16, .i32, .i64, .i128, .dec, .i8x16, .i16x8, .i32x4, .i64x2 => true,
-            .u8, .u16, .u32, .u64, .u128, .u8x16, .u16x8, .u32x4, .u64x2 => false,
-            // Default to signed for other types (floats don't use this, bools are unsigned)
-            else => true,
-        };
+        // Default to signed for other types (floats don't use this).
+        return self != .u8 and self != .u16 and self != .u32 and self != .u64 and self != .u128 and self != .u8x16 and self != .u16x8 and self != .u32x4 and self != .u64x2;
     }
 
     /// Default numeric type for unbound/polymorphic numbers.
@@ -222,7 +218,7 @@ pub const Closure = struct {
 /// a raw integer with typed accessors on the Layout struct instead.
 pub const LayoutData = std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag));
 
-/// Unified struct field layout — used for both records and tuples at the layout level.
+/// Unified struct field layout—used for both records and tuples at the layout level.
 /// At the shared LIR/layout commit, records and tuples become contiguous fields that are
 /// stable-sorted by descending alignment.
 /// The `index` field stores the canonical semantic field index:
@@ -236,8 +232,8 @@ pub const StructField = struct {
     layout: Idx,
     /// True for unnamed nominal-record padding spacers. Such a field reserves
     /// `sizeof(layout)` bytes at alignment 1 (its layout's own alignment is
-    /// ignored) and is excluded from every semantic field operation — name
-    /// resolution, equality, refcounting, inspect, glue, and construction — while
+    /// ignored) and is excluded from every semantic field operation—name
+    /// resolution, equality, refcounting, inspect, glue, and construction—while
     /// still occupying its bytes for offsets and total struct size. It never
     /// contributes its alignment to the struct.
     is_padding: bool = false,
@@ -282,7 +278,7 @@ pub const TupleIdx = StructIdx;
 /// A byte value precomputed for both pointer widths, keeping the layout store
 /// target-independent: both targets' values are stored and the right one is a
 /// direct array read once the target is known (no per-read computation). Indexed
-/// by `@intFromEnum(TargetUsize)` — `[0]` is the 32-bit target, `[1]` the 64-bit.
+/// by `@intFromEnum(TargetUsize)`—`[0]` is the 32-bit target, `[1]` the 64-bit.
 /// Computing both directly (rather than a pointer count) accounts for the
 /// pointer-width-dependent alignment padding exactly.
 pub fn WidthValues(comptime T: type) type {
@@ -299,7 +295,7 @@ pub fn WidthValues(comptime T: type) type {
     };
 }
 
-/// Struct data stored in the layout Store — unified for records and tuples.
+/// Struct data stored in the layout Store—unified for records and tuples.
 pub const StructData = struct {
     /// Size of the struct in bytes, precomputed for both pointer widths.
     size: WidthValues(u32),
@@ -504,7 +500,7 @@ pub const RocAlignment = enum(u3) {
 ///
 /// This is the target-independent alignment class of a value: it both orders
 /// fields and (given a target) yields the actual alignment in bytes. A pointer
-/// is its own class, sorting strictly between 4-byte and 8-byte alignment —
+/// is its own class, sorting strictly between 4-byte and 8-byte alignment—
 /// because a pointer is the only type whose real alignment varies by target
 /// (4 bytes on a 32-bit target, 8 on a 64-bit one), its fixed slot between
 /// `align_4` and `align_8` makes a record/tuple's field order identical on both
@@ -768,7 +764,7 @@ pub const Layout = packed struct {
     /// This layout's target-independent alignment class (see `SortKey`). Pointers
     /// are `.pointer`; fixed-width scalars map to their alignment band; aggregates
     /// return the `sort_key` they stored at commit time. Pure (no store, no
-    /// target) — identical on 32-bit and 64-bit targets.
+    /// target)—identical on 32-bit and 64-bit targets.
     pub fn sortKey(self: Layout) SortKey {
         return switch (self.tag) {
             .scalar => switch (self.getScalar().tag) {
@@ -850,7 +846,7 @@ pub const Layout = packed struct {
     }
 
     /// struct layout with the given alignment class and struct metadata.
-    /// Used for both records and tuples — at the layout level they are identical.
+    /// Used for both records and tuples—at the layout level they are identical.
     pub fn struct_(struct_sort_key: SortKey, struct_idx: StructIdx) Layout {
         return .{ .data = packData(StructLayout{ .sort_key = struct_sort_key, .idx = struct_idx }), .tag = .struct_ };
     }
@@ -889,9 +885,10 @@ pub const Layout = packed struct {
                 .int, .frac, .opaque_ptr, .vector => false,
             },
             .list, .list_of_zst => true, // Lists need refcounting
-            .box, .box_of_zst => true, // Boxes need refcounting
+            .box => true, // Boxes need refcounting
+            .box_of_zst => false, // Box({}) is represented as a null pointer, not an allocation
             .erased_callable => true, // Boxed erased functions need refcounting
-            else => false,
+            .struct_, .closure, .zst, .tag_union, .ptr => false,
         };
     }
 

@@ -699,11 +699,8 @@ pub fn extractAndRelocateElf(allocator: Allocator, object_bytes: []const u8) All
             // gate below. The relocatable objects this loader reads do not emit
             // them today, but handle them explicitly rather than silently skip:
             // value = load base + addend.
-            const is_relative = switch (builtin.cpu.arch) {
-                .aarch64 => r_type == 1027, // R_AARCH64_RELATIVE
-                .x86_64 => r_type == 8, // R_X86_64_RELATIVE
-                else => false,
-            };
+            const is_relative = (builtin.cpu.arch == .aarch64 and r_type == 1027) or // R_AARCH64_RELATIVE
+                (builtin.cpu.arch == .x86_64 and r_type == 8); // R_X86_64_RELATIVE
             if (is_relative) {
                 const rel_patch_off: u64 = target_buf_offset.? + r_offset;
                 if (rel_patch_off + 8 > buf.len) continue;
@@ -783,7 +780,7 @@ fn resolveSymbol(
     const st_value = std.mem.readInt(u64, sym[8..16], .little);
 
     if (st_shndx == 0) {
-        // SHN_UNDEF — undefined symbol, try dlsym
+        // SHN_UNDEF—undefined symbol, try dlsym
         const st_name = std.mem.readInt(u32, sym[0..4], .little);
         if (st_name < strtab.len) {
             const name = getSectionName(strtab, st_name);
@@ -810,19 +807,17 @@ fn dlsymLookup(name: []const u8) ?usize {
     name_buf[name.len] = 0;
     const name_z: [*:0]const u8 = @ptrCast(&name_buf);
 
-    switch (builtin.os.tag) {
-        .macos, .ios, .linux, .freebsd, .openbsd, .netbsd => {
-            // RTLD_DEFAULT = search all loaded shared libraries
-            const RTLD_DEFAULT: ?*anyopaque = switch (builtin.os.tag) {
-                .macos, .ios => @ptrFromInt(@as(usize, @bitCast(@as(isize, -2)))),
-                else => null,
-            };
-            const addr = std.c.dlsym(RTLD_DEFAULT, name_z);
-            if (addr) |a| return @intFromPtr(a);
-            return null;
-        },
-        else => return null,
-    }
+    const supports_dlsym = builtin.os.tag == .macos or builtin.os.tag == .ios or builtin.os.tag == .linux or builtin.os.tag == .freebsd or builtin.os.tag == .openbsd or builtin.os.tag == .netbsd;
+    if (!supports_dlsym) return null;
+
+    // RTLD_DEFAULT = search all loaded shared libraries
+    const RTLD_DEFAULT: ?*anyopaque = if (builtin.os.tag == .macos or builtin.os.tag == .ios)
+        @ptrFromInt(@as(usize, @bitCast(@as(isize, -2))))
+    else
+        null;
+    const addr = std.c.dlsym(RTLD_DEFAULT, name_z);
+    if (addr) |a| return @intFromPtr(a);
+    return null;
 }
 
 /// Resolve a builtin symbol to its in-process wrapper address. Every

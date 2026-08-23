@@ -15,22 +15,20 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - numeric_let_generalize_in_block.md:4:20:4:21
 # PROBLEMS
+── ✗ type mismatch ───────────────────── numeric_let_generalize_in_block.md:4:20
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │  b = Dec.to_str(n)                                                         │
- │                 ‾                                                          │
- └─────────────────────────────────── numeric_let_generalize_in_block.md:4:20 ┘
+The first argument being passed to this function has the wrong type.
 
-    This argument has the type:
+b = Dec.to_str(n)
+               ^
 
-        I64
+This argument has the type:
 
-    But the function needs the first argument to be:
+    I64
 
-        Dec
+But the function needs the first argument to be:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -81,7 +79,7 @@ EndOfFile,
 		(e-num (value "42")))
 	(s-let
 		(p-assign (ident "a"))
-		(e-call (constraint-fn-var 221)
+		(e-call (constraint-fn-var 231)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local

@@ -31,152 +31,122 @@ validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-MOD NOT IMPORTED - can_import_nested_mods.md:6:15:6:30
+MISSING NESTED TYPE - can_import_nested_mods.md:6:15:6:30
 DOES NOT EXIST - can_import_nested_mods.md:7:26:7:41
-MOD NOT FOUND - can_import_nested_mods.md:10:36:10:42
-NAME NOT IN SCOPE - can_import_nested_mods.md:11:29:11:43
-MOD NOT IMPORTED - can_import_nested_mods.md:14:15:14:37
-MOD NOT IMPORTED - can_import_nested_mods.md:14:55:14:74
+MISSING NESTED TYPE - can_import_nested_mods.md:10:28:10:42
+DOES NOT EXIST - can_import_nested_mods.md:11:29:11:43
+MISSING NESTED TYPE - can_import_nested_mods.md:14:15:14:37
+MISSING NESTED TYPE - can_import_nested_mods.md:14:55:14:74
 DOES NOT EXIST - can_import_nested_mods.md:16:5:16:37
 NAME NOT IN SCOPE - can_import_nested_mods.md:20:23:20:30
 DOES NOT EXIST - can_import_nested_mods.md:20:37:20:58
-MOD NOT FOUND - can_import_nested_mods.md:23:24:23:36
-MOD NOT FOUND - can_import_nested_mods.md:23:52:23:58
-MOD NOT FOUND - can_import_nested_mods.md:23:68:23:74
-NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
+MISSING NESTED TYPE - can_import_nested_mods.md:23:16:23:36
+MISSING NESTED TYPE - can_import_nested_mods.md:23:44:23:58
+MISSING NESTED TYPE - can_import_nested_mods.md:23:60:23:74
+DOES NOT EXIST - can_import_nested_mods.md:24:24:24:41
 # PROBLEMS
+── ✗ missing nested type ───────────────────── can_import_nested_mods.md:6:15
 
-┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `Config` imported ──┐
-└┬────────────────────┘  into this Roc file.                                  │
- │                                                                            │
- │  parseConfig : Config.Settings -> Str                                      │
- │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
- └───────────────────────────────────────── can_import_nested_mods.md:6:15 ┘
+Config is in scope, but it doesn't have a nested type named Settings.
 
+parseConfig : Config.Settings -> Str
+              ^^^^^^^^^^^^^^^
 
+── ✗ does not exist ────────────────────────── can_import_nested_mods.md:7:26
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `Config.toString` does not exist. ────────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  parseConfig = |settings| Config.toString(settings)                        │
- │                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
- └───────────────────────────────────────── can_import_nested_mods.md:7:26 ┘
+Config.toString does not exist.
 
+parseConfig = |settings| Config.toString(settings)
+                         ^^^^^^^^^^^^^^^
 
+Config is in scope, but it has no associated toString.
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Token` type is declared to be in `http.Client`, ──┐
-└┬─────────────────┘  which does not exist.                                   │
- │                                                                            │
- │  authenticate : Str, Str -> HttpAuth.Token                                 │
- │                                     ‾‾‾‾‾‾                                 │
- └──────────────────────────────────────── can_import_nested_mods.md:10:36 ┘
+── ✗ missing nested type ──────────────────── can_import_nested_mods.md:10:28
 
+HttpAuth is in scope, but it doesn't have a nested type named Token.
 
+authenticate : Str, Str -> HttpAuth.Token
+                           ^^^^^^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `login` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  authenticate = |user, pass| HttpAuth.login(user, pass)                    │
- │                              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
- └──────────────────────────────────────── can_import_nested_mods.md:11:29 ┘
+── ✗ does not exist ───────────────────────── can_import_nested_mods.md:11:29
 
-    Is it misspelled, or is there an import missing?
+HttpAuth.login does not exist.
 
+authenticate = |user, pass| HttpAuth.login(user, pass)
+                            ^^^^^^^^^^^^^^
 
-┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `Config.Parser` ────┐
-└┬────────────────────┘  imported into this Roc file.                         │
- │                                                                            │
- │  processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)│
- │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
- └──────────────────────────────────────── can_import_nested_mods.md:14:15 ┘
+HttpAuth is in scope, but it has no associated login.
 
+── ✗ missing nested type ──────────────────── can_import_nested_mods.md:14:15
 
+Config is in scope, but it doesn't have a nested type named Advanced.
 
-┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `Config.Parser` ────┐
-└┬────────────────────┘  imported into this Roc file.                         │
- │                                                                            │
- │  processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)│
- │                                                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾ │
- └──────────────────────────────────────── can_import_nested_mods.md:14:55 ┘
+processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
+              ^^^^^^^^^^^^^^^^^^^^^^
 
+── ✗ missing nested type ──────────────────── can_import_nested_mods.md:14:55
 
+Config is in scope, but it doesn't have a nested type named Error.
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `Config.Parser.Advanced.parseWith` does not exist. ───────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  Config.Parser.Advanced.parseWith(advancedConfig, input)                   │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
- └───────────────────────────────────────── can_import_nested_mods.md:16:5 ┘
+processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)
+                                                      ^^^^^^^^^^^^^^^^^^^
 
+── ✗ does not exist ────────────────────────── can_import_nested_mods.md:16:5
 
+Config.Parser.Advanced.parseWith does not exist.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `padLeft` in this scope. ─────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  formatOutput = |text| padLeft(text, Config.defaultPadding)                │
- │                        ‾‾‾‾‾‾‾                                             │
- └──────────────────────────────────────── can_import_nested_mods.md:20:23 ┘
+Config.Parser.Advanced.parseWith(advancedConfig, input)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+Config.Parser.Advanced is in scope, but it has no associated parseWith.
 
+── ✗ name not in scope ────────────────────── can_import_nested_mods.md:20:23
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `Config.defaultPadding` does not exist. ──────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  formatOutput = |text| padLeft(text, Config.defaultPadding)                │
- │                                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                 │
- └──────────────────────────────────────── can_import_nested_mods.md:20:37 ┘
+Nothing is named padLeft in this scope.
 
+formatOutput = |text| padLeft(text, Config.defaultPadding)
+                      ^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Credentials` type is declared to be in ───────────┐
-└┬─────────────────┘  `http.Client`, which does not exist.                    │
- │                                                                            │
- │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
- │                         ‾‾‾‾‾‾‾‾‾‾‾‾                                       │
- └──────────────────────────────────────── can_import_nested_mods.md:23:24 ┘
+── ✗ does not exist ───────────────────────── can_import_nested_mods.md:20:37
 
+Config.defaultPadding does not exist.
 
+formatOutput = |text| padLeft(text, Config.defaultPadding)
+                                    ^^^^^^^^^^^^^^^^^^^^^
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Token` type is declared to be in `http.Client`, ──┐
-└┬─────────────────┘  which does not exist.                                   │
- │                                                                            │
- │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
- │                                                     ‾‾‾‾‾‾                 │
- └──────────────────────────────────────── can_import_nested_mods.md:23:52 ┘
+Config is in scope, but it has no associated defaultPadding.
 
+── ✗ missing nested type ──────────────────── can_import_nested_mods.md:23:16
 
+HttpAuth is in scope, but it doesn't have a nested type named Credentials.
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Error` type is declared to be in `http.Client`, ──┐
-└┬─────────────────┘  which does not exist.                                   │
- │                                                                            │
- │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
- │                                                                     ‾‾‾‾‾‾ │
- └──────────────────────────────────────── can_import_nested_mods.md:23:68 ┘
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
+               ^^^^^^^^^^^^^^^^^^^^
 
+── ✗ missing nested type ──────────────────── can_import_nested_mods.md:23:44
 
+HttpAuth is in scope, but it doesn't have a nested type named Token.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `validate` in this scope. ────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  validateAuth = |creds| HttpAuth.validate(creds)                           │
- │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
- └──────────────────────────────────────── can_import_nested_mods.md:24:24 ┘
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
+                                           ^^^^^^^^^^^^^^
 
-    Is it misspelled, or is there an import missing?
+── ✗ missing nested type ──────────────────── can_import_nested_mods.md:23:60
+
+HttpAuth is in scope, but it doesn't have a nested type named Error.
+
+validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
+                                                           ^^^^^^^^^^^^^^
+
+── ✗ does not exist ───────────────────────── can_import_nested_mods.md:24:24
+
+HttpAuth.validate does not exist.
+
+validateAuth = |creds| HttpAuth.validate(creds)
+                       ^^^^^^^^^^^^^^^^^
+
+HttpAuth is in scope, but it has no associated validate.
 
 # TOKENS
 ~~~zig
@@ -201,9 +171,7 @@ EndOfFile,
 (file
 	(type-mod)
 	(statements
-		(s-import (raw "json.Parser")
-			(exposing
-				(exposed-upper-ident (text "Config"))))
+		(s-import (raw "json.Parser.Config"))
 		(s-import (raw "http.Client.Auth") (alias "HttpAuth"))
 		(s-import (raw "utils.String.Format")
 			(exposing
@@ -285,7 +253,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import json.Parser exposing [Config]
+import json.Parser.Config
 import http.Client.Auth as HttpAuth
 import utils.String.Format exposing [padLeft]
 
@@ -315,21 +283,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 (can-ir
 	(d-let
 		(p-assign (ident "parseConfig"))
-		(e-lambda
-			(args
-				(p-assign (ident "settings")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "authenticate"))
-		(e-lambda
-			(args
-				(p-assign (ident "user"))
-				(p-assign (ident "pass")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -337,11 +298,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(ty-malformed))))
 	(d-let
 		(p-assign (ident "processData"))
-		(e-lambda
-			(args
-				(p-assign (ident "advancedConfig"))
-				(p-assign (ident "input")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -351,20 +308,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "formatOutput"))
-		(e-lambda
-			(args
-				(p-assign (ident "text")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "validateAuth"))
-		(e-lambda
-			(args
-				(p-assign (ident "creds")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -373,12 +324,14 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(ty-malformed)))))
 	(s-import (mod "json.Parser")
 		(exposes
-			(exposed (name "Config") (wildcard false))))
+			(exposed (name "Config") (alias "Config") (wildcard false))))
 	(s-import (mod "http.Client")
-		(exposes))
+		(exposes
+			(exposed (name "Auth") (alias "HttpAuth") (wildcard false))))
 	(s-import (mod "utils.String")
 		(exposes
-			(exposed (name "padLeft") (wildcard false)))))
+			(exposed (name "Format") (alias "Format") (wildcard false))
+			(exposed (name "Format.padLeft") (alias "padLeft") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

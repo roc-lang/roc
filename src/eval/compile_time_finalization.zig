@@ -20,12 +20,15 @@ const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
 const ConstStoreWriter = @import("const_store_writer.zig");
 const CompileTimeHost = @import("compile_time_host.zig");
+const boxy_abi = @import("boxy_abi.zig");
 const interpreter_mod = @import("interpreter.zig");
 const static_data_exports = @import("static_data");
 const Interpreter = interpreter_mod.Interpreter;
 const ExpectFailure = interpreter_mod.ExpectFailure;
 const FinalizeError = checked.CompileTimeFinalizer.Error;
 const LirProgram = lir.Program;
+const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
+const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
@@ -61,7 +64,7 @@ pub const Timing = struct {
     /// evaluation runs as bursts interleaved with checking, so the progress
     /// reporter cannot window-sample it; the brackets that already time each
     /// burst fold a footprint reading at the same points.
-    mem_min: MemMinCounter = .{},
+    mem_min: MemMinCounter = MemMinCounter.init(std.math.maxInt(u64)),
     mem_max: MemMaxCounter = .{},
 
     pub fn init(std_io: std.Io) Timing {
@@ -76,7 +79,7 @@ pub const Timing = struct {
         return .{
             .total_ns = self.total_ns.load(),
             .monotype_ns = lowering.monotype_ns,
-            .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.lir_gen_ns,
+            .postcheck_to_lir_ns = lowering.lift_ns + lowering.spec_constr_ns + lowering.lambda_solve_ns + lowering.inline_plan_ns + lowering.lir_gen_ns,
             .lir_passes_ns = lowering.lir_passes_ns,
             .arc_ns = lowering.arc_ns,
             .static_data_ns = self.static_data_ns.load(),
@@ -102,8 +105,8 @@ pub const Timing = struct {
         self.code_generation_ns.add(snapshot_value.code_generation_ns);
         self.execution_ns.add(snapshot_value.execution_ns);
         self.store_results_ns.add(snapshot_value.store_results_ns);
-        if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.fold(snapshot_value.mem_min);
-        self.mem_max.fold(snapshot_value.mem_max);
+        if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.min(snapshot_value.mem_min);
+        self.mem_max.max(snapshot_value.mem_max);
     }
 
     fn start(self: *Timing) i64 {
@@ -113,8 +116,8 @@ pub const Timing = struct {
 
     fn sampleMemory(self: *Timing) void {
         const bytes = base.process_memory.currentBytes() orelse return;
-        self.mem_min.fold(bytes);
-        self.mem_max.fold(bytes);
+        self.mem_min.min(bytes);
+        self.mem_max.max(bytes);
     }
 
     fn finish(self: *Timing, started_ns: i64, phase: TimingPhase) void {
@@ -130,77 +133,9 @@ pub const Timing = struct {
     }
 };
 
-const MemMinCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
-    value: u64 = std.math.maxInt(u64),
-
-    fn load(self: *const @This()) u64 {
-        return self.value;
-    }
-
-    fn fold(self: *@This(), sample: u64) void {
-        if (sample < self.value) self.value = sample;
-    }
-} else struct {
-    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(std.math.maxInt(u64)),
-
-    fn load(self: *const @This()) u64 {
-        return self.value.load(.monotonic);
-    }
-
-    fn fold(self: *@This(), sample: u64) void {
-        var current = self.value.load(.monotonic);
-        while (sample < current) {
-            current = self.value.cmpxchgWeak(current, sample, .monotonic, .monotonic) orelse return;
-        }
-    }
-};
-
-const MemMaxCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
-    value: u64 = 0,
-
-    fn load(self: *const @This()) u64 {
-        return self.value;
-    }
-
-    fn fold(self: *@This(), sample: u64) void {
-        if (sample > self.value) self.value = sample;
-    }
-} else struct {
-    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-
-    fn load(self: *const @This()) u64 {
-        return self.value.load(.monotonic);
-    }
-
-    fn fold(self: *@This(), sample: u64) void {
-        var current = self.value.load(.monotonic);
-        while (sample > current) {
-            current = self.value.cmpxchgWeak(current, sample, .monotonic, .monotonic) orelse return;
-        }
-    }
-};
-
-const TimingCounter = if (base.parallel.is_freestanding or builtin.target.cpu.arch == .wasm32) struct {
-    value: u64 = 0,
-
-    fn load(self: *const @This()) u64 {
-        return self.value;
-    }
-
-    fn add(self: *@This(), value: u64) void {
-        self.value +%= value;
-    }
-} else struct {
-    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-
-    fn load(self: *const @This()) u64 {
-        return self.value.load(.monotonic);
-    }
-
-    fn add(self: *@This(), value: u64) void {
-        _ = self.value.fetchAdd(value, .monotonic);
-    }
-};
+const MemMinCounter = base.ConcurrentU64;
+const MemMaxCounter = base.ConcurrentU64;
+const TimingCounter = base.ConcurrentU64;
 
 /// Immutable compile-time finalization timings for progress reporting.
 pub const TimingSnapshot = struct {
@@ -351,9 +286,10 @@ fn finalize(
         defer batch_root_ids.deinit(allocator);
 
         for (requests, 0..) |request, request_index| {
+            const root_id = state.rootIdForRequestIndex(request_index);
             if (!state.dependenciesComplete(request)) {
                 if (batch_requests.items.len == 0) {
-                    finalizationInvariant("compile-time root request order referenced an unfinished dependency");
+                    finalizationInvariant("compile-time root request order placed a root before its field defaults or another dependency");
                 }
                 _ = try lowerEvalAndFinishRoots(
                     allocator,
@@ -375,7 +311,7 @@ fn finalize(
                 }
             }
             try batch_requests.append(allocator, request);
-            try batch_root_ids.append(allocator, state.rootIdForRequestIndex(request_index));
+            try batch_root_ids.append(allocator, root_id);
         }
 
         if (batch_requests.items.len != 0) {
@@ -420,6 +356,15 @@ const RootCompletionState = struct {
     visited_templates: []u32,
     visit: u32,
     current_root_id: ?checked.ComptimeRootId = null,
+    /// Requested `field_default` roots not yet finished. Derived parsers
+    /// restore archived default constants from within OTHER roots' lowering
+    ///—which happens before those roots' own evaluation—so every
+    /// non-default root carries an implicit dependency edge on ALL field
+    /// defaults (design.md "Defaulted Fields"). The checked-artifact request
+    /// scheduler records those edges explicitly; this counter validates the
+    /// durable order and makes the defaults evaluate as their own leading
+    /// batch.
+    pending_field_defaults: usize,
 
     fn init(
         allocator: Allocator,
@@ -449,6 +394,13 @@ const RootCompletionState = struct {
         errdefer allocator.free(visited_templates);
         @memset(visited_templates, 0);
 
+        var pending_field_defaults: usize = 0;
+        for (module.compile_time_roots.roots, 0..) |root, i| {
+            if (root.kind == .field_default and requested_roots[i]) {
+                pending_field_defaults += 1;
+            }
+        }
+
         return .{
             .allocator = allocator,
             .module = module,
@@ -457,6 +409,7 @@ const RootCompletionState = struct {
             .request_root_ids = request_root_ids,
             .visited_templates = visited_templates,
             .visit = 0,
+            .pending_field_defaults = pending_field_defaults,
         };
     }
 
@@ -474,7 +427,13 @@ const RootCompletionState = struct {
     }
 
     fn markDone(self: *RootCompletionState, root_id: checked.ComptimeRootId) void {
-        self.statuses[@intFromEnum(root_id)] = .done;
+        const raw = @intFromEnum(root_id);
+        if (self.statuses[raw] != .done and
+            self.module.compile_time_roots.roots[raw].kind == .field_default)
+        {
+            self.pending_field_defaults -= 1;
+        }
+        self.statuses[raw] = .done;
     }
 
     fn rootIdForRequestIndex(self: *const RootCompletionState, request_index: usize) checked.ComptimeRootId {
@@ -488,9 +447,18 @@ const RootCompletionState = struct {
         self: *RootCompletionState,
         request: checked.RootRequest,
     ) bool {
+        const request_root_id = compileTimeRootForRequest(self.module, request);
+        // Every non-default root depends on ALL field defaults (see
+        // `pending_field_defaults`).
+        if (self.pending_field_defaults != 0 and
+            self.module.compile_time_roots.roots[@intFromEnum(request_root_id)].kind != .field_default)
+        {
+            return false;
+        }
+
         const saved_current_root_id = self.current_root_id;
         defer self.current_root_id = saved_current_root_id;
-        self.current_root_id = compileTimeRootForRequest(self.module, request);
+        self.current_root_id = request_root_id;
 
         self.visit +%= 1;
         if (self.visit == 0) {
@@ -569,8 +537,16 @@ const RootCompletionState = struct {
         self: *RootCompletionState,
         const_use: checked.ConstUseTemplate,
     ) bool {
+        // A declaration with no implementation evaluates nothing, so it
+        // publishes no compile-time root and there is nothing to wait on.
+        if (self.constUseIsUnimplemented(const_use.const_ref)) return true;
         const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
         return self.rootDependencyComplete(root_id);
+    }
+
+    fn constUseIsUnimplemented(self: *RootCompletionState, const_ref: checked.ConstRef) bool {
+        if (!artifactMatches(const_ref.artifact, self.module.key)) return false;
+        return self.module.const_templates.get(const_ref).state == .unimplemented;
     }
 
     fn rootDependencyComplete(
@@ -589,9 +565,9 @@ const RootCompletionState = struct {
                     dependent_def,
                     dependency_def,
                 ),
-                else => true,
+                .expr, .statement, .required_binding, .hoisted => true,
             },
-            else => true,
+            .expr, .statement, .required_binding, .hoisted => true,
         };
         if (!is_strict) return true;
 
@@ -708,7 +684,7 @@ fn lowerEvalAndFinishRoots(
         );
     }
 
-    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+    var lowered = try lowerFinalizationModulesToLir(
         allocator,
         .{
             .root = checked.loweringViewWithRelations(module, relation_modules),
@@ -717,6 +693,7 @@ fn lowerEvalAndFinishRoots(
         .{ .requests = requests },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .specialization_strategy = .lss,
             .checked_module_state = .checking_finalization,
             .timing = if (options.timing) |timing| &timing.lowering else null,
         },
@@ -820,10 +797,11 @@ fn lowerEvalAndFinishRoots(
     var host = CompilerHost.init(allocator);
     defer host.deinit();
 
-    var interpreter = try Interpreter.init(
+    var interpreter = try Interpreter.initWithBoxyTables(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        Interpreter.BoxyTables.fromResult(&lowered.lir_result),
         host.ops(),
         .normalize,
     );
@@ -862,12 +840,17 @@ fn lowerEvalAndFinishRoots(
                         const message = interpreter.getCrashMessage() orelse host.crash_message orelse "Roc crashed";
                         break :blk .{ .const_node = try appendCrashConst(module, message) };
                     },
+                    error.UnsupportedHostedFunction => finalizationInvariant("compile-time constant reached an unsupported hosted function"),
+                    error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time constant reached an invalid hosted function signature"),
                     // expect_err statements only occur in top-level expect
                     // test roots, never in compile-time constant roots.
                     error.ExpectErr => unreachable,
                 };
                 defer interpreter.dropValue(eval_result.value, root.ret_layout);
-                break :blk try writer.storeRoot(root, eval_result.value);
+                break :blk if (compile_time_root.kind == .hoisted_validation)
+                    .discarded
+                else
+                    try writer.storeRoot(root, eval_result.value);
             }
 
             const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout);
@@ -875,7 +858,10 @@ fn lowerEvalAndFinishRoots(
             switch (eval_result) {
                 .value => |value| {
                     defer interpreter.dropValue(value.value, root.ret_layout);
-                    break :blk try writer.storeRoot(root, value.value);
+                    break :blk if (compile_time_root.kind == .hoisted_validation)
+                        .discarded
+                    else
+                        try writer.storeRoot(root, value.value);
                 },
                 .failed => |failed_payload| break :blk failed_payload,
             }
@@ -889,20 +875,19 @@ fn lowerEvalAndFinishRoots(
             interpreter.getExpectFailures(),
         )) had_problem = true;
 
-        switch (compile_time_root.kind) {
-            .numeral_conversion, .quote_conversion => {
-                payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
-            },
-            else => {},
+        if (compile_time_root.literalConversionKind() != null) {
+            payload = try finishLiteralConversionRoot(allocator, module, problem_store, compile_time_root, payload);
         }
 
         module.compile_time_roots.fillPayload(root_id, payload);
         const stored_root_type = switch (compile_time_root.kind) {
             .constant, .hoisted_constant => try writer.storeRootType(root),
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .field_default,
             => null,
         };
         finishConstRoot(module, compile_time_root, payload, stored_root_type);
@@ -993,6 +978,16 @@ const ThreadSafeAllocator = struct {
     }
 };
 
+fn boxyNativeFnTable() BoxyNativeFnTable {
+    var table: BoxyNativeFnTable = undefined;
+    inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
+        const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+        const name = comptime boxy_fn.symbolName();
+        table[field.value] = @intFromPtr(&@field(boxy_abi, name));
+    }
+    return table;
+}
+
 const DevRootLabel = struct {
     module_name: []const u8,
     snippet: []u8,
@@ -1029,6 +1024,7 @@ const DevRunContext = struct {
     jobs: []DevRootJob,
     std_io: ?std.Io,
     progress_reporter: ?*DevProgressReporter,
+    boxy_global_installed: bool,
     had_oom: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
@@ -1189,7 +1185,7 @@ fn lowerDevEvalAndFinishRoots(
     coverage: *ComptimeCoverage,
     options: Options,
 ) FinalizeError!bool {
-    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+    var lowered = try lowerFinalizationModulesToLir(
         allocator,
         .{
             .root = checked.loweringViewWithRelations(module, relation_modules),
@@ -1198,6 +1194,7 @@ fn lowerDevEvalAndFinishRoots(
         .{ .requests = requests },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .specialization_strategy = .lss,
             .checked_module_state = .checking_finalization,
             .timing = if (options.timing) |timing| &timing.lowering else null,
         },
@@ -1253,12 +1250,17 @@ fn lowerDevEvalAndFinishRoots(
     if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
 
     const code_generation_started_ns = if (options.timing) |timing| timing.start() else 0;
-    var codegen = try backend.HostLirCodeGen.init(
+    // Compile-time code runs in this process, so it is generated for the CPU
+    // of the machine compiling, not for the CPU the program is compiled for.
+    var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         static_strings.entries,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
         .normalize,
+        roc_target.host_cpu.level(),
     );
     defer codegen.deinit();
     codegen.setNativeStaticData(native_static_data);
@@ -1269,6 +1271,8 @@ fn lowerDevEvalAndFinishRoots(
         .call_enter = CompileTimeHost.rocComptimeCallEnter,
         .call_exit = CompileTimeHost.rocComptimeCallExit,
     });
+    var native_fns = boxyNativeFnTable();
+    codegen.boxy_native_fns = &native_fns;
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
     const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, materialized_static_data);
     defer allocator.free(static_rc_helpers);
@@ -1329,11 +1333,24 @@ fn lowerDevEvalAndFinishRoots(
         allocator.free(jobs);
     }
 
-    var executable = try backend.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
-        codegen.getGeneratedCode(),
-        0,
-        codegen.getUnwindFunctions(),
-    );
+    const boxy_tables = Interpreter.BoxyTables.fromResult(&lowered.lir_result);
+    const boxy_global_installed = jobs_len != 0 and boxy_tables.needsRuntimeForStore(&lowered.lir_result.store);
+    if (boxy_global_installed) {
+        boxy_abi.deinitGlobal();
+        boxy_abi.initGlobal(
+            allocator,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            boxy_tables,
+            jobs[0].host.ops(),
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.AlreadyInitialized => finalizationInvariant("compile-time boxy runtime stayed initialized after teardown"),
+        };
+    }
+    defer if (boxy_global_installed) boxy_abi.deinitGlobal();
+
+    var executable = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
     defer executable.deinit();
 
     const StaticFunctionResolver = struct {
@@ -1379,8 +1396,11 @@ fn lowerDevEvalAndFinishRoots(
         .jobs = jobs[0..jobs_len],
         .std_io = options.std_io,
         .progress_reporter = if (progress.thread == null) null else &progress,
+        .boxy_global_installed = boxy_global_installed,
     };
-    const max_threads = if (options.max_threads == 0)
+    const max_threads = if (boxy_global_installed)
+        1
+    else if (options.max_threads == 0)
         0
     else
         @max(options.max_threads, 1);
@@ -1464,7 +1484,10 @@ fn lowerDevEvalAndFinishRoots(
                 job.host.failed_region,
                 &had_problem,
             ),
-            .success => try writer.storeRoot(job.root, .{ .ptr = job.ret_buf.ptr }),
+            .success => if (job.compile_time_root.kind == .hoisted_validation)
+                .discarded
+            else
+                try writer.storeRoot(job.root, .{ .ptr = job.ret_buf.ptr }),
         };
 
         try recordComptimeSiteHits(problem_store, coverage, module, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
@@ -1473,22 +1496,21 @@ fn lowerDevEvalAndFinishRoots(
             had_problem = true;
         }
 
-        switch (job.compile_time_root.kind) {
-            .numeral_conversion, .quote_conversion => {
-                const conversion = try finishLiteralConversionRootDetailed(allocator, module, problem_store, job.compile_time_root, payload);
-                payload = conversion.payload;
-                if (conversion.had_problem) had_problem = true;
-            },
-            else => {},
+        if (job.compile_time_root.literalConversionKind() != null) {
+            const conversion = try finishLiteralConversionRootDetailed(allocator, module, problem_store, job.compile_time_root, payload);
+            payload = conversion.payload;
+            if (conversion.had_problem) had_problem = true;
         }
 
         module.compile_time_roots.fillPayload(job.root_id, payload);
         const stored_root_type = switch (job.compile_time_root.kind) {
             .constant, .hoisted_constant => try writer.storeRootType(job.root),
+            .hoisted_validation,
             .callable_binding,
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .field_default,
             => null,
         };
         finishConstRoot(module, job.compile_time_root, payload, stored_root_type);
@@ -1502,6 +1524,9 @@ fn lowerDevEvalAndFinishRoots(
 fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     const job = &context.jobs[item_id];
     job.host.resetForRun();
+    if (context.boxy_global_installed) {
+        boxy_abi.setGlobalRocOps(job.host.ops());
+    }
     job.start_ms.store(if (context.std_io) |io| nowMs(io) else 0, .release);
     job.last_progress_ms.store(0, .release);
     job.progress.store(@intFromEnum(DevRootProgressState.running), .release);
@@ -1727,13 +1752,24 @@ fn finishLiteralConversionRootDetailed(
 ) FinalizeError!LiteralConversionFinish {
     const try_node = switch (payload) {
         .const_node => |node| node,
-        else => finalizationInvariant("numeral conversion root did not store a constant"),
+        .pending, .fn_value, .discarded, .expect => finalizationInvariant("numeral conversion root did not store a constant"),
     };
     switch (module.const_store.get(try_node)) {
         // The from_numeral implementation itself crashed; that crash was
         // already stored (and reported when a problem store exists).
         .crash => return .{ .payload = payload, .had_problem = false },
-        else => {},
+        .pending,
+        .zst,
+        .scalar,
+        .str,
+        .list,
+        .box,
+        .tuple,
+        .record,
+        .tag,
+        .nominal,
+        .fn_value,
+        => {},
     }
     const try_tag = constTagValue(module, try_node);
     if (constTagNameIs(try_tag.tag_name, "Ok")) {
@@ -1748,22 +1784,32 @@ fn finishLiteralConversionRootDetailed(
     if (err_tag.payloads.len != 1) finalizationInvariant("numeral conversion error tag did not carry one payload");
     const message_str = switch (module.const_store.get(err_tag.payloads[0])) {
         .str => |str| str,
-        else => finalizationInvariant("numeral conversion error payload was not a string"),
+        .pending,
+        .zst,
+        .scalar,
+        .list,
+        .box,
+        .tuple,
+        .record,
+        .crash,
+        .tag,
+        .nominal,
+        .fn_value,
+        => finalizationInvariant("numeral conversion error payload was not a string"),
     };
     const message = module.const_store.strBytes(message_str);
     if (problem_store) |store| {
         const message_idx = try store.putExtraString(message);
         const region = module.checked_bodies.expr(root.expr).source_region;
-        switch (root.kind) {
-            .numeral_conversion => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
+        switch (root.literalConversionKind() orelse finalizationInvariant("non literal-conversion root reported a conversion problem")) {
+            .numeral => _ = try store.appendProblem(allocator, .{ .comptime_invalid_numeral = .{
                 .message = message_idx,
                 .region = region,
             } }),
-            .quote_conversion => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{
+            .quote => _ = try store.appendProblem(allocator, .{ .comptime_invalid_quote = .{
                 .message = message_idx,
                 .region = region,
             } }),
-            else => finalizationInvariant("non literal-conversion root reported a conversion problem"),
         }
         return .{
             .payload = .{ .const_node = try appendCrashConst(module, message) },
@@ -1782,7 +1828,17 @@ fn constTagValue(
         switch (module.const_store.get(current)) {
             .nominal => |nominal| current = nominal.backing,
             .tag => |tag| return tag,
-            else => finalizationInvariant("numeral conversion constant was not a tag value"),
+            .pending,
+            .zst,
+            .scalar,
+            .str,
+            .list,
+            .box,
+            .tuple,
+            .record,
+            .crash,
+            .fn_value,
+            => finalizationInvariant("numeral conversion constant was not a tag value"),
         }
     }
 }
@@ -1799,7 +1855,7 @@ fn appendCrashConst(
     module: *checked.CheckedModuleArtifact,
     message: []const u8,
 ) Allocator.Error!checked.ConstNodeId {
-    const data = try module.const_store.addStrData(message);
+    const data = try module.const_store.addBlobData(message);
     return try module.const_store.append(.{ .crash = .{
         .data = data,
         .offset = 0,
@@ -1852,6 +1908,8 @@ fn evalCompileTimeRoot(
         error.DivisionByZero => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero") },
         error.Crash => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed") },
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
+        error.UnsupportedHostedFunction => finalizationInvariant("compile-time root reached an unsupported hosted function"),
+        error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time root reached an invalid hosted function signature"),
     };
     return .{ .value = result };
 }
@@ -1888,8 +1946,11 @@ fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
         .expect,
         .numeral_conversion,
         .quote_conversion,
+        .field_default,
         => true,
-        .hoisted_constant => false,
+        .hoisted_constant,
+        .hoisted_validation,
+        => false,
     };
 }
 
@@ -2024,11 +2085,13 @@ fn failedRootPayload(
 ) Allocator.Error!checked.CompileTimeRootPayload {
     return switch (root.kind) {
         .expect => .expect,
+        .hoisted_validation => .discarded,
         .constant,
         .hoisted_constant,
         .callable_binding,
         .numeral_conversion,
         .quote_conversion,
+        .field_default,
         => .{ .const_node = try appendCrashConst(module, message) },
     };
 }
@@ -2086,23 +2149,31 @@ fn compileTimeRootForRequest(
     module: *const checked.CheckedModuleArtifact,
     request: checked.RootRequest,
 ) checked.ComptimeRootId {
-    for (module.compile_time_roots.roots) |root| {
-        const kind_matches = switch (request.kind) {
-            .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .numeral_conversion or root.kind == .quote_conversion,
-            .compile_time_callable => root.kind == .callable_binding,
-            .runtime_entrypoint,
-            .provided_export,
-            .platform_required_binding,
-            .hosted_export,
-            .test_expect,
-            .repl_expr,
-            .dev_expr,
-            => finalizationInvariant("non compile-time request reached compile-time root lookup"),
-        };
-        if (kind_matches and rootSourceEql(root.source, request.source)) return root.id;
+    const root_id = request.compile_time_root orelse {
+        finalizationInvariant("compile-time request had no exact checked root identity");
+    };
+    const raw = @intFromEnum(root_id);
+    if (raw >= module.compile_time_roots.roots.len) {
+        finalizationInvariant("compile-time request root identity was outside the checked root table");
+    }
+    const root = module.compile_time_roots.roots[raw];
+    const kind_matches = switch (request.kind) {
+        .compile_time_constant => root.kind == .constant or root.kind == .hoisted_constant or root.kind == .hoisted_validation or root.kind == .numeral_conversion or root.kind == .quote_conversion or root.kind == .field_default,
+        .compile_time_callable => root.kind == .callable_binding,
+        .runtime_entrypoint,
+        .provided_export,
+        .platform_required_binding,
+        .hosted_export,
+        .test_expect,
+        .repl_expr,
+        .dev_expr,
+        => finalizationInvariant("non compile-time request reached compile-time root lookup"),
+    };
+    if (root.id != root_id or !kind_matches or !rootSourceEql(root.source, request.source)) {
+        finalizationInvariant("compile-time request identity did not match its checked root");
     }
 
-    finalizationInvariant("compile-time root request did not match a checked root");
+    return root_id;
 }
 
 fn finishConstRoot(
@@ -2116,13 +2187,17 @@ fn finishConstRoot(
         .const_node => |id| id,
         .pending,
         .fn_value,
+        .discarded,
         .expect,
         => finalizationInvariant("constant root finalized with non-constant payload"),
     };
     const const_ref = switch (root.kind) {
         .constant => blk: {
-            const pattern = root.pattern orelse finalizationInvariant("constant root had no checked pattern");
-            const top_level = module.top_level_values.lookupByPattern(pattern) orelse
+            const def_idx = switch (root.source) {
+                .def => |def| def,
+                .expr, .statement, .required_binding, .hoisted => finalizationInvariant("constant root source was not a top-level definition"),
+            };
+            const top_level = module.top_level_values.lookupByDef(def_idx) orelse
                 finalizationInvariant("constant root had no top-level value");
             break :blk switch (top_level.value) {
                 .const_ref => |ref| ref,
@@ -2134,10 +2209,12 @@ fn finishConstRoot(
                 finalizationInvariant("hoisted constant root had no hoisted const entry");
             break :blk hoisted.const_ref;
         },
+        .hoisted_validation,
         .callable_binding,
         .expect,
         .numeral_conversion,
         .quote_conversion,
+        .field_default,
         => unreachable,
     };
     const stored = checked.StoredConstTemplate{
@@ -2163,6 +2240,26 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
 
 fn artifactMatches(a: anytype, b: checked.CheckedModuleArtifactKey) bool {
     return std.meta.eql(a.bytes, b.bytes);
+}
+
+/// Lower a module that is still being checked.
+///
+/// `lowerCheckedModulesToLir` binds hosted declarations against a platform
+/// header's hosted section only once the module holding that section finished
+/// checking, so the unbound-declaration rejection cannot reach compile-time
+/// finalization.
+fn lowerFinalizationModulesToLir(
+    allocator: Allocator,
+    modules: lir.CheckedPipeline.CheckedModuleSet,
+    roots: lir.CheckedPipeline.RootRequestSet,
+    target: lir.CheckedPipeline.TargetConfig,
+) Allocator.Error!lir.CheckedPipeline.LoweredProgram {
+    return lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.HostedFunctionNotBound => finalizationInvariant(
+            "compile-time finalization lowering rejected a hosted declaration the platform header did not bind",
+        ),
+    };
 }
 
 fn finalizationInvariant(comptime message: []const u8) noreturn {

@@ -18,5 +18,5 @@ const native_runtime_libcalls = @import("native_runtime_libcalls.zig");
 pub const panic = std.debug.no_panic;
 
 comptime {
-    native_runtime_libcalls.exportLibcalls();
+    native_runtime_libcalls.exportLibcalls(.strong);
 }

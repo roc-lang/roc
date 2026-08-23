@@ -167,18 +167,14 @@ pub const Modules = struct {
             }
             module_result.value_ptr.* = @intCast(i);
 
-            for (module_.moduleEnvConst().store.sliceDefs(module_.moduleEnvConst().global_value_defs)) |def_idx| {
+            for (module_.moduleEnvConst().store.sliceDefs(module_.moduleEnvConst().top_level_value_defs)) |def_idx| {
                 const def = module_.def(def_idx);
                 if (def.data.kind != .let) continue;
-                switch (def.pattern.data) {
-                    .assign => |assign| {
-                        const def_result = try module_data.top_level_defs_by_ident.getOrPut(allocator, assign.ident);
-                        if (def_result.found_existing) {
-                            continue;
-                        }
-                        def_result.value_ptr.* = def_idx;
-                    },
-                    else => {},
+                if (def.pattern.data == .assign) {
+                    const assign = def.pattern.data.assign;
+                    const def_result = try module_data.top_level_defs_by_ident.getOrPut(allocator, assign.ident);
+                    std.debug.assert(!def_result.found_existing);
+                    def_result.value_ptr.* = def_idx;
                 }
             }
         }
@@ -215,7 +211,7 @@ pub const Modules = struct {
 
 /// Prepare a checked `ModuleEnv` for runtime use so it can pair with a published or
 /// relocated artifact: enable runtime ident inserts, ensure module-name idents, and
-/// finalize method tables. This is the single source of that 3-step prep — used by
+/// finalize method tables. This is the single source of that 3-step prep—used by
 /// `Modules.init`'s `SourceModule` handling and called DIRECTLY (without building a
 /// whole `Modules` graph) by the builtin and cache-hit load paths, which only need
 /// the env prepared.
@@ -440,23 +436,37 @@ pub const Module = struct {
                             .alias => |alias| current = store.getAliasBackingVar(alias),
                             .structure => |ret_flat| switch (ret_flat) {
                                 .fn_pure, .fn_effectful, .fn_unbound => current = ret,
-                                else => std.debug.panic(
+                                .record,
+                                .record_unbound,
+                                .tuple,
+                                .nominal_type,
+                                .empty_record,
+                                .tag_union,
+                                .empty_tag_union,
+                                => std.debug.panic(
                                     "typed_cir invariant violated: lambda boundary expected more function args when building source function shape",
                                     .{},
                                 ),
                             },
-                            else => std.debug.panic(
+                            .flex, .rigid, .field_presence, .err => std.debug.panic(
                                 "typed_cir invariant violated: lambda boundary expected more function args when building source function shape",
                                 .{},
                             ),
                         }
                     },
-                    else => std.debug.panic(
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => std.debug.panic(
                         "typed_cir invariant violated: expected function type when building source function shape",
                         .{},
                     ),
                 },
-                else => std.debug.panic(
+                .flex, .rigid, .field_presence, .err => std.debug.panic(
                     "typed_cir invariant violated: expected function type when building source function shape",
                     .{},
                 ),
@@ -572,17 +582,31 @@ pub const Module = struct {
                             .alias => |alias| current = store.getAliasBackingVar(alias),
                             .structure => |ret_flat| switch (ret_flat) {
                                 .fn_pure, .fn_effectful, .fn_unbound => current = ret,
-                                else => return ret,
+                                .record,
+                                .record_unbound,
+                                .tuple,
+                                .nominal_type,
+                                .empty_record,
+                                .tag_union,
+                                .empty_tag_union,
+                                => return ret,
                             },
-                            else => return ret,
+                            .flex, .rigid, .field_presence, .err => return ret,
                         }
                     },
-                    else => std.debug.panic(
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => std.debug.panic(
                         "typed_cir invariant violated: expected function type when building source function shape",
                         .{},
                     ),
                 },
-                else => std.debug.panic(
+                .flex, .rigid, .field_presence, .err => std.debug.panic(
                     "typed_cir invariant violated: expected function type when building source function shape",
                     .{},
                 ),
@@ -605,10 +629,8 @@ pub const Def = struct {
     }
 
     pub fn patternName(self: @This()) ?Ident.Idx {
-        return switch (self.pattern.data) {
-            .assign => |assign| assign.ident,
-            else => null,
-        };
+        if (self.pattern.data == .assign) return self.pattern.data.assign.ident;
+        return null;
     }
 };
 

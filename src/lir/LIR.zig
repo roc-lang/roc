@@ -16,6 +16,7 @@ const layout = @import("layout");
 const hosted = @import("hosted.zig");
 
 const StringLiteral = base.StringLiteral;
+const names = check.CheckedNames;
 
 /// Global identifier (opaque 64-bit id).
 pub const Symbol = packed struct(u64) {
@@ -57,6 +58,66 @@ pub const LirProcSpecId = enum(u32) {
 /// Identifier of one LIR local.
 pub const LocalId = enum(u32) {
     _,
+};
+
+/// Identifier for one boxy runtime type descriptor owned by a LIR program.
+pub const BoxyTypeDescId = enum(u32) { _ };
+
+/// Identifier for one boxy runtime dictionary owned by a LIR program.
+pub const BoxyDictId = enum(u32) { _ };
+
+/// Identifier for one explicit boxy representation adapter plan.
+pub const BoxyAdapterId = enum(u32) { _ };
+
+/// Runtime projection of one explicit argument descriptor from a dictionary
+/// method adapter. The dictionary value is frame-local; the remaining fields
+/// identify the checked method slot and operand exactly.
+pub const BoxyDictMethodArgDesc = struct {
+    dict: LocalId,
+    method: names.MethodNameId,
+    method_slot: u32,
+    arg_index: u32,
+};
+
+/// Runtime lookup of one hidden descriptor carried by a dictionary method
+/// slot. This is the exact descriptor passed to the selected method worker.
+pub const BoxyDictMethodHiddenDesc = struct {
+    pub const Shape = enum(u32) { worker, requirement };
+
+    dict: LocalId,
+    method: names.MethodNameId,
+    method_slot: u32,
+    hidden_index: u32,
+    shape: Shape = .worker,
+};
+
+/// Reference to type-descriptor data available to boxy LIR.
+pub const BoxyDescRef = union(enum) {
+    static: BoxyTypeDescId,
+    local: LocalId,
+    runtime: u32,
+    dict_method_arg: BoxyDictMethodArgDesc,
+    dict_method_hidden: BoxyDictMethodHiddenDesc,
+
+    pub fn localOrNull(self: BoxyDescRef) ?LocalId {
+        return switch (self) {
+            .static, .runtime, .dict_method_arg, .dict_method_hidden => null,
+            .local => |local| local,
+        };
+    }
+};
+
+/// Reference to dictionary data available to boxy LIR.
+pub const BoxyDictRef = union(enum) {
+    static: BoxyDictId,
+    local: LocalId,
+
+    pub fn localOrNull(self: BoxyDictRef) ?LocalId {
+        return switch (self) {
+            .static => null,
+            .local => |local| local,
+        };
+    }
 };
 
 /// Identifier of a stored statement/control-flow node.
@@ -111,6 +172,7 @@ pub const JoinPointId = enum(u32) {
 /// One explicitly typed LIR local.
 pub const Local = struct {
     layout_idx: layout.Idx,
+    boxy_desc: ?BoxyDescRef = null,
 };
 
 /// Span into flat local-id storage.
@@ -143,6 +205,141 @@ pub const U64Span = extern struct {
     pub fn isEmpty(self: U64Span) bool {
         return self.len == 0;
     }
+};
+
+/// Span into a boxy side-table pool.
+pub const BoxySpan = extern struct {
+    start: u32 = 0,
+    len: u32 = 0,
+
+    pub fn empty() BoxySpan {
+        return .{};
+    }
+};
+
+/// Exact tag payload selected while navigating a runtime descriptor.
+pub const BoxyTagPayloadRead = struct {
+    tag_name: StringLiteral.Idx,
+    payload_index: u32,
+};
+
+/// Stable identity of one erased-call argument descriptor. `descriptor_index`
+/// is the pre-order position among descriptor requirements rooted at the
+/// explicit argument.
+pub const ErasedArgDescKey = extern struct {
+    arg_index: u16,
+    descriptor_index: u16,
+};
+
+/// Capture-storage destination for one keyed erased-call argument descriptor.
+pub const ErasedArgDescOffset = extern struct {
+    key: ErasedArgDescKey,
+    offset: u32,
+};
+
+/// Hidden erased-procedure parameter initialized from one keyed call-site
+/// descriptor operand.
+pub const ErasedArgDescParam = extern struct {
+    key: ErasedArgDescKey,
+    local: LocalId,
+    /// For a projected parameter, the descriptor index of its already-bound
+    /// parent within the same explicit argument.
+    source_descriptor_index: u16,
+    /// Nested descriptor slot read from the parent. `maxInt(u16)` means the
+    /// parameter consumes its exact call-site key directly.
+    source_nested_index: u16,
+};
+
+/// How a boxy operation observes or transfers its source value.
+pub const BoxyTransferMode = enum {
+    borrow,
+    copy,
+    move,
+};
+
+/// One explicit step in a boxy representation adapter plan.
+pub const BoxyAdaptStep = union(enum) {
+    copy_bytes: struct {
+        source_offset: u32,
+        target_offset: u32,
+        layout_idx: layout.Idx,
+    },
+    dynamic_payload: struct {
+        source_offset: u32,
+        target_offset: u32,
+        source_desc: ?BoxyDescRef = null,
+        target_desc: ?BoxyDescRef = null,
+        mode: BoxyTransferMode,
+    },
+    nested_adapter: struct {
+        source_offset: u32,
+        target_offset: u32,
+        adapter: BoxyAdapterId,
+        mode: BoxyTransferMode,
+    },
+};
+
+/// Explicit runtime operation needed for a dynamic boxy payload.
+pub const BoxyPayloadOp = enum {
+    copy,
+    incref,
+    decref,
+    drop,
+    free,
+};
+
+/// One explicitly planned payload operation. It never asks a backend to infer
+/// reference-counting behavior from a pointer-shaped value.
+pub const BoxyPayloadStep = union(enum) {
+    concrete: struct {
+        op: BoxyPayloadOp,
+        layout_idx: layout.Idx,
+    },
+    dynamic: struct {
+        op: BoxyPayloadOp,
+        desc: BoxyDescRef,
+    },
+};
+
+/// Explicit helper selected by ARC/lowering for one RC statement.
+///
+/// `.concrete` is the canonical layout-keyed helper used by the LSS pipeline.
+/// `.boxy` is a descriptor-keyed helper selected by boxy lowering for values
+/// whose refcounted payload shape is known only through runtime type metadata.
+pub const RcHelper = union(enum) {
+    concrete: layout.RcHelper,
+    boxy: BoxyDescRef,
+
+    pub fn fromConcrete(helper: layout.RcHelper) RcHelper {
+        return .{ .concrete = helper };
+    }
+
+    pub fn concreteOrNull(self: RcHelper) ?layout.RcHelper {
+        return switch (self) {
+            .concrete => |helper| helper,
+            .boxy => null,
+        };
+    }
+};
+
+/// Span into flat u32 storage.
+pub const U32Span = extern struct {
+    start: u32,
+    len: u32,
+
+    pub fn empty() U32Span {
+        return .{ .start = 0, .len = 0 };
+    }
+};
+
+/// Identifier of one interned erased-call argument layout plan.
+pub const ErasedCallArgsPlanId = enum(u32) { _ };
+
+/// Exact packed-argument struct layout shared by an erased caller and callee.
+pub const ErasedCallArgsPlan = extern struct {
+    offsets: U32Span,
+    size: u32,
+    alignment: u32,
 };
 
 /// Builtin low-level operations reused from `base`.
@@ -274,6 +471,12 @@ pub const StrMatchArmSpan = extern struct {
     }
 };
 
+/// A flat scalar list backed by bytes in the shared literal store.
+pub const ListLiteral = struct {
+    bytes: StrLiteral,
+    len: u32,
+};
+
 /// Literal RHS values supported by `assign_literal`.
 pub const LiteralValue = union(enum) {
     i64_literal: struct {
@@ -288,8 +491,32 @@ pub const LiteralValue = union(enum) {
     f32_literal: f32,
     dec_literal: i128,
     str_literal: StrLiteral,
+    /// A numeric literal whose runtime representation is only known through a
+    /// descriptor (a literal pattern matched against an erased scrutinee).
+    /// The runtime encodes `value` per the descriptor's payload layout and
+    /// boxes it into the dynamic-storage target.
+    boxy_dynamic_num_literal: struct {
+        value: i128,
+        desc: BoxyDescRef,
+        /// Encoding used when the descriptor is erased (carries no concrete
+        /// payload layout): the literal kind's default numeric layout, which
+        /// is also how the checker's defaulting encodes the values such a
+        /// literal meets.
+        default_layout: layout.Idx,
+    },
+    /// A fractional numeric literal whose runtime representation is only known
+    /// through a descriptor. The runtime re-encodes the `RocDec` bits per the
+    /// descriptor's payload layout (`Dec`, `F64`, or `F32`) and boxes it into
+    /// the dynamic-storage target.
+    boxy_dynamic_frac_literal: struct {
+        dec_bits: i128,
+        desc: BoxyDescRef,
+        /// Encoding used when the descriptor is erased and carries no concrete
+        /// payload layout.
+        default_layout: layout.Idx,
+    },
     static_data: StaticDataId,
-    bytes_literal: StrLiteral,
+    bytes_literal: ListLiteral,
     null_ptr,
     proc_ref: LirProcSpecId,
 };
@@ -392,6 +619,10 @@ pub const SetLocalWriteMode = enum {
 pub const ErasedCallableOnDrop = union(enum) {
     none,
     rc_helper: layout.RcHelperKey,
+    boxy_capture: struct {
+        capture_layout: layout.Idx,
+        desc_field_offset: u32,
+    },
     interpreter_context_drop,
 };
 
@@ -430,6 +661,19 @@ pub fn layoutNeedsStackProbe(layouts: *const layout.Store, layout_idx: layout.Id
     return size >= stack_probe_page_size;
 }
 
+/// A compiler-generated static message or a source-level `Str` evaluated at runtime.
+pub const CrashMessage = union(enum) {
+    literal: StringLiteral.Idx,
+    local: LocalId,
+
+    pub fn localId(self: CrashMessage) ?LocalId {
+        return switch (self) {
+            .literal => null,
+            .local => |local| local,
+        };
+    }
+};
+
 /// Single statement/control-flow language for all lowered code.
 pub const CFStmt = union(enum) {
     init_uninitialized: struct {
@@ -439,6 +683,11 @@ pub const CFStmt = union(enum) {
     assign_ref: struct {
         target: LocalId,
         op: RefOp,
+        /// Semantic struct-field indices whose stored ownership units are
+        /// absent from a same-layout representation-shell alias. ARC writes
+        /// this exact path state; evaluators must not inspect those stale
+        /// field bytes as live values.
+        residual_shell_absent_fields: U32Span = .empty(),
         next: CFStmtId,
     },
     assign_literal: struct {
@@ -450,6 +699,11 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         proc: LirProcSpecId,
         args: LocalSpan,
+        result_desc: ?BoxyDescRef = null,
+        /// Fresh descriptor local initialized with the descriptor governing
+        /// the value written to `target` when the callee produces that
+        /// descriptor during execution.
+        out_desc: ?LocalId = null,
         is_cold: bool = false,
         next: CFStmtId,
     },
@@ -457,6 +711,33 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
+        /// Ordered runtime layouts of the explicit arguments packed into the
+        /// erased-call argument buffer.
+        arg_layouts: BoxySpan = BoxySpan.empty(),
+        /// Exact descriptors for descriptor-bearing explicit arguments, in
+        /// the callee function representation's traversal order.
+        arg_descs: LocalSpan = LocalSpan.empty(),
+        /// Keys parallel to `arg_descs` in the program's Boxy key table.
+        arg_desc_keys: BoxySpan = BoxySpan.empty(),
+        /// Descriptor requested by the callable type at this call site.
+        result_desc: ?BoxyDescRef = null,
+        /// Fresh descriptor local initialized with the descriptor governing
+        /// the value written to `target`.
+        out_desc: ?LocalId = null,
+        arg_plan: ErasedCallArgsPlanId,
+        /// Consume the allocation denoted by `closure` as the destination for
+        /// an erased-callable result.
+        /// The erased callee may repack it when the returned capture payload has
+        /// the same committed size and alignment; otherwise it releases the
+        /// consumed allocation and returns a fresh one. At the machine ABI this
+        /// passes the callable data pointer as the nullable fifth argument.
+        reuse_closure: bool = false,
+        /// Ownership source consumed by `reuse_closure`. This may be an outer
+        /// transparent nominal/tag wrapper of `closure`; both must denote the
+        /// same erased-callable allocation, while this local carries its owned
+        /// unit. Debug certification proves that allocation identity through
+        /// the exact representation-transparent producer chain.
+        reuse_source: ?LocalId = null,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -465,7 +746,12 @@ pub const CFStmt = union(enum) {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: ErasedCallableOnDrop,
-        /// Optional consumed erased callable allocation to repack.
+        /// Exact descriptor of the worker result stored in compiler-private
+        /// callable metadata. Host-created callables carry no such metadata.
+        result_desc: ?BoxyDescRef = null,
+        /// Optional local containing a consumed erased callable allocation to
+        /// repack. The local itself is present statically, but its runtime value
+        /// may be null when an ABI caller declined to transfer ownership.
         ///
         /// When present, this statement returns a unique erased callable with
         /// the new proc/drop/capture. If `reuse_unique` is true, ARC proved the
@@ -474,6 +760,114 @@ pub const CFStmt = union(enum) {
         /// path when the old allocation is shared.
         reuse: ?LocalId = null,
         reuse_unique: bool = false,
+        next: CFStmtId,
+    },
+    assign_boxy_desc_ref: struct {
+        target: LocalId,
+        desc: BoxyDescRef,
+        nested_index: ?u32 = null,
+        /// Resolve the descriptor governing the allocation payload of a value
+        /// stored in this committed Box layout. This is distinct from an
+        /// ordinary nested read because Box descriptors may be box-self or
+        /// payload-direct.
+        box_payload_layout: ?layout.Idx = null,
+        tag_payload: ?BoxyTagPayloadRead = null,
+        tag_ext: bool = false,
+        tag_residual_for: ?BoxyDescRef = null,
+        captures: LocalSpan = .{ .start = 0, .len = 0 },
+        next: CFStmtId,
+    },
+    assign_boxy_dict_ref: struct {
+        target: LocalId,
+        dict: BoxyDictRef,
+        next: CFStmtId,
+    },
+    assign_boxy_box: struct {
+        target: LocalId,
+        payload: LocalId,
+        payload_layout: layout.Idx,
+        source_desc: ?BoxyDescRef = null,
+        payload_desc: ?BoxyDescRef = null,
+        payload_mode: BoxyTransferMode = .move,
+        next: CFStmtId,
+    },
+    assign_boxy_reuse_box: struct {
+        target: LocalId,
+        source: LocalId,
+        desc: BoxyDescRef,
+        next: CFStmtId,
+    },
+    assign_boxy_unbox: struct {
+        target: LocalId,
+        source: LocalId,
+        source_desc: BoxyDescRef,
+        target_desc: ?BoxyDescRef = null,
+        target_layout: layout.Idx,
+        source_mode: BoxyTransferMode = .borrow,
+        next: CFStmtId,
+    },
+    assign_boxy_adapt: struct {
+        target: LocalId,
+        source: LocalId,
+        adapter: BoxyAdapterId,
+        source_desc: ?BoxyDescRef,
+        target_desc: ?BoxyDescRef,
+        source_mode: BoxyTransferMode,
+        next: CFStmtId,
+    },
+    assign_boxy_inspect: struct {
+        target: LocalId,
+        source: LocalId,
+        source_desc: BoxyDescRef,
+        source_mode: BoxyTransferMode = .borrow,
+        next: CFStmtId,
+    },
+    assign_boxy_eq: struct {
+        target: LocalId,
+        lhs: LocalId,
+        rhs: LocalId,
+        source_desc: BoxyDescRef,
+        source_mode: BoxyTransferMode = .borrow,
+        next: CFStmtId,
+    },
+    assign_boxy_tag: struct {
+        target: LocalId,
+        target_desc: BoxyDescRef,
+        tag_name: StringLiteral.Idx,
+        payload: ?LocalId = null,
+        payload_layout: layout.Idx = .zst,
+        payload_desc: ?BoxyDescRef = null,
+        payload_mode: BoxyTransferMode = .move,
+        next: CFStmtId,
+    },
+    assign_boxy_tag_payload: struct {
+        target: LocalId,
+        target_desc: ?LocalId = null,
+        source: LocalId,
+        source_desc: BoxyDescRef,
+        tag_name: StringLiteral.Idx,
+        payload_index: u32,
+        source_mode: BoxyTransferMode = .borrow,
+        next: CFStmtId,
+    },
+    boxy_tag_match: struct {
+        source: LocalId,
+        source_desc: BoxyDescRef,
+        tag_name: StringLiteral.Idx,
+        on_match: CFStmtId,
+        on_miss: CFStmtId,
+    },
+    assign_call_dict: struct {
+        target: LocalId,
+        dict: BoxyDictRef,
+        method: names.MethodNameId,
+        method_slot: u32,
+        args: LocalSpan,
+        /// Descriptor pointer locals parallel to `args`.
+        arg_descs: LocalSpan = .empty(),
+        hidden_args: LocalSpan = .empty(),
+        result_desc: ?BoxyDescRef = null,
+        is_cold: bool = false,
         next: CFStmtId,
     },
     assign_low_level: struct {
@@ -490,7 +884,7 @@ pub const CFStmt = union(enum) {
         unique_args: u64 = 0,
         /// For `list_map_can_reuse`: whether the input and output element
         /// layouts are interchangeable in one allocation, computed per pointer
-        /// width. Resolved at codegen for the target being built — a `false`
+        /// width. Resolved at codegen for the target being built—a `false`
         /// width forces the op to a constant `0` (reuse statically impossible),
         /// so the in-place branch is never taken there. Target-independent
         /// because both widths are stored; ignored by every other op.
@@ -506,10 +900,15 @@ pub const CFStmt = union(enum) {
     assign_struct: struct {
         target: LocalId,
         fields: LocalSpan,
+        /// A static descriptor ARC adopts for the aggregate when a constructed
+        /// field carries a runtime descriptor, so the aggregate is released
+        /// through the descriptor rather than its box-free concrete layout.
+        contents_desc: ?BoxyDescRef = null,
         next: CFStmtId,
     },
     assign_tag: struct {
         target: LocalId,
+        target_desc: ?BoxyDescRef = null,
         variant_index: u16,
         discriminant: u16,
         payload: ?LocalId,
@@ -566,14 +965,14 @@ pub const CFStmt = union(enum) {
     },
     incref: struct {
         value: LocalId,
-        rc: layout.RcHelper,
+        rc: RcHelper,
         count: u16 = 1,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     decref: struct {
         value: LocalId,
-        rc: layout.RcHelper,
+        rc: RcHelper,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
@@ -585,13 +984,13 @@ pub const CFStmt = union(enum) {
         cond: LocalId,
         cond_mask: u64 = 1,
         value: LocalId,
-        rc: layout.RcHelper,
+        rc: RcHelper,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     free: struct {
         value: LocalId,
-        rc: layout.RcHelper,
+        rc: RcHelper,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
@@ -670,20 +1069,57 @@ pub const CFStmt = union(enum) {
         value: LocalId,
     },
     crash: struct {
-        msg: StringLiteral.Idx,
+        msg: CrashMessage,
     },
 };
+
+/// Return whether an erased call's reuse flag and consumed ownership source
+/// describe the same optional reuse operation.
+pub fn erasedCallReuseFieldsMatch(assign: anytype) bool {
+    return assign.reuse_closure == (assign.reuse_source != null);
+}
 
 /// Lowered proc specification rooted either at a statement body or at explicit
 /// hosted-proc metadata.
 pub const LirProcSpec = struct {
     name: Symbol,
     args: LocalSpan,
+    /// Hidden erased-callable ownership input. Every erased-callable ABI proc
+    /// records its final argument here, regardless of whether its result can
+    /// reuse the allocation. Its local has erased-callable layout so ARC always
+    /// consumes a non-null transfer; its runtime pointer may be null when the
+    /// caller declines reuse. Internal Roc-ABI destination variants preserve
+    /// this marker when they forward the same input.
+    erased_reuse_arg: ?LocalId = null,
+    /// Packed explicit-argument layout required by the erased-callable ABI.
+    erased_call_args: ?ErasedCallArgsPlanId = null,
     frame_locals: LocalSpan = LocalSpan.empty(),
     join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: ?CFStmtId = null,
     ret_layout: layout.Idx,
+    /// Exact descriptor source for a descriptor-governed return value.
+    /// Dictionary dispatch thunks consume this directly; backends never derive
+    /// it by inspecting the procedure body.
+    ret_desc: ?BoxyDescRef = null,
+    /// Frame-local descriptor source produced while this procedure executes.
+    /// Internal direct calls expose it through `assign_call.out_desc`; it is
+    /// intentionally separate from externally resolvable `ret_desc`.
+    runtime_ret_desc: ?LocalId = null,
+    /// Keyed byte offsets of hidden descriptor fields in this erased worker's
+    /// capture value.
+    erased_arg_desc_offsets: BoxySpan = .{},
+    /// Ordered runtime layouts expected in this erased worker's explicit
+    /// argument buffer.
+    erased_arg_layouts: BoxySpan = .{},
+    /// Hidden descriptor parameters supplied for this erased invocation.
+    erased_arg_desc_params: BoxySpan = .{},
+    /// Hidden capture-pointer parameter for an erased callable procedure.
+    erased_capture_arg: ?LocalId = null,
     abi: ProcAbi = .roc,
+    /// This callable can be invoked as an external function pointer before a
+    /// normal Roc root runs, so its entry must initialize the embedded Boxy
+    /// runtime before executing the body.
+    boxy_runtime_entry: bool = false,
     /// This closed proc exists only so target static-data materialization can
     /// execute its exact post-layout construction. Runtime backends register
     /// and emit only ordinary procedures.
@@ -694,6 +1130,12 @@ pub const LirProcSpec = struct {
     tail_transform: TailTransform = .none,
     /// Explicit native-stack probing requirement for this proc.
     stack_probe: StackProbe = .default,
+    /// Final ARC ownership signature persisted for indirect runtime dispatch.
+    /// Ordinary direct calls have this information in their rewritten call
+    /// sites; dictionary thunks register it with the Boxy runtime explicitly.
+    rc_borrowed_params: u64 = 0,
+    rc_ret_borrowed: bool = false,
+    rc_ret_lenders: u64 = 0,
 };
 
 /// Identifier of a stored LirPattern.
@@ -767,4 +1209,21 @@ pub const LirPattern = union(enum) {
 test "Symbol size and alignment" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Symbol));
     try std.testing.expectEqual(@as(usize, 8), @alignOf(Symbol));
+}
+
+test "RcHelper distinguishes concrete layout helpers from boxy descriptor helpers" {
+    const concrete = RcHelper.fromConcrete(.{ .op = .incref, .layout_idx = .str });
+    const concrete_key = concrete.concreteOrNull() orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(layout.RcOp.incref, concrete_key.op);
+    try std.testing.expectEqual(layout.Idx.str, concrete_key.layout_idx);
+
+    const boxy = RcHelper{ .boxy = .{ .static = @enumFromInt(7) } };
+    try std.testing.expect(boxy.concreteOrNull() == null);
+    switch (boxy) {
+        .boxy => |desc| switch (desc) {
+            .static => |id| try std.testing.expectEqual(@as(u32, 7), @intFromEnum(id)),
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => return error.TestExpectedEqual,
+        },
+        .concrete => return error.TestExpectedEqual,
+    }
 }

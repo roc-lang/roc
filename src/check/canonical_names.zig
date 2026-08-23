@@ -480,6 +480,10 @@ pub const CanonicalNameStore = struct {
         return lookupId(MethodNameId, &self.method_names, text);
     }
 
+    pub fn lookupTagLabel(self: *const CanonicalNameStore, text: []const u8) ?TagLabelId {
+        return lookupId(TagLabelId, &self.tag_labels, text);
+    }
+
     pub fn lookupExportName(self: *const CanonicalNameStore, text: []const u8) ?ExportNameId {
         return lookupId(ExportNameId, &self.export_names, text);
     }
@@ -529,6 +533,13 @@ pub const CanonicalNameStore = struct {
 
     pub fn recordFieldLabelText(self: *const CanonicalNameStore, id: RecordFieldLabelId) []const u8 {
         return self.record_field_labels.getText(@intFromEnum(id));
+    }
+
+    /// Whether a record field label id has interned text. Real compilation
+    /// always interns every label; minimal test fixtures may reference label
+    /// ids without registering their text.
+    pub fn recordFieldLabelTextInterned(self: *const CanonicalNameStore, id: RecordFieldLabelId) bool {
+        return @intFromEnum(id) < self.record_field_labels.count();
     }
 
     pub fn recordFieldLabelCount(self: *const CanonicalNameStore) u32 {

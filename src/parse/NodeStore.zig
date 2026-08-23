@@ -25,6 +25,137 @@ const TargetConfigValueNodeTag = enum(u32) {
     malformed,
 };
 
+const HeaderNodeTag = enum {
+    app_header,
+    module_header,
+    hosted_header,
+    package_header,
+    platform_header,
+    type_module_header,
+    default_app_header,
+    malformed,
+};
+
+const ExposedItemNodeTag = enum {
+    exposed_item_lower,
+    exposed_item_upper,
+    exposed_item_upper_star,
+    malformed,
+};
+
+const StatementNodeTag = enum {
+    decl,
+    @"var",
+    expr,
+    import,
+    expect,
+    @"for",
+    @"while",
+    crash,
+    dbg,
+    @"return",
+    @"break",
+    type_decl,
+    type_decl_nominal,
+    type_decl_opaque,
+    type_decl_where_alias,
+    type_anno,
+    file_import,
+    malformed,
+};
+
+const PatternNodeTag = enum {
+    ident_patt,
+    var_ident_patt,
+    tag_patt,
+    string_patt,
+    single_quote_patt,
+    int_patt,
+    frac_patt,
+    typed_int_patt,
+    typed_frac_patt,
+    record_patt,
+    list_patt,
+    list_rest_patt,
+    tuple_patt,
+    alternatives_patt,
+    underscore_patt,
+    as_patt,
+    malformed,
+};
+
+const ExprNodeTag = enum {
+    int,
+    frac,
+    typed_int,
+    typed_frac,
+    single_quote,
+    ident,
+    tag,
+    string_part,
+    string,
+    typed_string,
+    typed_multiline_string,
+    multiline_string,
+    list,
+    tuple,
+    record,
+    record_update,
+    field_access,
+    method_call,
+    tuple_access,
+    arrow_call,
+    lambda,
+    apply,
+    suffix_single_question,
+    if_then_else,
+    if_without_else,
+    match,
+    dbg,
+    crash,
+    bin_op,
+    block,
+    ellipsis,
+    for_expr,
+    break_expr,
+    return_expr,
+    malformed,
+    record_builder,
+    nominal_record,
+    nominal_apply,
+    unary_op,
+};
+
+const WhereClauseNodeTag = enum {
+    where_mod_method,
+    where_mod_alias,
+    malformed,
+};
+
+const TypeAnnoNodeTag = enum {
+    ty_apply,
+    ty_var,
+    ty_underscore_var,
+    ty_underscore,
+    ty_ty,
+    ty_union,
+    ty_tuple,
+    ty_record,
+    ty_fn,
+    ty_parens,
+    malformed,
+};
+
+const TargetFileNodeTag = enum {
+    target_file_string,
+    target_file_ident,
+    malformed,
+};
+
+fn narrowNodeTag(comptime T: type, tag: Node.Tag) ?T {
+    return std.meta.stringToEnum(T, @tagName(tag));
+}
+
 /// Packed optional indices store null as 0 and non-null values as value + 1.
 /// All producers must use the fallible helpers below so maxInt(u32) overflows
 /// become OutOfMemory in every build mode.
@@ -60,6 +191,7 @@ scratch_requires_entries: base.Scratch(AST.RequiresEntry.Idx),
 numeric_literals: std.ArrayList(NumericLiteral.Stored),
 numeric_literal_bytes: std.ArrayList(u8),
 pattern_string_parts: std.ArrayList(AST.PatternStringPart),
+field_access_segments: std.ArrayList(AST.FieldAccessSegment),
 
 fn reserveExtraDataStart(store: *NodeStore, count: usize) std.mem.Allocator.Error!u32 {
     const start = std.math.cast(u32, store.extra_data.items.len) orelse return error.OutOfMemory;
@@ -93,6 +225,13 @@ fn packOptionalIndex(value: anytype) std.mem.Allocator.Error!u32 {
     return 0;
 }
 
+fn packOptionalToken(value: ?Token.Idx) std.mem.Allocator.Error!u32 {
+    if (value) |idx| {
+        return packNonNullOptionalU32(idx);
+    }
+    return 0;
+}
+
 fn unpackNonNullOptionalU32(value: u32) u32 {
     std.debug.assert(value != 0);
     return value - OPTIONAL_VALUE_OFFSET;
@@ -101,6 +240,11 @@ fn unpackNonNullOptionalU32(value: u32) u32 {
 fn unpackOptionalIndex(comptime Idx: type, value: u32) ?Idx {
     if (value == 0) return null;
     return @enumFromInt(unpackNonNullOptionalU32(value));
+}
+
+fn unpackOptionalToken(value: u32) ?Token.Idx {
+    if (value == 0) return null;
+    return unpackNonNullOptionalU32(value);
 }
 
 const TypeDeclExtra = struct {
@@ -209,6 +353,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     errdefer numeric_literal_bytes.deinit(gpa);
     var pattern_string_parts = try std.ArrayList(AST.PatternStringPart).initCapacity(gpa, capacity / 8);
     errdefer pattern_string_parts.deinit(gpa);
+    var field_access_segments = try std.ArrayList(AST.FieldAccessSegment).initCapacity(gpa, capacity / 4);
+    errdefer field_access_segments.deinit(gpa);
 
     var store: NodeStore = .{
         .gpa = gpa,
@@ -236,6 +382,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .numeric_literals = numeric_literals,
         .numeric_literal_bytes = numeric_literal_bytes,
         .pattern_string_parts = pattern_string_parts,
+        .field_access_segments = field_access_segments,
     };
 
     const expected_idx = store.nodes.items.len;
@@ -282,6 +429,7 @@ pub fn deinit(store: *NodeStore) void {
     store.numeric_literals.deinit(store.gpa);
     store.numeric_literal_bytes.deinit(store.gpa);
     store.pattern_string_parts.deinit(store.gpa);
+    store.field_access_segments.deinit(store.gpa);
 }
 
 /// Ensures that all scratch buffers in the store
@@ -434,7 +582,12 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.main_token = @intFromEnum(app.platform_idx);
             // Store provides collection
             node.data.lhs = @intFromEnum(app.provides);
-            node.data.rhs = @intFromEnum(app.packages);
+            // `packages` and the optional `roc` version pin do not both fit in
+            // the node, so they share an extra_data record.
+            const ed_start = try store.reserveExtraDataStart(2);
+            store.extra_data.appendAssumeCapacity(@intFromEnum(app.packages));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(app.roc_version));
+            node.data.rhs = ed_start;
             node.region = app.region;
         },
         .module => |mod| {
@@ -451,13 +604,16 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
             node.tag = .package_header;
             node.data.lhs = @intFromEnum(package.exposes);
             node.data.rhs = @intFromEnum(package.packages);
+            // A package header has no name token, so the optional `roc`
+            // version pin fits in main_token without an extra_data record.
+            node.main_token = try packOptionalIndex(package.roc_version);
             node.region = package.region;
         },
         .platform => |platform| {
             node.tag = .platform_header;
             node.main_token = platform.name;
 
-            const ed_start = try store.reserveExtraDataStart(14);
+            const ed_start = try store.reserveExtraDataStart(15);
             // Store requires_entries span (start and len)
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.start);
             store.extra_data.appendAssumeCapacity(platform.requires_entries.span.len);
@@ -475,9 +631,10 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
                 (@as(u32, @intFromEnum(platform.hosted.layout)) << 8);
             store.extra_data.appendAssumeCapacity(symbol_map_layouts);
             store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.targets));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(platform.roc_version));
 
             node.data.lhs = ed_start;
-            node.data.rhs = 14;
+            node.data.rhs = 15;
 
             node.region = platform.region;
         },
@@ -515,7 +672,14 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocato
         .lower_ident => |i| {
             node.tag = .exposed_item_lower;
             node.main_token = i.ident;
-            if (i.as) |a| {
+            if (i.qualifiers.span.len > 0) {
+                const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+                try store.extra_data.append(store.gpa, i.qualifiers.span.start);
+                try store.extra_data.append(store.gpa, i.qualifiers.span.len);
+                try store.extra_data.append(store.gpa, if (i.as) |a| a else 0);
+                node.data.lhs = extra_start;
+                node.data.rhs = 2;
+            } else if (i.as) |a| {
                 std.debug.assert(a > 0);
                 node.data.lhs = a;
                 node.data.rhs = 1;
@@ -525,7 +689,14 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocato
         .upper_ident => |i| {
             node.tag = .exposed_item_upper;
             node.main_token = i.ident;
-            if (i.as) |a| {
+            if (i.qualifiers.span.len > 0) {
+                const extra_start = @as(u32, @intCast(store.extra_data.items.len));
+                try store.extra_data.append(store.gpa, i.qualifiers.span.start);
+                try store.extra_data.append(store.gpa, i.qualifiers.span.len);
+                try store.extra_data.append(store.gpa, if (i.as) |a| a else 0);
+                node.data.lhs = extra_start;
+                node.data.rhs = 2;
+            } else if (i.as) |a| {
                 std.debug.assert(a > 0);
                 node.data.lhs = a;
                 node.data.rhs = 1;
@@ -621,20 +792,30 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
         .import => |i| {
             node.tag = .import;
             node.region = i.region;
-            node.main_token = i.module_name_tok;
+            node.main_token = i.target.module_name_tok;
             var rhs = AST.ImportRhs{
                 .aliased = 0,
                 .qualified = 0,
-                .num_exposes = @as(u30, @intCast(i.exposes.span.len)),
+                .has_nested = @intFromBool(i.target.hasNestedTypes()),
+                .origin = @intFromEnum(i.target.origin),
+                .base = @intFromEnum(i.target.base),
+                .reserved = 0,
             };
 
-            // Store all import data in a flat format:
-            // [exposes.span.start, exposes.span.len, qualifier_tok?, alias_tok?]
+            // [exposes.start, exposes.len, target.start, target.path_start,
+            //  parent_count, nested_start?, nested_len, qualifier?, alias?]
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, i.exposes.span.start);
             try store.extra_data.append(store.gpa, i.exposes.span.len);
+            try store.extra_data.append(store.gpa, i.target.start_tok);
+            try store.extra_data.append(store.gpa, i.target.path_start_tok);
+            try store.extra_data.append(store.gpa, i.target.parent_count);
+            if (i.target.nested_start_tok) |tok| {
+                try store.extra_data.append(store.gpa, tok);
+            }
+            try store.extra_data.append(store.gpa, i.target.nested_len);
 
-            if (i.qualifier_tok) |tok| {
+            if (i.target.qualifier_tok) |tok| {
                 rhs.qualified = 1;
                 try store.extra_data.append(store.gpa, tok);
             }
@@ -651,6 +832,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
                 .alias => .type_decl,
                 .nominal => .type_decl_nominal,
                 .@"opaque" => .type_decl_opaque,
+                .where_alias => .type_decl_where_alias,
             };
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.header);
@@ -985,9 +1167,9 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;
-            node.main_token = fa.operator;
-            node.data.lhs = @intFromEnum(fa.left);
-            node.data.rhs = @intFromEnum(fa.right);
+            node.data.lhs = @intFromEnum(fa.receiver);
+            node.data.rhs = fa.segments.span.start;
+            node.main_token = fa.segments.span.len;
         },
         .method_call => |mc| {
             node.tag = .method_call;
@@ -1067,6 +1249,11 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .dbg;
             node.region = d.region;
             node.data.lhs = @intFromEnum(d.expr);
+        },
+        .crash => |c| {
+            node.tag = .crash;
+            node.region = c.region;
+            node.data.lhs = @intFromEnum(c.expr);
         },
         .record_builder => |rb| {
             node.tag = .record_builder;
@@ -1215,9 +1402,22 @@ pub fn addTypeHeader(store: *NodeStore, header: AST.TypeHeader) std.mem.Allocato
 
 /// TODO
 pub fn addAnnoRecordField(store: *NodeStore, field: AST.AnnoRecordField) std.mem.Allocator.Error!AST.AnnoRecordField.Idx {
-    const node = Node{
+    const node = if (field.default_value) |default_idx| blk: {
+        const ed_start = store.extra_data.items.len;
+        try store.extra_data.append(store.gpa, @intFromEnum(field.ty));
+        try store.extra_data.append(store.gpa, @intFromEnum(default_idx));
+        break :blk Node{
+            .tag = .ty_record_field_defaulted,
+            .main_token = try packOptionalToken(field.optional_mark),
+            .data = .{
+                .lhs = field.name,
+                .rhs = @intCast(ed_start),
+            },
+            .region = field.region,
+        };
+    } else Node{
         .tag = .ty_record_field,
-        .main_token = 0,
+        .main_token = try packOptionalToken(field.optional_mark),
         .data = .{
             .lhs = field.name,
             .rhs = @intFromEnum(field.ty),
@@ -1257,7 +1457,7 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
             node.tag = .where_mod_alias;
             node.region = c.region;
             node.main_token = c.var_tok;
-            node.data.lhs = c.name_tok;
+            node.data.lhs = @intFromEnum(c.alias);
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -1449,15 +1649,109 @@ pub fn nodeCount(store: *const NodeStore) usize {
     return store.nodes.len();
 }
 
+/// Returns the source-ordered segments of a record-field access path.
+pub fn fieldAccessSegmentSlice(
+    store: *const NodeStore,
+    span: AST.FieldAccessSegment.Span,
+) []const AST.FieldAccessSegment {
+    const start: usize = span.span.start;
+    const len: usize = span.span.len;
+    return store.field_access_segments.items[start..][0..len];
+}
+
+/// Adds one segment to the dedicated record-field access segment store.
+///
+/// This low-level operation is primarily useful to producers that already own
+/// the enclosing path span. Parser code should use `addOrExtendFieldAccess` so
+/// a failed node allocation rolls the segment append back atomically.
+pub fn addFieldAccessSegment(
+    store: *NodeStore,
+    segment: AST.FieldAccessSegment,
+) std.mem.Allocator.Error!u32 {
+    const start = std.math.cast(u32, store.field_access_segments.items.len) orelse return error.OutOfMemory;
+    // Keep `start + len` representable for every non-empty DataSpan consumer.
+    if (start == std.math.maxInt(u32)) return error.OutOfMemory;
+    try store.field_access_segments.append(store.gpa, segment);
+    return start;
+}
+
+/// Appends a source segment to the current contiguous field path, or creates a
+/// new path whose receiver is `receiver` when the expression is a path
+/// boundary.
+///
+/// The parser produces field paths at the tail of the segment store and passes
+/// only its current, not-yet-owned expression to this function. Extending such
+/// a path in place is therefore O(1) amortized and does not copy earlier
+/// segments. A non-tail field-access node is already closed and is treated as
+/// the receiver of a new path instead of being mutated.
+/// Segment storage is rolled back if allocating the enclosing expression node
+/// fails.
+pub fn addOrExtendFieldAccess(
+    store: *NodeStore,
+    receiver: AST.Expr.Idx,
+    segment: AST.FieldAccessSegment,
+    region: AST.TokenizedRegion,
+) std.mem.Allocator.Error!AST.Expr.Idx {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(receiver));
+    var receiver_node = store.nodes.get(node_idx);
+
+    if (receiver_node.tag == .field_access) {
+        const segment_start: usize = receiver_node.data.rhs;
+        const segment_len: usize = receiver_node.main_token;
+        const path_is_open_tail = segment_len <= store.field_access_segments.items.len and
+            segment_start == store.field_access_segments.items.len - segment_len and
+            receiver_node.region.start == region.start;
+
+        if (path_is_open_tail) {
+            if (receiver_node.main_token == std.math.maxInt(u32)) return error.OutOfMemory;
+            try store.field_access_segments.append(store.gpa, segment);
+            receiver_node.main_token += 1;
+            receiver_node.region.end = region.end;
+            store.nodes.set(node_idx, receiver_node);
+            return receiver;
+        }
+    }
+
+    const previous_segment_len = store.field_access_segments.items.len;
+    const segment_start = try store.addFieldAccessSegment(segment);
+    errdefer store.field_access_segments.items.len = previous_segment_len;
+
+    return store.addExpr(.{ .field_access = .{
+        .receiver = receiver,
+        .segments = .{ .span = .{ .start = segment_start, .len = 1 } },
+        .region = region,
+    } });
+}
+
+/// Returns whether a field-access path explicitly contains an optional
+/// segment. Every non-field expression is a path boundary and returns false.
+pub fn fieldAccessContainsOptional(store: *const NodeStore, expr_idx: AST.Expr.Idx) bool {
+    const node = store.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
+    if (node.tag != .field_access) return false;
+
+    const access = AST.FieldAccessSegment.Span{ .span = .{
+        .start = node.data.rhs,
+        .len = node.main_token,
+    } };
+    for (store.fieldAccessSegmentSlice(access)) |segment| {
+        if (segment.mode == .optional) return true;
+    }
+    return false;
+}
+
 /// Retrieves header data from a stored header node, reconstructing the appropriate header type.
 pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(header_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(HeaderNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .app_header => {
+            const ed_start = node.data.rhs;
             return .{ .app = .{
                 .platform_idx = @enumFromInt(node.main_token),
                 .provides = @enumFromInt(node.data.lhs),
-                .packages = @enumFromInt(node.data.rhs),
+                .packages = @enumFromInt(store.extra_data.items[ed_start]),
+                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 1]),
                 .region = node.region,
             } };
         },
@@ -1477,16 +1771,18 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
             return .{ .package = .{
                 .exposes = @enumFromInt(node.data.lhs),
                 .packages = @enumFromInt(node.data.rhs),
+                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, node.main_token),
                 .region = node.region,
             } };
         },
         .platform_header => {
             const ed_start = node.data.lhs;
-            std.debug.assert(node.data.rhs == 14);
+            std.debug.assert(node.data.rhs == 15);
 
             const symbol_map_layouts = store.extra_data.items[ed_start + 12];
             const targets_val = store.extra_data.items[ed_start + 13];
             const targets = unpackOptionalIndex(AST.TargetsSection.Idx, targets_val);
+            const roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 14]);
 
             return .{ .platform = .{
                 .name = node.main_token,
@@ -1496,6 +1792,7 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 } },
                 .exposes = @enumFromInt(store.extra_data.items[ed_start + 2]),
                 .packages = @enumFromInt(store.extra_data.items[ed_start + 3]),
+                .roc_version = roc_version,
                 .provides = .{ .span = .{
                     .start = store.extra_data.items[ed_start + 4],
                     .len = store.extra_data.items[ed_start + 5],
@@ -1531,41 +1828,66 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
 /// Retrieves exposed item data from a stored exposed item node.
 pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem.Idx) AST.ExposedItem {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(exposed_item_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(ExposedItemNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid exposed item tag, got {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .exposed_item_lower => {
-            if (node.data.rhs == 1) {
+            if (node.data.rhs == 2) {
+                const extra_start = node.data.lhs;
+                const q_start = store.extra_data.items[extra_start];
+                const q_len = store.extra_data.items[extra_start + 1];
+                const as_tok = store.extra_data.items[extra_start + 2];
                 return .{ .lower_ident = .{
                     .region = node.region,
                     .ident = node.main_token,
+                    .qualifiers = .{ .span = .{ .start = q_start, .len = q_len } },
+                    .as = if (as_tok != 0) as_tok else null,
+                } };
+            } else if (node.data.rhs == 1) {
+                return .{ .lower_ident = .{
+                    .region = node.region,
+                    .ident = node.main_token,
+                    .qualifiers = .{ .span = base.DataSpan.empty() },
                     .as = node.data.lhs,
                 } };
             }
             return .{ .lower_ident = .{
                 .region = node.region,
                 .ident = node.main_token,
+                .qualifiers = .{ .span = base.DataSpan.empty() },
                 .as = null,
             } };
         },
         .exposed_item_upper => {
-            if (node.data.rhs == 1) {
+            if (node.data.rhs == 2) {
+                const extra_start = node.data.lhs;
+                const q_start = store.extra_data.items[extra_start];
+                const q_len = store.extra_data.items[extra_start + 1];
+                const as_tok = store.extra_data.items[extra_start + 2];
                 return .{ .upper_ident = .{
                     .region = node.region,
                     .ident = node.main_token,
+                    .qualifiers = .{ .span = .{ .start = q_start, .len = q_len } },
+                    .as = if (as_tok != 0) as_tok else null,
+                } };
+            } else if (node.data.rhs == 1) {
+                return .{ .upper_ident = .{
+                    .region = node.region,
+                    .ident = node.main_token,
+                    .qualifiers = .{ .span = base.DataSpan.empty() },
                     .as = node.data.lhs,
                 } };
             }
             return .{ .upper_ident = .{
                 .region = node.region,
                 .ident = node.main_token,
+                .qualifiers = .{ .span = base.DataSpan.empty() },
                 .as = null,
             } };
         },
@@ -1582,16 +1904,15 @@ pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid exposed item tag, got {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
 /// Retrieves statement data from a stored statement node, reconstructing the appropriate statement type.
 pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) AST.Statement {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(statement_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(StatementNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .decl => {
             return .{ .decl = .{
                 .pattern = @enumFromInt(node.data.lhs),
@@ -1615,11 +1936,24 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
         .import => {
             const rhs = @as(AST.ImportRhs, @bitCast(node.data.rhs));
 
-            // Read flat data format: [exposes.span.start, exposes.span.len, qualifier_tok?, alias_tok?]
             var extra_data_pos = node.data.lhs;
             const exposes_start = store.extra_data.items[extra_data_pos];
             extra_data_pos += 1;
             const exposes_len = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const target_start_tok = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const path_start_tok = store.extra_data.items[extra_data_pos];
+            extra_data_pos += 1;
+            const parent_count: u16 = @intCast(store.extra_data.items[extra_data_pos]);
+            extra_data_pos += 1;
+
+            var nested_start_tok: ?Token.Idx = null;
+            if (rhs.has_nested == 1) {
+                nested_start_tok = store.extra_data.items[extra_data_pos];
+                extra_data_pos += 1;
+            }
+            const nested_len: u16 = @intCast(store.extra_data.items[extra_data_pos]);
             extra_data_pos += 1;
 
             var qualifier_tok: ?Token.Idx = null;
@@ -1633,14 +1967,22 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
             }
 
             return AST.Statement{ .import = .{
-                .module_name_tok = node.main_token,
-                .qualifier_tok = qualifier_tok,
+                .target = .{
+                    .origin = @enumFromInt(rhs.origin),
+                    .base = @enumFromInt(rhs.base),
+                    .parent_count = parent_count,
+                    .start_tok = target_start_tok,
+                    .path_start_tok = path_start_tok,
+                    .module_name_tok = node.main_token,
+                    .qualifier_tok = qualifier_tok,
+                    .nested_start_tok = nested_start_tok,
+                    .nested_len = nested_len,
+                },
                 .alias_tok = alias_tok,
                 .exposes = .{ .span = .{
                     .start = exposes_start,
                     .len = exposes_len,
                 } },
-                .nested_import = false,
                 .region = node.region,
             } };
         },
@@ -1724,6 +2066,18 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .associated = extra.associated,
             } };
         },
+        .type_decl_where_alias => {
+            const extra = store.decodeTypeDeclExtra(node.main_token);
+
+            return .{ .type_decl = .{
+                .region = node.region,
+                .header = @enumFromInt(node.data.lhs),
+                .anno = @enumFromInt(node.data.rhs),
+                .kind = .where_alias,
+                .where = extra.where,
+                .associated = extra.associated,
+            } };
+        },
         .type_anno => {
             var where_clause: ?AST.Collection.Idx = null;
             var is_var = false;
@@ -1759,16 +2113,15 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
 /// Retrieves pattern data from a stored pattern node, reconstructing the appropriate pattern type.
 pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(pattern_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(PatternNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid pattern tag, got {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .ident_patt => {
             return .{ .ident = .{
                 .ident_tok = node.main_token,
@@ -1914,16 +2267,15 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid pattern tag, got {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
 /// Retrieves expression data from a stored expression node, reconstructing the appropriate expression type.
 pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(expr_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(ExprNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .int => {
             return .{ .int = .{
                 .token = node.main_token,
@@ -2080,9 +2432,11 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .field_access => {
             return .{ .field_access = .{
-                .left = @enumFromInt(node.data.lhs),
-                .right = @enumFromInt(node.data.rhs),
-                .operator = node.main_token,
+                .receiver = @enumFromInt(node.data.lhs),
+                .segments = .{ .span = .{
+                    .start = node.data.rhs,
+                    .len = node.main_token,
+                } },
                 .region = node.region,
             } };
         },
@@ -2168,6 +2522,12 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         },
         .dbg => {
             return .{ .dbg = .{
+                .region = node.region,
+                .expr = @enumFromInt(node.data.lhs),
+            } };
+        },
+        .crash => {
+            return .{ .crash = .{
                 .region = node.region,
                 .expr = @enumFromInt(node.data.lhs),
             } };
@@ -2260,9 +2620,6 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
@@ -2277,6 +2634,24 @@ pub fn getRecordField(store: *const NodeStore, field_idx: AST.RecordField.Idx) A
         .value = value,
         .region = node.region,
     };
+}
+
+/// The token holding the whole text of a string literal that is made of
+/// exactly one literal part, i.e. a plain string with no interpolation.
+///
+/// Returns null for any other expression, and for strings whose text is split
+/// across several parts (interpolation, escapes, line continuations)—callers
+/// use this to read short literals like a pinned compiler version straight out
+/// of the source, which is only sound when the source says it verbatim.
+pub fn singleStringPartToken(store: *const NodeStore, expr_idx: AST.Expr.Idx) ?Token.Idx {
+    const expr = store.getExpr(expr_idx);
+    if (expr != .string) return null;
+    const string = expr.string;
+    const parts = store.exprSlice(string.parts);
+    if (parts.len != 1) return null;
+    const part = store.getExpr(parts[0]);
+    if (part != .string_part) return null;
+    return part.string_part.token;
 }
 
 /// Retrieves match branch data from a stored match branch node.
@@ -2312,15 +2687,25 @@ pub fn getTypeHeader(store: *const NodeStore, header_idx: AST.TypeHeader.Idx) er
 pub fn getAnnoRecordField(store: *const NodeStore, anno_record_field_idx: AST.AnnoRecordField.Idx) error{MalformedNode}!AST.AnnoRecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(anno_record_field_idx)));
 
-    if (node.tag == .malformed) {
-        return error.MalformedNode;
+    if (node.tag == .ty_record_field) {
+        return .{
+            .region = node.region,
+            .name = node.data.lhs,
+            .optional_mark = unpackOptionalToken(node.main_token),
+            .ty = @enumFromInt(node.data.rhs),
+        };
     }
-
-    return .{
-        .region = node.region,
-        .name = node.data.lhs,
-        .ty = @enumFromInt(node.data.rhs),
-    };
+    if (node.tag == .ty_record_field_defaulted) {
+        const ed_start = @as(usize, @intCast(node.data.rhs));
+        return .{
+            .region = node.region,
+            .name = node.data.lhs,
+            .optional_mark = unpackOptionalToken(node.main_token),
+            .ty = @enumFromInt(store.extra_data.items[ed_start]),
+            .default_value = @enumFromInt(store.extra_data.items[ed_start + 1]),
+        };
+    }
+    return error.MalformedNode;
 }
 
 /// Returns the source region for a stored type annotation without reconstructing the full AST union.
@@ -2338,7 +2723,9 @@ pub fn typeAnnoIsMalformed(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Id
 /// Get a WhereClause node from the store, using a type-safe index to the node.
 pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause.Idx) AST.WhereClause {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(where_clause_idx)));
-    switch (node.tag) {
+    const tag = narrowNodeTag(WhereClauseNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
+    switch (tag) {
         .where_mod_method => {
             const ed_start = @as(usize, @intCast(node.data.lhs));
             const name_tok = store.extra_data.items[ed_start];
@@ -2357,7 +2744,7 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
             return .{ .mod_alias = .{
                 .region = node.region,
                 .var_tok = node.main_token,
-                .name_tok = node.data.lhs,
+                .alias = @enumFromInt(node.data.lhs),
             } };
         },
         .malformed => {
@@ -2366,17 +2753,18 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
                 .region = node.region,
             } };
         },
-        else => {
-            std.debug.panic("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
-        },
     }
 }
 
 /// Retrieves type annotation data from a stored type annotation node, reconstructing the appropriate annotation type.
 pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.TypeAnno {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(ty_anno_idx)));
+    const tag = narrowNodeTag(TypeAnnoNodeTag, node.tag) orelse return .{ .malformed = .{
+        .reason = .ty_anno_unexpected_token,
+        .region = node.region,
+    } };
 
-    switch (node.tag) {
+    switch (tag) {
         .ty_apply => {
             return .{ .apply = .{
                 .region = node.region,
@@ -2504,14 +2892,6 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
         .malformed => {
             return .{ .malformed = .{
                 .reason = @enumFromInt(node.data.lhs),
-                .region = node.region,
-            } };
-        },
-        else => {
-            // Return a malformed type annotation instead of panicking
-            // This handles cases where an invalid node type is encountered
-            return .{ .malformed = .{
-                .reason = .ty_anno_unexpected_token,
                 .region = node.region,
             } };
         },
@@ -3345,8 +3725,10 @@ pub fn getTargetEntry(store: *const NodeStore, idx: AST.TargetEntry.Idx) AST.Tar
 /// Retrieves a TargetFile from a stored node.
 pub fn getTargetFile(store: *const NodeStore, idx: AST.TargetFile.Idx) AST.TargetFile {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    const tag = narrowNodeTag(TargetFileNodeTag, node.tag) orelse
+        std.debug.panic("Expected a valid target_file tag, got {s}", .{@tagName(node.tag)});
 
-    switch (node.tag) {
+    switch (tag) {
         .target_file_string => {
             return .{ .string_literal = if (node.data.lhs != 0) node.main_token else null };
         },
@@ -3358,9 +3740,6 @@ pub fn getTargetFile(store: *const NodeStore, idx: AST.TargetFile.Idx) AST.Targe
                 .reason = @enumFromInt(node.data.lhs),
                 .region = node.region,
             } };
-        },
-        else => {
-            std.debug.panic("Expected a valid target_file tag, got {s}", .{@tagName(node.tag)});
         },
     }
 }

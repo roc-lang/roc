@@ -9,9 +9,9 @@
 //! copy, or the pristine root recorded by a `SchemeUseRecord`)
 //! enumerate identical lists without sharing var identities.
 //!
-//! Order contract: depth-first over the resolved type structure — function
+//! Order contract: depth-first over the resolved type structure—function
 //! args then return, ordinary alias/nominal args then backing, and logical row
-//! fields/tags across the complete extension chain, all in store order —
+//! fields/tags across the complete extension chain, all in store order—
 //! emitting each constrained var's constraints in range order at its first
 //! occurrence; then the collected
 //! constraints' fn types are walked the same way in emission order (they can
@@ -21,8 +21,8 @@
 //! dispatcher's first occurrence (function arg positions, type arguments,
 //! row labels, …). Row-extension storage chains, including transparent aliases
 //! within them, are normalized away: a field or tag payload in any tail is
-//! addressed directly from the logical row root. Compiler-generated call edges — structural-derivation
-//! component calls, builtin helper calls — have no checked instantiation
+//! addressed directly from the logical row root. Compiler-generated call edges—structural-derivation
+//! component calls, builtin helper calls—have no checked instantiation
 //! records, so monotype resolves a target's obligations by walking these
 //! paths over the concrete monomorphic callable instead.
 
@@ -61,19 +61,7 @@ pub const PathStep = extern struct {
     /// discriminant. Artifact boundary validation uses this before consumers
     /// call `stepKind`.
     pub fn kindOrNull(self: PathStep) ?Kind {
-        return switch (self.kind) {
-            @intFromEnum(Kind.fn_arg) => .fn_arg,
-            @intFromEnum(Kind.fn_ret) => .fn_ret,
-            @intFromEnum(Kind.alias_arg) => .alias_arg,
-            @intFromEnum(Kind.alias_backing) => .alias_backing,
-            @intFromEnum(Kind.nominal_arg) => .nominal_arg,
-            @intFromEnum(Kind.nominal_backing) => .nominal_backing,
-            @intFromEnum(Kind.tuple_elem) => .tuple_elem,
-            @intFromEnum(Kind.record_field) => .record_field,
-            @intFromEnum(Kind.tag_payload_tag) => .tag_payload_tag,
-            @intFromEnum(Kind.tag_payload_index) => .tag_payload_index,
-            else => null,
-        };
+        return std.enums.fromInt(Kind, self.kind);
     }
 
     pub fn stepKind(self: PathStep) Kind {
@@ -163,7 +151,7 @@ pub fn enumerateEvidenceParams(
     try walk(gpa, store, root, true, scratch, out);
     // Constraint fn types can bind further constrained vars; the queue holds
     // every emitted constraint's fn var in emission order. `walk` may grow the
-    // queue while we drain it — index-based drain keeps that sound. Params
+    // queue while we drain it—index-based drain keeps that sound. Params
     // found through the queue are pathless: no path over the scheme's
     // callable reaches them.
     var queue_index: usize = 0;
@@ -213,11 +201,7 @@ fn walk(
             .structure => |flat_type| switch (flat_type) {
                 .record => |record| try pushRecordChildren(gpa, scratch, entry, store, record.fields, record.ext),
                 .record_unbound => |fields_range| {
-                    scratch.children.clearRetainingCapacity();
-                    const fields = store.getRecordFieldsSlice(fields_range);
-                    for (fields.items(.name), fields.items(.var_)) |name, field_var| {
-                        try scratch.children.append(gpa, child(field_var, step(.record_field, @bitCast(name))));
-                    }
+                    try collectRecordFieldChildren(gpa, scratch, store, fields_range);
                     try pushChildren(gpa, scratch, entry);
                 },
                 .tuple => |tuple| {
@@ -250,6 +234,9 @@ fn walk(
                 .tag_union => |tag_union| try pushTagChildren(gpa, scratch, entry, store, tag_union),
                 .empty_record, .empty_tag_union => {},
             },
+            // A presence variable carries no static-dispatch constraints and has
+            // no children; it is a leaf like `.err`.
+            .field_presence => {},
             .err => {},
         }
     }
@@ -282,23 +269,37 @@ fn walkRowContinuation(
             .record => switch (flat_type) {
                 .record => |record| try pushRecordChildren(gpa, scratch, entry, store, record.fields, record.ext),
                 .record_unbound => |fields_range| {
-                    scratch.children.clearRetainingCapacity();
-                    const fields = store.getRecordFieldsSlice(fields_range);
-                    for (fields.items(.name), fields.items(.var_)) |name, field_var| {
-                        try scratch.children.append(gpa, child(field_var, step(.record_field, @bitCast(name))));
-                    }
+                    try collectRecordFieldChildren(gpa, scratch, store, fields_range);
                     try pushChildren(gpa, scratch, entry);
                 },
                 .empty_record => {},
-                else => unreachable,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .tag_union,
+                .empty_tag_union,
+                => unreachable,
             },
             .tag => switch (flat_type) {
                 .tag_union => |tag_union| try pushTagChildren(gpa, scratch, entry, store, tag_union),
                 .empty_tag_union => {},
-                else => unreachable,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal_type,
+                .fn_pure,
+                .fn_effectful,
+                .fn_unbound,
+                .empty_record,
+                => unreachable,
             },
             .none => unreachable,
         },
+        // A presence variable carries no static-dispatch constraints and has no
+        // children; it is a leaf like `.err`.
+        .field_presence => {},
         .err => {},
     }
 }
@@ -358,6 +359,41 @@ fn pushChildren(gpa: Allocator, scratch: *Scratch, entry: StackEntry) Allocator.
     }
 }
 
+/// Collect one child per record field, addressed by label. Shared by the
+/// `record` and `record_unbound` branches of both walkers so the two row kinds
+/// cannot diverge.
+///
+/// Only the field's VALUE-axis var is walked. A field with a dynamic kind also
+/// carries a presence-axis var, but a
+/// presence var is an evidence leaf exactly like the `.field_presence` arms
+/// above: static-dispatch constraints attach to expression receivers, a
+/// presence var is never addressable from an expression, and unification only
+/// ever pairs it with other presence-axis content—`unify.zig`'s
+/// `unifyFlex`/`unifyFieldPresence` assert that a flex meeting a presence fact
+/// carries zero constraints (and still `recordDeferredConstraint` it), so no
+/// constraint can hide behind a presence var.
+///
+/// `.unknown` fields occur in both row kinds: `record` rows mint them for
+/// literals, `.?` accesses, and `?:` annotations, and `record_unbound` rows—
+/// whose sole producer is the record-update probe in `Check.zig` (`e_record`
+/// with an ext, later appearances being verbatim copies via `instantiate.zig`
+/// and `copy_import.zig`)—carry one kind-flexible `.unknown` field per
+/// mentioned update field (creation semantics: the base's kind decides).
+/// Both row kinds share this walk because the evidence-bearing axis is
+/// identical either way.
+fn collectRecordFieldChildren(
+    gpa: Allocator,
+    scratch: *Scratch,
+    store: *const types_mod.Store,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
+) Allocator.Error!void {
+    scratch.children.clearRetainingCapacity();
+    const fields = store.getRecordFieldsSlice(fields_range);
+    for (fields.items(.name), fields.items(.presence)) |name, presence| {
+        try scratch.children.append(gpa, child(presence.typeVar(), step(.record_field, @bitCast(name))));
+    }
+}
+
 fn pushRecordChildren(
     gpa: Allocator,
     scratch: *Scratch,
@@ -366,11 +402,7 @@ fn pushRecordChildren(
     fields_range: types_mod.RecordField.SafeMultiList.Range,
     ext: Var,
 ) Allocator.Error!void {
-    scratch.children.clearRetainingCapacity();
-    const fields = store.getRecordFieldsSlice(fields_range);
-    for (fields.items(.name), fields.items(.var_)) |name, field_var| {
-        try scratch.children.append(gpa, child(field_var, step(.record_field, @bitCast(name))));
-    }
+    try collectRecordFieldChildren(gpa, scratch, store, fields_range);
     try scratch.children.append(gpa, rowContinuation(ext, .record));
     try pushChildren(gpa, scratch, entry);
 }

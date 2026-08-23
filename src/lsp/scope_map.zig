@@ -140,7 +140,7 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, return_stmt.expr, scope_end, depth + 1);
             },
             // Type declarations, imports, etc. don't introduce variable bindings
-            .s_import, .s_alias_decl, .s_nominal_decl, .s_crash, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
+            .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_crash, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
         }
     }
 
@@ -368,6 +368,9 @@ pub const ScopeMap = struct {
             .e_str_segment,
             .e_lookup_local,
             .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_empty_list,
             .e_empty_record,
@@ -498,3 +501,43 @@ pub const ScopeMap = struct {
         }
     }
 };
+
+test "ScopeMap traverses a flattened field access receiver" {
+    const allocator = std.testing.allocator;
+    var module_env = try ModuleEnv.init(allocator, "");
+    defer module_env.deinit();
+    try module_env.initCIRFields("Test");
+
+    const parameter_name = try module_env.insertIdent(Ident.for_text("parameter"));
+    const parameter = try module_env.addPattern(.{ .assign = .{ .ident = parameter_name } }, base.Region.from_raw_offsets(10, 19));
+    const args_start = module_env.store.scratchPatternTop();
+    try module_env.store.addScratchPattern(parameter);
+    const args = try module_env.store.patternSpanFrom(args_start);
+    const body = try module_env.addExpr(.{ .e_empty_record = .{} }, base.Region.from_raw_offsets(20, 30));
+    const receiver = try module_env.addExpr(.{ .e_lambda = .{
+        .args = args,
+        .body = body,
+    } }, base.Region.from_raw_offsets(9, 30));
+
+    const path = try module_env.store.startFieldAccessPath(1);
+    _ = module_env.store.appendFieldAccessPathSegmentAssumeCapacity(path, .{
+        .name = parameter_name,
+        .mode = .optional,
+    }, base.Region.from_raw_offsets(31, 38));
+    const access = try module_env.addExpr(.{ .e_field_access = .{
+        .receiver = receiver,
+        .segments = module_env.store.finishFieldAccessPath(path),
+    } }, base.Region.from_raw_offsets(9, 38));
+
+    var scope_map = ScopeMap.init(allocator);
+    defer scope_map.deinit();
+    try scope_map.traverseExpr(&module_env, access, std.math.maxInt(u32), 0);
+
+    try std.testing.expectEqual(@as(usize, 1), scope_map.bindings.items.len);
+    const binding = scope_map.bindings.items[0];
+    try std.testing.expect(binding.ident.eql(parameter_name));
+    try std.testing.expectEqual(parameter, binding.pattern_idx);
+    try std.testing.expectEqual(@as(u32, 20), binding.visible_from);
+    try std.testing.expectEqual(@as(u32, 30), binding.visible_to);
+    try std.testing.expect(binding.is_parameter);
+}

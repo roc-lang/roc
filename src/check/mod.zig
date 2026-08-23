@@ -88,8 +88,14 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_9709_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9710_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9711_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10093_test.zig"));
     std.testing.refAllDecls(@import("test/repros_test.zig"));
     std.testing.refAllDecls(@import("test/typed_cir_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10338_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10690_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10695_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10759_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10804_test.zig"));
 
     // Cross-module monomorphization tests
     std.testing.refAllDecls(@import("test/cross_module_mono_test.zig"));

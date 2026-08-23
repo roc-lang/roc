@@ -14,6 +14,7 @@ const TypeStore = types.Store;
 const Content = types.Content;
 const Var = types.Var;
 const Record = types.Record;
+const Presence = types.RecordField.Presence;
 const TypeIdent = types.TypeIdent;
 const Ident = base.Ident;
 
@@ -34,14 +35,10 @@ pub fn unwrapAliases(type_store: *const TypeStore, type_var: Var, max_depth: usi
     var depth: usize = 0;
 
     while (depth < max_depth) : (depth += 1) {
-        switch (content) {
-            .alias => |alias| {
-                const backing_var = type_store.getAliasBackingVar(alias);
-                resolved = type_store.resolveVar(backing_var);
-                content = resolved.desc.content;
-            },
-            else => break,
-        }
+        if (std.meta.activeTag(content) != .alias) break;
+        const backing_var = type_store.getAliasBackingVar(content.alias);
+        resolved = type_store.resolveVar(backing_var);
+        content = resolved.desc.content;
     }
 
     return .{
@@ -61,26 +58,30 @@ pub fn unwrapToRecord(type_store: *const TypeStore, type_var: Var, max_depth: us
 pub const RecordFieldInfo = struct {
     name: Ident.Idx,
     type_var: Var,
+    presence: Presence,
 };
 
 /// Iterator over record fields.
 /// This avoids allocations by providing an iterator interface over internal storage.
+///
+/// The type of a field lives on its presence's second axis, so the iterator
+/// derives `type_var` from the presence.
 pub const RecordFieldsIterator = struct {
     names: []const Ident.Idx,
-    vars: []const Var,
+    presences: []const Presence,
     index: usize = 0,
 
     /// Get the next field, or null if exhausted
     pub fn next(self: *RecordFieldsIterator) ?RecordFieldInfo {
-        if (self.index >= self.names.len) {
-            return null;
-        }
-        const field = RecordFieldInfo{
-            .name = self.names[self.index],
-            .type_var = self.vars[self.index],
-        };
+        if (self.index >= self.names.len) return null;
+        const idx = self.index;
         self.index += 1;
-        return field;
+        const presence = self.presences[idx];
+        return .{
+            .name = self.names[idx],
+            .type_var = presence.typeVar(),
+            .presence = presence,
+        };
     }
 
     /// Reset the iterator to the beginning
@@ -105,7 +106,7 @@ pub fn getRecordFieldsIterator(type_store: *const TypeStore, record: Record) Rec
     const fields_slice = type_store.getRecordFieldsSlice(record.fields);
     return .{
         .names = fields_slice.items(.name),
-        .vars = fields_slice.items(.var_),
+        .presences = fields_slice.items(.presence),
     };
 }
 
@@ -135,19 +136,13 @@ pub fn extractBaseTypeName(type_str: []const u8) []const u8 {
 /// Get the alias type identifier if the content is an alias.
 /// Returns null if the content is not an alias.
 pub fn getAliasIdent(content: Content) ?TypeIdent {
-    return switch (content) {
-        .alias => |alias| alias.ident,
-        else => null,
-    };
+    return if (std.meta.activeTag(content) == .alias) content.alias.ident else null;
 }
 
 /// Check if a content is an alias and get the backing var.
 /// Returns the backing var if the content is an alias, null otherwise.
 pub fn getAliasBackingVar(type_store: *const TypeStore, content: Content) ?Var {
-    return switch (content) {
-        .alias => |alias| type_store.getAliasBackingVar(alias),
-        else => null,
-    };
+    return if (std.meta.activeTag(content) == .alias) type_store.getAliasBackingVar(content.alias) else null;
 }
 
 /// Get the backing var for a type variable if it's an alias.
@@ -208,23 +203,28 @@ test "extractBaseTypeName empty and edge cases" {
 
 test "RecordFieldsIterator" {
     const testing = std.testing;
+    const allocator = testing.allocator;
 
-    // Create test data
+    var type_store = try TypeStore.initCapacity(allocator, 8, 4);
+    defer type_store.deinit();
+
     const names = [_]Ident.Idx{
         .{ .idx = 1, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } },
         .{ .idx = 2, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } },
         .{ .idx = 3, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } },
     };
-    const vars = [_]Var{
-        @enumFromInt(10),
-        @enumFromInt(20),
-        @enumFromInt(30),
-    };
+    const first_var = try type_store.freshFromContent(.err);
+    const second_var = try type_store.freshFromContent(.err);
+    const third_var = try type_store.freshFromContent(.err);
+    const ext_var = try type_store.freshFromContent(.{ .structure = .empty_record });
+    const opt_presence = try type_store.fresh();
+    const fields = try type_store.appendRecordFields(&.{
+        .{ .name = names[0], .presence = .required(first_var) },
+        .{ .name = names[1], .presence = .unknown(opt_presence, second_var) },
+        .{ .name = names[2], .presence = .required(third_var) },
+    });
 
-    var iter = RecordFieldsIterator{
-        .names = &names,
-        .vars = &vars,
-    };
+    var iter = getRecordFieldsIterator(&type_store, .{ .fields = fields, .ext = ext_var });
 
     try testing.expectEqual(@as(usize, 3), iter.len());
     try testing.expect(iter.hasNext());
@@ -232,17 +232,20 @@ test "RecordFieldsIterator" {
     // First field
     const field1 = iter.next().?;
     try testing.expectEqual(@as(u29, 1), field1.name.idx);
-    try testing.expectEqual(@as(u32, 10), @intFromEnum(field1.type_var));
+    try testing.expectEqual(first_var, field1.type_var);
+    try testing.expectEqual(null, field1.presence.presenceVar());
 
     // Second field
     const field2 = iter.next().?;
     try testing.expectEqual(@as(u29, 2), field2.name.idx);
-    try testing.expectEqual(@as(u32, 20), @intFromEnum(field2.type_var));
+    try testing.expectEqual(second_var, field2.type_var);
+    try testing.expectEqual(opt_presence, field2.presence.presenceVar());
 
     // Third field
     const field3 = iter.next().?;
     try testing.expectEqual(@as(u29, 3), field3.name.idx);
-    try testing.expectEqual(@as(u32, 30), @intFromEnum(field3.type_var));
+    try testing.expectEqual(third_var, field3.type_var);
+    try testing.expectEqual(null, field3.presence.presenceVar());
 
     // No more fields
     try testing.expect(iter.next() == null);

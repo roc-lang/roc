@@ -27,66 +27,51 @@ UNDECLARED TYPE - nominal_mixed_scope.md:10:9:10:12
 UNDECLARED TYPE - nominal_mixed_scope.md:11:9:11:12
 UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
 # PROBLEMS
+── ✗ import must be top level ─────────────────────── nominal_mixed_scope.md:7:5
 
-┌──────────────────────────┐
-│ IMPORT MUST BE TOP LEVEL ├─ I was parsing an import, but imports are only ──┐
-└┬─────────────────────────┘  allowed at the top level.                       │
- │                                                                            │
- │  import Color.RGB                                                          │
- │  ‾‾‾‾‾‾                                                                    │
- └──────────────────────────────────────────────── nominal_mixed_scope.md:7:5 ┘
+I was parsing an import, but imports are only allowed at the top level.
 
-    Move this import after the mod header and before declarations or
-    executable statements.
+import Color.RGB
+^^^^^^
 
-    For example:
-        import Json
+Move this import after the mod header and before declarations or executable
+statements.
 
-        main = 1
+For example:
+    import Json
 
-    I found `import` here.
-    That word is reserved by Roc, so it cannot be used as a name in this
-    position.
+    main = 1
 
+I found import here.
+That word is reserved by Roc, so it cannot be used as a name in this position.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Color` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  import Color.RGB                                                          │
- │         ‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────── nominal_mixed_scope.md:7:12 ┘
+── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:7:12
 
+The type Color is not declared in this scope.
 
+import Color.RGB
+       ^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `RGB` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  RGB.Red => LocalStatus.Pending                                            │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────── nominal_mixed_scope.md:10:9 ┘
+── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:10:9
 
+The type RGB is not declared in this scope.
 
+RGB.Red => LocalStatus.Pending
+^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `RGB` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  RGB.Green => LocalStatus.Complete                                         │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────── nominal_mixed_scope.md:11:9 ┘
+── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:11:9
 
+The type RGB is not declared in this scope.
 
+RGB.Green => LocalStatus.Complete
+^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `RGB` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  RGB.Blue => LocalStatus.Pending                                           │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────── nominal_mixed_scope.md:12:9 ┘
+── ✗ undeclared type ─────────────────────────────── nominal_mixed_scope.md:12:9
 
+The type RGB is not declared in this scope.
+
+RGB.Blue => LocalStatus.Pending
+^^^
 
 # TOKENS
 ~~~zig
@@ -162,38 +147,7 @@ processColor = |color| {
 (can-ir
 	(d-let
 		(p-assign (ident "processColor"))
-		(e-lambda
-			(args
-				(p-assign (ident "color")))
-			(e-block
-				(s-expr
-					(e-runtime-error (tag "undeclared_type")))
-				(e-match
-					(match
-						(cond
-							(e-runtime-error (tag "erroneous_value_use")))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "undeclared_type"))))
-								(value
-									(e-nominal (nominal "LocalStatus")
-										(e-tag (name "Pending")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "undeclared_type"))))
-								(value
-									(e-nominal (nominal "LocalStatus")
-										(e-tag (name "Complete")))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "undeclared_type"))))
-								(value
-									(e-nominal (nominal "LocalStatus")
-										(e-tag (name "Pending"))))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-underscore)

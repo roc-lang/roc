@@ -1,10 +1,10 @@
-//! x86-64 C-ABI parameter/return classification for Roc layouts — both the System V
+//! x86-64 C-ABI parameter/return classification for Roc layouts—both the System V
 //! (Linux/macOS) eightbyte algorithm and the Windows x64 convention.
 //!
 //! Adapted from the Zig compiler (MIT License, "Copyright (c) Zig contributors"):
 //! `src/codegen/x86_64/abi.zig` @ 24fdd5b7a4 (Release 0.16.0). The classification
-//! algorithms — System V's per-eightbyte INTEGER/SSE classification with struct/union
-//! recursion and post-merge cleanup, and the Win64 size-based rules — are unchanged; they
+//! algorithms—System V's per-eightbyte INTEGER/SSE classification with struct/union
+//! recursion and post-merge cleanup, and the Win64 size-based rules—are unchanged; they
 //! have been rewritten to read Roc's layout store instead of Zig's `Type`/`Zcu`.
 //!
 //! Roc aggregates always use a C-compatible (extern-like) layout: fields are laid out at
@@ -49,10 +49,7 @@ pub const Class = enum {
     pub const stack: [8]Class = .{ .memory, .none, .none, .none, .none, .none, .none, .none };
 
     pub fn isX87(class: Class) bool {
-        return switch (class) {
-            .x87, .x87up => true,
-            else => false,
-        };
+        return class == .x87 or class == .x87up;
     }
 
     /// Combine a field's class with the eightbyte's running class (System V).
@@ -112,13 +109,8 @@ pub fn classifyWindows(store: *const Store, idx: Idx) Class {
         .zst => unreachable,
     }
 
-    return switch (size) {
-        1, 2, 4, 8 => .integer,
-        else => switch (lay.tag) {
-            .scalar => .win_i128, // a >8-byte integer scalar (i128)
-            else => .memory,
-        },
-    };
+    if (size == 1 or size == 2 or size == 4 or size == 8) return .integer;
+    return if (lay.tag == .scalar) .win_i128 else .memory;
 }
 
 /// Classify under the System V AMD64 ABI. Returns up to eight eightbyte classes; unused
@@ -184,8 +176,8 @@ fn classifyAggregateSysV(store: *const Store, result: *[8]Class, base_offset: u3
             var i: u32 = 0;
             while (i < field_count) : (i += 1) {
                 const field_off = base_offset + store.getStructFieldOffset(struct_idx, i);
-                // Unnamed padding holds uninitialized, alignment-1 bytes — not a
-                // typed member — so it classifies as INTEGER bytes (like a C
+                // Unnamed padding holds uninitialized, alignment-1 bytes—not a
+                // typed member—so it classifies as INTEGER bytes (like a C
                 // `char[N]`), regardless of the type it borrowed its size from.
                 if (store.getStructFieldIsPadding(struct_idx, i)) {
                     classifyPaddingBytesSysV(result, field_off, store.getStructFieldSize(struct_idx, i));
@@ -213,7 +205,15 @@ fn classifyAggregateSysV(store: *const Store, result: *[8]Class, base_offset: u3
             }
         },
         .closure => classifyAggregateSysV(store, result, base_offset, lay.getClosure().captures_layout_idx),
-        else => classifyMemberSysV(store, result, base_offset, idx),
+        .scalar,
+        .box,
+        .box_of_zst,
+        .list,
+        .list_of_zst,
+        .erased_callable,
+        .zst,
+        .ptr,
+        => classifyMemberSysV(store, result, base_offset, idx),
     }
 }
 
@@ -223,7 +223,15 @@ fn classifyMemberSysV(store: *const Store, result: *[8]Class, offset: u32, idx: 
     const lay = store.getLayout(idx);
     switch (lay.tag) {
         .struct_, .tag_union, .closure => classifyAggregateSysV(store, result, offset, idx),
-        else => {
+        .scalar,
+        .box,
+        .box_of_zst,
+        .list,
+        .list_of_zst,
+        .erased_callable,
+        .zst,
+        .ptr,
+        => {
             const member = classifySystemV(store, idx, .other);
             var j: usize = 0;
             while (j < member.len and member[j] != .none) : (j += 1) {
@@ -255,11 +263,10 @@ fn finishSystemV(result_in: [8]Class, size: u32) [8]Class {
 
     // "If one of the classes is MEMORY, the whole argument is passed in memory."
     // "If X87UP is not preceded by X87, the whole argument is passed in memory."
-    for (result, 0..) |class, i| switch (class) {
-        .memory => return Class.stack,
-        .x87up => if (i == 0 or result[i - 1] != .x87) return Class.stack,
-        else => continue,
-    };
+    for (result, 0..) |class, i| {
+        if (class == .memory) return Class.stack;
+        if (class == .x87up and (i == 0 or result[i - 1] != .x87)) return Class.stack;
+    }
 
     // "If the size of the aggregate exceeds two eightbytes and the first eightbyte isn't SSE
     // or any other eightbyte isn't SSEUP, the whole argument is passed in memory."
@@ -272,10 +279,7 @@ fn finishSystemV(result_in: [8]Class, size: u32) [8]Class {
 
     // "If SSEUP is not preceded by SSE or SSEUP, it is converted to SSE."
     for (&result, 0..) |*item, i| {
-        if (item.* == .sseup) switch (result[i - 1]) {
-            .sse, .sseup => continue,
-            else => item.* = .sse,
-        };
+        if (item.* == .sseup and result[i - 1] != .sse and result[i - 1] != .sseup) item.* = .sse;
     }
     return result;
 }
@@ -345,7 +349,7 @@ test "x86_64 SysV: unnamed padding classifies as integer bytes, not its declared
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
 
-    // { x : U64, _ : F64 } — the second eightbyte is 8 bytes of unnamed, alignment-1
+    // { x : U64, _ : F64 }—the second eightbyte is 8 bytes of unnamed, alignment-1
     // padding. It must classify as INTEGER (like a C `char[8]`), NOT SSE as a real
     // `double` member would, so a nominal mirroring `{ uint64_t; char[8]; }` is passed
     // in two integer registers rather than one integer + one SSE register.

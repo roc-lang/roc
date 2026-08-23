@@ -33,6 +33,9 @@ const LirPattern = lir_defs.LirPattern;
 const LirPatternId = lir_defs.LirPatternId;
 const LirPatternSpan = lir_defs.LirPatternSpan;
 const U64Span = lir_defs.U64Span;
+const U32Span = lir_defs.U32Span;
+const ErasedCallArgsPlan = lir_defs.ErasedCallArgsPlan;
+const ErasedCallArgsPlanId = lir_defs.ErasedCallArgsPlanId;
 
 /// Source-level name to use when presenting a specialized LIR proc in debug output.
 pub const ProcDebugName = extern struct {
@@ -60,6 +63,8 @@ join_points: GuardedList.List(JoinPoint, "LirStore.join_points"),
 locals: GuardedList.List(Local, "LirStore.locals"),
 local_ids: GuardedList.List(LocalId, "LirStore.local_ids"),
 u64s: GuardedList.List(u64, "LirStore.u64s"),
+u32s: GuardedList.List(u32, "LirStore.u32s"),
+erased_call_arg_plans: GuardedList.List(ErasedCallArgsPlan, "LirStore.erased_call_arg_plans"),
 proc_specs: GuardedList.List(LirProcSpec, "LirStore.proc_specs"),
 strings: base.StringLiteral.Store,
 string_builder: base.StringLiteral.BuilderState,
@@ -109,6 +114,8 @@ pub fn init(allocator: Allocator) Self {
         .locals = .empty,
         .local_ids = .empty,
         .u64s = .empty,
+        .u32s = .empty,
+        .erased_call_arg_plans = .empty,
         .proc_specs = .empty,
         .strings = base.StringLiteral.Store{},
         .string_builder = .{},
@@ -142,6 +149,8 @@ pub fn deinit(self: *Self) void {
     self.locals.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
     self.u64s.deinit(self.allocator);
+    self.u32s.deinit(self.allocator);
+    self.erased_call_arg_plans.deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
     self.string_builder.deinit(self.allocator);
     self.strings.deinit(self.allocator);
@@ -315,8 +324,13 @@ pub fn freshSyntheticSymbol(self: *Self) Symbol {
 
 /// Interns a string literal in the store-level string table.
 pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLiteral.Idx {
+    return try self.insertStringAligned(text, 1);
+}
+
+/// Interns string backing bytes with the requested minimum alignment.
+pub fn insertStringAligned(self: *Self, text: []const u8, alignment: u32) Allocator.Error!base.StringLiteral.Idx {
     self.assertStringsInsertable();
-    return self.string_builder.insert(&self.strings, self.allocator, text);
+    return self.string_builder.insertAligned(&self.strings, self.allocator, text, alignment);
 }
 
 /// Interns string backing bytes and returns a literal view into them.
@@ -325,6 +339,18 @@ pub fn insertStringView(
     backing: []const u8,
     offset: u32,
     len: u32,
+) Allocator.Error!lir_defs.StrLiteral {
+    return try self.insertStringViewAligned(backing, offset, len, 1);
+}
+
+/// Interns shared literal backing bytes, raising their runtime alignment to the
+/// maximum required by every string or packed-list view.
+pub fn insertStringViewAligned(
+    self: *Self,
+    backing: []const u8,
+    offset: u32,
+    len: u32,
+    alignment: u32,
 ) Allocator.Error!lir_defs.StrLiteral {
     const offset_usize: usize = offset;
     const len_usize: usize = len;
@@ -336,7 +362,7 @@ pub fn insertStringView(
     }
 
     return .{
-        .backing = try self.insertString(backing),
+        .backing = try self.insertStringAligned(backing, alignment),
         .offset = offset,
         .len = len,
     };
@@ -403,6 +429,22 @@ pub fn getLocalPtr(self: *Self, id: LocalId) *Local {
     return self.locals.getPtrImmediate(@intFromEnum(id));
 }
 
+/// Records the boxy descriptor governing a local's runtime payload.
+pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) void {
+    const local = self.getLocalPtr(id);
+    if (local.boxy_desc) |existing| {
+        if (!std.meta.eql(existing, desc)) {
+            std.debug.panic(
+                "LIR store invariant violated: local {d} was assigned two different boxy descriptors: existing={any} new={any}",
+                .{ @intFromEnum(id), existing, desc },
+            );
+        }
+        return;
+    }
+    local.boxy_desc = desc;
+}
+
+/// Attaches descriptor metadata without mutating existing LIR statements.
 /// Stores local ids and returns the corresponding flat-storage span.
 pub fn addLocalSpan(self: *Self, ids: []const LocalId) Allocator.Error!LocalSpan {
     if (ids.len == 0) return LocalSpan.empty();
@@ -431,6 +473,63 @@ pub fn getU64Span(self: *const Self, span: U64Span) StoreSpanBorrow(u64, "u64s")
     return self.u64s.borrowSpan(span.start, span.len);
 }
 
+/// Stores u32 values and returns the corresponding flat-storage span.
+pub fn addU32Span(self: *Self, values: []const u32) Allocator.Error!U32Span {
+    if (values.len == 0) return U32Span.empty();
+    const start: u32 = @intCast(self.u32s.len());
+    try self.u32s.appendSlice(self.allocator, values);
+    return .{ .start = start, .len = @intCast(values.len) };
+}
+
+/// Resolves a u32 span to its stored slice.
+pub fn getU32Span(self: *const Self, span: U32Span) StoreSpanBorrow(u32, "u32s") {
+    return self.u32s.borrowSpan(span.start, span.len);
+}
+
+/// Intern the canonical erased-call argument layout for an ordered signature.
+pub fn internErasedCallArgsPlan(
+    self: *Self,
+    layouts: *const layout.Store,
+    arg_layouts: []const layout.Idx,
+) Allocator.Error!ErasedCallArgsPlanId {
+    const offsets = try self.allocator.alloc(u32, arg_layouts.len);
+    defer self.allocator.free(offsets);
+    const metrics = layout.erased_call_abi.plan(layouts, arg_layouts, offsets);
+
+    for (self.erased_call_arg_plans.unsafeRawItemsForView(), 0..) |existing, index| {
+        const existing_offsets = self.u32s.unsafeRawItemsForView()[existing.offsets.start..][0..existing.offsets.len];
+        if (existing.size == metrics.size and
+            existing.alignment == metrics.alignment and
+            std.mem.eql(u32, existing_offsets, offsets))
+        {
+            return @enumFromInt(@as(u32, @intCast(index)));
+        }
+    }
+
+    const id: ErasedCallArgsPlanId = @enumFromInt(@as(u32, @intCast(self.erased_call_arg_plans.len())));
+    try self.erased_call_arg_plans.append(self.allocator, .{
+        .offsets = try self.addU32Span(offsets),
+        .size = metrics.size,
+        .alignment = metrics.alignment,
+    });
+    return id;
+}
+
+/// Return an interned erased-call argument layout plan.
+pub fn getErasedCallArgsPlan(self: *const Self, id: ErasedCallArgsPlanId) ErasedCallArgsPlan {
+    return self.erased_call_arg_plans.get(@intFromEnum(id));
+}
+
+/// Return the number of interned erased-call argument layout plans.
+pub fn erasedCallArgsPlanCount(self: *const Self) usize {
+    return self.erased_call_arg_plans.len();
+}
+
+/// Borrow the ordered field offsets named by an erased-call argument layout plan.
+pub fn getErasedCallArgOffsets(self: *const Self, plan: ErasedCallArgsPlan) StoreSpanBorrow(u32, "u32s") {
+    return self.u32s.borrowSpan(plan.offsets.start, plan.offsets.len);
+}
+
 /// Appends a statement/control-flow node and returns its id.
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
     const idx = self.cf_stmts.len();
@@ -448,6 +547,18 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
         .assign_call,
         .assign_call_erased,
         .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
         .assign_low_level,
         .assign_list,
         .assign_struct,

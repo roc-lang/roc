@@ -14,18 +14,16 @@ main = (picked(1), picked("a"))
 # EXPECTED
 TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
 # PROBLEMS
+── ✗ type mismatch ──────────────────────── generalize_alias_if_branches.md:5:27
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
-└┬──────────────┘  type is needed.                                            │
- │                                                                            │
- │  main = (picked(1), picked("a"))                                           │
- │                            ‾‾‾                                             │
- └────────────────────────────────────── generalize_alias_if_branches.md:5:27 ┘
+This string literal is being used where a non-string type is needed.
 
-    The type was determined to be:
+main = (picked(1), picked("a"))
+                          ^^^
 
-        Dec
+The type was determined to be:
+
+    Dec
 
 # TOKENS
 ~~~zig
@@ -93,11 +91,11 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 231)
+				(e-call (constraint-fn-var 241)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 240)
+				(e-call (constraint-fn-var 250)
 					(e-lookup-local
 						(p-assign (ident "picked")))
 					(e-runtime-error (tag "erroneous_value_expr")))))))

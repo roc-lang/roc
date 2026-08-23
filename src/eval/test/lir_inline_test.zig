@@ -1,6 +1,7 @@
 //! Structural LIR tests for post-check wrapper inlining.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
 const eval = @import("eval");
@@ -17,7 +18,7 @@ const MonoAst = postcheck.Monotype.Ast;
 const MonoLower = postcheck.Monotype.Lower;
 const MonoType = postcheck.Monotype.Type;
 
-const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || error{
+const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || lir.CheckedPipeline.LowerResourceError || error{
     TestExpectedEqual,
     TestUnexpectedResult,
     MissingRootProcedure,
@@ -85,10 +86,12 @@ fn lowerModule(
 }
 
 const LowerModuleOptions = struct {
+    specialization_strategy: base.SpecializationStrategy = .lss,
     checked_module_state: lir.CheckedPipeline.CheckedModuleState = .complete,
     inline_expects: lir.CheckedPipeline.InlineExpectMode = .run,
     proc_debug_names: bool = false,
     tag_reachability: bool = false,
+    promote_loop_appends: bool = true,
     imports: []const helpers.ModuleSource = &.{},
 };
 
@@ -115,19 +118,31 @@ fn lowerModuleWithOptions(
         view_index += 1;
     }
 
+    const main_def = resources.can.explicitRootDefByName("main") orelse return error.MissingRootProcedure;
+    const main_request = for (resources.checked_artifact.root_requests.requests) |request| {
+        switch (request.source) {
+            .def => |def| if (def == main_def) break request,
+            .expr, .statement, .required_binding, .hoisted => {},
+        }
+    } else return error.MissingRootProcedure;
+    const published_roots = [_]check.CheckedArtifact.RootRequest{main_request};
+
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .requests = &published_roots },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .consume_dead_boxes = false,
+            .specialization_strategy = options.specialization_strategy,
             .checked_module_state = options.checked_module_state,
             .inline_mode = inline_mode,
             .inline_expects = options.inline_expects,
             .proc_debug_names = options.proc_debug_names,
+            .promote_loop_appends = options.promote_loop_appends,
             .tag_reachability = options.tag_reachability,
         },
     );
@@ -157,6 +172,9 @@ const LowerMonotypeOptions = struct {
     specialization_cache: MonoLower.SpecializationCacheControl = .{},
     loaded_specialization_shards: []const MonoLower.LoadedSpecializationShard = &.{},
     specialization_counters: ?*MonoLower.SpecializationCounters = null,
+    diagnostics: ?*MonoLower.Diagnostics = null,
+    root_selection: enum { all, test_expects } = .all,
+    procedure_template_root_grouping: postcheck.Common.ProcedureTemplateRootGrouping = .isolated,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -181,17 +199,33 @@ fn lowerMonotypeModuleWithOptions(
         view_index += 1;
     }
 
+    var selected_test_roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    defer selected_test_roots.deinit(allocator);
+    const root_requests = switch (options.root_selection) {
+        .all => resources.checked_artifact.root_requests.requests,
+        .test_expects => blk: {
+            for (resources.checked_artifact.root_requests.requests) |request| {
+                if (request.kind == .test_expect) try selected_test_roots.append(allocator, request);
+            }
+            break :blk selected_test_roots.items;
+        },
+    };
+
     var mono = try postcheck.Monotype.Lower.run(
         allocator,
         .{
             .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
             .imports = import_views,
         },
-        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{
+            .requests = root_requests,
+            .procedure_template_root_grouping = options.procedure_template_root_grouping,
+        },
         .{
             .specialization_cache = options.specialization_cache,
             .loaded_specialization_shards = options.loaded_specialization_shards,
             .specialization_counters = options.specialization_counters,
+            .diagnostics = options.diagnostics,
         },
     );
     errdefer mono.deinit();
@@ -426,7 +460,7 @@ const DurableTypeSnapshot = struct {
     }
 };
 
-fn durableTypeSnapshot(allocator: Allocator, program: *const MonoAst.Program) Allocator.Error!DurableTypeSnapshot {
+fn durableTypeSnapshot(allocator: Allocator, program: *MonoAst.Program) Allocator.Error!DurableTypeSnapshot {
     const store_view = program.types.view();
     const type_digests = try allocator.alloc(check.CheckedNames.TypeDigest, store_view.types.len);
     errdefer allocator.free(type_digests);
@@ -509,17 +543,17 @@ fn expectSpecsCoveredByCachedOrLoaded(
 fn isUnaryPrimitiveFnSpec(view: MonoAst.ProgramView, record: MonoAst.SpecRecord, primitive: MonoType.Primitive) bool {
     const func = switch (view.types.get(record.solved_fn_ty)) {
         .func => |func| func,
-        else => return false,
+        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => return false,
     };
     const args = view.types.span(func.args);
     if (args.len != 1) return false;
     const arg_matches = switch (view.types.get(args[0])) {
         .primitive => |arg| arg == primitive,
-        else => false,
+        .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
     };
     const ret_matches = switch (view.types.get(func.ret)) {
         .primitive => |ret| ret == primitive,
-        else => false,
+        .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => false,
     };
     return arg_matches and ret_matches;
 }
@@ -583,7 +617,14 @@ fn runLoweredWithHostEvents(
         .arg_layouts = arg_layouts,
     }) catch |err| switch (err) {
         error.Crash => return runtime_env.snapshot(allocator),
-        else => return err,
+        error.ComptimeExhaustiveness,
+        error.DivisionByZero,
+        error.ExpectErr,
+        error.InvalidHostedFunctionSignature,
+        error.OutOfMemory,
+        error.RuntimeError,
+        error.UnsupportedHostedFunction,
+        => return err,
     };
     switch (result) {
         .value => {},
@@ -606,7 +647,7 @@ fn expectOptimizedDbgEvents(source: []const u8, expected: []const []const u8) Te
     for (expected, run.events) |expected_event, actual_event| {
         switch (actual_event) {
             .dbg => |msg| try std.testing.expectEqualStrings(expected_event, msg),
-            else => return error.TestUnexpectedResult,
+            .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
         }
     }
 }
@@ -622,7 +663,50 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
         switch (stmt) {
             .debug => counts.debug += 1,
             .expect => counts.expect += 1,
-            else => {},
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => {},
         }
     }
     return counts;
@@ -1068,8 +1152,7 @@ fn expectInlinePlanDecision(
 }
 
 fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!LIR.LirProcSpecId {
-    try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.root_procs.items.len);
-    return lowered.lir_result.root_procs.items[0];
+    return lowered.main_proc orelse error.MissingRootProcedure;
 }
 
 fn collectAssignCallProcs(
@@ -1087,7 +1170,7 @@ fn collectAssignCallProcs(
     defer work.deinit(allocator);
     try work.append(allocator, body);
 
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |stmt_id| {
@@ -1106,6 +1189,21 @@ fn collectAssignCallProcs(
             },
             .assign_call_erased => |stmt| try work.append(allocator, stmt.next),
             .assign_packed_erased_fn => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
+            .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
+            .boxy_tag_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
             .assign_low_level => |stmt| try work.append(allocator, stmt.next),
             .assign_list => |stmt| try work.append(allocator, stmt.next),
             .assign_struct => |stmt| try work.append(allocator, stmt.next),
@@ -1247,7 +1345,7 @@ fn reachableIterCollectShape(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |proc_id| {
@@ -1273,7 +1371,7 @@ fn reachableProcShapeCount(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var count: usize = 0;
@@ -1408,6 +1506,10 @@ fn markReachableLiftedExpr(
             const branches = program.branchSpan(match.branches);
             for (0..branches.len) |i| {
                 const branch = GuardedList.at(branches, i);
+                const bindings = program.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| {
+                    markReachableLiftedStmt(program, GuardedList.at(bindings, binding_index), reachable);
+                }
                 if (branch.guard) |guard| markReachableLiftedExpr(program, guard, reachable);
                 markReachableLiftedExpr(program, branch.body, reachable);
             }
@@ -1628,7 +1730,14 @@ fn expectRootTargetHasCalls(
 fn nestedSite(def: postcheck.Monotype.Ast.NestedDef) ?postcheck.Monotype.Ast.NestedFn {
     return switch (def.fn_def.fn_def) {
         .nested => |site| site,
-        else => null,
+        .local_template,
+        .imported_template,
+        .local_hosted,
+        .imported_hosted,
+        .checked_generated,
+        .parser_runtime,
+        .encoder_for_runtime,
+        => null,
     };
 }
 
@@ -1783,6 +1892,7 @@ test "issue 10121 shared JSON helpers preserve optional nested round trips" {
         .native,
         try sharedPrePublishedBuiltin(),
         null,
+        .lss,
     );
     defer compiled.deinit(allocator);
 
@@ -1822,15 +1932,18 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     ;
 
     try expectMonotypeSpecializationCountersWithin(try monotypeCountersForModule(allocator, source), .{
-        .template_requests = 27,
-        .template_hits = 22,
-        .template_misses = 5,
+        // The eight scalar `plus` method calls are producer-authored low-level
+        // operations, so direct publication emits them without procedure
+        // specialization requests.
+        .template_requests = 19,
+        .template_hits = 15,
+        .template_misses = 4,
         .nested_requests = 16,
         .nested_hits = 8,
         .nested_misses = 8,
         .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 84,
+        .specialization_type_digest_requests = 74,
         .max_specialization_type_digest_cache_hits = 160,
         .max_specialization_type_digest_cache_misses = 160,
         .max_specialization_type_digest_nodes_visited = 160,
@@ -1838,6 +1951,106 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .nominal_backing_reuses = 1,
         .nominal_backing_instantiations = 86,
     });
+}
+
+test "test roots share template work only when explicitly grouped" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\expect identity(1) == 1
+        \\expect identity(2) == 2
+        \\
+        \\main = 0
+    ;
+
+    var isolated_diagnostics = MonoLower.Diagnostics{};
+    var isolated = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &isolated_diagnostics,
+        .root_selection = .test_expects,
+    });
+    defer isolated.deinit(allocator);
+
+    var shared_diagnostics = MonoLower.Diagnostics{};
+    var shared = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .diagnostics = &shared_diagnostics,
+        .root_selection = .test_expects,
+        .procedure_template_root_grouping = .shared_adjacent,
+    });
+    defer shared.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 0), isolated_diagnostics.body.cross_root_template_reuses);
+    try std.testing.expect(shared_diagnostics.body.cross_root_template_reuses > 0);
+}
+
+test "issue 10529 open Try chain with named local callback stays bounded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\take0 = |b| {
+        \\    to_end = |_| End
+        \\    Ok({ val: b.get(0).map_err(to_end)?, rest: b.drop_first(1) })
+        \\}
+        \\take1 = |b| Ok({ val: take0(b)?.val, rest: take0(b)?.rest })
+        \\take2 = |b| Ok({ val: take1(b)?.val, rest: take1(b)?.rest })
+        \\take3 = |b| Ok({ val: take2(b)?.val, rest: take2(b)?.rest })
+        \\take4 = |b| Ok({ val: take3(b)?.val, rest: take3(b)?.rest })
+        \\take5 = |b| Ok({ val: take4(b)?.val, rest: take4(b)?.rest })
+        \\take6 = |b| Ok({ val: take5(b)?.val, rest: take5(b)?.rest })
+        \\
+        \\main : {} -> Try({ val : U8, rest : List(U8) }, [End, ..])
+        \\main = |_| take6([1, 2, 3])
+    ;
+
+    const counters = try monotypeCountersForModule(allocator, source);
+    try std.testing.expect(counters.template_misses <= 20);
+    // Generalized record fields retain distinct source-value/runtime-slot
+    // cells until specialization freeze. Keep that fixed linear bookkeeping
+    // bounded while guarding against the former exponential Try-chain growth.
+    try std.testing.expect(counters.nominal_backing_instantiations <= 325);
+}
+
+test "specialization interface replay follows returned local functions through wrappers" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\mk = |f| {
+        \\    show = || f({}).map_err(|_| ShowFailed)
+        \\    show
+        \\}
+        \\
+        \\wrap = |f| mk(f)
+        \\
+        \\main : {} -> Try({}, [ShowFailed])
+        \\main = |_| {
+        \\    f : {} -> Try({}, [Empty])
+        \\    f = |_| Ok({})
+        \\    wrap(f)()
+        \\}
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
+}
+
+test "specialization interface replay keeps unequal generic requests through local dependencies distinct" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\id = |value| value
+        \\
+        \\make = |value| {
+        \\    get = || id(value)
+        \\    get
+        \\}
+        \\
+        \\pair = |left, right| {
+        \\    left: make(left)(),
+        \\    right: make(right)(),
+        \\}
+        \\
+        \\main : {} -> { left : U64, right : Str }
+        \\main = |_| pair(1, "one")
+    ;
+
+    _ = try monotypeCountersForModule(allocator, source);
 }
 
 test "issue 9802 growing-structural map2 specialization counters are bounded" {
@@ -1922,6 +2135,44 @@ test "imported and local generic specialization counters reuse closed types" {
     try std.testing.expect(counters.template_misses >= 2);
     try std.testing.expect(counters.template_hits >= 2);
     try std.testing.expect(counters.template_lookup_candidates <= counters.template_requests);
+}
+
+test "closed direct method calls reuse specialization before durable key construction" {
+    const allocator = std.testing.allocator;
+    const one_call =
+        \\Thing := [Val(U64)].{
+        \\    next : Thing -> Thing
+        \\    next = |Thing.Val(n)| Thing.Val(n.plus_wrap(1))
+        \\}
+        \\
+        \\main : Thing
+        \\main = Thing.Val(0).next()
+    ;
+    const repeated_calls =
+        \\Thing := [Val(U64)].{
+        \\    next : Thing -> Thing
+        \\    next = |Thing.Val(n)| Thing.Val(n.plus_wrap(1))
+        \\}
+        \\
+        \\main : Thing
+        \\main = {
+        \\    v0 = Thing.Val(0)
+        \\    v1 = v0.next()
+        \\    v2 = v1.next()
+        \\    v3 = v2.next()
+        \\    v4 = v3.next()
+        \\    v5 = v4.next()
+        \\    v6 = v5.next()
+        \\    v7 = v6.next()
+        \\    v7.next()
+        \\}
+    ;
+
+    const one = try monotypeCountersForModule(allocator, one_call);
+    const repeated = try monotypeCountersForModule(allocator, repeated_calls);
+    try std.testing.expectEqual(one.template_requests, repeated.template_requests);
+    try std.testing.expectEqual(one.template_misses, repeated.template_misses);
+    try std.testing.expectEqual(one.specialization_type_digest_requests, repeated.specialization_type_digest_requests);
 }
 
 test "alias-heavy generic specialization count does not exceed backing types" {
@@ -2182,7 +2433,7 @@ test "differently ordered source record rows produce normalized monotype rows" {
     for (type_view.types) |content| {
         const span = switch (content) {
             .record => |fields| fields,
-            else => continue,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => continue,
         };
         const fields = type_view.fieldSpan(span);
         if (fields.len != 2) continue;
@@ -2532,6 +2783,52 @@ test "interpreter captures the virtual source frame of an inlined crash" {
         try std.testing.expectEqualStrings("read", store.getString(scope.source_name));
         try std.testing.expect(scope.source_loc.hasLocation());
         try std.testing.expect(scope.call_site.hasLocation());
+        return;
+    };
+    return error.TestUnexpectedResult;
+}
+
+test "boxy lowering preserves a runtime-built crash message" {
+    const allocator = std.testing.allocator;
+    const expected_message = "runtime-built crash message long enough for heap storage: 42";
+    var lowered_source = try lowerModuleWithOptions(allocator,
+        \\main : I64
+        \\main = {
+        \\    n : I64
+        \\    n = 42
+        \\    crash "runtime-built crash message long enough for heap storage: ${n.to_str()}"
+        \\}
+    , .none, .{ .specialization_strategy = .boxy });
+    defer lowered_source.deinit(allocator);
+
+    const result = &lowered_source.lowered.lir_result;
+    var found_local_crash_message = false;
+    for (0..result.store.cf_stmts.len()) |stmt_index| {
+        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const stmt = result.store.getCFStmt(stmt_id);
+        if (std.meta.activeTag(stmt) != .crash) continue;
+        switch (stmt.crash.msg) {
+            .literal => {},
+            .local => found_local_crash_message = true,
+        }
+    }
+    try std.testing.expect(found_local_crash_message);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.initWithBoxyTables(
+        allocator,
+        &result.store,
+        &result.layouts,
+        eval.boxy_runtime.BoxyTables.fromResult(result),
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    _ = interpreter.eval(.{ .proc_id = try rootProc(&lowered_source.lowered) }) catch |err| {
+        try std.testing.expectEqual(error.Crash, err);
+        try std.testing.expectEqualStrings(expected_message, interpreter.getCrashMessage() orelse return error.TestUnexpectedResult);
         return;
     };
     return error.TestUnexpectedResult;
@@ -2979,6 +3276,18 @@ test "LIR statements and procs carry resolved source locations" {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -3209,15 +3518,15 @@ fn expectOptimizedHostEvents(
         switch (expected_event) {
             .dbg => |expected_msg| switch (actual_event) {
                 .dbg => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
-                else => return error.TestUnexpectedResult,
+                .expect_failed, .crashed, .effect => return error.TestUnexpectedResult,
             },
             .expect_failed => switch (actual_event) {
                 .expect_failed => {},
-                else => return error.TestUnexpectedResult,
+                .dbg, .crashed, .effect => return error.TestUnexpectedResult,
             },
             .crashed => |expected_msg| switch (actual_event) {
                 .crashed => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
-                else => return error.TestUnexpectedResult,
+                .dbg, .expect_failed, .effect => return error.TestUnexpectedResult,
             },
         }
     }
@@ -3239,7 +3548,7 @@ fn collectLirResultProcShape(
     defer work.deinit(allocator);
     try work.append(allocator, body);
 
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |stmt_id| {
@@ -3263,24 +3572,36 @@ fn collectLirResultProcShape(
                 shape.packed_erased_fn_count += 1;
                 try work.append(allocator, stmt.next);
             },
+            .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
+            .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
+            .boxy_tag_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
             .assign_low_level => |stmt| {
                 shape.low_level_count += 1;
-                switch (stmt.op) {
-                    .list_len => shape.list_len_count += 1,
-                    .list_get_unsafe => shape.list_get_unsafe_count += 1,
-                    .list_with_capacity => shape.list_with_capacity_count += 1,
-                    .list_append_unsafe => shape.list_append_unsafe_count += 1,
-                    .list_reserve => shape.list_reserve_count += 1,
-                    .str_count_utf8_bytes => shape.str_count_utf8_bytes_count += 1,
-                    .str_concat => shape.str_concat_count += 1,
-                    .box_box => shape.box_box_count += 1,
-                    .box_unbox => shape.box_unbox_count += 1,
-                    .box_prepare_update => shape.box_prepare_update_count += 1,
-                    .ptr_cast => shape.ptr_cast_count += 1,
-                    .ptr_load => shape.ptr_load_count += 1,
-                    .ptr_store => shape.ptr_store_count += 1,
-                    else => {},
-                }
+                if (stmt.op == .list_len) shape.list_len_count += 1;
+                if (stmt.op == .list_get_unsafe) shape.list_get_unsafe_count += 1;
+                if (stmt.op == .list_with_capacity) shape.list_with_capacity_count += 1;
+                if (stmt.op == .list_append_unsafe) shape.list_append_unsafe_count += 1;
+                if (stmt.op == .list_reserve) shape.list_reserve_count += 1;
+                if (stmt.op == .str_count_utf8_bytes) shape.str_count_utf8_bytes_count += 1;
+                if (stmt.op == .str_concat) shape.str_concat_count += 1;
+                if (stmt.op == .box_box) shape.box_box_count += 1;
+                if (stmt.op == .box_unbox or stmt.op == .box_unbox_borrowed) shape.box_unbox_count += 1;
+                if (stmt.op == .box_prepare_update) shape.box_prepare_update_count += 1;
+                if (stmt.op == .ptr_cast) shape.ptr_cast_count += 1;
+                if (stmt.op == .ptr_load) shape.ptr_load_count += 1;
+                if (stmt.op == .ptr_store) shape.ptr_store_count += 1;
                 try work.append(allocator, stmt.next);
             },
             .assign_list => |stmt| try work.append(allocator, stmt.next),
@@ -3381,7 +3702,7 @@ fn reachableProcDebugName(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     while (work.pop()) |proc_id| {
@@ -3408,7 +3729,7 @@ fn reachableProcShapeFieldTotal(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var total: usize = 0;
@@ -3455,6 +3776,239 @@ fn expectReachableProcShapeFieldEqual(
 ) TestError!void {
     const actual = try reachableProcShapeFieldTotal(allocator, lowered, field_name);
     try std.testing.expectEqual(expected, actual);
+}
+
+// A producer-authored concrete iterator representation must survive ordinary
+// procedure returns and all supported static-dispatch invocation forms. Each
+// case below must reach `sum_it` (the debug-name sanity probe), avoid the public
+// `Iter.next` boundary, and lower without iterator-state heap or ARC operations.
+// List-backed cases retain exactly the one decref required to release their
+// concrete source list; range-backed cases have none.
+test "iterator producers and delegating wrappers fuse into a scalar loop" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, decrefs: usize, src: []const u8 }{
+        .{ .name = "direct List (baseline)", .decrefs = 1, .src =
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in xs {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "type alias of List", .decrefs = 1, .src =
+        \\Nums : List(U64)
+        \\
+        \\sum_it : Nums -> U64
+        \\sum_it = |xs| {
+        \\    var $sum = 0
+        \\    for x in xs {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "record wrapper with method delegate", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    var $sum = 0
+        \\    for x in rows {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "tag wrapper with qualified delegate", .decrefs = 1, .src =
+        \\Bag(a) := [Items({ entries : List(a) })].{
+        \\    iter : Bag(a) -> Iter(a)
+        \\    iter = |bag| match bag {
+        \\        Bag.Items(data) => List.iter(data.entries)
+        \\    }
+        \\}
+        \\
+        \\sum_it : Bag(U64) -> U64
+        \\sum_it = |bag| {
+        \\    var $sum = 0
+        \\    for x in bag {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Bag.Items({ entries: [1, 2, 3] }))
+        },
+        .{ .name = "generic record wrapper", .decrefs = 1, .src =
+        \\Bag(a) := { entries : List(a) }.{
+        \\    iter : Bag(a) -> Iter(a)
+        \\    iter = |bag| bag.entries.iter()
+        \\}
+        \\
+        \\sum_it : Bag(U64) -> U64
+        \\sum_it = |bag| {
+        \\    var $sum = 0
+        \\    for x in bag {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Bag.{ entries: [1, 2, 3] })
+        },
+        .{ .name = "two-parameter generic tuple wrapper", .decrefs = 1, .src =
+        \\Bag(k, v) := { entries : List((k, v)) }.{
+        \\    iter : Bag(k, v) -> Iter((k, v))
+        \\    iter = |bag| bag.entries.iter()
+        \\}
+        \\
+        \\sum_it : Bag(U64, U64) -> U64
+        \\sum_it = |bag| {
+        \\    var $sum = 0
+        \\    for pair in bag {
+        \\        $sum = $sum + pair.0 + pair.1
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Bag.{ entries: [(1, 10), (2, 20)] })
+        },
+        .{ .name = "explicit method invocation", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    iter = rows.iter()
+        \\    var $sum = 0
+        \\    for x in iter {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "fully qualified invocation", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    iter = Rows.iter(rows)
+        \\    var $sum = 0
+        \\    for x in iter {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "reverse-list delegate", .decrefs = 1, .src =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter_rev()
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    var $sum = 0
+        \\    for x in rows {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+        .{ .name = "range delegate", .decrefs = 0, .src =
+        \\Span := { first : U8, last : U8 }.{
+        \\    iter : Span -> Iter(U8)
+        \\    iter = |span| span.first.until(span.last)
+        \\}
+        \\
+        \\sum_it : Span -> U64
+        \\sum_it = |span| {
+        \\    var $sum = 0
+        \\    for x in span {
+        \\        $sum = $sum + x.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Span.{ first: 1, last: 4 })
+        },
+        .{ .name = "method-syntax ascending range", .decrefs = 0, .src =
+        \\sum_it : U8 -> U64
+        \\sum_it = |n| {
+        \\    var $sum = 0
+        \\    for x in 0.U8.until(n) {
+        \\        $sum = $sum + x.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(4)
+        },
+    };
+
+    for (cases) |c| {
+        var opt = try lowerModuleWithProcDebugNames(allocator, c.src, .wrappers, true);
+        defer opt.deinit(allocator);
+        if (!try reachableProcDebugName(allocator, &opt.lowered, "sum_it")) {
+            std.debug.print("debug-name sanity probe missing for case: {s}\n", .{c.name});
+            return error.TestUnexpectedResult;
+        }
+        if (try reachableProcDebugName(allocator, &opt.lowered, "Builtin.Iter.next")) {
+            std.debug.print("iterator fusion lost for case: {s}\n", .{c.name});
+            return error.TestUnexpectedResult;
+        }
+        inline for (.{
+            "box_box_count",
+            "erased_call_count",
+            "packed_erased_fn_count",
+            "list_with_capacity_count",
+            "incref_count",
+        }) |field_name| {
+            const actual = try reachableProcShapeFieldTotal(allocator, &opt.lowered, field_name);
+            if (actual != 0) {
+                std.debug.print("unexpected {s}={d} for case: {s}\n", .{ field_name, actual, c.name });
+                return error.TestUnexpectedResult;
+            }
+        }
+        const actual_decrefs = try reachableProcShapeFieldTotal(allocator, &opt.lowered, "decref_count");
+        if (actual_decrefs != c.decrefs) {
+            std.debug.print("unexpected decref_count={d} for case: {s}\n", .{ actual_decrefs, c.name });
+            return error.TestUnexpectedResult;
+        }
+        try expectLoweredIterChainAllocatesNothing(allocator, &opt.lowered);
+    }
 }
 
 fn expectStaticListIterAppendLoopAvoidsListAppendAllocation(
@@ -3506,10 +4060,11 @@ fn expectLoweredIterStateHasNoBoxesOrErasedCallables(
     try expectReachableProcShapeFieldEqual(allocator, lowered, "packed_erased_fn_count", 0);
 }
 
-// Repro for https://github.com/roc-lang/roc/issues/10429: numeric `until` and
-// `range_exclusive` iterators consumed directly by `for` have scalar state,
-// with no heap or ARC operations.
-test "issue 10429 numeric until and range_exclusive loops have no heap or RC operations" {
+// Repro for https://github.com/roc-lang/roc/issues/10429: numeric ranges
+// consumed directly by `for` have scalar state, with no heap or ARC
+// operations. All four spellings live in one body so their distinct producer
+// representations cannot be accidentally deduplicated.
+test "issue 10429 numeric range spellings in one body have no heap or RC operations" {
     const allocator = std.testing.allocator;
     const numeric_types = [_][]const u8{
         "U8",  "I8",  "U16",  "I16",  "U32", "I32",
@@ -3518,42 +4073,331 @@ test "issue 10429 numeric until and range_exclusive loops have no heap or RC ope
 
     for (numeric_types) |numeric_type| {
         const source = try std.fmt.allocPrint(allocator,
-            \\until_last : {s} -> {s}
-            \\until_last = |n| {{
+            \\all_last : {s} -> ({s}, {s}, {s}, {s})
+            \\all_last = |n| {{
             \\    var $last = 0.{s}
             \\    for i in {s}.until(0, n) {{
             \\        $last = i
             \\    }}
-            \\    $last
-            \\}}
-            \\
-            \\range_last : {s} -> {s}
-            \\range_last = |n| {{
-            \\    var $last = 0.{s}
-            \\    for i in {s}.range_exclusive(0, n) {{
+            \\    until_last = $last
+            \\    $last = 0.{s}
+            \\    for i in {s}.range_exclusive_to(0, n) {{
             \\        $last = i
             \\    }}
-            \\    $last
+            \\    exclusive_last = $last
+            \\    $last = 0.{s}
+            \\    for i in {s}.to(0, n) {{
+            \\        $last = i
+            \\    }}
+            \\    to_last = $last
+            \\    $last = 0.{s}
+            \\    for i in {s}.range_inclusive_to(0, n) {{
+            \\        $last = i
+            \\    }}
+            \\    (until_last, exclusive_last, to_last, $last)
             \\}}
             \\
-            \\main : {s} -> ({s}, {s})
-            \\main = |n| (until_last(n), range_last(n))
+            \\main : {s} -> ({s}, {s}, {s}, {s})
+            \\main = |n| all_last(n)
         , .{
             numeric_type, numeric_type, numeric_type, numeric_type,
             numeric_type, numeric_type, numeric_type, numeric_type,
-            numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type,
         });
         defer allocator.free(source);
 
-        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .proc_debug_names = true,
+            .tag_reachability = true,
+        });
         defer optimized.deinit(allocator);
 
+        if (try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next")) {
+            std.debug.print("numeric range fusion lost for {s}\n", .{numeric_type});
+            return error.TestUnexpectedResult;
+        }
         try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "incref_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "decref_if_initialized_count", 0);
         try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "free_count", 0);
     }
+}
+
+test "F32 and F64 range syntax fuses without Iter.next" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "F32", "F64" }) |numeric_type| {
+        const source = try std.fmt.allocPrint(allocator,
+            \\all_last : {s} -> ({s}, {s})
+            \\all_last = |n| {{
+            \\    var $exclusive = 0.0.{s}
+            \\    for i in 0.0.{s}..<n {{
+            \\        $exclusive = i
+            \\    }}
+            \\    var $inclusive = 0.0.{s}
+            \\    for i in 0.0.{s}..=n {{
+            \\        $inclusive = i
+            \\    }}
+            \\    ($exclusive, $inclusive)
+            \\}}
+            \\
+            \\main : {s} -> ({s}, {s})
+            \\main = |n| all_last(n)
+        , .{
+            numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type,
+            numeric_type, numeric_type, numeric_type,
+            numeric_type,
+        });
+        defer allocator.free(source);
+
+        var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .proc_debug_names = true,
+            .tag_reachability = true,
+        });
+        defer optimized.deinit(allocator);
+
+        if (try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next")) {
+            std.debug.print("floating-point range fusion lost for {s}\n", .{numeric_type});
+            return error.TestUnexpectedResult;
+        }
+        try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+    }
+}
+
+test "nested iterator results retain the callee-authored representation" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, source: []const u8 }{
+        .{ .name = "record", .source =
+        \\wrap : List(U64) -> { it : Iter(U64) }
+        \\wrap = |items| { it: items.iter() }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "tuple", .source =
+        \\wrap : List(U64) -> (Iter(U64), U64)
+        \\wrap = |items| (items.iter(), 1)
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.0 {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "list", .source =
+        \\wrap : List(U64) -> List(Iter(U64))
+        \\wrap = |items| [items.iter()]
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    var $sum = 0
+        \\    for iter in wrap(items) {
+        \\        for x in iter {
+        \\            $sum = $sum + x
+        \\        }
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "nominal record", .source =
+        \\Wrapped := { it : Iter(U64) }
+        \\
+        \\wrap : List(U64) -> Wrapped
+        \\wrap = |items| Wrapped.{ it: items.iter() }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    var $sum = 0
+        \\    for x in wrapped.it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "Try", .source =
+        \\wrap : List(U64) -> Try(Iter(U64), [Unavailable])
+        \\wrap = |items| Ok(items.iter())
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| match wrap(items) {
+        \\    Ok(iter) => {
+        \\        var $sum = 0
+        \\        for x in iter {
+        \\            $sum = $sum + x
+        \\        }
+        \\        $sum
+        \\    }
+        \\    Err(_) => 0
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "match field access", .source =
+        \\wrap : List(U64) -> { it : Try(Iter(U64), [Unavailable]) }
+        \\wrap = |items| { it: Ok(items.iter()) }
+        \\
+        \\sum_it : List(U64) -> U64
+        \\sum_it = |items| {
+        \\    wrapped = wrap(items)
+        \\    match wrapped.it {
+        \\        Ok(iter) => {
+        \\            var $sum = 0
+        \\            for x in iter {
+        \\                $sum = $sum + x
+        \\            }
+        \\            $sum
+        \\        }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it([1, 2, 3])
+        },
+        .{ .name = "closed direct Try method", .source =
+        \\Rows := { items : List(U64) }.{
+        \\    wrapped : Rows -> Try(Iter(U64), [Unavailable])
+        \\    wrapped = |rows| Ok(rows.items.iter())
+        \\}
+        \\
+        \\sum_it : Rows -> U64
+        \\sum_it = |rows| {
+        \\    wrapped = rows.wrapped()
+        \\    match wrapped {
+        \\        Ok(iter) => {
+        \\            var $sum = 0
+        \\            for x in iter {
+        \\                $sum = $sum + x
+        \\            }
+        \\            $sum
+        \\        }
+        \\        Err(_) => 0
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_it(Rows.{ items: [1, 2, 3] })
+        },
+    };
+
+    for (cases) |case| {
+        var optimized = try lowerModuleWithProcDebugNames(allocator, case.source, .wrappers, true);
+        defer optimized.deinit(allocator);
+
+        if (try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next")) {
+            std.debug.print("nested iterator result lost representation for {s} wrapper\n", .{case.name});
+            return error.TestUnexpectedResult;
+        }
+        try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+    }
+}
+
+test "completed iterator method specs refresh their public lookup keys" {
+    const allocator = std.testing.allocator;
+    const single_source =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_once : Rows -> U64
+        \\sum_once = |rows| {
+        \\    first = rows.iter()
+        \\    var $sum = 0
+        \\    for x in first {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_once(Rows.{ items: [1, 2, 3] })
+    ;
+    const source =
+        \\Rows := { items : List(U64) }.{
+        \\    iter : Rows -> Iter(U64)
+        \\    iter = |rows| rows.items.iter()
+        \\}
+        \\
+        \\sum_twice : Rows -> U64
+        \\sum_twice = |rows| {
+        \\    first = rows.iter()
+        \\    var $sum = 0
+        \\    for x in first {
+        \\        $sum = $sum + x
+        \\    }
+        \\    second = rows.iter()
+        \\    for x in second {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_twice(Rows.{ items: [1, 2, 3] })
+    ;
+
+    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers, true);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+
+    const single_counters = try monotypeCountersForModule(allocator, single_source);
+    const repeated_counters = try monotypeCountersForModule(allocator, source);
+    try std.testing.expectEqual(single_counters.template_misses, repeated_counters.template_misses);
+    try std.testing.expect(repeated_counters.template_hits > single_counters.template_hits);
+}
+
+test "match locals and field accesses retain their registered scrutinee nodes" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : Try(U64, [Unavailable]), { value : Try(U64, [Unavailable]) } -> U64
+        \\main = |input, record| {
+        \\    local = input
+        \\    from_local = match local {
+        \\        Ok(value) => value
+        \\        Err(_) => 0
+        \\    }
+        \\    from_field = match record.value {
+        \\        Ok(value) => value
+        \\        Err(_) => 0
+        \\    }
+        \\    from_local + from_field
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+    try expectReachableProcShapeFieldEqual(allocator, &lowered.lowered, "switch_count", 2);
 }
 
 // Zero-allocation gate for iterator chains that escape their construction site
@@ -3578,6 +4422,18 @@ fn expectEscapingIterChainAllocatesNothing(source: []const u8) TestError!void {
     try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
 }
 
+test "issue 10348 nominal declaration with unbound annotation does not panic" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : {}
+        \\main = {}
+        \\M := { f : I }
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+}
+
 test "iter alloc static: iterator returned from a function is zero-alloc" {
     try expectEscapingIterChainAllocatesNothing(
         \\consume : Iter(U64) -> U64
@@ -3590,7 +4446,7 @@ test "iter alloc static: iterator returned from a function is zero-alloc" {
         \\}
         \\
         \\make : U64 -> Iter(U64)
-        \\make = |n| Iter.map(0.U64..<n, |x| x + 1)
+        \\make = |n| Iter.map((0.U64..<n).iter(), |x| x + 1)
         \\
         \\main : U64
         \\main = consume(make(5))
@@ -3609,7 +4465,7 @@ test "iter alloc static: iterator passed to a non-inlined function is zero-alloc
         \\}
         \\
         \\main : U64
-        \\main = consume(Iter.map(0.U64..<5, |x| x + 1))
+        \\main = consume(Iter.map((0.U64..<5).iter(), |x| x + 1))
     );
 }
 
@@ -3627,9 +4483,9 @@ test "iter alloc static: branch-chosen iterator is zero-alloc" {
         \\choose : Bool -> Iter(U64)
         \\choose = |flag|
         \\    if flag {
-        \\        Iter.map(0.U64..<5, |x| x + 1)
+        \\        Iter.map((0.U64..<5).iter(), |x| x + 1)
         \\    } else {
-        \\        Iter.keep_if(0.U64..<5, |x| x > 2)
+        \\        Iter.keep_if((0.U64..<5).iter(), |x| x > 2)
         \\    }
         \\
         \\main : U64
@@ -3656,9 +4512,9 @@ test "iter alloc static: same adapter with different capture layouts is zero-all
         \\    config : Config
         \\    config = { big: 10, small: 3 }
         \\    if flag {
-        \\        Iter.map(0.U64..<5, |x| x + offset)
+        \\        Iter.map((0.U64..<5).iter(), |x| x + offset)
         \\    } else {
-        \\        Iter.map(0.U64..<5, |x| x + config.big + config.small)
+        \\        Iter.map((0.U64..<5).iter(), |x| x + config.big + config.small)
         \\    }
         \\}
         \\
@@ -3692,7 +4548,7 @@ test "iter alloc static: runtime-count map wrapping terminates at dynamic bounda
         \\}
         \\
         \\main : U64 -> U64
-        \\main = |count| consume(wrap(count, 0.U64..<5))
+        \\main = |count| consume(wrap(count, (0.U64..<5).iter()))
     ;
 
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
@@ -3730,7 +4586,7 @@ test "iter alloc static: recursive map wrapping terminates at dynamic boundary" 
         \\    }
         \\
         \\main : U64 -> U64
-        \\main = |count| consume(wrap(count, 0.U64..<5))
+        \\main = |count| consume(wrap(count, (0.U64..<5).iter()))
     ;
 
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
@@ -3760,7 +4616,7 @@ fn deepStaticChainSource(comptime map_count: usize) []const u8 {
         var source: []const u8 =
             \\main : U64 -> U64
             \\main = |n| {
-            \\    i0 = 0.U64..<n
+            \\    i0 = (0.U64..<n).iter()
             \\
         ;
         for (0..map_count) |index| {
@@ -3823,7 +4679,7 @@ fn reachableReturnSlotProcCount(
     defer work.deinit(allocator);
     try work.append(allocator, try rootProc(lowered));
 
-    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
     defer visited.deinit();
 
     var count: usize = 0;
@@ -3839,10 +4695,7 @@ fn reachableReturnSlotProcCount(
             );
             if (first_arg_layout.tag != .ptr) break :candidate;
             const result_layout = lowered.lir_result.layouts.getLayout(first_arg_layout.getIdx());
-            switch (result_layout.tag) {
-                .struct_, .tag_union => {},
-                else => break :candidate,
-            }
+            if (result_layout.tag != .struct_ and result_layout.tag != .tag_union) break :candidate;
             const shape = try collectProcShape(allocator, lowered, proc_id);
             if (shape.ptr_store_count != 0 or shape.store_struct_count != 0 or shape.store_tag_count != 0) count += 1;
         }
@@ -3906,7 +4759,9 @@ fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_u
 
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
+    // Promoted appends compare the length against the carried fill limit at
+    // each site, and the limit seeds on entry and regrowth read it once each.
+    try std.testing.expectEqual(@as(usize, 4), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_with_capacity_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
@@ -3984,7 +4839,7 @@ test "destination baseline: boxed record update reboxes a list and string payloa
     try std.testing.expect(shape.tag_assign_count >= 2);
 }
 
-test "destination phase 3: direct boxed update wrapper calls a return-slot variant" {
+test "destination phase 3: direct boxed update wrapper keeps aggregate ownership explicit" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
         \\Model : {
@@ -4008,18 +4863,18 @@ test "destination phase 3: direct boxed update wrapper calls a return-slot varia
 
     const root_shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
 
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_cast_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_load_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_cast_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_load_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_store_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_struct_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_struct_count"));
     try std.testing.expectEqual(@as(usize, 0), root_shape.ptr_store_count);
-    try std.testing.expectEqual(@as(usize, 1), try reachableReturnSlotProcCount(allocator, &lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), try reachableReturnSlotProcCount(allocator, &lowered_source.lowered));
 }
 
-test "destination phase 3: effectful boxed update wrapper prepares box update" {
+test "destination phase 3: effectful boxed update wrapper keeps aggregate ownership explicit" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
         \\Model : {
@@ -4038,9 +4893,9 @@ test "destination phase 3: effectful boxed update wrapper prepares box update" {
     , .wrappers);
     defer lowered_source.deinit(allocator);
 
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
 }
 
 test "destination baseline: boxed lambda is packed then boxed" {
@@ -4144,6 +4999,7 @@ test "plant iter pipeline collect uses direct range map list loop" {
         \\starting_plants : () -> List(Plant)
         \\starting_plants = || {
         \\    (0.I64..=15)
+        \\        .iter()
         \\        .map(|i| random_plant(i * 12))
         \\        .collect()
         \\}
@@ -4163,7 +5019,7 @@ test "direct range map collect uses direct list loop" {
         \\main : () -> List(Plant)
         \\main = ||
         \\    Iter.collect(
-        \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
+        \\        Iter.map((0.I64..=15).iter(), |i| random_plant(i * 12)),
         \\    )
     , 2);
 }
@@ -4253,8 +5109,8 @@ test "boundary field access projects private leaf branch" {
     // sparse private product, and an if branch whose value is an opaque call
     // result is carried whole as a private leaf. A boundary argument that
     // projects a field from such an if value must project through every
-    // branch — including the leaf branch, whose field is an ordinary field
-    // access on the carried public value — rather than materialize the
+    // branch—including the leaf branch, whose field is an ordinary field
+    // access on the carried public value—rather than materialize the
     // sparse receiver whole.
     const allocator = std.testing.allocator;
     var optimized = try lowerModule(allocator,
@@ -4354,6 +5210,154 @@ test "imported iterator producer keeps finite step callables" {
     defer optimized.deinit(allocator);
 
     try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+}
+
+test "static list iter_rev loop eliminates the public iterator boundary" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\sum_backwards : U64 -> I64
+        \\sum_backwards = |extra| {
+        \\    base = [11, 13, 3, 11]
+        \\
+        \\    points =
+        \\        if extra == 2 {
+        \\            base.append(2).append(7)
+        \\        } else {
+        \\            base
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for x in points.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_backwards(2)
+    ;
+
+    var optimized = try lowerModuleWithProcDebugNames(allocator, source, .wrappers, true);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.List.iter_rev"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "iter_from_step"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.next"));
+}
+
+test "Dict and Set iteration inherit the minted list representation" {
+    const allocator = std.testing.allocator;
+    const dict_source =
+        \\sum_dict : U64 -> U64
+        \\sum_dict = |extra| {
+        \\    d = Dict.single(1.U64, 10.U64).insert(extra, 20)
+        \\
+        \\    var $sum = 0
+        \\    for (k, v) in d.iter() {
+        \\        $sum = $sum + k + v
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_dict(2)
+    ;
+    const set_source =
+        \\sum_set : U64 -> U64
+        \\sum_set = |extra| {
+        \\    s = Set.from_list([1.U64, 2, extra])
+        \\
+        \\    var $sum = 0
+        \\    for x in s.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_set(3)
+    ;
+
+    var dict_optimized = try lowerModuleWithProcDebugNames(allocator, dict_source, .wrappers, true);
+    defer dict_optimized.deinit(allocator);
+    var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers, true);
+    defer set_optimized.deinit(allocator);
+
+    // The `Dict.iter` / `Set.iter_rev` procedures themselves may survive as a
+    // call: their bodies unwrap the nominal and hand back the backing list,
+    // which happens once when the iterator is built rather than once per step.
+    // What must not survive is the stepping machinery—a reachable `Iter.next`
+    // would mean the loop is running against the public iterator boundary
+    // instead of the minted representation.
+    for ([_][]const u8{ "Builtin.List.iter", "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &dict_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE dict: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
+    for ([_][]const u8{ "Builtin.List.iter_rev", "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &set_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE set: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
+}
+
+test "closed Dict and Set receivers keep minted iteration" {
+    const allocator = std.testing.allocator;
+    // The receivers are fully closed, so the checker's static-data hoisting
+    // applies. The delegating `.iter()`/`.iter_rev()` dispatch must leave the
+    // collection as the hoist root instead of becoming one itself; a hoisted
+    // dispatch result would step through the public iterator boundary.
+    const dict_source =
+        \\sum_dict : U64 -> U64
+        \\sum_dict = |seed| {
+        \\    d = Dict.single(1.U64, 10.U64).insert(2, 20)
+        \\
+        \\    var $sum = seed
+        \\    for (k, v) in d.iter() {
+        \\        $sum = $sum + k + v
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_dict(7)
+    ;
+    const set_source =
+        \\sum_set : U64 -> U64
+        \\sum_set = |seed| {
+        \\    s = Set.from_list([1.U64, 2, 3])
+        \\
+        \\    var $sum = seed
+        \\    for x in s.iter_rev() {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_set(7)
+    ;
+
+    var dict_optimized = try lowerModuleWithProcDebugNames(allocator, dict_source, .wrappers, true);
+    defer dict_optimized.deinit(allocator);
+    var set_optimized = try lowerModuleWithProcDebugNames(allocator, set_source, .wrappers, true);
+    defer set_optimized.deinit(allocator);
+
+    // Sanity probes: reachability data must be populated, or every absence
+    // assertion below holds vacuously.
+    try std.testing.expect(try reachableProcDebugName(allocator, &dict_optimized.lowered, "sum_dict"));
+    try std.testing.expect(try reachableProcDebugName(allocator, &set_optimized.lowered, "sum_set"));
+
+    for ([_][]const u8{ "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &dict_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE closed dict: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
+    for ([_][]const u8{ "iter_from_step", "Builtin.Iter.next" }) |name| {
+        const reachable = try reachableProcDebugName(allocator, &set_optimized.lowered, name);
+        if (reachable) std.debug.print("STILL REACHABLE closed set: {s}\n", .{name});
+        try std.testing.expect(!reachable);
+    }
 }
 
 test "static list iter append loop eliminates public iter adapters" {
@@ -5266,6 +6270,14 @@ fn expectRecordedRunsEqual(
             std.meta.activeTag(expected_event),
             std.meta.activeTag(actual_event),
         );
+        switch (expected_event) {
+            .effect => |expected_effect| switch (actual_event) {
+                .effect => |actual_effect| try std.testing.expectEqualStrings(expected_effect.name, actual_effect.name),
+                // The activeTag equality above already proved both are effects.
+                .dbg, .expect_failed, .crashed => unreachable,
+            },
+            .dbg, .expect_failed, .crashed => {},
+        }
         try std.testing.expectEqualStrings(expected_event.bytes(), actual_event.bytes());
     }
 }
@@ -5310,7 +6322,7 @@ test "iterdiff: recursively-constructed iterator chain agrees across inline mode
         \\build : U64 -> U64
         \\build = |depth| {
         \\    var $sum = 0.U64
-        \\    for x in wrap(depth, 0.U64..<5) {
+        \\    for x in wrap(depth, (0.U64..<5).iter()) {
         \\        $sum = $sum + x
         \\    }
         \\    dbg $sum
@@ -5643,9 +6655,13 @@ test "iterdiff: tier-one map collect matches hand-written loop shape" {
         \\}
     ;
 
-    var iter_lowered = try lowerModule(allocator, iter_source, .wrappers);
+    // Append promotion rewrites qualifying checked appends into slack
+    // diamonds, and qualification legitimately differs between these two
+    // lowerings; this test compares the fused loop skeletons themselves, so
+    // it runs with promotion off.
+    var iter_lowered = try lowerModuleWithOptions(allocator, iter_source, .wrappers, .{ .promote_loop_appends = false });
     defer iter_lowered.deinit(allocator);
-    var loop_lowered = try lowerModule(allocator, loop_source, .wrappers);
+    var loop_lowered = try lowerModuleWithOptions(allocator, loop_source, .wrappers, .{ .promote_loop_appends = false });
     defer loop_lowered.deinit(allocator);
 
     const iter = &iter_lowered.lowered;
@@ -5869,23 +6885,18 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
     defer lifted.deinit();
 
     try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
-    try postcheck.MonotypeLifted.Lift.recomputeCaptures(allocator, &lifted);
 
     // The input program has no tuple nested directly inside another tuple, so a
     // nested tuple after specialization means the substituted aggregate leaked
     // into the scalar slot.
     for (lifted.exprsView()) |expr| {
-        const items = switch (expr.data) {
-            .tuple => |items| items,
-            else => continue,
-        };
+        if (std.meta.activeTag(expr.data) != .tuple) continue;
+        const items = expr.data.tuple;
         const tuple_items = lifted.exprSpan(items);
         for (0..tuple_items.len) |index| {
             const item = GuardedList.at(tuple_items, index);
-            switch (lifted.getExpr(item).data) {
-                .tuple => return error.SubstitutedAggregateLeakedIntoScalar,
-                else => {},
-            }
+            if (std.meta.activeTag(lifted.getExpr(item).data) == .tuple)
+                return error.SubstitutedAggregateLeakedIntoScalar;
         }
     }
 }
@@ -5964,6 +6975,204 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
 }
 
+test "custom literal field default owns its conversion root" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\MyNum := [Value(U64)].{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(Value(numeral.digits_before_pt().len()))
+        \\}
+        \\
+        \\Label := [Label(Str)].{
+        \\    from_quote : Str -> Try(Label, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Label(str))
+        \\}
+        \\
+        \\Config : { size : MyNum ?? 5, label : Label ?? "hi" }
+        \\
+        \\config : Config
+        \\config = {}
+        \\
+        \\main = config.size
+    ;
+
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+        allocator,
+        .module,
+        source,
+        &.{},
+        try sharedPrePublishedBuiltin(),
+    );
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    var default_count: usize = 0;
+    for (resources.checked_artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .field_default) continue;
+        default_count += 1;
+        try std.testing.expect(root.literalConversionKind() != null);
+        const conversion = resources.checked_artifact.compile_time_roots.lookupNumeralRootByExpr(root.expr) orelse
+            return error.TestUnexpectedResult;
+        try std.testing.expectEqual(root.id, conversion.id);
+    }
+    try std.testing.expectEqual(@as(usize, 2), default_count);
+}
+
+test "dispatch evidence boundary validator rejects malformed specialization interface metadata" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\mk = |f| {
+        \\    show = || f({}).map_err(|_| ShowFailed)
+        \\    show
+        \\}
+        \\
+        \\wrap = |f| mk(f)
+        \\
+        \\main : {} -> Try({}, [ShowFailed])
+        \\main = |_| {
+        \\    f : {} -> Try({}, [Empty])
+        \\    f = |_| Ok({})
+        \\    wrap(f)()
+        \\}
+    ;
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const artifact = &resources.checked_artifact;
+    const templates = &artifact.checked_procedure_templates;
+    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+    try std.testing.expect(templates.dispatch_scopes.len > 0);
+    try std.testing.expect(templates.specialization_interface_relations.len > 0);
+
+    var template_index: ?usize = null;
+    for (templates.templates, 0..) |template, i| {
+        if (template.specialization_interface_relations.len > 0) {
+            template_index = i;
+            break;
+        }
+    }
+    const raw_template = template_index orelse return error.TestUnexpectedResult;
+    const saved_template_span = templates.templates[raw_template].specialization_interface_relations;
+    templates.templates[raw_template].specialization_interface_relations.start = @intCast(templates.specialization_interface_relations.len);
+    templates.templates[raw_template].specialization_interface_relations.len = 1;
+    var failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.template_specialization_relations_out_of_bounds, failure.kind);
+    templates.templates[raw_template].specialization_interface_relations = saved_template_span;
+
+    const saved_parent = templates.dispatch_scopes[0].parent;
+    templates.dispatch_scopes[0].parent = @enumFromInt(templates.dispatch_scopes.len);
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_parent_invalid, failure.kind);
+    templates.dispatch_scopes[0].parent = saved_parent;
+
+    const saved_scheme_root = templates.dispatch_scopes[0].scheme_root;
+    templates.dispatch_scopes[0].scheme_root = @enumFromInt(artifact.checked_types.payloadCount());
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_scheme_root_out_of_bounds, failure.kind);
+    templates.dispatch_scopes[0].scheme_root = saved_scheme_root;
+
+    const saved_scope = templates.specialization_interface_relations[0].scope;
+    templates.specialization_interface_relations[0].scope = .{ .generalized = @enumFromInt(templates.dispatch_scopes.len) };
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_scope_out_of_bounds, failure.kind);
+    templates.specialization_interface_relations[0].scope = saved_scope;
+
+    const saved_relation_data = templates.specialization_interface_relations[0].data;
+    templates.specialization_interface_relations[0].data = .{ .type_equality = .{
+        .left = @enumFromInt(artifact.checked_types.payloadCount()),
+        .right = templates.dispatch_scopes[0].scheme_root,
+    } };
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_type_out_of_bounds, failure.kind);
+    templates.specialization_interface_relations[0].data = saved_relation_data;
+
+    var call_index: ?usize = null;
+    var direct_call_index: ?usize = null;
+    var local_use_index: ?usize = null;
+    for (templates.specialization_interface_relations, 0..) |relation, i| switch (relation.data) {
+        .call => |call| {
+            if (call_index == null) call_index = i;
+            if (call.direct_target != null and direct_call_index == null) direct_call_index = i;
+        },
+        .local_proc_use => if (local_use_index == null) {
+            local_use_index = i;
+        },
+        .type_equality, .procedure => {},
+    };
+
+    const raw_call = call_index orelse return error.TestUnexpectedResult;
+    const saved_args = templates.specialization_interface_relations[raw_call].data.call.args;
+    templates.specialization_interface_relations[raw_call].data.call.args = .{
+        .start = @intCast(templates.specialization_interface_types.len),
+        .len = 1,
+    };
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_call_args_out_of_bounds, failure.kind);
+    templates.specialization_interface_relations[raw_call].data.call.args = saved_args;
+
+    const raw_direct_call = direct_call_index orelse return error.TestUnexpectedResult;
+    const saved_direct_target = templates.specialization_interface_relations[raw_direct_call].data.call.direct_target;
+    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = @enumFromInt(artifact.resolved_value_refs.records.len);
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_value_ref_out_of_bounds, failure.kind);
+    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
+
+    var non_procedure_ref: ?check.CheckedArtifact.ResolvedValueRefId = null;
+    for (artifact.resolved_value_refs.records, 0..) |record, i| {
+        const ref_tag = std.meta.activeTag(record.ref);
+        if (ref_tag != .local_proc and
+            ref_tag != .top_level_proc and
+            ref_tag != .imported_proc and
+            ref_tag != .hosted_proc and
+            ref_tag != .platform_required_proc and
+            ref_tag != .promoted_top_level_proc)
+        {
+            non_procedure_ref = @enumFromInt(i);
+            break;
+        }
+    }
+    const invalid_procedure_ref = non_procedure_ref orelse return error.TestUnexpectedResult;
+    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = invalid_procedure_ref;
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_direct_target_invalid, failure.kind);
+    templates.specialization_interface_relations[raw_direct_call].data.call.direct_target = saved_direct_target;
+
+    const raw_local_use = local_use_index orelse return error.TestUnexpectedResult;
+    const saved_local_ref = templates.specialization_interface_relations[raw_local_use].data.local_proc_use;
+    templates.specialization_interface_relations[raw_local_use].data.local_proc_use = invalid_procedure_ref;
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
+    templates.specialization_interface_relations[raw_local_use].data.local_proc_use = saved_local_ref;
+
+    const local_record = artifact.resolved_value_refs.records[@intFromEnum(saved_local_ref)].ref.local_proc;
+    const local_scope = local_record.dispatch_scope orelse return error.TestUnexpectedResult;
+    const raw_local_scope = @intFromEnum(local_scope);
+    const saved_scope_expr = templates.dispatch_scopes[raw_local_scope].checked_expr;
+    const next_expr = (@intFromEnum(saved_scope_expr) + 1) % artifact.checked_bodies.exprCount();
+    templates.dispatch_scopes[raw_local_scope].checked_expr = @enumFromInt(next_expr);
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_relation_local_proc_use_invalid, failure.kind);
+    templates.dispatch_scopes[raw_local_scope].checked_expr = saved_scope_expr;
+
+    var path_param_span: ?@TypeOf(templates.templates[0].evidence_params) = null;
+    for (templates.templates) |template| {
+        const params = templates.evidenceParams(&template);
+        for (params) |param| {
+            if (param.path.len > 0) {
+                path_param_span = template.evidence_params;
+                break;
+            }
+        }
+        if (path_param_span != null) break;
+    }
+    const saved_scope_params = templates.dispatch_scopes[raw_local_scope].evidence_params;
+    templates.dispatch_scopes[raw_local_scope].evidence_params = path_param_span orelse return error.TestUnexpectedResult;
+    failure = artifact.validateDispatchEvidence() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
+    templates.dispatch_scopes[raw_local_scope].evidence_params = saved_scope_params;
+
+    try std.testing.expect(artifact.validateDispatchEvidence() == null);
+}
+
 test "dispatch evidence boundary validator rejects non-normalized and malformed paths" {
     const allocator = std.testing.allocator;
     const source =
@@ -6006,13 +7215,10 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by ex
 
     var removed: ?check.CheckedArtifact.CheckedExprId = null;
     for (resources.checked_artifact.checked_bodies.stored_exprs.items) |*expr| {
-        switch (expr.data) {
-            .dispatch_call => |maybe_plan| if (maybe_plan != null) {
-                expr.data = .{ .dispatch_call = null };
-                removed = expr.id;
-                break;
-            },
-            else => {},
+        if (std.meta.activeTag(expr.data) == .dispatch_call and expr.data.dispatch_call != null) {
+            expr.data = .{ .dispatch_call = null };
+            removed = expr.id;
+            break;
         }
     }
     try std.testing.expect(removed != null);
@@ -6032,12 +7238,22 @@ test "dispatch evidence boundary validator names the method of a dangling eviden
     var corrupted_method: ?[]const u8 = null;
     for (table.plans) |*plan| {
         switch (plan.resolution) {
-            .direct => {
-                plan.resolution = .{ .direct = @enumFromInt(table.evidence_nodes.len) };
+            .direct_closed => {
+                plan.resolution = .{ .direct_closed = .{ .evidence = @enumFromInt(table.evidence_nodes.len) } };
                 corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
                 break;
             },
-            else => {},
+            .direct_parametric => {
+                plan.resolution = .{ .direct_parametric = .{ .evidence = @enumFromInt(table.evidence_nodes.len) } };
+                corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
+                break;
+            },
+            .direct_pending,
+            .evidence_dependent,
+            .structural,
+            .checked_error,
+            .@"unreachable",
+            => {},
         }
     }
     try std.testing.expect(corrupted_method != null);
@@ -6115,7 +7331,7 @@ test "compiler-generated dispatch classes lower via checked evidence" {
         \\}
     ;
 
-    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(allocator, std.testing.io, .module, source, &.{}, .native, try sharedPrePublishedBuiltin(), null);
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(allocator, std.testing.io, .module, source, &.{}, .native, try sharedPrePublishedBuiltin(), null, .lss);
     defer compiled.deinit(allocator);
 
     // The program must check cleanly: a reported problem would resolve the
@@ -6482,7 +7698,7 @@ fn recordFieldReadCounts(
     const proc = store.getProcSpec(proc_id);
     const body = proc.body orelse return .{ .before_first_call = 0, .total = 0 };
 
-    var aliases = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var aliases = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer aliases.deinit();
     try aliases.put(record, {});
 
@@ -6506,11 +7722,16 @@ fn recordFieldReadCounts(
                         try total.put(ref.field_idx, {});
                         if (!seen_call) try before.put(ref.field_idx, {});
                     },
-                    else => {},
+                    .discriminant,
+                    .tag_payload,
+                    .tag_payload_struct,
+                    .list_reinterpret,
+                    .nominal,
+                    => {},
                 }
                 cursor = stmt.next;
             },
-            .assign_call => |stmt| {
+            inline .assign_call, .assign_call_dict => |stmt| {
                 seen_call = true;
                 cursor = stmt.next;
             },
@@ -6518,10 +7739,24 @@ fn recordFieldReadCounts(
                 seen_call = true;
                 cursor = stmt.next;
             },
-            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 cursor = stmt.next;
             },
-            else => break,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .boxy_tag_match,
+            .loop_continue,
+            .loop_break,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => break,
         }
     }
     return .{ .before_first_call = before.count(), .total = total.count() };
@@ -6587,9 +7822,9 @@ fn fieldReadRetainCount(
     const proc = store.getProcSpec(proc_id);
     const body = proc.body orelse return 0;
 
-    var read_targets = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var read_targets = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer read_targets.deinit();
-    var retained = std.AutoHashMap(LIR.LocalId, void).init(allocator);
+    var retained = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer retained.deinit();
     var visited = std.AutoHashMap(u32, void).init(allocator);
     defer visited.deinit();
@@ -6612,7 +7847,12 @@ fn fieldReadRetainCount(
                         .local => |src| if (read_targets.contains(src)) {
                             try read_targets.put(stmt.target, {});
                         },
-                        else => {},
+                        .discriminant,
+                        .tag_payload,
+                        .tag_payload_struct,
+                        .list_reinterpret,
+                        .nominal,
+                        => {},
                     }
                     try stack.append(allocator, stmt.next);
                 },
@@ -6622,7 +7862,7 @@ fn fieldReadRetainCount(
                     }
                     try stack.append(allocator, stmt.next);
                 },
-                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .switch_stmt => |stmt| {
@@ -6648,11 +7888,23 @@ fn fieldReadRetainCount(
                     }
                     try stack.append(allocator, stmt.on_miss);
                 },
+                .boxy_tag_match => |stmt| {
+                    try stack.append(allocator, stmt.on_match);
+                    try stack.append(allocator, stmt.on_miss);
+                },
                 .join => |stmt| {
                     try stack.append(allocator, stmt.body);
                     try stack.append(allocator, stmt.remainder);
                 },
-                else => {},
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .loop_continue,
+                .loop_break,
+                .jump,
+                .ret,
+                .crash,
+                => {},
             }
         }
     }
@@ -6698,7 +7950,10 @@ test "field takes drop the field-read retains of dying local records" {
 // A field read placed after an if-diamond still takes: every branch of the
 // lowered switch falls straight through to its shared continuation, so the
 // read past the rejoin runs exactly once on every path and may consume the
-// dying record's stored unit for its field.
+// dying record's stored unit for its field. Because this record has one RC
+// field, its root ownership resource ends at the take; checked-call failure
+// restitution must restore the standalone field carrier, not manufacture a
+// residual aggregate resource after the diamond.
 test "field takes cross a fall-through branch diamond" {
     const allocator = std.testing.allocator;
     const source =
@@ -6727,6 +7982,178 @@ test "field takes cross a fall-through branch diamond" {
     }
     try std.testing.expect(root_retained != null);
     try std.testing.expectEqual(@as(usize, 0), root_retained.?);
+}
+
+// A field consumed on every arm of a branch—here List.set's success arm and
+// the `??` fallback arm—takes on each path: the paths are exclusive, each
+// takes exactly once, and the residual is the same wherever the record dies.
+// The one-RC-field projection is also ownership-complete, so this pins that
+// one call position receives the root-unit receipt only—not a second partial
+// field receipt—and that the failure arm can move the restored unit onward.
+test "field takes split across the arms of a branch" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : I64
+        \\main = {
+        \\    m = { rows: List.repeat(2.I64, 8), n: 3.I64 }
+        \\    r = List.set(m.rows, 9, 7) ?? m.rows
+        \\    (List.get(r, 0) ?? 0) + m.n
+        \\}
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    var root_retained: ?usize = null;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc = store.getProcSpec(proc_id);
+        const args = store.getLocalSpan(proc.args);
+        if (GuardedList.borrowLen(args) != 0) continue;
+        if (proc.body == null) continue;
+        const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
+        root_retained = (root_retained orelse 0) + retained;
+    }
+    try std.testing.expect(root_retained != null);
+    try std.testing.expectEqual(@as(usize, 0), root_retained.?);
+}
+
+// A record of lists updated through a helper function stays in place: the
+// call site demands a mode-specialized variant whose owned parameter lets the
+// field reads take, so no emitted variant both mutates a list and retains a
+// field read. This is the record-state-through-a-call shape hash-table
+// updates lower to.
+test "owned variants take a helper parameter's fields at the call" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\step : { a : List(I64), b : List(I64) }, U64, I64 -> { s : { a : List(I64), b : List(I64) }, prev : I64 }
+        \\step = |st, i, v| {
+        \\    prev = List.get(st.a, i) ?? 0
+        \\    s1 = { a: List.set(st.a, i, v) ?? st.a, b: st.b }
+        \\    s2 = { ..s1, b: List.set(s1.b, i, prev) ?? s1.b }
+        \\    { s: s2, prev }
+        \\}
+        \\
+        \\main : I64
+        \\main = {
+        \\    var $st = { a: List.repeat(0.I64, 8), b: List.repeat(0.I64, 8) }
+        \\    var $i = 0.U64
+        \\    var $v = 5.I64
+        \\    var $acc = 0.I64
+        \\    while $i < 8 {
+        \\        r = step($st, $i, $v)
+        \\        $st = r.s
+        \\        $acc = $acc + r.prev
+        \\        $v = $v + 1
+        \\        $i = $i + 1
+        \\    }
+        \\    $acc + (List.get($st.a, 3) ?? 0) + (List.get($st.b, 2) ?? 0)
+        \\}
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    const store = &optimized.lowered.lir_result.store;
+    var mutating_retain_free: usize = 0;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc = store.getProcSpec(proc_id);
+        if (proc.body == null) continue;
+        if (!procContainsListSet(store, proc_id)) continue;
+        const retained = try fieldReadRetainCount(allocator, &optimized.lowered, proc_id);
+        if (retained == 0) mutating_retain_free += 1;
+    }
+    // At least the specialized variant of `step` mutates without retaining.
+    try std.testing.expect(mutating_retain_free >= 1);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(i64, 8), value.read(i64)),
+    }
+}
+
+fn procContainsListSet(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) bool {
+    const proc = store.getProcSpec(proc_id);
+    const body = proc.body orelse return false;
+    var cursor_stack: [256]LIR.CFStmtId = undefined;
+    var top: usize = 0;
+    cursor_stack[top] = body;
+    top += 1;
+    var seen = std.bit_set.ArrayBitSet(usize, 1 << 20).initEmpty();
+    while (top > 0) {
+        top -= 1;
+        const cursor = cursor_stack[top];
+        if (seen.isSet(@intFromEnum(cursor))) continue;
+        seen.set(@intFromEnum(cursor));
+        switch (store.getCFStmt(cursor)) {
+            .assign_low_level => |stmt| {
+                if (stmt.op == .list_set) return true;
+                if (top < cursor_stack.len) {
+                    cursor_stack[top] = stmt.next;
+                    top += 1;
+                }
+            },
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                if (top < cursor_stack.len) {
+                    cursor_stack[top] = stmt.next;
+                    top += 1;
+                }
+            },
+            .join => |stmt| {
+                if (top + 1 < cursor_stack.len) {
+                    cursor_stack[top] = stmt.body;
+                    cursor_stack[top + 1] = stmt.remainder;
+                    top += 2;
+                }
+            },
+            .switch_stmt => |stmt| {
+                const heads = store.getCFSwitchBranches(stmt.branches);
+                for (0..GuardedList.borrowLen(heads)) |i| {
+                    if (top < cursor_stack.len) {
+                        cursor_stack[top] = GuardedList.at(heads, i).body;
+                        top += 1;
+                    }
+                }
+                if (top < cursor_stack.len) {
+                    cursor_stack[top] = stmt.default_branch;
+                    top += 1;
+                }
+                if (stmt.continuation) |continuation| {
+                    if (top < cursor_stack.len) {
+                        cursor_stack[top] = continuation;
+                        top += 1;
+                    }
+                }
+            },
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .boxy_tag_match,
+            .loop_continue,
+            .loop_break,
+            .jump,
+            .ret,
+            .crash,
+            => {},
+        }
+    }
+    return false;
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10435: SpecConstr must
@@ -6777,8 +8204,8 @@ test "issue 10435 SpecConstr preserves frozen types for partially used while sta
 // https://github.com/roc-lang/roc/issues/10461: ScalarizeJoins treated a
 // neighboring join's parameter as a splattable wrapper temporary because its
 // only initialization was a struct literal and its only use was a
-// `set_local initialize_join_param` copy. Splatting deleted the literal —
-// that join's edge initialization — leaving the parameter uninitialized, so
+// `set_local initialize_join_param` copy. Splatting deleted the literal—
+// that join's edge initialization—leaving the parameter uninitialized, so
 // ARC's release of the (unused, refcounted) parameter had nothing to
 // release. The parameter must instead be seeded by field reads and dissolve
 // on a later fixpoint round.
@@ -6976,4 +8403,216 @@ test "SpecConstr rewrites nested match breaks with the selected loop exit ABI" {
 
     var lowered = try lowerModule(allocator, source, .wrappers);
     defer lowered.deinit(allocator);
+}
+
+test "issue 10354 undefined identifier in expression does not panic monotype lowering" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\undefined
+    ;
+
+    _ = lowerModule(allocator, source, .wrappers) catch |err| switch (err) {
+        error.TypeCheckError, error.ParseError => {},
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.BuiltinArtifactVersionMismatch,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptArtifact,
+        error.CorruptBuiltinArtifact,
+        error.CorruptEmbeddedBuiltins,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.HostedFunctionNotBound,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidHandle,
+        error.InvalidHostedFunctionSignature,
+        error.InvalidLirImage,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LinkFailed,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingCallable,
+        error.MissingDbgRoot,
+        error.MissingDynamicLinkingInformation,
+        error.MissingIterCollectWorker,
+        error.MissingProcSpec,
+        error.MissingRootProcedure,
+        error.MissingSpecializedWorker,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.OutOfMemory,
+        error.PageSizeQueryFailed,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SocketUnconnected,
+        error.StaleEmbeddedBuiltins,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempFileError,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedHostedFunction,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => return err,
+    };
+}
+
+test "issue 10409 duplicate top-level value defs do not panic constant root lookup" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : {}
+        \\main = {}
+        \\x = ()
+        \\x = 0
+    ;
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+}
+
+test "issue 10731 mapping over a List-recursive tag union lowers under wrapper inlining" {
+    try expectOptimizedDbgEvents(
+        \\Tree(a) := [Node(a, List(Tree(a)))]
+        \\
+        \\tree_map : Tree(a), (a -> b) -> Tree(b)
+        \\tree_map = |tree, f|
+        \\    match tree {
+        \\        Node(value, children) => Node(f(value), children.map(|child| tree_map(child, f)))
+        \\    }
+        \\
+        \\main : {}
+        \\main = {
+        \\    Node(root, children) = tree_map(Node(1.U64, [Node(2.U64, [])]), |value| Wrap(value))
+        \\    dbg root
+        \\    dbg children.map(|Node(value, _)| value)
+        \\    {}
+        \\}
+    , &.{ "Wrap(1)", "[Wrap(2)]" });
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10797: a generic
+// state-threading function whose returned closure builds a `List` with a
+// counted `for` loop, specialized at a call site that supplies a known
+// generator. Cloning that closure body must keep the `var $state` parameter
+// bound in the clone, so the specialized loop's initial values still name a
+// live binding.
+test "issue 10797 SpecConstr keeps the threaded var parameter bound in a specialized loop" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Generator(value) : U32 -> { value : value, state : U32 }
+        \\
+        \\list : Generator(a), U64 -> Generator(List(a))
+        \\list = |generator, length| {
+        \\    |var $state| {
+        \\        var $result = List.with_capacity(length)
+        \\
+        \\        for _ in 0..<length {
+        \\            { value: item, state: $state } = generator($state)
+        \\            $result = $result.append(item)
+        \\        }
+        \\
+        \\        { value: $result, state: $state }
+        \\    }
+        \\}
+        \\
+        \\step : Generator(U32)
+        \\step = |state| { value: state, state: state + 7 }
+        \\
+        \\main : U64
+        \\main = {
+        \\    { value: values, state: final } = list(step, 3)(1234)
+        \\    values.sum().to_u64() * 10000 + final.to_u64()
+        \\}
+    ;
+
+    var lifted = try liftModuleAfterSpecConstr(allocator, source);
+    defer lifted.deinit(allocator);
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+
+    // 1234 + 1241 + 1248 = 3723, and the threaded state ends at 1255.
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(u64, 37231255), value.read(u64)),
+    }
 }

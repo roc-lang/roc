@@ -8,6 +8,10 @@ const collections = @import("collections");
 /// embedded-lld COFF link of Roc-generated code.
 pub const stack_probe = @import("stack_probe.zig");
 
+/// Darwin sysroot resolution, shared by every embedded-lld Mach-O link of
+/// Roc-generated code.
+pub const darwin_sysroot = @import("darwin_sysroot.zig");
+
 /// Object format handled by one of the embedded LLD frontends.
 pub const Format = enum {
     elf,
@@ -24,7 +28,43 @@ pub const Format = enum {
             .windows => .coff,
             .macos, .ios, .watchos, .tvos => .macho,
             .freestanding => .wasm,
-            else => .elf,
+            .linux,
+            .other,
+            .contiki,
+            .fuchsia,
+            .hermit,
+            .managarm,
+            .haiku,
+            .hurd,
+            .illumos,
+            .plan9,
+            .rtems,
+            .serenity,
+            .dragonfly,
+            .freebsd,
+            .openbsd,
+            .netbsd,
+            .driverkit,
+            .maccatalyst,
+            .visionos,
+            .uefi,
+            .@"3ds",
+            .ps3,
+            .ps4,
+            .ps5,
+            .psp,
+            .vita,
+            .emscripten,
+            .wasi,
+            .amdhsa,
+            .amdpal,
+            .cuda,
+            .mesa3d,
+            .nvcl,
+            .opencl,
+            .opengl,
+            .vulkan,
+            => .elf,
         };
     }
 };

@@ -1,3 +1,4 @@
+#![no_std]
 #![allow(improper_ctypes)]
 #![allow(improper_ctypes_definitions)]
 
@@ -5,6 +6,12 @@
 mod abi;
 
 use core::ffi::c_void;
+use core::panic::PanicInfo;
+
+#[panic_handler]
+fn panic(_info: &PanicInfo<'_>) -> ! {
+    core::arch::wasm32::unreachable()
+}
 
 const WASM_PAGE_SIZE: usize = 65_536;
 
@@ -275,11 +282,11 @@ fn check_provided_abi() {
         }
 
         let tag = abi::roc_make_vector_tag();
-        let tag_back = abi::roc_provide_vector_tag(tag);
+        let mut tag_back = abi::roc_provide_vector_tag(tag);
         if tag_back.tag != abi::ProbeVectorTagTag::Pair {
             fail("provided vector tag discriminant mismatch");
         } else {
-            let pair = tag_back.payload_pair();
+            let pair = tag_back.take_payload_pair_unchecked();
             if pair._0 != 0x1020304050607080
                 || vector_bits(pair._1) != 0x00112233445566778899aabbccddeeff
             {

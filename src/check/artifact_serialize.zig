@@ -3,12 +3,12 @@
 //! These let a store keep its in-memory `[]T` representation unchanged while
 //! still serializing via the CompactWriter offset-relocation scheme: a slice of
 //! POD (relocation-invariant) elements is written contiguously and reconstructed
-//! by recomputing one base-relative pointer — a single fixup per slice,
+//! by recomputing one base-relative pointer—a single fixup per slice,
 //! independent of the slice length. This is the transform-A building block (no
 //! representation change, no consumer churn).
 //!
 //! "POD / relocation-invariant" means `T` contains only scalars, enums, packed
-//! structs, and `Idx`/offset integers — NO pointers, slices, or maps nested
+//! structs, and `Idx`/offset integers—NO pointers, slices, or maps nested
 //! inside an element. Slices whose elements embed pointers/slices need the
 //! side-list (transform B) treatment instead and must NOT use this helper.
 
@@ -22,7 +22,7 @@ const CompactWriter = collections.CompactWriter;
 /// `@compileError` unless `T` is relocation-invariant ("POD"): it transitively
 /// contains no pointers or slices, so the only fixup needed when a `[]T` moves
 /// is the outer slice's base pointer. This is what makes a single-fixup
-/// `SerializedSlice(T)` *correct* — an element with an embedded pointer/slice
+/// `SerializedSlice(T)` *correct*—an element with an embedded pointer/slice
 /// would silently dangle after relocation, so we reject it at compile time
 /// (such a type needs the transform-B side-list treatment instead).
 pub fn assertRelocatablePod(comptime T: type) void {
@@ -36,21 +36,23 @@ pub fn assertRelocatablePod(comptime T: type) void {
 }
 
 fn assertRelocatablePodInner(comptime T: type) void {
-    switch (@typeInfo(T)) {
-        .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
-        .optional => |o| assertRelocatablePodInner(o.child),
-        .array => |a| assertRelocatablePodInner(a.child),
-        .@"struct" => |s| {
-            for (s.fields) |f| assertRelocatablePodInner(f.type);
-        },
-        .@"union" => |u| {
-            for (u.fields) |f| assertRelocatablePodInner(f.type);
-        },
-        .pointer => @compileError("SerializedSlice element type '" ++ @typeName(T) ++
-            "' contains a pointer/slice; it is not relocation-invariant. Use a side-list (transform B) instead."),
-        else => @compileError("SerializedSlice element type '" ++ @typeName(T) ++
-            "' has an unsupported (possibly non-POD) representation: " ++ @tagName(@typeInfo(T))),
+    const info = @typeInfo(T);
+    const tag = std.meta.activeTag(info);
+    if (tag == .int or tag == .float or tag == .bool or tag == .void or tag == .@"enum" or tag == .error_set or tag == .vector) return;
+    if (tag == .optional) return assertRelocatablePodInner(info.optional.child);
+    if (tag == .array) return assertRelocatablePodInner(info.array.child);
+    if (tag == .@"struct") {
+        for (info.@"struct".fields) |field| assertRelocatablePodInner(field.type);
+        return;
     }
+    if (tag == .@"union") {
+        for (info.@"union".fields) |field| assertRelocatablePodInner(field.type);
+        return;
+    }
+    if (tag == .pointer) @compileError("SerializedSlice element type '" ++ @typeName(T) ++
+        "' contains a pointer/slice; it is not relocation-invariant. Use a side-list (transform B) instead.");
+    @compileError("SerializedSlice element type '" ++ @typeName(T) ++
+        "' has an unsupported (possibly non-POD) representation: " ++ @tagName(info));
 }
 
 /// `@compileError` unless `T` is safe to persist as checked-cache bytes across
@@ -74,38 +76,40 @@ fn assertPortableSerializedInner(comptime T: type) void {
                 "' uses native pointer-width integer storage; use an explicit fixed-width integer");
         }
 
-        switch (@typeInfo(T)) {
-            .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
-            .optional => |o| assertPortableSerializedInner(o.child),
-            .array => |a| assertPortableSerializedInner(a.child),
-            .@"struct" => |s| {
-                if (@hasDecl(T, "SerializedElement")) {
-                    assertPortableSerializedInner(T.SerializedElement);
-                }
-                for (s.fields) |f| assertPortableSerializedInner(f.type);
-            },
-            .@"union" => |u| {
-                if (u.tag_type) |tag| {
-                    assertPortableSerializedInner(tag);
-                } else {
-                    if (u.layout != .@"extern" or !@hasDecl(T, "serialized_portable_extern_union")) {
-                        @compileError("Serialized type '" ++ @typeName(T) ++
-                            "' contains an untagged union; use an explicit serialized representation or a proven extern payload");
-                    }
-                }
-                for (u.fields) |f| assertPortableSerializedInner(f.type);
-            },
-            .pointer => @compileError("Serialized type '" ++ @typeName(T) ++
-                "' contains a pointer/slice; use a relocatable marker or explicit fixed-width storage"),
-            else => @compileError("Serialized type '" ++ @typeName(T) ++
-                "' has an unsupported representation for checked-cache portability: " ++ @tagName(@typeInfo(T))),
+        const info = @typeInfo(T);
+        const tag = std.meta.activeTag(info);
+        if (tag == .int or tag == .float or tag == .bool or tag == .void or tag == .@"enum" or tag == .error_set or tag == .vector) return;
+        if (tag == .optional) return assertPortableSerializedInner(info.optional.child);
+        if (tag == .array) return assertPortableSerializedInner(info.array.child);
+        if (tag == .@"struct") {
+            if (@hasDecl(T, "SerializedElement")) {
+                assertPortableSerializedInner(T.SerializedElement);
+            }
+            for (info.@"struct".fields) |field| assertPortableSerializedInner(field.type);
+            return;
         }
+        if (tag == .@"union") {
+            if (info.@"union".tag_type) |union_tag| {
+                assertPortableSerializedInner(union_tag);
+            } else {
+                if (info.@"union".layout != .@"extern" or !@hasDecl(T, "serialized_portable_extern_union")) {
+                    @compileError("Serialized type '" ++ @typeName(T) ++
+                        "' contains an untagged union; use an explicit serialized representation or a proven extern payload");
+                }
+            }
+            for (info.@"union".fields) |field| assertPortableSerializedInner(field.type);
+            return;
+        }
+        if (tag == .pointer) @compileError("Serialized type '" ++ @typeName(T) ++
+            "' contains a pointer/slice; use a relocatable marker or explicit fixed-width storage");
+        @compileError("Serialized type '" ++ @typeName(T) ++
+            "' has an unsupported representation for checked-cache portability: " ++ @tagName(info));
     }
 }
 
 /// Reject an `= undefined` field default anywhere inside a serialized POD type. A
 /// fixed-layout serialized element always writes every field's bytes, so an `undefined`
-/// default leaks uninitialized memory into the blob — a non-deterministic, cache-poisoning
+/// default leaks uninitialized memory into the blob—a non-deterministic, cache-poisoning
 /// result. Reading the bytes of an `undefined` comptime default is illegal, so building
 /// this for such a type fails with "use of undefined value" pointing at the offending
 /// type. The fix is to give the field a zero/explicit default (e.g. `= .{}` or
@@ -125,15 +129,30 @@ pub fn assertSerializedDefaultsDefined(comptime T: type) void {
 /// default; defined values read harmlessly.
 fn touchAllDefined(comptime T: type, comptime value: T) void {
     comptime {
-        switch (@typeInfo(T)) {
-            .bool, .int, .float, .@"enum" => _ = (value == value),
-            .optional => |o| if (value) |inner| touchAllDefined(o.child, inner),
-            .array => |a| for (value) |elem| touchAllDefined(a.child, elem),
-            .@"struct" => |s| for (s.fields) |f| touchAllDefined(f.type, @field(value, f.name)),
-            .@"union" => |u| if (u.tag_type != null) switch (value) {
-                inline else => |payload| touchAllDefined(@TypeOf(payload), payload),
-            },
-            else => {},
+        const info = @typeInfo(T);
+        const tag = std.meta.activeTag(info);
+        if (tag == .bool or tag == .int or tag == .float or tag == .@"enum") {
+            _ = (value == value);
+            return;
+        }
+        if (tag == .optional) {
+            if (value) |inner| touchAllDefined(info.optional.child, inner);
+            return;
+        }
+        if (tag == .array) {
+            for (value) |elem| touchAllDefined(info.array.child, elem);
+            return;
+        }
+        if (tag == .@"struct") {
+            for (info.@"struct".fields) |field| touchAllDefined(field.type, @field(value, field.name));
+            return;
+        }
+        if (tag == .@"union" and info.@"union".tag_type != null) {
+            for (info.@"union".fields) |field| {
+                if (std.meta.activeTag(value) == @field(info.@"union".tag_type.?, field.name)) {
+                    touchAllDefined(field.type, @field(value, field.name));
+                }
+            }
         }
     }
 }
@@ -143,8 +162,8 @@ fn touchAllDefined(comptime T: type, comptime value: T) void {
 /// and so knows how to fix its own base pointer on load) or a relocation-invariant
 /// POD leaf/aggregate. The hazard this closes: a raw pointer or slice embedded
 /// *directly* in a `Serialized` struct (outside a marker) is silently skipped by
-/// `relocatablePointerCount` — a `.pointer` type falls through to its `else => 0`
-/// arm — so it contributes no fixup and dangles after relocation. A marker is
+/// `relocatablePointerCount`—a `.pointer` type falls through to its `else => 0`
+/// arm—so it contributes no fixup and dangles after relocation. A marker is
 /// exempt because it self-describes relocation and its element/payload type was
 /// already validated by `assertRelocatablePod` where the marker was built.
 ///
@@ -152,22 +171,25 @@ fn touchAllDefined(comptime T: type, comptime value: T) void {
 /// artifact `Serialized` validates the entire sub-store tree at compile time.
 pub fn assertSerializedRelocatable(comptime T: type) void {
     comptime {
-        switch (@typeInfo(T)) {
-            .@"struct" => |s| {
-                if (@hasDecl(T, "serialized_relocatable_pointers")) return;
-                for (s.fields) |f| assertSerializedRelocatable(f.type);
-            },
-            .@"union" => |u| {
-                for (u.fields) |f| assertSerializedRelocatable(f.type);
-            },
-            .array => |a| assertSerializedRelocatable(a.child),
-            .optional => |o| assertSerializedRelocatable(o.child),
-            .int, .float, .bool, .void, .@"enum", .error_set, .vector => {},
-            .pointer => @compileError("Serialized type '" ++ @typeName(T) ++
-                "' embeds a pointer/slice outside a relocatable marker; it would dangle after relocation. Wrap it in a SerializedSlice/SerializedOptional."),
-            else => @compileError("Serialized type '" ++ @typeName(T) ++
-                "' has a field with an unsupported (possibly non-relocatable) representation: " ++ @tagName(@typeInfo(T))),
+        @setEvalBranchQuota(1_000_000);
+        const info = @typeInfo(T);
+        const tag = std.meta.activeTag(info);
+        if (tag == .@"struct") {
+            if (@hasDecl(T, "serialized_relocatable_pointers")) return;
+            for (info.@"struct".fields) |field| assertSerializedRelocatable(field.type);
+            return;
         }
+        if (tag == .@"union") {
+            for (info.@"union".fields) |field| assertSerializedRelocatable(field.type);
+            return;
+        }
+        if (tag == .array) return assertSerializedRelocatable(info.array.child);
+        if (tag == .optional) return assertSerializedRelocatable(info.optional.child);
+        if (tag == .int or tag == .float or tag == .bool or tag == .void or tag == .@"enum" or tag == .error_set or tag == .vector) return;
+        if (tag == .pointer) @compileError("Serialized type '" ++ @typeName(T) ++
+            "' embeds a pointer/slice outside a relocatable marker; it would dangle after relocation. Wrap it in a SerializedSlice/SerializedOptional.");
+        @compileError("Serialized type '" ++ @typeName(T) ++
+            "' has a field with an unsupported (possibly non-relocatable) representation: " ++ @tagName(info));
     }
 }
 
@@ -188,7 +210,7 @@ pub fn SerializedSlice(comptime T: type) type {
 
         /// The element type whose bytes this slice serializes. Read by the layout
         /// fingerprint (`serializedLayoutFingerprint`) so a change to the element's
-        /// field order/size — which changes the serialized bytes — is reflected in
+        /// field order/size—which changes the serialized bytes—is reflected in
         /// the version hash even though this container's own `{offset,len}` layout
         /// is unchanged.
         pub const SerializedElement = T;
@@ -197,7 +219,7 @@ pub fn SerializedSlice(comptime T: type) type {
         pub const serialized_relocatable_pointers: usize = 1;
 
         /// Append `slice`'s bytes to `writer` and record their offset/len. Uses
-        /// `appendSlicePodZeroed` so element padding is zeroed — the serialized blob is
+        /// `appendSlicePodZeroed` so element padding is zeroed—the serialized blob is
         /// byte-deterministic (reproducible builds; content-stable cache bodies).
         pub fn serialize(self: *Self, slice: []const T, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
             if (slice.len == 0) {
@@ -244,6 +266,34 @@ pub fn validateSerialized(comptime T: type, self: *const T, backing_len: u64) er
     try collections.validateSerializedRelocations(T, self, backing_len);
 }
 
+/// Serialized form of a POD `T` stored inline, defaulting to `default`. No
+/// relocatable pointer: the value lives in the header itself. `T` must be
+/// extern-compatible, which for an enum means an explicit fixed-width backing
+/// integer.
+pub fn SerializedScalar(comptime T: type, comptime default: T) type {
+    comptime assertRelocatablePod(T);
+    comptime assertPortableSerialized(T);
+    comptime assertSerializedDefaultsDefined(T);
+    return extern struct {
+        value: T = default,
+
+        const Self = @This();
+
+        /// Record `source`'s value inline. A scalar needs no separate buffer
+        /// region and no relocation, so it appends nothing to the writer and
+        /// takes neither the allocator nor the writer the driver passes.
+        pub fn serialize(self: *Self, source: *const T, _: Allocator, _: *CompactWriter) Allocator.Error!void {
+            self.value = source.*;
+        }
+
+        /// Read the inline value back. Nothing was relocated, so the buffer
+        /// base the driver passes goes unused.
+        pub fn deserialize(self: *const Self, _: usize) T {
+            return self.value;
+        }
+    };
+}
+
 /// Relocatable serialized form of an `?T` of POD `T`. Encodes presence as a
 /// 0- or 1-element `SerializedSlice` (the payload lives in the separate buffer
 /// region, so `T` need not be extern-compatible, unlike an inline optional
@@ -275,23 +325,23 @@ pub fn SerializedOptional(comptime T: type) type {
 }
 
 /// Count the relocatable base pointers a `Serialized` type fixes up when it
-/// moves — i.e. its deserialization fixup count. A `SerializedSlice` /
+/// moves—i.e. its deserialization fixup count. A `SerializedSlice` /
 /// `SerializedOptional` field contributes exactly 1 (via its
 /// `serialized_relocatable_pointers` decl); a nested aggregate is summed
 /// recursively. This is a pure compile-time function of the *type*, never of the
-/// data, so a store can `comptime`-assert its fixup count is a fixed constant —
+/// data, so a store can `comptime`-assert its fixup count is a fixed constant—
 /// the core invariant that makes deserialization O(1) in the data size.
 pub fn relocatablePointerCount(comptime T: type) usize {
-    return switch (@typeInfo(T)) {
-        .@"struct" => |s| blk: {
-            if (@hasDecl(T, "serialized_relocatable_pointers")) break :blk T.serialized_relocatable_pointers;
-            var n: usize = 0;
-            inline for (s.fields) |f| n += relocatablePointerCount(f.type);
-            break :blk n;
-        },
-        .array => |a| a.len * relocatablePointerCount(a.child),
-        else => 0,
-    };
+    @setEvalBranchQuota(1_000_000);
+    const info = @typeInfo(T);
+    if (comptime std.meta.activeTag(info) == .@"struct") {
+        if (@hasDecl(T, "serialized_relocatable_pointers")) return T.serialized_relocatable_pointers;
+        var count: usize = 0;
+        inline for (info.@"struct".fields) |field| count += relocatablePointerCount(field.type);
+        return count;
+    }
+    if (comptime std.meta.activeTag(info) == .array) return info.array.len * relocatablePointerCount(info.array.child);
+    return 0;
 }
 
 /// Recursively fold a `Serialized` type's complete relocation-relevant layout into
@@ -302,56 +352,61 @@ pub fn relocatablePointerCount(comptime T: type) usize {
 /// A change anywhere that could make a previously-written blob deserialize into a
 /// differently-shaped struct therefore changes the digest. Pure compile-time.
 pub fn serializedLayoutFingerprint(comptime T: type, hasher: anytype) void {
-    switch (@typeInfo(T)) {
-        .@"struct" => |s| {
-            // A container (SerializedSlice / SafeList.Serialized / …) fixes a
-            // {offset,len[,capacity]} header but its *element* layout determines the
-            // serialized bytes — fold the element type in so an element reorder is seen.
-            if (@hasDecl(T, "SerializedElement")) {
-                hasher.update("E<");
-                serializedLayoutFingerprint(T.SerializedElement, hasher);
-                hasher.update(">");
-            }
-            hasher.update("struct{");
-            inline for (s.fields) |f| {
-                hasher.update(f.name);
-                hasher.update(":");
-                serializedLayoutFingerprint(f.type, hasher);
-                hasher.update(",");
-            }
-            hasher.update("}");
-        },
-        .@"union" => |u| {
-            hasher.update("union{");
-            inline for (u.fields) |f| {
-                hasher.update(f.name);
-                hasher.update(":");
-                serializedLayoutFingerprint(f.type, hasher);
-                hasher.update(",");
-            }
-            hasher.update("}");
-        },
-        .@"enum" => |e| {
-            hasher.update("enum(");
-            serializedLayoutFingerprint(e.tag_type, hasher);
-            hasher.update(")");
-        },
-        .optional => |o| {
-            hasher.update("?");
-            serializedLayoutFingerprint(o.child, hasher);
-        },
-        .array => |a| {
-            hasher.update(std.fmt.comptimePrint("[{d}]", .{a.len}));
-            serializedLayoutFingerprint(a.child, hasher);
-        },
-        // Scalars and anything else: the name fully captures its size/representation.
-        else => hasher.update(@typeName(T)),
+    const info = @typeInfo(T);
+    const tag = std.meta.activeTag(info);
+    if (comptime tag == .@"struct") {
+        // A container (SerializedSlice / SafeList.Serialized / …) fixes a
+        // {offset,len[,capacity]} header but its *element* layout determines the
+        // serialized bytes—fold the element type in so an element reorder is seen.
+        if (@hasDecl(T, "SerializedElement")) {
+            hasher.update("E<");
+            serializedLayoutFingerprint(T.SerializedElement, hasher);
+            hasher.update(">");
+        }
+        hasher.update("struct{");
+        inline for (info.@"struct".fields) |f| {
+            hasher.update(f.name);
+            hasher.update(":");
+            serializedLayoutFingerprint(f.type, hasher);
+            hasher.update(",");
+        }
+        hasher.update("}");
+        return;
     }
+    if (comptime tag == .@"union") {
+        hasher.update("union{");
+        inline for (info.@"union".fields) |f| {
+            hasher.update(f.name);
+            hasher.update(":");
+            serializedLayoutFingerprint(f.type, hasher);
+            hasher.update(",");
+        }
+        hasher.update("}");
+        return;
+    }
+    if (comptime tag == .@"enum") {
+        hasher.update("enum(");
+        serializedLayoutFingerprint(info.@"enum".tag_type, hasher);
+        hasher.update(")");
+        return;
+    }
+    if (comptime tag == .optional) {
+        hasher.update("?");
+        serializedLayoutFingerprint(info.optional.child, hasher);
+        return;
+    }
+    if (comptime tag == .array) {
+        hasher.update(std.fmt.comptimePrint("[{d}]", .{info.array.len}));
+        serializedLayoutFingerprint(info.array.child, hasher);
+        return;
+    }
+    // Scalars and anything else: the name fully captures its size/representation.
+    hasher.update(@typeName(T));
 }
 
 /// Comptime FNV-1a accumulator. Cheap enough to fold a large recursive layout
 /// fingerprint at compile time without exhausting the eval branch quota (a full
-/// SHA-256 over the whole artifact layout does — and cryptographic strength is
+/// SHA-256 over the whole artifact layout does—and cryptographic strength is
 /// unnecessary for detecting *accidental* layout drift).
 const LayoutHasher = struct {
     state: u64 = 0xcbf29ce484222325,
@@ -435,11 +490,11 @@ pub fn binarySearchByKey(
 }
 
 /// Append `items` to a flat side pool (`ArrayList`), returning their `(start, len)`
-/// range as `RangeT` (a `start: u32, len: u32` struct — a store's named range or the
+/// range as `RangeT` (a `start: u32, len: u32` struct—a store's named range or the
 /// shared `Span`). This is the single implementation behind every transform-B "flatten
 /// a slice into a shared pool" helper. An empty input appends nothing and returns the
 /// canonical empty range `{ .start = 0, .len = 0 }` (a zero-length range never indexes
-/// the pool, so its start is irrelevant — every consumer slices `pool[start..start+0]`).
+/// the pool, so its start is irrelevant—every consumer slices `pool[start..start+0]`).
 pub fn appendSpan(
     comptime RangeT: type,
     comptime T: type,
@@ -487,7 +542,7 @@ fn allocatorField(comptime Store: type) ?[]const u8 {
 /// store lists them in a `pub const serde_transient_fields = [_][]const u8{...}` decl;
 /// `deserialize` resets each to its struct default (so they must declare one). They
 /// are excluded from the serialized set, and a store field that is neither serialized,
-/// the flag, the allocator, nor listed here is a compile error — closing the
+/// the flag, the allocator, nor listed here is a compile error—closing the
 /// "forgot to serialize a data field" footgun the strict field set otherwise guards.
 fn transientFields(comptime Store: type) []const []const u8 {
     if (@hasDecl(Store, "serde_transient_fields")) return &Store.serde_transient_fields;
@@ -504,7 +559,7 @@ fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
 /// Comptime serialization framework for "transform-A" stores: a store backed by a
 /// set of same-named `SerializedSlice`/`SerializedOptional`/nested-`Serialized`
 /// fields. It generates `serialize`/`deserialize` by iterating the `Serialized`
-/// fields, so the two can never drift apart when a field is added or removed — the
+/// fields, so the two can never drift apart when a field is added or removed—the
 /// hand-written triplet's classic footgun (a missed line silently drops or misaligns
 /// a field). A store opts in inside its `Serialized` extern struct:
 ///
@@ -517,14 +572,14 @@ fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
 ///     };
 ///
 /// Stores carrying extra runtime state are handled by reflection, not excluded:
-///   * a `serialized: bool` frozen flag — auto-detected and set `true` on load;
-///   * a retained `allocator: Allocator` — auto-detected; the store aliases
+///   * a `serialized: bool` frozen flag—auto-detected and set `true` on load;
+///   * a retained `allocator: Allocator`—auto-detected; the store aliases
 ///     `deserialize = Serde.deserializeWithAllocator` and the allocator is injected;
-///   * build-only side tables — declared in `serde_transient_fields` and reset to
+///   * build-only side tables—declared in `serde_transient_fields` and reset to
 ///     their struct default on load;
-///   * `ArrayList`-backed fields — adapted via `.items`/`arrayListFromSlice`.
+///   * `ArrayList`-backed fields—adapted via `.items`/`arrayListFromSlice`.
 /// Every store field must be one of: serialized (a `Serialized` field), the frozen
-/// flag, the allocator, or a declared transient — otherwise a compile error fires, so
+/// flag, the allocator, or a declared transient—otherwise a compile error fires, so
 /// a data field accidentally left out of `Serialized` cannot silently vanish. `deinit`
 /// stays hand-written per store: it encodes genuine per-store ownership (slice-free vs
 /// list/interner deinit, frozen gating, allocator retention) that does not belong in
@@ -749,7 +804,7 @@ test "relocatablePointerCount: counts SafeList.Serialized base pointers and sums
     };
     try testing.expectEqual(@as(usize, 3), relocatablePointerCount(InternerLike));
 
-    // A store composed of slices + a nested interner sums to the true total — the
+    // A store composed of slices + a nested interner sums to the true total—the
     // invariant that lets the artifact assert its full constant fixup count.
     const Composed = extern struct {
         a: SerializedSlice(Elem),
@@ -830,7 +885,7 @@ test "layoutVersionHash: flips on nested reorder, element reorder, and version b
     // A version-discriminant bump changes the hash.
     try testing.expect(!versionHashesEqual(hA1, hA2));
     // Reordering the ELEMENT type's fields changes the hash even though the
-    // container's own {offset,len} layout is identical — captured via SerializedElement.
+    // container's own {offset,len} layout is identical—captured via SerializedElement.
     try testing.expect(!versionHashesEqual(hC1, hC2));
     // Same for SafeList-backed element layout.
     try testing.expect(!versionHashesEqual(hL1, hL2));
@@ -905,7 +960,7 @@ test "SerializedSlice.serialize: padding-free elements are iovec'd verbatim (no 
     const aa = arena.allocator();
 
     // A padding-free element type (u32). The serializer must NOT allocate a
-    // writer-owned copy buffer for it — it iovecs the source directly. Measure the
+    // writer-owned copy buffer for it—it iovecs the source directly. Measure the
     // `allocated_memory` delta across the slice serialize (the header `appendAlloc`
     // registers one entry up front, which is not what we're measuring).
     const PodHolder = extern struct { items: SerializedSlice(u32) = .{} };

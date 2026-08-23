@@ -1,10 +1,11 @@
 //! Resolves checked-artifact types into committed ordinary-data layouts.
 //!
-//! This is the glue/cache-path sibling of `type_layout_resolver.zig`: it consumes
+//! This is the glue/cache-path layout resolver: it consumes
 //! serialized checked artifacts instead of live checker vars, then finalizes
 //! through the shared layout graph/store.
 
 const std = @import("std");
+const collections = @import("collections");
 const check = @import("check");
 const layout = @import("layout");
 
@@ -442,7 +443,7 @@ pub const Resolver = struct {
                     const match = backingFieldByName(lookup.artifact, backing_fields.items, field_name) orelse unreachable;
                     graph_fields.appendAssumeCapacity(.{
                         .index = match.index,
-                        .child = try self.buildRefForType(lookup.artifact, match.field.ty, .ordinary, build_state),
+                        .child = try self.buildFieldSlotRef(lookup.artifact, match.field, build_state),
                     });
                 },
                 .padding => |padding_ty| {
@@ -457,8 +458,7 @@ pub const Resolver = struct {
         }
 
         const span = try build_state.graph.appendFields(self.allocator, graph_fields.items);
-        build_state.graph.setNode(placeholder, .{ .struct_ = span });
-        try build_state.graph.markNominalStruct(self.allocator, placeholder);
+        build_state.graph.setNode(placeholder, .{ .struct_ = build_state.graph.declaredOrder(span) });
         return true;
     }
 
@@ -483,10 +483,40 @@ pub const Resolver = struct {
         for (fields.items, 0..) |field, index| {
             graph_fields.appendAssumeCapacity(.{
                 .index = @intCast(index),
-                .child = try self.buildRefForType(artifact, field.ty, .ordinary, build_state),
+                .child = try self.buildFieldSlotRef(artifact, field, build_state),
             });
         }
-        return self.buildStructNode(build_state, graph_fields.items, false);
+        return self.buildStructNode(build_state, graph_fields.items);
+    }
+
+    /// The internal layout slot of one checked record field (design.md "Field
+    /// Kinds"): `required` and `defaulted` kinds use the field's own inline
+    /// layout, while `optional` uses the compiler's two-variant
+    /// `[#Missing, #Present(value)]` slot. The checker separately forbids every
+    /// reachable optional field in hosted/provided signatures; being able to
+    /// resolve checked metadata here does not make this representation part of
+    /// the platform-host ABI.
+    fn buildFieldSlotRef(
+        self: *Resolver,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        field: CheckedArtifact.CheckedRecordField,
+        build_state: *BuildState,
+    ) Error!GraphRef {
+        switch (field.kind.tag) {
+            .required, .defaulted => return try self.buildRefForType(artifact, field.ty, .ordinary, build_state),
+            .optional => {
+                const variants = [_]GraphRef{
+                    try self.buildPayloadRef(artifact, &.{}, build_state),
+                    try self.buildPayloadRef(artifact, &.{field.ty}, build_state),
+                };
+                const node_id = try build_state.graph.reserveNode(self.allocator);
+                const span = try build_state.graph.appendRefs(self.allocator, &variants);
+                build_state.graph.setNode(node_id, .{ .tag_union = span });
+                return .{ .local = node_id };
+            },
+            .undetermined => return error.UnresolvedByValue,
+            .err => return error.UnresolvedByValue,
+        }
     }
 
     fn buildTupleRef(
@@ -505,7 +535,7 @@ pub const Resolver = struct {
                 .child = try self.buildRefForType(artifact, item, .ordinary, build_state),
             });
         }
-        return self.buildStructNode(build_state, fields.items, false);
+        return self.buildStructNode(build_state, fields.items);
     }
 
     fn buildTagUnionRef(
@@ -550,13 +580,11 @@ pub const Resolver = struct {
         self: *Resolver,
         build_state: *BuildState,
         fields: []const GraphField,
-        nominal_struct: bool,
     ) Error!GraphRef {
         if (fields.len == 0) return .{ .canonical = .zst };
         const node_id = try build_state.graph.reserveNode(self.allocator);
         const span = try build_state.graph.appendFields(self.allocator, fields);
         build_state.graph.setNode(node_id, .{ .struct_ = span });
-        if (nominal_struct) try build_state.graph.markNominalStruct(self.allocator, node_id);
         return .{ .local = node_id };
     }
 
@@ -577,7 +605,7 @@ pub const Resolver = struct {
         root: CheckedArtifact.CheckedTypeId,
     ) Error!void {
         var current: ?CheckedArtifact.CheckedTypeId = root;
-        var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
 
         while (current) |current_id| {
@@ -599,7 +627,14 @@ pub const Resolver = struct {
                     if (variable.row_default == .empty_record) break;
                     return error.UnresolvedByValue;
                 },
-                else => return error.UnresolvedByValue,
+                .pending,
+                .err,
+                .tuple,
+                .nominal,
+                .function,
+                .tag_union,
+                .empty_tag_union,
+                => return error.UnresolvedByValue,
             }
         }
     }
@@ -611,7 +646,7 @@ pub const Resolver = struct {
         root: CheckedArtifact.CheckedTypeId,
     ) Error!void {
         var current: ?CheckedArtifact.CheckedTypeId = root;
-        var seen = std.AutoHashMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
+        var seen = collections.DenseMap(CheckedArtifact.CheckedTypeId, void).init(self.allocator);
         defer seen.deinit();
 
         while (current) |current_id| {
@@ -629,7 +664,15 @@ pub const Resolver = struct {
                     if (variable.row_default == .empty_tag_union) break;
                     return error.UnresolvedByValue;
                 },
-                else => return error.UnresolvedByValue,
+                .pending,
+                .err,
+                .record,
+                .record_unbound,
+                .tuple,
+                .nominal,
+                .function,
+                .empty_record,
+                => return error.UnresolvedByValue,
             }
         }
     }

@@ -30,20 +30,17 @@ use_it = {
 # EXPECTED
 MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:12:9:12:24
 # PROBLEMS
+── ✗ missing method ──── static_dispatch_where_forced_numeric_issue_9657.md:12:9
 
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named `encode` on ────┐
-└┬───────────────┘  an unresolved type variable, but unresolved type          │
- │                  variables have no methods.                                │
- │                                                                            │
- │  output.encode()                                                           │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └─────────────────── static_dispatch_where_forced_numeric_issue_9657.md:12:9 ┘
+This is trying to dispatch a method named encode on an unresolved type
+variable, but unresolved type variables have no methods.
 
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+output.encode()
+^^^^^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -193,13 +190,13 @@ use_it = {
 									(ty-rigid-var (name "a")))
 								(s-let
 									(p-assign (ident "value"))
-									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 28) (constraint-fn-var 294)
+									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 28) (constraint-fn-var 304)
 										(args
 											(e-lookup-local
 												(p-assign (ident "input"))))))
 								(s-let
 									(p-assign (ident "output"))
-									(e-call (constraint-fn-var 300)
+									(e-call (constraint-fn-var 310)
 										(e-lookup-local
 											(p-assign (ident "f")))
 										(e-lookup-local
@@ -231,19 +228,19 @@ use_it = {
 		(e-block
 			(s-let
 				(p-assign (ident "transform"))
-				(e-call (constraint-fn-var 318)
+				(e-call (constraint-fn-var 331)
 					(e-lookup-local
 						(p-assign (ident "make_map")))
 					(e-lambda
 						(args
 							(p-assign (ident "n")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 316)
+						(e-dispatch-call (method "plus") (constraint-fn-var 329)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
 							(args
 								(e-num (value "1")))))))
-			(e-call (constraint-fn-var 326)
+			(e-call (constraint-fn-var 339)
 				(e-lookup-local
 					(p-assign (ident "transform")))
 				(e-num (value "41"))))))

@@ -49,6 +49,11 @@ pub const CompilationResult = struct {
     object_bytes: []const u8,
     /// Allocator used - caller must free object_bytes with this
     allocator: Allocator,
+    /// Whether the compiled procs emit boxy runtime calls. When set, the object
+    /// references `roc_boxy_*` symbols and its entrypoints call
+    /// `roc_boxy_init_embedded`, so the link must include the boxy runtime
+    /// object and the embedded sidecar.
+    uses_boxy: bool = false,
 
     pub fn deinit(self: *CompilationResult) void {
         self.allocator.free(self.object_bytes);
@@ -133,7 +138,7 @@ pub const ObjectFileCompiler = struct {
     ///
     /// Dispatches at runtime to the correct compile-time LirCodeGen
     /// instantiation for the requested target. Works for both native and
-    /// cross-compilation — the caller just passes the desired target.
+    /// cross-compilation—the caller just passes the desired target.
     ///
     /// Returns CompilationError.UnsupportedTarget for arm32 and wasm32 targets.
     pub fn compileToObjectFile(
@@ -143,12 +148,16 @@ pub const ObjectFileCompiler = struct {
         entrypoints: []const Entrypoint,
         static_data_exports: []const StaticDataExport,
         proc_specs: []const LirProcSpec,
+        erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
+        erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime, self.timing);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, target, self.enable_default_platform_runtime, self.timing);
     }
 
-    /// Compile to an object file and write it to a path.
+    /// Compile to an object file and write it to a path. Returns whether the
+    /// compiled object emits boxy runtime calls; when set, the caller must add
+    /// the boxy runtime object and the embedded sidecar to the link.
     pub fn compileToObjectFileAndWrite(
         self: *ObjectFileCompiler,
         lir_store: *const LirStore,
@@ -156,16 +165,20 @@ pub const ObjectFileCompiler = struct {
         entrypoints: []const Entrypoint,
         static_data_exports: []const StaticDataExport,
         proc_specs: []const LirProcSpec,
+        erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
+        erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
         target: RocTarget,
         output_path: []const u8,
         roc_ctx: CoreCtx,
-    ) CompilationError!void {
+    ) CompilationError!bool {
         var result = try self.compileToObjectFile(
             lir_store,
             layout_store,
             entrypoints,
             static_data_exports,
             proc_specs,
+            erased_arg_desc_offsets,
+            erased_arg_desc_params,
             target,
         );
         defer result.deinit();
@@ -179,6 +192,7 @@ pub const ObjectFileCompiler = struct {
             return CompilationError.ObjectGenerationFailed;
         };
         if (self.timing) |timing| timing.finish(file_io_started_ns, .file_io);
+        return result.uses_boxy;
     }
 
     /// Emit a data-only object from already materialized readonly exports.
@@ -241,6 +255,8 @@ fn compileWithCodeGen(
     entrypoints: []const Entrypoint,
     static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
+    erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
+    erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
     target: RocTarget,
     enable_default_platform_runtime: bool,
     timing: ?*ObjectFileCompiler.Timing,
@@ -256,12 +272,15 @@ fn compileWithCodeGen(
     defer static_strings.deinit();
 
     // Initialize the code generator
-    var codegen = CodeGen.init(
+    var codegen = CodeGen.initWithBoxyMetadata(
         allocator,
         lir_store,
         layout_store,
         static_strings.entries,
+        erased_arg_desc_offsets,
+        erased_arg_desc_params,
         .preserve,
+        target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 
@@ -562,6 +581,7 @@ fn compileWithCodeGen(
     return CompilationResult{
         .object_bytes = object_bytes,
         .allocator = allocator,
+        .uses_boxy = codegen.boxy_runtime_used,
     };
 }
 
@@ -693,6 +713,11 @@ fn compileStaticDataObjectBytes(
 
 /// Runtime-to-comptime dispatch for compilation.
 /// Uses inline for over RocTarget enum fields to select the correct LirCodeGen instantiation.
+///
+/// Only default-CPU targets are instantiated. A `v1` target compiles through
+/// its default twin's instantiation and carries its CPU level as a runtime
+/// field, so the baseline targets cost no extra monomorphizations: they select
+/// different instruction sequences, not a different code generator.
 fn crossCompileDispatch(
     allocator: Allocator,
     lir_store: *const LirStore,
@@ -700,14 +725,18 @@ fn crossCompileDispatch(
     entrypoints: []const Entrypoint,
     static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
+    erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
+    erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
     target: RocTarget,
     enable_default_platform_runtime: bool,
     timing: ?*ObjectFileCompiler.Timing,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
+    const default_target = target.defaultCpuTarget();
     inline for (enum_info.fields) |field| {
         const comptime_target: RocTarget = @enumFromInt(field.value);
-        if (target == comptime_target) {
+        if (comptime comptime_target.defaultCpuTarget() != comptime_target) continue;
+        if (default_target == comptime_target) {
             const arch = comptime comptime_target.toCpuArch();
             if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {
                 return compileWithCodeGen(
@@ -718,7 +747,9 @@ fn crossCompileDispatch(
                     entrypoints,
                     static_data_exports,
                     proc_specs,
-                    comptime_target,
+                    erased_arg_desc_offsets,
+                    erased_arg_desc_params,
+                    target,
                     enable_default_platform_runtime,
                     timing,
                 );

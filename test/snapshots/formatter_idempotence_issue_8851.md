@@ -10,16 +10,14 @@ a = 0->b().c()
 # EXPECTED
 NAME NOT IN SCOPE - formatter_idempotence_issue_8851.md:1:8:1:9
 # PROBLEMS
+── ✗ name not in scope ───────────────── formatter_idempotence_issue_8851.md:1:8
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  a = 0->b().c()                                                            │
- │         ‾                                                                  │
- └─────────────────────────────────── formatter_idempotence_issue_8851.md:1:8 ┘
+Nothing is named b in this scope.
 
-    Is it misspelled, or is there an import missing?
+a = 0->b().c()
+       ^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -43,7 +41,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a = (0->b()).c()
+a = (0 |> b).c()
 ~~~
 # CANONICALIZE
 ~~~clojure

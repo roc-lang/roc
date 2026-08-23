@@ -71,6 +71,7 @@ const Decision = union(enum) {
 const WrapperAnalyzer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
+    solved_types: SolvedType.Store.View,
     decisions: []Decision,
     stack: std.ArrayList(Lifted.FnId),
 
@@ -85,6 +86,7 @@ const WrapperAnalyzer = struct {
         var analyzer = WrapperAnalyzer{
             .allocator = allocator,
             .solved = solved,
+            .solved_types = solved.types.view(),
             .decisions = decisions,
             .stack = .empty,
         };
@@ -176,21 +178,21 @@ const WrapperAnalyzer = struct {
 
     fn solvedCaptureCount(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) usize {
         const captures = self.solvedCapturesForFn(fn_id);
-        return self.solved.types.captureSpan(captures).len;
+        return self.solved_types.captureSpan(captures).len;
     }
 
     fn solvedCapturesForFn(self: *const WrapperAnalyzer, fn_id: Lifted.FnId) SolvedType.Span {
         const fn_symbol = self.solved.lifted.getFn(fn_id).symbol;
-        const func = switch (self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)])) {
-            .func => |func| func,
-            else => Common.invariant("direct Lambda Mono function table contains a non-function type"),
-        };
-        const callable = switch (self.solved.types.rootContent(func.callable)) {
-            .lambda_set => |members| members,
-            .erased => |erased| erased.members,
-            else => Common.invariant("callable value did not have a resolved callable slot"),
-        };
-        for (self.solved.types.memberSpan(callable)) |member| {
+        const fn_content = self.solved.types.rootContent(self.solved.fn_tys.items[@intFromEnum(fn_id)]);
+        if (fn_content != .func) Common.invariant("direct Lambda Mono function table contains a non-function type");
+        const callable_content = self.solved.types.rootContent(fn_content.func.callable);
+        const callable = if (callable_content == .lambda_set)
+            callable_content.lambda_set
+        else if (callable_content == .erased)
+            callable_content.erased.members
+        else
+            Common.invariant("callable value did not have a resolved callable slot");
+        for (self.solved_types.memberSpan(callable)) |member| {
             if (member.lambda == fn_symbol) return member.captures;
         }
         return .empty();
@@ -221,6 +223,15 @@ const WrapperAnalyzer = struct {
             => |items| self.exprSpanReadsOnlyArgs(items, args),
             .record => |fields| {
                 const field_exprs = self.solved.lifted.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| {
+                    const field = GuardedList.at(field_exprs, index);
+                    if (!self.exprReadsOnlyArgs(field.value, args)) return false;
+                }
+                return true;
+            },
+            .record_update => |update| {
+                if (!self.exprReadsOnlyArgs(update.base, args)) return false;
+                const field_exprs = self.solved.lifted.fieldExprSpan(update.fields);
                 for (0..field_exprs.len) |index| {
                     const field = GuardedList.at(field_exprs, index);
                     if (!self.exprReadsOnlyArgs(field.value, args)) return false;
@@ -295,12 +306,10 @@ const WrapperAnalyzer = struct {
 
     fn isInlineableWrapperBody(self: *const WrapperAnalyzer, expr_id: Lifted.ExprId) bool {
         const expr = self.solved.lifted.getExpr(expr_id);
-        return switch (expr.data) {
-            .call_proc, .low_level => true,
-            .block => |block| self.solved.lifted.stmtSpan(block.statements).len == 0 and
-                self.isInlineableWrapperBody(block.final_expr),
-            else => false,
-        };
+        if (expr.data == .call_proc or expr.data == .low_level) return true;
+        if (expr.data != .block) return false;
+        return self.solved.lifted.stmtSpan(expr.data.block.statements).len == 0 and
+            self.isInlineableWrapperBody(expr.data.block.final_expr);
     }
 
     /// Visit every proc called within a wrapper body so inline cycles are
@@ -327,6 +336,14 @@ const WrapperAnalyzer = struct {
             => |items| try self.visitSpanCallees(items),
             .record => |fields| {
                 const field_exprs = self.solved.lifted.fieldExprSpan(fields);
+                for (0..field_exprs.len) |index| {
+                    const field = GuardedList.at(field_exprs, index);
+                    try self.visitBodyCallees(field.value);
+                }
+            },
+            .record_update => |update| {
+                try self.visitBodyCallees(update.base);
+                const field_exprs = self.solved.lifted.fieldExprSpan(update.fields);
                 for (0..field_exprs.len) |index| {
                     const field = GuardedList.at(field_exprs, index);
                     try self.visitBodyCallees(field.value);

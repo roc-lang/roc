@@ -21,41 +21,24 @@ boxed = Container(X)
 # EXPECTED
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:13:9:14
 UNDECLARED TYPE VARIABLE - nominal_associated_in_tuples.md:9:29:9:30
-TOO MANY ARGS - nominal_associated_in_tuples.md:11:9:11:27
 # PROBLEMS
+── ✗ undeclared type variable ───────────── nominal_associated_in_tuples.md:9:13
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  Container : a -> [Container(a)]                                           │
- │              ‾                                                             │
- └────────────────────────────────────── nominal_associated_in_tuples.md:9:13 ┘
+The type variable a is not declared in this scope.
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+Container : a -> [Container(a)]
+            ^
 
+Type variables must be introduced in a type annotation before they can be used.
 
-┌──────────────────────────┐
-│ UNDECLARED TYPE VARIABLE ├─ The type variable `a` is not declared in this ──┐
-└┬─────────────────────────┘  scope.                                          │
- │                                                                            │
- │  Container : a -> [Container(a)]                                           │
- │                              ‾                                             │
- └────────────────────────────────────── nominal_associated_in_tuples.md:9:29 ┘
+── ✗ undeclared type variable ───────────── nominal_associated_in_tuples.md:9:29
 
-    Type variables must be introduced in a type annotation before they can be
-    used.
+The type variable a is not declared in this scope.
 
+Container : a -> [Container(a)]
+                            ^
 
-┌───────────────┐
-│ TOO MANY ARGS ├─ The type Container expects 0 arguments, but got 1 ─────────┐
-└┬──────────────┘  instead.                                                   │
- │                                                                            │
- │  boxed : Container(Foo.Bar)                                                │
- │          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
- └────────────────────────────────────── nominal_associated_in_tuples.md:11:9 ┘
-
+Type variables must be introduced in a type annotation before they can be used.
 
 # TOKENS
 ~~~zig
@@ -194,7 +177,7 @@ boxed = Container(X)
 			(ty-header (name "Foo.Bar")))
 		(nominal (type "Foo.Baz")
 			(ty-header (name "Foo.Baz")))
-		(alias (type "Container")
+		(alias (type "Error")
 			(ty-header (name "Container"))))
 	(expressions
 		(expr (type "(Foo.Bar, Foo.Baz)"))

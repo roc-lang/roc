@@ -43,14 +43,12 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "y")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 201)
-				(receiver
-					(e-lookup-local
-						(p-assign (ident "x"))))
-				(args
-					(e-runtime-error (tag "ident_not_in_scope")))))))
+			(e-binop (op "add")
+				(e-lookup-local
+					(p-assign (ident "x")))
+				(e-runtime-error (tag "ident_not_in_scope"))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a -> (_arg -> a) where [a.plus : a, Error -> a]"))
+(expr (type "_arg -> (_arg2 -> Error)"))
 ~~~

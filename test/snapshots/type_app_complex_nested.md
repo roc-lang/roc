@@ -34,67 +34,50 @@ UNDECLARED TYPE - type_app_complex_nested.md:12:14:12:19
 UNDECLARED TYPE - type_app_complex_nested.md:18:30:18:35
 UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 # PROBLEMS
+── ✗ undeclared type ─────────────────────────── type_app_complex_nested.md:4:27
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)     │
- │                            ‾‾‾‾‾                                           │
- └─────────────────────────────────────────── type_app_complex_nested.md:4:27 ┘
+The type Maybe is not declared in this scope.
 
+processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+                          ^^^^^
 
+── ✗ undeclared type ─────────────────────────── type_app_complex_nested.md:4:48
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)     │
- │                                                 ‾‾‾‾‾                      │
- └─────────────────────────────────────────── type_app_complex_nested.md:4:48 ┘
+The type Error is not declared in this scope.
 
+processComplex : Try(List(Maybe(a)), Dict(Str, Error(_b))) -> List(a)
+                                               ^^^^^
 
+── ● unused variable ─────────────────────────── type_app_complex_nested.md:7:12
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `maybeList` is defined here and then never ─────┐
-└┬────────────────┘  used.                                                    │
- │                                                                            │
- │  Ok(maybeList) => []                                                       │
- │     ‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────── type_app_complex_nested.md:7:12 ┘
+Variable maybeList is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like
-    `_maybeList` to suppress this warning.
+Ok(maybeList) => []
+   ^^^^^^^^^
 
+If you don't need this variable, prefix it with an underscore like _maybeList
+to suppress this warning.
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a                      │
- │               ‾‾‾‾‾                                                        │
- └────────────────────────────────────────── type_app_complex_nested.md:12:14 ┘
+── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:12:14
 
+The type Maybe is not declared in this scope.
 
+deepNested : Maybe(Try(List(Dict(Str, a)), _b)) -> a
+             ^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Maybe` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))              │
- │                               ‾‾‾‾‾                                        │
- └────────────────────────────────────────── type_app_complex_nested.md:18:30 ┘
+── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:18:30
 
+The type Maybe is not declared in this scope.
 
+ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
+                             ^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Error` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))              │
- │                                                    ‾‾‾‾‾                   │
- └────────────────────────────────────────── type_app_complex_nested.md:18:51 ┘
+── ✗ undeclared type ────────────────────────── type_app_complex_nested.md:18:51
 
+The type Error is not declared in this scope.
+
+ComplexType(a, b) : Try(List(Maybe(a)), Dict(Str, Error(b)))
+                                                  ^^^^^
 
 # TOKENS
 ~~~zig
@@ -247,26 +230,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 (can-ir
 	(d-let
 		(p-assign (ident "processComplex"))
-		(e-lambda
-			(args
-				(p-assign (ident "result")))
-			(e-match
-				(match
-					(cond
-						(e-runtime-error (tag "erroneous_value_expr")))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-empty_list)))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-applied-tag)))
-							(value
-								(e-empty_list)))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "Try") (builtin)
@@ -279,11 +243,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "deepNested"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(e-crash (msg "not implemented"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -293,7 +253,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 371)
+			(e-call (constraint-fn-var 373)
 				(e-runtime-error (tag "erroneous_value_expr"))
 				(e-tag (name "Ok")
 					(args
@@ -323,7 +283,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(patt (type "Error -> _ret"))
 		(patt (type "_arg -> List(_c)")))
 	(type_decls
-		(alias (type "ComplexType(a, b)")
+		(alias (type "Error")
 			(ty-header (name "ComplexType")
 				(ty-args
 					(ty-rigid-var (name "a"))

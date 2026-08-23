@@ -554,6 +554,7 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 
 // Use the actual RocStr from builtins instead of defining our own
 const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
 
 /// Hosted function: Stderr.line! (index 0 - sorted alphabetically)
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
@@ -850,7 +851,7 @@ fn hostedHostGetGreeting(host: HostRecord) callconv(.c) RocStr {
     return RocStr.fromSlice(result_str, ops);
 }
 
-/// Hosted function: Padded.check! — end-to-end host-interop check for a nominal
+/// Hosted function: Padded.check!—end-to-end host-interop check for a nominal
 /// record with an unnamed padding field. The Roc type is
 /// `Padded := { z : U32, _ : U32, a : U32 }`, whose runtime layout must match
 /// this extern struct (declared order, with four reserved padding bytes): z@0,
@@ -880,6 +881,9 @@ const BoxedHostDropCounts = struct {
     recursive_tree: usize = 0,
     recursive_tree_child_box_releases: usize = 0,
     boxed_capture: usize = 0,
+    transition_outer: usize = 0,
+    transition_inner: usize = 0,
+    transition_nonnull_reuse: usize = 0,
 };
 
 var boxed_host_drop_counts: BoxedHostDropCounts = .{};
@@ -918,6 +922,10 @@ const TreeCapture = extern struct {
 const BoxedCallableCapture = extern struct {
     inner: ?[*]u8,
     bonus: i64,
+};
+
+const TransitionCapture = extern struct {
+    value: i64,
 };
 
 fn capturePtrAs(comptime T: type, capture_ptr: ?[*]u8) *T {
@@ -962,18 +970,83 @@ fn callBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i
     const payload = builtins.erased_callable.payloadPtr(payload_ptr);
     var call_args = I64ToI64Args{ .arg0 = arg0 };
     var result: i64 = undefined;
+    var ret_desc: ?*const anyopaque = null;
     payload.callable_fn_ptr(
         ops,
         @ptrCast(&result),
         @ptrCast(&call_args),
         builtins.erased_callable.capturePtr(payload_ptr),
+        null,
+        &ret_desc,
     );
     return result;
 }
 
-fn hostAddCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+/// Invoke a boxed callable whose scalar result cannot reuse the allocation,
+/// transferring the caller's owned reference through the fifth ABI argument.
+/// The callee must therefore release the allocation before returning.
+fn consumeBoxedI64ToI64(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8, arg0: i64) i64 {
+    const payload_ptr = boxed orelse {
+        ops.crash("host attempted to call a null boxed erased callable");
+        unreachable;
+    };
+    const payload = builtins.erased_callable.payloadPtr(payload_ptr);
+    var call_args = I64ToI64Args{ .arg0 = arg0 };
+    var result: i64 = undefined;
+    var ret_desc: ?*const anyopaque = null;
+    payload.callable_fn_ptr(
+        ops,
+        @ptrCast(&result),
+        @ptrCast(&call_args),
+        builtins.erased_callable.capturePtr(payload_ptr),
+        payload_ptr,
+        &ret_desc,
+    );
+    return result;
+}
+
+fn callBoxedTransitionWithoutReuse(ops: *builtins.host_abi.RocOps, boxed: ?[*]u8) i64 {
+    const outer_ptr = boxed orelse {
+        ops.crash("host attempted to call a null boxed transition");
+        unreachable;
+    };
+    defer builtins.erased_callable.decref(outer_ptr, ops);
+
+    const outer_payload = builtins.erased_callable.payloadPtr(outer_ptr);
+    var inner: ?[*]u8 = null;
+    var inner_desc: ?*const anyopaque = null;
+    outer_payload.callable_fn_ptr(
+        ops,
+        @ptrCast(&inner),
+        null,
+        builtins.erased_callable.capturePtr(outer_ptr),
+        null,
+        &inner_desc,
+    );
+
+    const inner_ptr = inner orelse {
+        ops.crash("boxed transition returned a null boxed callable");
+        unreachable;
+    };
+    defer builtins.erased_callable.decref(inner_ptr, ops);
+    const inner_payload = builtins.erased_callable.payloadPtr(inner_ptr);
+    var result: i64 = undefined;
+    var result_desc: ?*const anyopaque = null;
+    inner_payload.callable_fn_ptr(
+        ops,
+        @ptrCast(&result),
+        null,
+        builtins.erased_callable.capturePtr(inner_ptr),
+        null,
+        &result_desc,
+    );
+    return result;
+}
+
+fn hostAddCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(AddCapture, capture_ptr);
     writeI64Result(ret, readI64ToI64Arg(args) + capture.amount);
+    ret_desc.* = null;
 }
 
 fn hostAddCaptureOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -994,10 +1067,11 @@ fn hostedHostBoxedAdd(amount: i64) callconv(.c) ?[*]u8 {
     return ret;
 }
 
-fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn hostNestedRecordCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(NestedRecordCapture, capture_ptr);
     const x = readI64ToI64Arg(args);
     writeI64Result(ret, x + capture.inner.base + capture.adjustment + @as(i64, @intCast(capture.inner.label.asSlice().len)));
+    ret_desc.* = null;
 }
 
 fn hostNestedRecordCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1098,9 +1172,10 @@ fn hostTreeSum(tree: *const HostTree) i64 {
     };
 }
 
-fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn hostTreeCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(TreeCapture, capture_ptr);
     writeI64Result(ret, readI64ToI64Arg(args) + hostTreeSum(&capture.tree));
+    ret_desc.* = null;
 }
 
 fn hostTreeCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1126,10 +1201,11 @@ fn hostedHostBoxedRecursiveTree(tree: HostTree) callconv(.c) ?[*]u8 {
     return ret;
 }
 
-fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8) callconv(.c) void {
+fn hostBoxedCaptureCallable(ops: *builtins.host_abi.RocOps, ret: ?[*]u8, args: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8, ret_desc: *?*const anyopaque) callconv(.c) void {
     const capture = capturePtrAs(BoxedCallableCapture, capture_ptr);
     const x = readI64ToI64Arg(args);
     writeI64Result(ret, callBoxedI64ToI64(ops, capture.inner, x) + capture.bonus);
+    ret_desc.* = null;
 }
 
 fn hostBoxedCaptureOnDrop(capture_ptr: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
@@ -1165,9 +1241,59 @@ fn hostedHostBoxedWithBoxedCapture(inner: ?[*]u8, bonus: i64) callconv(.c) ?[*]u
 }
 
 fn hostedHostCallBoxed(boxed: ?[*]u8, value: i64) callconv(.c) i64 {
+    return consumeBoxedI64ToI64(g_roc_ops.?, boxed, value);
+}
+
+fn hostedHostCallBoxedTransition(boxed: ?[*]u8) callconv(.c) i64 {
+    return callBoxedTransitionWithoutReuse(g_roc_ops.?, boxed);
+}
+
+fn hostTransitionInnerCallable(_: *builtins.host_abi.RocOps, ret: ?[*]u8, _: ?[*]const u8, capture_ptr: ?[*]u8, _: ?[*]u8) callconv(.c) void {
+    writeI64Result(ret, capturePtrAs(TransitionCapture, capture_ptr).value);
+}
+
+fn hostTransitionInnerOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    boxed_host_drop_counts.transition_inner += 1;
+}
+
+fn hostTransitionOuterCallable(
+    ops: *builtins.host_abi.RocOps,
+    ret: ?[*]u8,
+    _: ?[*]const u8,
+    capture_ptr: ?[*]u8,
+    reuse: ?[*]u8,
+) callconv(.c) void {
+    // `capture_ptr` can point inside `reuse`, so snapshot before repacking.
+    const next_capture = capturePtrAs(TransitionCapture, capture_ptr).*;
+    if (reuse != null) boxed_host_drop_counts.transition_nonnull_reuse += 1;
+    const next = builtins.erased_callable.repack(
+        reuse,
+        @ptrCast(&hostTransitionInnerCallable),
+        &hostTransitionInnerOnDrop,
+        @ptrCast(&next_capture),
+        @sizeOf(TransitionCapture),
+        .Immutable,
+        ops,
+    );
+    @as(*align(1) ?[*]u8, @ptrCast(ret orelse unreachable)).* = next;
+}
+
+fn hostTransitionOuterOnDrop(_: ?[*]u8, _: *builtins.host_abi.RocOps) callconv(.c) void {
+    boxed_host_drop_counts.transition_outer += 1;
+}
+
+fn hostedHostBoxedTransition(value: i64) callconv(.c) ?[*]u8 {
     const ops = g_roc_ops.?;
-    defer builtins.erased_callable.decref(boxed, ops);
-    return callBoxedI64ToI64(ops, boxed, value);
+    var ret: ?[*]u8 = null;
+    writeErasedCallable(
+        TransitionCapture,
+        &ret,
+        @ptrCast(&hostTransitionOuterCallable),
+        &hostTransitionOuterOnDrop,
+        .{ .value = value },
+        ops,
+    );
+    return ret;
 }
 
 fn hostedHostReleaseStoredBoxed() callconv(.c) void {
@@ -1185,6 +1311,33 @@ fn hostedHostRoundtripBoxed(boxed: ?[*]u8) callconv(.c) ?[*]u8 {
         builtins.erased_callable.decref(b, ops);
     }
     return boxed;
+}
+
+/// The one boxed Roc value `store_seed!` is holding for `take_seed!`.
+/// Ownership moves in on the store and back out on the take, so the host never
+/// needs to know the value's type to keep its refcount balanced.
+var stored_seed: ?[*]u8 = null;
+
+fn hostedHostStoreSeed(boxed: ?[*]u8) callconv(.c) void {
+    const ops = g_roc_ops.?;
+    if (stored_seed != null) {
+        ops.crash("host was given a second seed while still holding one");
+        unreachable;
+    }
+    stored_seed = boxed orelse {
+        ops.crash("host was given a null seed");
+        unreachable;
+    };
+}
+
+fn hostedHostTakeSeed() callconv(.c) ?[*]u8 {
+    const ops = g_roc_ops.?;
+    const seed = stored_seed orelse {
+        ops.crash("host was asked for a seed it was never given");
+        unreachable;
+    };
+    stored_seed = null;
+    return seed;
 }
 
 fn hostedHostStoreBoxed(boxed: ?[*]u8) callconv(.c) void {
@@ -1212,7 +1365,7 @@ fn hostedHostBoxedDropReport() callconv(.c) RocStr {
     var buf: [256]u8 = undefined;
     const report = std.fmt.bufPrint(
         &buf,
-        "drops primitive={d} nested_record={d} nested_str={d} recursive_tree={d} tree_child_boxes={d} boxed_capture={d}",
+        "drops primitive={d} nested_record={d} nested_str={d} recursive_tree={d} tree_child_boxes={d} boxed_capture={d} transition_outer={d} transition_inner={d} transition_nonnull={d}",
         .{
             boxed_host_drop_counts.primitive,
             boxed_host_drop_counts.nested_record,
@@ -1220,6 +1373,9 @@ fn hostedHostBoxedDropReport() callconv(.c) RocStr {
             boxed_host_drop_counts.recursive_tree,
             boxed_host_drop_counts.recursive_tree_child_box_releases,
             boxed_host_drop_counts.boxed_capture,
+            boxed_host_drop_counts.transition_outer,
+            boxed_host_drop_counts.transition_inner,
+            boxed_host_drop_counts.transition_nonnull_reuse,
         },
     ) catch "drops unavailable";
     return RocStr.fromSlice(report, ops);
@@ -1234,6 +1390,35 @@ fn hostedHostResetBoxedDropReport() callconv(.c) void {
     boxed_host_drop_counts = .{};
 }
 
+/// Hosted function: Host.sum_str_bytes! (): List(Str) => U64.
+///
+/// Coverage for a hosted argument that is a container whose elements are
+/// refcounted. The argument is owned, so the host releases exactly one
+/// ownership unit of the whole value before returning. For a `List(Str)` that
+/// release is `roc_builtins_list_decref_str`: it drops the element strings
+/// only when the list's own count reaches zero, which is the same operation
+/// compiled Roc code performs when it drops a `List(Str)` it owns.
+fn hostedHostSumStrBytes(list: RocList) callconv(.c) u64 {
+    const ops = g_roc_ops.?;
+
+    var total: u64 = 0;
+    if (list.bytes) |bytes| {
+        const elements: [*]const RocStr = @ptrCast(@alignCast(bytes));
+        for (elements[0..list.length]) |element| {
+            total += element.len();
+        }
+    }
+
+    builtins.dev_wrappers.roc_builtins_list_decref_str(
+        list.bytes,
+        list.length,
+        list.capacity_or_alloc_ptr,
+        ops,
+    );
+
+    return total;
+}
+
 // The platform's hosted functions, exported under their header symbols, plus
 // the fixed runtime symbols every symbol-ABI host defines.
 comptime {
@@ -1244,12 +1429,17 @@ comptime {
     @export(&hostedHostBoxedRecursiveTree, .{ .name = "roc_host_boxed_recursive_tree", .visibility = .hidden });
     @export(&hostedHostBoxedWithBoxedCapture, .{ .name = "roc_host_boxed_with_boxed_capture", .visibility = .hidden });
     @export(&hostedHostCallBoxed, .{ .name = "roc_host_call_boxed", .visibility = .hidden });
+    @export(&hostedHostCallBoxedTransition, .{ .name = "roc_host_call_boxed_transition", .visibility = .hidden });
     @export(&hostedHostGetGreeting, .{ .name = "roc_host_get_greeting", .visibility = .hidden });
     @export(&hostedHostReleaseStoredBoxed, .{ .name = "roc_host_release_stored_boxed", .visibility = .hidden });
     @export(&hostedHostResetBoxedDropReport, .{ .name = "roc_host_reset_boxed_drop_report", .visibility = .hidden });
     @export(&hostedHostRoundtripBoxed, .{ .name = "roc_host_roundtrip_boxed", .visibility = .hidden });
+    @export(&hostedHostBoxedTransition, .{ .name = "roc_host_boxed_transition", .visibility = .hidden });
     @export(&hostedHostStoreBoxed, .{ .name = "roc_host_store_boxed", .visibility = .hidden });
+    @export(&hostedHostStoreSeed, .{ .name = "roc_host_store_seed", .visibility = .hidden });
+    @export(&hostedHostTakeSeed, .{ .name = "roc_host_take_seed", .visibility = .hidden });
     @export(&hostedHostStoredBoxedCall, .{ .name = "roc_host_stored_boxed_call", .visibility = .hidden });
+    @export(&hostedHostSumStrBytes, .{ .name = "roc_host_sum_str_bytes", .visibility = .hidden });
     @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });
     @export(&hostedStderrLine, .{ .name = "roc_stderr_line", .visibility = .hidden });
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });

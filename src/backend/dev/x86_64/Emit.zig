@@ -230,7 +230,7 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
-        /// POPCNT dst, src (population count) — `F3 0F B8 /r`. dst is ModRM.reg.
+        /// POPCNT dst, src (population count)—`F3 0F B8 /r`. dst is ModRM.reg.
         pub fn popcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF3); // mandatory prefix
             try self.emitRex(width, dst, src);
@@ -239,7 +239,32 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
-        /// LZCNT dst, src (count leading zeros) — `F3 0F BD /r`. dst is ModRM.reg.
+        /// BSR dst, src (index of highest set bit)—`0F BD /r`. dst is ModRM.reg.
+        ///
+        /// Sets ZF when src is zero and leaves dst architecturally undefined,
+        /// so callers must select the zero result themselves. This is the
+        /// x86-64 baseline's bit scan; LZCNT is the same opcode behind an `F3`
+        /// prefix, which older CPUs ignore, decoding LZCNT as BSR and silently
+        /// answering `63 - n` where LZCNT would answer `n`.
+        pub fn bsrRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBD);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// BSF dst, src (index of lowest set bit)—`0F BC /r`. dst is ModRM.reg.
+        ///
+        /// Sets ZF when src is zero and leaves dst architecturally undefined.
+        /// See `bsrRegReg` for how this relates to TZCNT.
+        pub fn bsfRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBC);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// LZCNT dst, src (count leading zeros)—`F3 0F BD /r`. dst is ModRM.reg.
         pub fn lzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF3); // mandatory prefix
             try self.emitRex(width, dst, src);
@@ -248,7 +273,7 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
-        /// TZCNT dst, src (count trailing zeros) — `F3 0F BC /r`. dst is ModRM.reg.
+        /// TZCNT dst, src (count trailing zeros)—`F3 0F BC /r`. dst is ModRM.reg.
         pub fn tzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF3); // mandatory prefix
             try self.emitRex(width, dst, src);
@@ -812,8 +837,54 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
         }
 
+        /// MOVSX r32, BYTE [base + disp32] (sign-extend byte to 32 bits)
+        /// 32-bit result auto-zero-extends to 64 bits on x86_64; no REX.W needed.
+        pub fn movsxBRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
+            // REX prefix only for extended registers (R8-R15), never REX.W
+            const r: u1 = dst.rexR();
+            const b: u1 = base.rexB();
+            if (r == 1 or b == 1) {
+                try self.buf.append(self.allocator, rex(0, r, 0, b));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBE); // MOVSX r32, r/m8
+
+            const base_enc = base.enc();
+            if (base_enc == 4) {
+                // RSP/R12 - needs SIB byte
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
+                try self.buf.append(self.allocator, 0x24);
+            } else {
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
+            }
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
+        /// MOVSX r32, WORD [base + disp32] (sign-extend word to 32 bits)
+        /// 32-bit result auto-zero-extends to 64 bits on x86_64; no REX.W needed.
+        pub fn movsxWRegMem(self: *Self, dst: GeneralReg, base: GeneralReg, disp: i32) Allocator.Error!void {
+            // REX prefix only for extended registers (R8-R15), never REX.W
+            const r: u1 = dst.rexR();
+            const b: u1 = base.rexB();
+            if (r == 1 or b == 1) {
+                try self.buf.append(self.allocator, rex(0, r, 0, b));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBF); // MOVSX r32, r/m16
+
+            const base_enc = base.enc();
+            if (base_enc == 4) {
+                // RSP/R12 - needs SIB byte
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
+                try self.buf.append(self.allocator, 0x24);
+            } else {
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
+            }
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
         /// LEA reg, [base + disp32] (load effective address)
-        /// LEA reg, [RIP + disp32] — compute PC-relative address
+        /// LEA reg, [RIP + disp32]—compute PC-relative address
         /// disp is relative to the end of this instruction (7 bytes total).
         pub fn leaRegRipRel(self: *Self, dst: GeneralReg, disp: i32) Allocator.Error!void {
             try self.emitRex(.w64, dst, .RBP); // REX.W prefix (RBP enc = 5, doesn't matter for mod=00 rm=101)
@@ -902,6 +973,83 @@ pub fn Emit(comptime target: RocTarget) type {
                 (@as(u8, encoded_vvvv) << 3) |
                 @intFromEnum(prefix); // L=0: 128-bit operation
             try self.buf.appendSlice(self.allocator, &.{ 0xC4, byte2, byte3 });
+        }
+
+        /// Emit the legacy (non-VEX) prefixes for a two-operand SSE instruction.
+        fn emitSseLegacyPrefix(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            dst: FloatReg,
+            rm_high: u1,
+        ) Allocator.Error!void {
+            switch (prefix) {
+                .none => {},
+                .p66 => try self.buf.append(self.allocator, 0x66),
+                .pf3 => try self.buf.append(self.allocator, 0xF3),
+                .pf2 => try self.buf.append(self.allocator, 0xF2),
+            }
+            if (dst.rexB() == 1 or rm_high == 1) {
+                try self.buf.append(self.allocator, rex(0, dst.rexB(), 0, rm_high));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            switch (map) {
+                .map_0f => {},
+                .map_0f38 => try self.buf.append(self.allocator, 0x38),
+                .map_0f3a => try self.buf.append(self.allocator, 0x3A),
+            }
+        }
+
+        /// Two-register 128-bit SSE instruction in the legacy encoding.
+        ///
+        /// The x86-64 baseline predates VEX, so baseline targets encode the
+        /// same opcodes this way. Legacy SSE is destructive: `dst` is also the
+        /// first source, which is why callers move the left operand into `dst`
+        /// before emitting.
+        pub fn sseRegReg(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            opcode: u8,
+            dst: FloatReg,
+            src: FloatReg,
+        ) Allocator.Error!void {
+            try self.emitSseLegacyPrefix(map, prefix, dst, src.rexB());
+            try self.buf.append(self.allocator, opcode);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// Two-register 128-bit SSE instruction with an immediate, legacy encoding.
+        pub fn sseRegRegImm8(
+            self: *Self,
+            map: VexMap,
+            prefix: VexPrefix,
+            opcode: u8,
+            dst: FloatReg,
+            src: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            try self.sseRegReg(map, prefix, opcode, dst, src);
+            try self.buf.append(self.allocator, imm);
+        }
+
+        /// Packed shift by immediate in the legacy encoding. The destination is
+        /// ModR/M.r/m and ModR/M.reg carries the opcode extension.
+        pub fn ssePackedShiftImm8(
+            self: *Self,
+            opcode: u8,
+            extension: u3,
+            dst: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            if (dst.rexB() == 1) {
+                try self.buf.append(self.allocator, rex(0, 0, 0, 1));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, opcode);
+            try self.buf.append(self.allocator, modRM(0b11, extension, dst.enc()));
+            try self.buf.append(self.allocator, imm);
         }
 
         /// Generic three-register 128-bit VEX instruction.

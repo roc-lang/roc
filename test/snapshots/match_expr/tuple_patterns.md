@@ -13,9 +13,20 @@ match coord {
 }
 ~~~
 # EXPECTED
-NIL
+MISSING METHOD - tuple_patterns.md:2:21:2:29
 # PROBLEMS
-NIL
+── ✗ missing method ───────────────────────────────────── tuple_patterns.md:2:21
+
+This from_quote method is being called on a value whose type doesn't have that
+method.
+
+(Zero, Zero) => "origin"
+                ^^^^^^^^
+
+The value's type, which does not have a method named from_quote, is:
+
+    [Zero, ..]
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -77,8 +88,7 @@ match coord {
 								(p-applied-tag)
 								(p-applied-tag)))))
 				(value
-					(e-string
-						(e-literal (string "origin")))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -112,5 +122,5 @@ match coord {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "[Zero, ..]"))
 ~~~

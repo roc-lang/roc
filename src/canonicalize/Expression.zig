@@ -50,6 +50,12 @@ pub const DerivedMethodKind = enum(u8) {
     map_effectful,
 };
 
+/// Why an annotation-only expression has no Roc implementation.
+pub const AnnotationOnlyKind = enum(u8) {
+    ordinary,
+    unsupported_generated_method,
+};
+
 /// An expression in the Roc language.
 pub const Expr = union(enum) {
     /// An number literal with a specific value.
@@ -164,6 +170,30 @@ pub const Expr = union(enum) {
         target_node_idx: u32,
         ident_idx: Ident.Idx,
         region: Region,
+    },
+    /// An associated value selected through a local type alias declaration.
+    /// Checking resolves transparent aliases and replaces this with
+    /// `e_lookup_associated_resolved`.
+    e_lookup_associated_local: struct {
+        type_node_idx: u32,
+        type_ident: Ident.Idx,
+        item_ident: Ident.Idx,
+    },
+    /// An associated value selected through an imported type declaration.
+    /// Checking resolves transparent aliases and replaces this with
+    /// `e_lookup_associated_resolved`.
+    e_lookup_associated: struct {
+        module_idx: CIR.Import.Idx,
+        type_node_idx: u32,
+        type_ident: Ident.Idx,
+        item_ident: Ident.Idx,
+    },
+    /// Exact associated-value target selected by checking.
+    e_lookup_associated_resolved: struct {
+        module_identity: base.ModuleIdentity.Idx,
+        target_node_idx: u32,
+        target_def_idx: CIR.Def.Idx,
+        source_ident: Ident.Idx,
     },
     /// Lookup of a required identifier from the platform's `requires` clause.
     /// This represents a value that the app provides to the platform.
@@ -341,15 +371,21 @@ pub const Expr = union(enum) {
     /// !True           # Unary not on literal
     /// ```
     e_unary_not: UnaryNot,
-    /// Field access expression.
+    /// A maximal contiguous record-field access path.
     ///
     /// ```roc
     /// person.name
+    /// person.?address.city.?zip
     /// ```
+    ///
+    /// Each segment preserves whether source selected required or optional
+    /// access. Its auxiliary node identity owns the successful payload type of
+    /// that path prefix; this expression owns the observable result type.
+    /// Checking therefore consumes the complete path and can wrap its final
+    /// successful payload in one flat `Try` when any segment is optional.
     e_field_access: struct {
         receiver: Expr.Idx,
-        field_name: Ident.Idx,
-        field_name_region: base.Region,
+        segments: Expr.FieldAccessSegment.Span,
     },
     /// Method call expression.
     ///
@@ -400,8 +436,8 @@ pub const Expr = union(enum) {
     /// Structural hashing chosen explicitly by the checker.
     ///
     /// This is not method dispatch. It represents the semantic case where
-    /// `to_hash` is satisfied structurally — threading a `Hasher` through each
-    /// component's hash — rather than via a user-defined `to_hash` method.
+    /// `to_hash` is satisfied structurally—threading a `Hasher` through each
+    /// component's hash—rather than via a user-defined `to_hash` method.
     e_structural_hash: struct {
         value: Expr.Idx,
         hasher: Expr.Idx,
@@ -520,6 +556,7 @@ pub const Expr = union(enum) {
     e_anno_only: struct {
         /// The identifier being defined (extracted from the pattern to avoid cross-module node index issues)
         ident: Ident.Idx,
+        kind: AnnotationOnlyKind = .ordinary,
     },
 
     /// An explicit request for a compiler-derived associated method.
@@ -602,6 +639,33 @@ pub const Expr = union(enum) {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: DataSpan };
+
+    /// The source operation selected for one record-field access segment.
+    /// This is syntax-level access intent, distinct from the field's solved
+    /// required/optional presence in its record type.
+    pub const FieldAccessMode = enum(u8) {
+        required,
+        optional,
+    };
+
+    /// One segment in a flattened record-field path.
+    ///
+    /// Its source region is stored alongside the auxiliary node in NodeStore.
+    pub const FieldAccessSegment = struct {
+        name: Ident.Idx,
+        mode: FieldAccessMode,
+
+        pub const Idx = enum(u32) { _ };
+
+        /// A source-ordered, contiguous range of auxiliary segment nodes.
+        ///
+        /// Unlike ordinary CIR spans, `start` is a node identity rather than
+        /// an offset into `NodeStore.index_data`.
+        pub const Span = extern struct {
+            start: FieldAccessSegment.Idx,
+            len: u32,
+        };
+    };
 
     /// A single branch of an if expression.
     /// Contains a condition expression and the body to execute if the condition is true.
@@ -971,6 +1035,41 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
+            .e_lookup_associated_local => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-associated-local");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("type", ir.getIdent(e.type_ident));
+                try tree.pushStringPair("item", ir.getIdent(e.item_ident));
+                try tree.pushStringPairFmt("type-node", "{d}", .{e.type_node_idx});
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_lookup_associated => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-associated");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("type", ir.getIdent(e.type_ident));
+                try tree.pushStringPair("item", ir.getIdent(e.item_ident));
+                try tree.pushStringPairFmt("import", "{d}", .{@intFromEnum(e.module_idx)});
+                try tree.pushStringPairFmt("type-node", "{d}", .{e.type_node_idx});
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_lookup_associated_resolved => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-associated-resolved");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try tree.pushStringPair("source", ir.getIdent(e.source_ident));
+                try tree.pushStringPair("target-module", ir.moduleIdentityDisplayText(e.module_identity));
+                try tree.pushStringPairFmt("target-node", "{d}", .{e.target_node_idx});
+                try tree.pushStringPairFmt("target-def", "{d}", .{@intFromEnum(e.target_def_idx)});
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
             .e_lookup_required => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-lookup-required");
@@ -1130,15 +1229,12 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
                 const stmt = ir.store.getStatement(nominal_expr.nominal_type_decl);
-                switch (stmt) {
-                    .s_nominal_decl => |decl| {
-                        const header = ir.store.getTypeHeader(decl.header);
-                        try tree.pushStringPair("nominal", ir.getIdent(header.name));
-                    },
-                    else => {
-                        // Handle malformed nominal type declaration by pushing error info
-                        try tree.pushStringPair("nominal", "<malformed>");
-                    },
+                if (stmt == .s_nominal_decl) {
+                    const header = ir.store.getTypeHeader(stmt.s_nominal_decl.header);
+                    try tree.pushStringPair("nominal", ir.getIdent(header.name));
+                } else {
+                    // Handle malformed nominal type declaration by pushing error info
+                    try tree.pushStringPair("nominal", "<malformed>");
                 }
 
                 const attrs = tree.beginNode();
@@ -1272,7 +1368,6 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-field-access");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                try tree.pushStringPair("field", ir.getIdentText(e.field_name));
                 const attrs = tree.beginNode();
 
                 const receiver_begin = tree.beginNode();
@@ -1280,6 +1375,24 @@ pub const Expr = union(enum) {
                 const receiver_attrs = tree.beginNode();
                 try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
                 try tree.endNode(receiver_begin, receiver_attrs);
+
+                const segments_begin = tree.beginNode();
+                try tree.pushStaticAtom("segments");
+                const segments_attrs = tree.beginNode();
+                var segment_position: u32 = 0;
+                while (segment_position < e.segments.len) : (segment_position += 1) {
+                    const segment_idx = ir.store.fieldAccessSegmentAt(e.segments, segment_position);
+                    const segment = ir.store.getFieldAccessSegment(segment_idx);
+                    const segment_begin = tree.beginNode();
+                    try tree.pushStaticAtom("segment");
+                    const segment_region = ir.store.getFieldAccessSegmentRegion(segment_idx);
+                    try ir.appendRegionInfoToSExprTreeFromRegion(tree, segment_region);
+                    try tree.pushStringPair("name", ir.getIdentText(segment.name));
+                    try tree.pushStringPair("mode", @tagName(segment.mode));
+                    const segment_attrs = tree.beginNode();
+                    try tree.endNode(segment_begin, segment_attrs);
+                }
+                try tree.endNode(segments_begin, segments_attrs);
 
                 try tree.endNode(begin, attrs);
             },
@@ -1506,9 +1619,12 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
-            .e_anno_only => {
+            .e_anno_only => |anno_only| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-anno-only");
+                if (anno_only.kind != .ordinary) {
+                    try tree.pushStringPair("kind", @tagName(anno_only.kind));
+                }
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();

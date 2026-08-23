@@ -28,7 +28,10 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-runtime-error (tag "crash_expects_string")))
+	(s-expr
+		(e-run-low-level (op "crash")
+			(args
+				(e-num (value "42"))))))
 ~~~
 # TYPES
 ~~~clojure

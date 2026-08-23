@@ -61,6 +61,16 @@ pub const SourceCodeMultiRegion = struct {
     filename: ?[]const u8,
 };
 
+/// A source location embedded in prose, such as the original declaration in a
+/// duplicate-definition diagnostic. Keeping this as structured data lets each
+/// renderer format the filename and coordinates without inferring meaning from
+/// surrounding punctuation.
+pub const SourceLocation = struct {
+    filename: ?[]const u8,
+    line: u32,
+    column: u32,
+};
+
 /// Annotations that can be applied to document content for styling and semantics.
 pub const Annotation = enum {
     /// Basic emphasis (usually bold or bright)
@@ -211,6 +221,9 @@ pub const DocumentElement = union(enum) {
     /// Source code display with underline regions
     source_code_with_underlines: SourceCodeWithUnderlines,
 
+    /// A filename, line, and column rendered inline with surrounding prose.
+    source_location: SourceLocation,
+
     /// Get the text content if this is a text element, null otherwise.
     pub fn getText(self: DocumentElement) ?[]const u8 {
         return switch (self) {
@@ -218,15 +231,35 @@ pub const DocumentElement = union(enum) {
             .annotated => |a| a.content,
             .raw => |r| r,
             .reflowing_text => |rt| rt,
-            else => null,
+            .line_break,
+            .indent,
+            .space,
+            .horizontal_rule,
+            .annotation_start,
+            .annotation_end,
+            .link,
+            .vertical_stack,
+            .horizontal_concat,
+            .source_code_region,
+            .source_code_multi_region,
+            .source_code_with_underlines,
+            .source_location,
+            => null,
         };
     }
 
     /// Returns true if this element represents actual content.
     pub fn hasContent(self: DocumentElement) bool {
         return switch (self) {
-            .text, .annotated, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region => true,
-            else => false,
+            .text, .annotated, .raw, .reflowing_text, .link, .vertical_stack, .horizontal_concat, .source_code_region, .source_code_multi_region, .source_location => true,
+            .line_break,
+            .indent,
+            .space,
+            .horizontal_rule,
+            .annotation_start,
+            .annotation_end,
+            .source_code_with_underlines,
+            => false,
         };
     }
 };
@@ -264,7 +297,16 @@ pub const Document = struct {
                     self.allocator.free(underlines.display_region.line_text);
                     if (underlines.display_region.filename) |f| self.allocator.free(f);
                 },
-                else => {},
+                .source_location => |location| {
+                    if (location.filename) |f| self.allocator.free(f);
+                },
+                .line_break,
+                .indent,
+                .space,
+                .horizontal_rule,
+                .annotation_start,
+                .annotation_end,
+                => {},
             }
         }
         self.elements.deinit();
@@ -555,6 +597,7 @@ pub const Document = struct {
             try self.allocator.dupe(u8, f)
         else
             null;
+        errdefer if (owned_filename) |f| self.allocator.free(f);
 
         try self.elements.append(.{
             .source_code_region = .{
@@ -565,6 +608,28 @@ pub const Document = struct {
                 .end_column = region_info.end_col_idx + 1,
                 .region_annotation = annotation,
                 .filename = owned_filename,
+            },
+        });
+    }
+
+    /// Add a source location inline with surrounding prose.
+    /// Accepts 0-based coordinates and stores 1-based display coordinates.
+    pub fn addSourceLocation(
+        self: *Document,
+        region_info: RegionInfo,
+        filename: ?[]const u8,
+    ) std.mem.Allocator.Error!void {
+        const owned_filename: ?[]const u8 = if (filename) |f|
+            try self.allocator.dupe(u8, f)
+        else
+            null;
+        errdefer if (owned_filename) |f| self.allocator.free(f);
+
+        try self.elements.append(.{
+            .source_location = .{
+                .filename = owned_filename,
+                .line = region_info.start_line_idx + 1,
+                .column = region_info.start_col_idx + 1,
             },
         });
     }

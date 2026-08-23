@@ -168,7 +168,18 @@ fn shouldSkipPhase(step: *Step, phase: Phase) !bool {
                 std.debug.print("Skipping {s} outside a Git worktree.\n", .{phase.label});
                 return true;
             },
-            else => return err,
+            error.Canceled,
+            error.InputOutput,
+            error.SystemResources,
+            error.AccessDenied,
+            error.Unexpected,
+            error.PermissionDenied,
+            error.FileBusy,
+            error.SymLinkLoop,
+            error.ReadOnlyFileSystem,
+            error.NameTooLong,
+            error.BadPathName,
+            => return err,
         };
     }
 
@@ -238,7 +249,7 @@ fn spawnAndWait(
                 return step.fail("`{s}` failed with exit code {d}", .{ display, code });
             }
         },
-        else => return step.fail("{s}", .{abnormal_message}),
+        .signal, .stopped, .unknown => return step.fail("{s}", .{abnormal_message}),
     }
 }
 

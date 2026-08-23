@@ -38,9 +38,23 @@ trap 'rm -rf -- "$tmp_dir"' EXIT
 cd "$repo_root"
 
 # target:expected-instruction-count
+# arm64musl dropped from 91 to 82 when the aarch64 CPU model moved from
+# cortex_a76 to generic plus the named AES and DotProd features, so that
+# arm64musl binaries run on Armv8.0-A hardware. The whole count is one
+# procedure, and the loop it pins is unchanged; what went away is scheduling
+# driven by the cortex_a76 model, which unrolled this loop one step further.
+# Fewer instructions here means less unrolling, not less work per byte.
+# x64musl rose from 95 to 99 when the x86-64-v3 model was constrained to the
+# instruction features declared by Roc's CPU contract. This prevents LLVM's
+# named model from silently raising the runtime instruction floor.
+# Both counts rose (x64musl 99 to 124, arm64musl 82 to 92) when generated
+# procs and linked builtins gained inline hints: the surrounding list setup
+# inlines into the procedure instead of staying behind calls. The pinned
+# eight-byte compare loop is unchanged - load, load, compare, advance, with
+# the from_le_bytes bounds test still doubling as the loop's termination.
 expectations=(
-    "x64musl:95"
-    "arm64musl:91"
+    "x64musl:124"
+    "arm64musl:92"
 )
 
 failed=0

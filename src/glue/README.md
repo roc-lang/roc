@@ -61,6 +61,17 @@ plans. They must not reconstruct runtime layout or ownership behavior from
 display strings, semantic type names, source field order, or incidental data
 structure shape.
 
+For concrete Roc-owned values, Zig and Rust glue compose zero-runtime-storage
+release policies. `RocList(T).deinit` in Zig selects the compiler-generated
+policy for `T` at comptime. Rust provided functions whose results have complete
+release policies also get an `_owned` wrapper returning `RocOwned`; its
+zero-sized policy implements recursive `Drop` without adding a descriptor or
+context pointer to the value. List release atomically claims the final spine
+reference before reading elements, then releases the allocation's complete
+element range and finally frees the spine. Opaque payloads are not assigned a
+structural policy: recursive teardown across that boundary requires an explicit
+compiler-owned release root or descriptor rather than host-side guessing.
+
 ## Pointer-Width Contract
 
 The glue script input is targetless. It carries no concrete Roc build target,
@@ -128,9 +139,9 @@ Treat an unexpected diff as an emitter bug, not a regen trigger.
 
 ## Host ABI Lock
 
-The templates restate the host ABI — the `RocStr`/`RocList`/`RocDec`
+The templates restate the host ABI—the `RocStr`/`RocList`/`RocDec`
 layouts, the `RocHost` callback vtable, the extern runtime symbols, and the
-erased-callable payload — as text in their output languages, so the compiler
+erased-callable payload—as text in their output languages, so the compiler
 cannot import those restatements. `zig build run-check-glue-abi` is the
 enforcement. It generates Zig glue and compiles `test/glue/zig_abi_lock.zig`
 against both the generated file and the canonical `builtins` definitions for
@@ -181,7 +192,7 @@ language-specific.
 | --- | --- | --- |
 | Owned-vs-borrowed boundary confusion for hosted args, provided returns, and stored values | Explicit retain/release/move helpers and generated hosted-function comments/signatures that make ownership transfer visible | `glue runtime: cli-main` owns/decrefs `RocStr` hosted args and `roc_main` results; `glue runtime: app-model` owns/decrefs boxed models and rendered `View`; all CGlue/ZigGlue/RustGlue native+wasm32 cells. |
 | Recursive refcounting for nested records, tag payloads, lists, boxes, closures, and recursive types through `Box` | Data-driven recursive retain/release helpers emitted from compiler RC plans, not from type names | `glue runtime: type-catalog` exercises `Tree`, boxed payloads, recursive tags, and catalog unions; `glue runtime: layout-probe` exercises many boxed fields; `glue command generated Zig compiles with zig build-obj` checks emitted retain/release helpers. |
-| Lists with refcounted elements, including backing element-count headers | List helpers that know element width, alignment, and whether element teardown is required | `glue runtime: cli-main` constructs `List(Str)` args and validates the refcounted element-count header; `glue runtime: app-model` renders and decrefs `View.messages : List(Msg)`. |
+| Lists with refcounted elements, including backing element-count headers | List helpers that know element width, alignment, and whether element teardown is required | `glue runtime: cli-main` constructs `List(Str)` args and validates the refcounted element-count header; `glue runtime: app-model` renders and decrefs `View.messages : List(Msg)`; issue 10451's Zig/Rust glue cases compile recursive release for a directly returned `List(Str)`. |
 | Seamless slices for `Str` and `List` | Allocation-base recovery helpers that never free the visible slice pointer directly | `glue runtime: cli-main` uses generated Zig/Rust `RocStr.fromSlice` and `RocList.fromSlice` helpers and decrefs through allocation-base recovery; CGlue helper source is covered by `glue command generated C header compiles with zig cc` and `CGlue.roc expect tests pass`. |
 | Roc allocation headers, static refcount zero, and deallocation alignment | Allocator wrappers and assertions for header size, alignment, canaries, and static-data no-op release | `glue runtime: cli-main` and `glue runtime: app-model` use adversarial host allocators with alignment/live-allocation checks; `glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment` and the Rust equivalent cover boxed payload alignment/static-release helpers. |
 | `RocStr` small, big, static, and sliced representations | Safe byte/as-str views, constructors with UTF-8 policy, retain/release helpers, and no C-string assumptions | `glue runtime: cli-main` covers `roc_cli_read`, `roc_cli_log`, and app args; `glue runtime: type-catalog` covers provided/result strings in records and tag payloads; `glue runtime: app-model` covers `View.title`. |
@@ -192,7 +203,7 @@ language-specific.
 | Native 128-bit vector ABI, including SysV SSE/SSEUP, Win64 indirect arguments, AAPCS64 Q-register placement, memory-class multi-vector aggregates, wasm `v128`, mixed aggregates, and register exhaustion | Distinct generated vector leaf types, C-layout aggregates, exact assertions, and extern declarations that use the target C ABI directly | `glue runtime: layout-probe` calls every vector and aggregate shape in both directions from generated C/Zig/Rust hosts; `run-check-glue-abi` compile-locks generated C and Zig across x86-64/AArch64 Linux/macOS/Windows plus wasm and Rust across native+wasm. |
 | Compiler-emitted layout facts: field order, offsets, discriminants, size, alignment, zero-sized values, and Bool representation | Glue consumers must use emitted `AbiLayout` metadata and generated assertions rather than reconstructing layout | `glue runtime: layout-probe`, `glue runtime: duplicate-tags`, and `glue runtime: type-catalog` cover emitted layout facts across all languages/targets; `glue command generated Zig compiles with zig build-obj` checks field offsets and compile-time layout assertions. |
 | Nominal vs structural records and explicit padding fields | Generated records with concrete committed fields plus explicit padding and per-target size, alignment, field-offset, and padding assertions | `glue runtime: type-catalog` covers nominal and structural records; `glue runtime: layout-probe` covers padded/boxed/vector layouts; `glue regression: ZigGlue quotes bang record fields` covers field names that require escaping. |
-| Tag union active-payload handling, discriminant layout, single-variant unwrapping, duplicate names, and recursive tags | Generated tag constructors/accessors/destructors that only touch the active payload and assert discriminant layout | `glue runtime: duplicate-tags` covers duplicate module-local tag/result names; `glue runtime: type-catalog` covers single-payload, no-payload, recursive, boxed, and result tag unions. |
+| Tag union active-payload handling, discriminant layout, single-variant unwrapping, duplicate names, recursive tags, and payload ownership transfer | Generated tag constructors/destructors, unsafe borrowed references, and unsafe consuming payload projections that only touch the validated active payload | `glue runtime: duplicate-tags` covers duplicate module-local tag/result names; `glue runtime: type-catalog` covers single-payload, no-payload, recursive, boxed, and result tag unions and consumes Rust owning payloads through `take_payload_*_unchecked`. |
 | Opaque or library containers such as `Dict` whose internals are not platform ABI | Opaque-safe helpers only; no generator or host code may infer container internals from semantic names | `glue regression: ZigGlue uses RocBox for opaque boxed app types` enforces `RocBox` for opaque boxed app values; C/Rust source-shape and compile controls cover opaque helper signatures without exposing container internals. |
 | Accidental shallow copies of ownership-bearing values | Rust non-`Copy` or unsafe ownership APIs; Zig/C retain/release naming and runtime double-free/leak checks | `glue runtime: cli-main`, `app-model`, and `type-catalog` all check balanced live allocations after owned values cross the boundary; `glue regression: RustGlue succeeds on fx platform` covers Rust ownership-shaped generated APIs. |
 | Error paths after ownership transfer into hosted functions | Scenario helpers that deliberately fail after receiving owned values and verify cleanup policy | `glue runtime: duplicate-tags` exercises `Try`-returning hosted functions with owned payloads; `glue runtime: cli-main` checks failure reporting paths and requires owned hosted args to be decrefed before a host-side failure is recorded. |

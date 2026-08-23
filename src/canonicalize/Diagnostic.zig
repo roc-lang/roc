@@ -11,6 +11,23 @@ const Report = reporting.Report;
 
 const Allocator = std.mem.Allocator;
 
+/// The kind of declaration a diagnostic is reported against, so its message can
+/// name what the user actually wrote.
+pub const DeclaredTypeKind = enum(u8) {
+    alias,
+    @"opaque",
+    where_alias,
+
+    /// The noun to use when describing this declaration to the user.
+    pub fn label(self: DeclaredTypeKind) []const u8 {
+        return switch (self) {
+            .alias => "alias",
+            .@"opaque" => "opaque type",
+            .where_alias => "where alias",
+        };
+    }
+};
+
 /// Different types of diagnostic errors
 pub const Diagnostic = union(enum) {
     not_implemented: struct {
@@ -93,6 +110,10 @@ pub const Diagnostic = union(enum) {
         stmt: StringLiteral.Idx,
         region: Region,
     },
+    invalid_associated_statement: struct {
+        stmt: StringLiteral.Idx,
+        region: Region,
+    },
     expr_not_canonicalized: struct {
         region: Region,
     },
@@ -139,10 +160,26 @@ pub const Diagnostic = union(enum) {
     where_clause_not_allowed_in_type_decl: struct {
         region: Region,
     },
+    /// A where alias declaration constrains exactly its receiver, so a clause
+    /// written against another type variable has no home.
+    where_alias_constraint_not_on_receiver: struct {
+        receiver_name: Ident.Idx,
+        region: Region,
+    },
     open_ext_not_allowed_in_type_decl: struct {
         region: Region,
     },
     unnamed_field_not_allowed_in_structural_record: struct {
+        region: Region,
+    },
+    optional_field_cannot_have_default: struct {
+        region: Region,
+    },
+    unnamed_field_cannot_have_default: struct {
+        region: Region,
+    },
+    record_default_not_literal: struct {
+        field_name: Ident.Idx,
         region: Region,
     },
     var_across_function_boundary: struct {
@@ -275,6 +312,12 @@ pub const Diagnostic = union(enum) {
     module_header_deprecated: struct {
         region: Region,
     },
+    /// The header pins a compiler version that is not the one running.
+    roc_version_mismatch: struct {
+        pinned: Ident.Idx,
+        running: Ident.Idx,
+        region: Region,
+    },
     redundant_expose_main_type: struct {
         type_name: Ident.Idx,
         module_name: Ident.Idx,
@@ -332,7 +375,7 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     underscore_in_type_declaration: struct {
-        is_alias: bool,
+        declared: DeclaredTypeKind,
         region: Region,
     },
     unused_type_var_name: struct {
@@ -398,6 +441,7 @@ pub const Diagnostic = union(enum) {
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
+            .read_uninitialized_var => |d| d.region,
             .self_referential_definition => |d| d.region,
             .circular_value_definition => |d| d.region,
             .local_reference_before_definition => |d| d.region,
@@ -406,6 +450,7 @@ pub const Diagnostic = union(enum) {
             .erroneous_value_expr => |d| d.region,
             .qualified_ident_does_not_exist => |d| d.region,
             .invalid_top_level_statement => |d| d.region,
+            .invalid_associated_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
             .invalid_string_interpolation => |d| d.region,
             .unreachable_string_pattern_capture => |d| d.region,
@@ -416,11 +461,16 @@ pub const Diagnostic = union(enum) {
             .if_condition_not_canonicalized => |d| d.region,
             .if_then_not_canonicalized => |d| d.region,
             .if_else_not_canonicalized => |d| d.region,
+            .if_expr_without_else => |d| d.region,
             .malformed_type_annotation => |d| d.region,
             .malformed_where_clause => |d| d.region,
             .where_clause_not_allowed_in_type_decl => |d| d.region,
+            .where_alias_constraint_not_on_receiver => |d| d.region,
             .open_ext_not_allowed_in_type_decl => |d| d.region,
             .unnamed_field_not_allowed_in_structural_record => |d| d.region,
+            .optional_field_cannot_have_default => |d| d.region,
+            .unnamed_field_cannot_have_default => |d| d.region,
+            .record_default_not_literal => |d| d.region,
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,
@@ -438,18 +488,21 @@ pub const Diagnostic = union(enum) {
             .module_not_imported => |d| d.region,
             .nested_type_not_found => |d| d.region,
             .nested_value_not_found => |d| d.region,
+            .record_builder_map2_not_found => |d| d.region,
             .too_many_exports => |d| d.region,
             .undeclared_type => |d| d.region,
             .undeclared_type_var => |d| d.region,
             .type_alias_but_needed_nominal => |d| d.region,
             .crash_expects_string => |d| d.region,
             .type_module_missing_matching_type => |d| d.region,
+            .type_module_has_alias_not_nominal => |d| d.region,
             .default_app_missing_main => |d| d.region,
             .default_app_wrong_arity => |d| d.region,
             .cannot_import_default_app => |d| d.region,
             .execution_requires_app_or_default_app => |d| d.region,
             .type_name_case_mismatch => |d| d.region,
             .module_header_deprecated => |d| d.region,
+            .roc_version_mismatch => |d| d.region,
             .redundant_expose_main_type => |d| d.region,
             .invalid_main_type_rename_in_exposing => |d| d.region,
             .type_alias_redeclared => |d| d.redeclared_region,
@@ -461,7 +514,6 @@ pub const Diagnostic = union(enum) {
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
             .duplicate_tag => |d| d.duplicate_region,
-            .invalid_single_quote => |d| d.region,
             .empty_tuple => |d| d.region,
             .f64_pattern_literal => |d| d.region,
             .unused_type_var_name => |d| d.region,
@@ -961,9 +1013,9 @@ pub const Diagnostic = union(enum) {
         const owned_ident = try report.addOwnedString(ident_name);
         try report.headline.addReflowingText("The name ");
         try report.headline.addUnqualifiedSymbol(owned_ident);
-        try report.headline.addReflowingText(" is being redeclared here.");
+        try report.headline.addReflowingText(" is being redeclared here:");
 
-        // The main box shows the new declaration; point below it at the original.
+        // The primary region shows the new declaration; point below it at the original.
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             new_region_info,
@@ -976,7 +1028,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("In this scope, ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" was already defined here:");
+        try report.document.addReflowingText(" was already defined in ");
+        try report.document.addSourceLocation(original_region_info, owned_filename);
+        try report.document.addReflowingText(":");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1005,9 +1059,6 @@ pub const Diagnostic = union(enum) {
         try report.headline.addInlineCode(owned_type_name);
         try report.headline.addReflowingText(" is being redeclared.");
 
-        // Show where the redeclaration is
-        try report.document.addReflowingText("The redeclaration is here:");
-        try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             redeclared_region_info,
@@ -1020,7 +1071,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("But ");
         try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" was already declared here:");
+        try report.document.addReflowingText(" was already declared in ");
+        try report.document.addSourceLocation(original_region_info, owned_filename);
+        try report.document.addReflowingText(":");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1126,9 +1179,6 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        // Show where the redeclaration is
-        try report.document.addReflowingText("The redeclaration is here:");
-        try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             redeclared_region_info,
@@ -1141,7 +1191,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("But ");
         try report.document.addType(owned_type_name);
-        try report.document.addReflowingText(" was already declared here:");
+        try report.document.addReflowingText(" was already declared in ");
+        try report.document.addSourceLocation(original_region_info, owned_filename);
+        try report.document.addReflowingText(":");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1173,9 +1225,6 @@ pub const Diagnostic = union(enum) {
 
         try report.document.addReflowingText("This may make the outer type inaccessible in this scope.");
         try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("The new declaration is here:");
-        try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
@@ -1186,7 +1235,9 @@ pub const Diagnostic = union(enum) {
             line_starts,
         );
         try report.document.addLineBreak();
-        try report.document.addText("The outer type was declared here:");
+        try report.document.addText("The outer type was declared in ");
+        try report.document.addSourceLocation(original_region_info, owned_filename);
+        try report.document.addText(":");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1216,9 +1267,6 @@ pub const Diagnostic = union(enum) {
         try report.headline.addText(" shadows a builtin type.");
 
         try report.document.addReflowingText("This may make the builtin type inaccessible in this scope.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addText("The new declaration is here:");
         try report.document.addLineBreak();
 
         const owned_filename = try report.addOwnedString(filename);
@@ -1257,9 +1305,6 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        // Show where the conflict is
-        try report.document.addText("The conflicting parameter is here:");
-        try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             region_info,
@@ -1272,7 +1317,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addText("But ");
         try report.document.addUnqualifiedSymbol(owned_parameter_name);
-        try report.document.addText(" was already declared here:");
+        try report.document.addText(" was already declared in ");
+        try report.document.addSourceLocation(original_region_info, owned_filename);
+        try report.document.addText(":");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1301,7 +1348,7 @@ pub const Diagnostic = union(enum) {
 
         try report.headline.addReflowingText("Variable ");
         try report.headline.addUnqualifiedSymbol(owned_ident);
-        try report.headline.addReflowingText(" is defined here and then never used.");
+        try report.headline.addReflowingText(" is defined here and then never used:");
 
         try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
         const ident_with_underscore = try std.fmt.allocPrint(gpa, "_{s}", .{owned_ident});
@@ -1380,9 +1427,6 @@ pub const Diagnostic = union(enum) {
         try report.headline.addRecordField(owned_field_name);
         try report.headline.addReflowingText(" appears more than once in this record.");
 
-        // Show where the duplicate field is
-        try report.document.addReflowingText("This field is duplicated here:");
-        try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             duplicate_region_info,
@@ -1395,7 +1439,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("The field ");
         try report.document.addRecordField(owned_field_name);
-        try report.document.addReflowingText(" was first defined here:");
+        try report.document.addReflowingText(" was first defined in ");
+        try report.document.addSourceLocation(original_region_info, owned_filename);
+        try report.document.addReflowingText(":");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,
@@ -1427,8 +1473,6 @@ pub const Diagnostic = union(enum) {
         try report.headline.addUnqualifiedSymbol(owned_tag_name);
         try report.headline.addReflowingText(" appears more than once in this tag union.");
 
-        try report.document.addReflowingText("This tag is duplicated here:");
-        try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
         try report.document.addSourceRegion(
             duplicate_region_info,
@@ -1441,7 +1485,9 @@ pub const Diagnostic = union(enum) {
         try report.document.addLineBreak();
         try report.document.addReflowingText("The tag ");
         try report.document.addUnqualifiedSymbol(owned_tag_name);
-        try report.document.addReflowingText(" was first defined here:");
+        try report.document.addReflowingText(" was first defined in ");
+        try report.document.addSourceLocation(original_region_info, owned_filename);
+        try report.document.addReflowingText(":");
         try report.document.addLineBreak();
         try report.document.addSourceRegion(
             original_region_info,

@@ -4,8 +4,8 @@
 //! declaration statements carry dotted names like "Taxonomy.Domain.Kingdom"),
 //! applying the type-module visibility rule: in a type module only the type
 //! matching the module name and its associated items are public. Every item's
-//! type comes from the checked artifact — the canonical scheme/root published
-//! at check time — never from source annotations or rendered strings.
+//! type comes from the checked artifact—the canonical scheme/root published
+//! at check time—never from source annotations or rendered strings.
 //!
 //! Extraction has no fallbacks: missing checked data for a public item, an
 //! unknown origin module, or a public type from an unstable (path or
@@ -26,12 +26,16 @@ const CheckedTypeId = CheckedArtifact.CheckedTypeId;
 const CheckedModuleArtifact = CheckedArtifact.CheckedModuleArtifact;
 const CheckedTypeStoreView = CheckedArtifact.CheckedTypeStoreView;
 
-/// One exposed module of the package being extracted.
+/// One exact public namespace used for API extraction or reference routing.
 pub const ModuleInput = struct {
-    /// The module name as exposed by the package header, e.g. "Parser".
+    /// The public namespace name, e.g. "Parser" or a platform root's name.
     exposed_name: []const u8,
     module_env: *const ModuleEnv,
     artifact: *const CheckedModuleArtifact,
+    /// Restrict a non-type root module to these names and their children.
+    exposed_names: ?[]const []const u8 = null,
+    /// Exact source type represented by this public namespace.
+    public_type_decl: ?can.CIR.Statement.Idx = null,
 };
 
 /// Resolves an origin module identity (as recorded in checked types) to the
@@ -44,7 +48,12 @@ pub const OriginMap = struct {
         kind: Kind,
         /// The module's bare (unqualified) name. Paths are built from this so
         /// they stay stable when the root package renames a dependency alias.
+        /// Platform roots use an empty name because their items are unqualified.
         module_name: []const u8,
+        /// Checked artifact for this compilation, used only while extracting a
+        /// default literal from the identity that owns it. PackageApi copies
+        /// canonical source into its arena and never retains this pointer.
+        artifact: ?*const CheckedModuleArtifact = null,
 
         pub const Kind = union(enum) {
             /// A module of the package being extracted.
@@ -98,25 +107,46 @@ pub const Failure = struct {
     }
 };
 
-/// Extract the public API of a package from its exposed modules' checked
-/// artifacts. On `error.ExtractFailed`, `failure` describes the problem.
+/// Extract the public API from the first `api_input_count` namespaces. Any
+/// remaining inputs are exact dependency projections used only to route named
+/// references. On `error.ExtractFailed`, `failure` describes the problem.
 pub fn extractPackageApi(
     gpa: Allocator,
     inputs: []const ModuleInput,
+    api_input_count: usize,
     origins: *const OriginMap,
     failure: *?Failure,
 ) ExtractError!PackageApi {
+    std.debug.assert(api_input_count <= inputs.len);
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
+
+    var public_input_order = std.ArrayList(usize).empty;
+    defer public_input_order.deinit(gpa);
+    for (inputs, 0..) |input, input_index| {
+        if (input.public_type_decl != null) try public_input_order.append(gpa, input_index);
+    }
+    std.mem.sort(usize, public_input_order.items, inputs, struct {
+        fn lessThan(all_inputs: []const ModuleInput, a_index: usize, b_index: usize) bool {
+            const a = all_inputs[a_index];
+            const b = all_inputs[b_index];
+            const owner_order = std.mem.order(u8, &a.artifact.key.bytes, &b.artifact.key.bytes);
+            if (owner_order != .eq) return owner_order == .lt;
+            return a_index < b_index;
+        }
+    }.lessThan);
 
     var extractor = Extractor{
         .gpa = gpa,
         .api = &api,
         .origins = origins,
         .failure = failure,
+        .inputs = inputs,
+        .public_input_order = public_input_order.items,
     };
 
-    for (inputs) |input| {
+    for (inputs[0..api_input_count], 0..) |input, input_index| {
+        extractor.current_input = input_index;
         try extractor.extractModule(input);
     }
 
@@ -131,6 +161,10 @@ const Extractor = struct {
     api: *PackageApi,
     origins: *const OriginMap,
     failure: *?Failure,
+    inputs: []const ModuleInput,
+    /// Public type inputs sorted by owning checked artifact for binary routing.
+    public_input_order: []const usize,
+    current_input: usize = 0,
     /// Current module context for failure reporting.
     current_module: []const u8 = "",
     current_item: []const u8 = "",
@@ -160,29 +194,34 @@ const Extractor = struct {
         const names = &input.artifact.canonical_names;
 
         // In a type module, only the type matching the module name and its
-        // associated items (dotted names under it) are public; other
-        // top-level defs are private helpers. Other module kinds expose all
-        // their top-level items.
-        const apply_name_filter = module_env.module_kind == .type_module;
+        // associated items (dotted names under it) are public. Platform roots
+        // instead supply their exact source-declared public names.
+        var exposed_names: std.StringHashMapUnmanaged(void) = .empty;
+        defer exposed_names.deinit(self.gpa);
+        if (input.exposed_names) |names_to_expose| {
+            try exposed_names.ensureTotalCapacity(self.gpa, @intCast(names_to_expose.len));
+            for (names_to_expose) |name| exposed_names.putAssumeCapacity(name, {});
+        }
 
         var seen_paths = std.StringHashMapUnmanaged(void).empty;
         defer seen_paths.deinit(self.gpa);
 
         // Type declaration statements (nominal and alias, including nested
-        // associated types — their names are already dotted).
+        // associated types—their names are already dotted).
         const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (stmts_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
-            const header_idx = switch (stmt) {
-                .s_alias_decl => |decl| decl.header,
-                .s_nominal_decl => |decl| decl.header,
-                else => continue,
-            };
+            const header_idx = if (stmt == .s_alias_decl)
+                stmt.s_alias_decl.header
+            else if (stmt == .s_nominal_decl)
+                stmt.s_nominal_decl.header
+            else
+                continue;
             const header = module_env.store.getTypeHeader(header_idx);
             const name = module_env.getIdentText(header.relative_name);
-            if (apply_name_filter and !nameIsPublic(name, input.exposed_name)) continue;
+            if (!inputIncludesName(input, &exposed_names, module_env.module_kind, name)) continue;
 
-            const path = try self.api.allocator().dupe(u8, name);
+            const path = try publicItemPath(self.api.allocator(), input, name);
             self.current_item = path;
             const gop = try seen_paths.getOrPut(self.gpa, path);
             if (gop.found_existing) continue;
@@ -202,21 +241,19 @@ const Extractor = struct {
         }
 
         // Top-level value defs (values, associated methods, and associated
-        // constants — associated names are already dotted).
+        // constants—associated names are already dotted).
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             const pattern = module_env.store.getPattern(def.pattern);
-            const ident = switch (pattern) {
-                .assign => |assign| assign.ident,
-                // Type declarations reach defs through nominal patterns; the
-                // statement walk above already covered them.
-                else => continue,
-            };
+            // Type declarations reach defs through nominal patterns; the
+            // statement walk above already covered them.
+            if (pattern != .assign) continue;
+            const ident = pattern.assign.ident;
             const name = module_env.getIdentText(ident);
-            if (apply_name_filter and !nameIsPublic(name, input.exposed_name)) continue;
+            if (!inputIncludesName(input, &exposed_names, module_env.module_kind, name)) continue;
 
-            const path = try self.api.allocator().dupe(u8, name);
+            const path = try publicItemPath(self.api.allocator(), input, name);
             self.current_item = path;
             const gop = try seen_paths.getOrPut(self.gpa, path);
             if (gop.found_existing) continue;
@@ -248,30 +285,31 @@ const Extractor = struct {
         var memo = ConvertMemo.empty;
         defer memo.deinit(self.gpa);
 
-        switch (view.payload(root)) {
-            .alias => |alias| {
-                return .{ .alias = .{
-                    .arity = @intCast(alias.args.len),
-                    .target = try self.convertType(view, names, alias.backing, &memo),
-                } };
-            },
-            .nominal => |nominal| {
-                const backing = if (nominal.is_opaque)
-                    null
-                else
-                    view.nominalBackingTemplateForPayload(nominal) orelse
-                        return self.fail(.unpublished_public_type, "transparent exposed nominal type has no published declaration backing");
-                return .{ .nominal = .{
-                    .arity = @intCast(nominal.args.len),
-                    .is_opaque = nominal.is_opaque,
-                    .backing = if (backing) |backing_ty|
-                        try self.convertType(view, names, backing_ty, &memo)
-                    else
-                        null,
-                } };
-            },
-            else => return self.fail(.unpublished_public_type, "exposed type declaration root is not an alias or nominal type"),
+        const payload = view.payload(root);
+        if (payload == .alias) {
+            const alias = payload.alias;
+            return .{ .alias = .{
+                .arity = @intCast(alias.args.len),
+                .target = try self.convertType(view, names, alias.backing, &memo),
+            } };
         }
+        if (payload != .nominal) {
+            return self.fail(.unpublished_public_type, "exposed type declaration root is not an alias or nominal type");
+        }
+        const nominal = payload.nominal;
+        const backing = if (nominal.is_opaque)
+            null
+        else
+            view.nominalBackingTemplateForPayload(nominal) orelse
+                return self.fail(.unpublished_public_type, "transparent exposed nominal type has no published declaration backing");
+        return .{ .nominal = .{
+            .arity = @intCast(nominal.args.len),
+            .is_opaque = nominal.is_opaque,
+            .backing = if (backing) |backing_ty|
+                try self.convertType(view, names, backing_ty, &memo)
+            else
+                null,
+        } };
     }
 
     const ConvertMemo = std.AutoHashMapUnmanaged(CheckedTypeId, PackageApi.TypeId);
@@ -315,6 +353,8 @@ const Extractor = struct {
                     view,
                     names,
                     alias.origin_module,
+                    alias.owner_module,
+                    alias.source_decl,
                     names.typeNameText(alias.name),
                     alias.builtin_origin,
                     alias.args,
@@ -328,6 +368,8 @@ const Extractor = struct {
                     view,
                     names,
                     nominal.origin_module,
+                    nominal.owner_module,
+                    nominal.source_decl,
                     names.typeNameText(nominal.name),
                     nominal.builtin != null,
                     nominal.args,
@@ -342,6 +384,7 @@ const Extractor = struct {
                     fields[i] = .{
                         .name = try alloc.dupe(u8, names.recordFieldLabelText(field.name)),
                         .ty = try self.convertType(view, names, field.ty, memo),
+                        .kind = try self.convertFieldKind(view, names, field.kind, memo),
                     };
                 }
                 const ext = try self.convertExt(view, names, record.ext, .empty_record, memo);
@@ -403,6 +446,67 @@ const Extractor = struct {
         }
     }
 
+    fn convertFieldKind(
+        self: *Extractor,
+        view: CheckedTypeStoreView,
+        names: *const check.CanonicalNames.CanonicalNameStore,
+        kind: CheckedArtifact.CheckedFieldKind,
+        memo: *ConvertMemo,
+    ) ExtractError!PackageApi.Field.Kind {
+        return switch (kind.tag) {
+            .required => .required,
+            .optional => .optional,
+            .defaulted => .{ .defaulted = try self.defaultLiteralSource(names, kind) },
+            .undetermined => blk: {
+                const checked_var = kind.undeterminedVariable() orelse
+                    return self.fail(.unpublished_public_type, "generalized record field kind has no published presence variable");
+                const api_var = try self.convertType(view, names, checked_var, memo);
+                if (self.api.getType(api_var).* != .variable) {
+                    return self.fail(.unpublished_public_type, "generalized record field kind does not reference a checked variable");
+                }
+                break :blk .{ .undetermined = api_var };
+            },
+            .err => return self.fail(.unpublished_public_type, "record field presence failed type checking"),
+        };
+    }
+
+    /// Translate a compiler-local default identity into deterministic Roc
+    /// source emitted from the declaring module's canonical IR. This keeps
+    /// PackageApi independent of content hashes and source-node indices: an
+    /// unrelated edit in the declaring module does not change the public API,
+    /// while a changed literal does.
+    fn defaultLiteralSource(
+        self: *Extractor,
+        names: *const check.CanonicalNames.CanonicalNameStore,
+        kind: CheckedArtifact.CheckedFieldKind,
+    ) ExtractError![]const u8 {
+        const default = kind.defaultIdentity() orelse
+            return self.fail(.unpublished_public_type, "defaulted record field has no default identity");
+        const origin_id = default.origin() orelse
+            return self.fail(.unpublished_public_type, "defaulted record field has no declaring module identity");
+        const origin_hash = names.moduleIdentityBytes(origin_id);
+        const origin = self.origins.identity_map.get(origin_hash.*) orelse {
+            const origin_hex = std.fmt.bytesToHex(origin_hash.*, .lower);
+            const detail = try std.fmt.allocPrint(self.gpa, "0x{s}", .{origin_hex[0..]});
+            defer self.gpa.free(detail);
+            return self.fail(.unknown_origin_module, detail);
+        };
+        const artifact = origin.artifact orelse
+            return self.fail(.unpublished_public_type, "default literal's declaring module has no checked artifact");
+        const module_env = artifact.moduleEnvConst();
+        if (default.expr_node >= module_env.store.nodes.len()) {
+            return self.fail(.unpublished_public_type, "default literal's source node is outside its declaring module");
+        }
+
+        var emitter = can.RocEmitter.init(self.gpa, module_env);
+        defer emitter.deinit();
+        emitter.emitExprWithLexicographicRecords(@enumFromInt(default.expr_node)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoSpaceLeft => return self.fail(.unpublished_public_type, "default literal could not be rendered canonically"),
+        };
+        return try self.api.allocator().dupe(u8, emitter.getOutput());
+    }
+
     /// A row extension that is the matching empty row means "closed" and is
     /// modeled as null; anything else (a variable, a chained row) is kept.
     fn convertExt(
@@ -422,6 +526,8 @@ const Extractor = struct {
         view: CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         origin_module: check.CanonicalNames.ModuleIdentityId,
+        owner_module: CheckedArtifact.ModuleId,
+        source_decl: ?u32,
         type_name: []const u8,
         is_builtin: bool,
         args: []const CheckedTypeId,
@@ -452,7 +558,11 @@ const Extractor = struct {
             return self.fail(.unknown_origin_module, detail);
         };
 
-        const path = try qualifiedPath(alloc, origin, path_module, type_name);
+        const projected_path = try self.publicReferencePath(owner_module, source_decl);
+        const path = if (projected_path) |public_path|
+            public_path
+        else
+            try qualifiedPath(alloc, origin, path_module, type_name);
         if (origin == .self) {
             try self.self_refs.put(self.api.allocator(), path, {});
         }
@@ -467,6 +577,52 @@ const Extractor = struct {
             .path = path,
             .args = api_args,
         } });
+    }
+
+    fn publicReferencePath(
+        self: *Extractor,
+        owner_module: CheckedArtifact.ModuleId,
+        source_decl: ?u32,
+    ) Allocator.Error!?[]const u8 {
+        const raw_statement = source_decl orelse return null;
+        const statement: can.CIR.Statement.Idx = @enumFromInt(raw_statement);
+
+        const current = self.inputs[self.current_input];
+        if (publicInputOwnsType(current, owner_module, statement)) {
+            const source_name = typeDeclName(current.module_env, statement) orelse return null;
+            return try publicItemPath(self.api.allocator(), current, source_name);
+        }
+
+        var selected: ?ModuleInput = null;
+        var selected_root_len: usize = 0;
+        var low: usize = 0;
+        var high = self.public_input_order.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const input = self.inputs[self.public_input_order[mid]];
+            if (std.mem.order(u8, &input.artifact.key.bytes, &owner_module.bytes) == .lt)
+                low = mid + 1
+            else
+                high = mid;
+        }
+        for (self.public_input_order[low..]) |input_index| {
+            const input = self.inputs[input_index];
+            if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) break;
+            if (!publicInputOwnsType(input, owner_module, statement)) continue;
+            const root_statement = input.public_type_decl orelse unreachable;
+            const root_len = (typeDeclName(input.module_env, root_statement) orelse unreachable).len;
+            // The nearest public root owns the reference. Equal roots retain
+            // the package header order encoded by the input array.
+            if (selected == null or root_len > selected_root_len) {
+                selected = input;
+                selected_root_len = root_len;
+            }
+        }
+        if (selected) |input| {
+            const source_name = typeDeclName(input.module_env, statement) orelse return null;
+            return try publicItemPath(self.api.allocator(), input, source_name);
+        }
+        return null;
     }
 
     /// Every `.self` named reference in a public signature must resolve to an
@@ -490,6 +646,74 @@ const Extractor = struct {
     }
 };
 
+fn typeDeclName(module_env: *const ModuleEnv, statement_idx: can.CIR.Statement.Idx) ?[]const u8 {
+    const statement = module_env.store.getStatement(statement_idx);
+    const header_idx = switch (statement) {
+        .s_alias_decl => |decl| decl.header,
+        .s_nominal_decl => |decl| decl.header,
+        .s_where_alias_decl => |decl| decl.header,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => return null,
+    };
+    return module_env.getIdentText(module_env.store.getTypeHeader(header_idx).relative_name);
+}
+
+fn publicInputOwnsType(
+    input: ModuleInput,
+    owner_module: CheckedArtifact.ModuleId,
+    statement: can.CIR.Statement.Idx,
+) bool {
+    const root_statement = input.public_type_decl orelse return false;
+    if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) return false;
+    const root_name = typeDeclName(input.module_env, root_statement) orelse return false;
+    const type_name = typeDeclName(input.module_env, statement) orelse return false;
+    return nameIsPublic(type_name, root_name);
+}
+
+fn publicItemPath(alloc: Allocator, input: ModuleInput, source_name: []const u8) Allocator.Error![]const u8 {
+    const root_statement = input.public_type_decl orelse return try alloc.dupe(u8, source_name);
+    const root_name = typeDeclName(input.module_env, root_statement) orelse unreachable;
+    std.debug.assert(nameIsPublic(source_name, root_name));
+    return if (source_name.len == root_name.len)
+        try alloc.dupe(u8, input.exposed_name)
+    else
+        try std.fmt.allocPrint(alloc, "{s}{s}", .{ input.exposed_name, source_name[root_name.len..] });
+}
+
+fn inputIncludesName(
+    input: ModuleInput,
+    exposed_names: *const std.StringHashMapUnmanaged(void),
+    module_kind: can.ModuleEnv.ModuleKind,
+    name: []const u8,
+) bool {
+    if (input.exposed_names != null) {
+        const root_name = if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
+        return exposed_names.contains(root_name);
+    }
+    if (input.public_type_decl) |root_statement| {
+        const root_name = typeDeclName(input.module_env, root_statement) orelse return false;
+        return nameIsPublic(name, root_name);
+    }
+    return module_kind != .type_module or nameIsPublic(name, input.exposed_name);
+}
+
 /// A name is public within a type module iff it is the module's type itself
 /// or an associated item underneath it ("Color", "Color.hex", never "helper").
 fn nameIsPublic(name: []const u8, module_name: []const u8) bool {
@@ -501,7 +725,7 @@ fn nameIsPublic(name: []const u8, module_name: []const u8) bool {
 
 /// The stable qualified path for a named type reference. Type names in CIR
 /// are dotted relative to their module's main type, which itself matches the
-/// module name — so a name that already starts with the module name is used
+/// module name—so a name that already starts with the module name is used
 /// as-is, and anything else is qualified with its module. Builtin types use
 /// their bare name (there is no meaningful "Builtin." namespace for users).
 fn qualifiedPath(
@@ -519,6 +743,7 @@ fn qualifiedPath(
             type_name;
         return try alloc.dupe(u8, bare);
     }
+    if (origin == .self and origin_module.len == 0) return try alloc.dupe(u8, type_name);
     if (nameIsPublic(type_name, origin_module)) return try alloc.dupe(u8, type_name);
     return try std.fmt.allocPrint(alloc, "{s}.{s}", .{ origin_module, type_name });
 }
@@ -530,4 +755,10 @@ test "nameIsPublic follows the type module visibility rule" {
     try std.testing.expect(!nameIsPublic("helper", "Color"));
     try std.testing.expect(!nameIsPublic("Colors", "Color"));
     try std.testing.expect(!nameIsPublic("Color2.hex", "Color"));
+}
+
+test "a root namespace leaves self type paths unqualified" {
+    const path = try qualifiedPath(std.testing.allocator, .self, "", "Blub");
+    defer std.testing.allocator.free(path);
+    try std.testing.expectEqualStrings("Blub", path);
 }

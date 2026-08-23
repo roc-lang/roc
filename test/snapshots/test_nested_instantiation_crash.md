@@ -23,22 +23,20 @@ answer = composed([42])
 # EXPECTED
 TYPE MISMATCH - test_nested_instantiation_crash.md:12:16:12:41
 # PROBLEMS
+── ✗ type mismatch ──────────────────── test_nested_instantiation_crash.md:12:16
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ This expression is used in an unexpected way. ─────────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  composed = |n| get_value(make_record(n))                                  │
- │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
- └────────────────────────────────── test_nested_instantiation_crash.md:12:16 ┘
+This expression is used in an unexpected way.
 
-    It has the type:
+composed = |n| get_value(make_record(n))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        List(a)
+It has the type:
 
-    But the annotation says it should be:
+    List(a)
 
-        Str
+But the annotation says it should be:
+
+    Str
 
 # TOKENS
 ~~~zig
@@ -98,8 +96,9 @@ EndOfFile,
 				(args
 					(p-ident (raw "r")))
 				(e-field-access
-					(e-ident (raw "r"))
-					(e-ident (raw "value")))))
+					(receiver
+						(e-ident (raw "r")))
+					(segment (mode "required") (field "value")))))
 		(s-type-anno (name "composed")
 			(ty-fn
 				(ty-apply
@@ -169,10 +168,12 @@ answer = composed([42])
 		(e-lambda
 			(args
 				(p-assign (ident "r")))
-			(e-field-access (field "value")
+			(e-field-access
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "r"))))))
+						(p-assign (ident "r"))))
+				(segments
+					(segment (name "value") (mode "required")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record
@@ -183,16 +184,7 @@ answer = composed([42])
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "composed"))
-		(e-lambda
-			(args
-				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 317)
-				(e-lookup-local
-					(p-assign (ident "get_value")))
-				(e-call (constraint-fn-var 316)
-					(e-lookup-local
-						(p-assign (ident "make_record")))
-					(e-runtime-error (tag "erroneous_value_use")))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -200,7 +192,7 @@ answer = composed([42])
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "answer"))
-		(e-call (constraint-fn-var 328)
+		(e-call (constraint-fn-var 338)
 			(e-lookup-local
 				(p-assign (ident "composed")))
 			(e-list

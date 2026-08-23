@@ -155,8 +155,8 @@ homogeneous_vector_member_count = |type_table, type_id|
 ## Whether a record with these committed fields is a memory-class vector
 ## aggregate: every member is (an aggregate of) 128-bit vectors and there are
 ## two to four of them in total. C classifies such an aggregate as homogeneous
-## and would pass it in registers, but the Roc host ABI passes it in memory —
-## the convention Zig and Rust hosts compile to — so C glue spells its members
+## and would pass it in registers, but the Roc host ABI passes it in memory—
+## the convention Zig and Rust hosts compile to—so C glue spells its members
 ## as vector/byte unions to pin the memory-class classification.
 c_needs_vector_union_spelling : TypeTable, List(AbiFieldLayout) -> Bool
 c_needs_vector_union_spelling = |type_table, fields| {
@@ -1232,8 +1232,12 @@ header_guard_top = {
 		"",
 		"Hosted argument ownership:",
 		"Roc transfers ownership of refcounted arguments to the hosted function.",
-		"The hosted function must decref owned refcounted arguments when done,",
+		"The hosted function must release owned refcounted arguments when done,",
 		"or retain/transfer ownership explicitly when storing or returning them.",
+		"Releasing a container releases its elements only when the container's own",
+		"count reaches zero, which is what compiled Roc code does when it drops one",
+		"it owns. Releasing the elements unconditionally double-frees them whenever",
+		"the Roc caller still holds the container.",
 	])
 
 	"${header_doc}\n#ifndef ROC_PLATFORM_ABI_H\n#define ROC_PLATFORM_ABI_H\n\n"
@@ -1270,7 +1274,8 @@ core_types_section = {
 
 	erased_callable_def =
 		"struct RocOps;\n\n"
-			.concat("typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture);\n")
+			.concat("/* `reuse` is nullable. Non-null must be the callable data pointer whose inline capture begins at `capture`; it transfers one owned reference to the callee. The caller must not use or decref that ownership unit after the call. The callee consumes it exactly once, whether or not the result can reuse the allocation. */\n")
+			.concat("typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture, uint8_t* reuse, const void** ret_desc);\n")
 			.concat("typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);\n")
 			.concat("typedef struct {\n    RocErasedCallableFn callable_fn_ptr;\n    RocErasedCallableOnDrop on_drop;\n} RocErasedCallablePayload;\n")
 			.concat("ROC_STATIC_ASSERT(offsetof(RocErasedCallablePayload, callable_fn_ptr) == 0, \"RocErasedCallablePayload.callable_fn_ptr offset mismatch\");\n")

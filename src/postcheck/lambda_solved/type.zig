@@ -33,10 +33,13 @@ pub const Span = extern struct {
     }
 };
 
-/// Record field type entry.
+/// Record field type entry. `default` is the Monotype `??` default identity
+/// carried verbatim through lambda solving (shared program name store).
 pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeVarId,
+    value_ty: ?TypeVarId = null,
+    default: ?MonoType.FieldDefault,
 };
 
 /// Tag-union variant type entry.
@@ -62,8 +65,8 @@ pub const FnMember = struct {
     captures: Span,
 };
 
-/// One entry of a nominal record's declared layout order; consumed only by
-/// layout selection (the backing row stays lexicographic).
+/// One entry of a nominal record's declared fields; consumed by layout and
+/// descriptor planning (the backing row stays lexicographic).
 pub const DeclaredField = union(enum) {
     named: names.RecordFieldNameId,
     padding: TypeVarId,
@@ -86,8 +89,7 @@ pub const Content = union(enum) {
             use: MonoType.BackingUse,
             authority: MonoType.BackingAuthority = .checked_public,
         } = null,
-        /// Declared field order for a nominal/opaque record backing; empty
-        /// otherwise.
+        /// Declared fields for a nominal/opaque record backing; empty otherwise.
         declared_order: Span = Span.empty(),
     },
     record: Span,
@@ -194,10 +196,9 @@ pub const Store = struct {
     pub fn root(self: *const Store, id: TypeVarId) TypeVarId {
         var current = id;
         while (true) {
-            switch (self.get(current)) {
-                .link => |next| current = next,
-                else => return current,
-            }
+            const content = self.get(current);
+            if (std.meta.activeTag(content) != .link) return current;
+            current = content.link;
         }
     }
 
@@ -208,22 +209,18 @@ pub const Store = struct {
     pub fn rootCompressed(self: *Store, id: TypeVarId) TypeVarId {
         var current = id;
         while (true) {
-            switch (self.get(current)) {
-                .link => |next| current = next,
-                else => break,
-            }
+            const content = self.get(current);
+            if (std.meta.activeTag(content) != .link) break;
+            current = content.link;
         }
 
         const root_id = current;
         current = id;
         while (current != root_id) {
-            switch (self.get(current)) {
-                .link => |next| {
-                    self.set(current, .{ .link = root_id });
-                    current = next;
-                },
-                else => break,
-            }
+            const content = self.get(current);
+            if (std.meta.activeTag(content) != .link) break;
+            self.set(current, .{ .link = root_id });
+            current = content.link;
         }
 
         return root_id;
@@ -274,17 +271,9 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn span(self: *const Store, span_: Span) []const TypeVarId {
-        return self.spans.items[span_.start..][0..span_.len];
-    }
-
     pub fn spanItem(self: *const Store, span_: Span, index: usize) TypeVarId {
         if (index >= span_.count()) Common.invariant("Lambda Solved type span index out of bounds");
         return self.spans.items[@as(usize, span_.start) + index];
-    }
-
-    pub fn fieldSpan(self: *const Store, span_: Span) []const Field {
-        return self.fields.items[span_.start..][0..span_.len];
     }
 
     pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
@@ -294,17 +283,14 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn declaredFieldSpan(self: *const Store, span_: Span) []const DeclaredField {
-        return self.declared_fields.items[span_.start..][0..span_.len];
-    }
-
     pub fn fieldItem(self: *const Store, span_: Span, index: usize) Field {
         if (index >= span_.count()) Common.invariant("Lambda Solved field span index out of bounds");
         return self.fields.items[@as(usize, span_.start) + index];
     }
 
-    pub fn tagSpan(self: *const Store, span_: Span) []const Tag {
-        return self.tags.items[span_.start..][0..span_.len];
+    pub fn declaredFieldItem(self: *const Store, span_: Span, index: usize) DeclaredField {
+        if (index >= span_.count()) Common.invariant("Lambda Solved declared-field span index out of bounds");
+        return self.declared_fields.items[@as(usize, span_.start) + index];
     }
 
     pub fn tagItem(self: *const Store, span_: Span, index: usize) Tag {
@@ -312,17 +298,9 @@ pub const Store = struct {
         return self.tags.items[@as(usize, span_.start) + index];
     }
 
-    pub fn captureSpan(self: *const Store, span_: Span) []const Capture {
-        return self.captures.items[span_.start..][0..span_.len];
-    }
-
     pub fn captureItem(self: *const Store, span_: Span, index: usize) Capture {
         if (index >= span_.count()) Common.invariant("Lambda Solved capture span index out of bounds");
         return self.captures.items[@as(usize, span_.start) + index];
-    }
-
-    pub fn memberSpan(self: *const Store, span_: Span) []const FnMember {
-        return self.fn_members.items[span_.start..][0..span_.len];
     }
 
     pub fn memberItem(self: *const Store, span_: Span, index: usize) FnMember {
@@ -346,10 +324,9 @@ pub const Store = struct {
         pub fn root(self: View, id: TypeVarId) TypeVarId {
             var current = id;
             while (true) {
-                switch (self.get(current)) {
-                    .link => |next| current = next,
-                    else => return current,
-                }
+                const content = self.get(current);
+                if (std.meta.activeTag(content) != .link) return current;
+                current = content.link;
             }
         }
 
@@ -416,7 +393,7 @@ test "lambda solved function types carry callable variables" {
     const function = store.get(fn_ty).func;
     try std.testing.expectEqual(callable, function.callable);
     try std.testing.expectEqual(ret, function.ret);
-    try std.testing.expectEqual(arg, store.span(function.args)[0]);
+    try std.testing.expectEqual(arg, store.spanItem(function.args, 0));
 }
 
 test "lambda solved type variable order uses the typed id helper" {
@@ -430,7 +407,7 @@ test "lambda solved empty spans use shared empty descriptor" {
 
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
-    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit }});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit, .default = null }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(2), .checked_name = @enumFromInt(2), .payloads = nonempty_span }});
     const nonempty_captures = try store.addCaptures(&.{.{ .local = @enumFromInt(3), .symbol = @enumFromInt(4), .binder = null, .ty = unit }});
     const nonempty_members = try store.addMembers(&.{.{ .lambda = @enumFromInt(5), .captures = nonempty_captures }});

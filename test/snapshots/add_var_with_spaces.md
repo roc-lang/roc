@@ -10,16 +10,14 @@ add2 = x +      2
 # EXPECTED
 NAME NOT IN SCOPE - add_var_with_spaces.md:1:8:1:9
 # PROBLEMS
+── ✗ name not in scope ────────────────────────────── add_var_with_spaces.md:1:8
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  add2 = x +      2                                                         │
- │         ‾                                                                  │
- └──────────────────────────────────────────────── add_var_with_spaces.md:1:8 ┘
+Nothing is named x in this scope.
 
-    Is it misspelled, or is there an import missing?
+add2 = x +      2
+       ^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

@@ -10,18 +10,16 @@ type=expr
 # EXPECTED
 POLYMORPHIC VALUE - unary_negation_access.md:1:1:1:12
 # PROBLEMS
+── ✗ polymorphic value ──────────────────────────── unary_negation_access.md:1:1
 
-┌───────────────────┐
-│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
-└┬──────────────────┘  polymorphic type.                                      │
- │                                                                            │
- │  -rec1.field                                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
- └────────────────────────────────────────────── unary_negation_access.md:1:1 ┘
+This top-level value still has an unresolved polymorphic type.
 
-    Its type is:
-    a where [a.negate : a -> a]
-    Add an annotation or use this value in a way that fixes its concrete type.
+-rec1.field
+^^^^^^^^^^^
+
+Its type is:
+a where [a.negate : a -> a]
+Add an annotation or use this value in a way that fixes its concrete type.
 
 # TOKENS
 ~~~zig
@@ -32,8 +30,9 @@ EndOfFile,
 ~~~clojure
 (unary "-"
 	(e-field-access
-		(e-ident (raw "rec1"))
-		(e-ident (raw "field"))))
+		(receiver
+			(e-ident (raw "rec1")))
+		(segment (mode "required") (field "field"))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -41,11 +40,13 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "negate") (constraint-fn-var 197)
+(e-dispatch-call (method "negate") (constraint-fn-var 207)
 	(receiver
-		(e-field-access (field "field")
+		(e-field-access
 			(receiver
-				(e-runtime-error (tag "ident_not_in_scope")))))
+				(e-runtime-error (tag "ident_not_in_scope")))
+			(segments
+				(segment (name "field") (mode "required")))))
 	(args))
 ~~~
 # TYPES

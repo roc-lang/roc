@@ -12,7 +12,9 @@ platform ""
         inputs_dir: "../../fx/platform/targets/",
         arm64mac: { inputs: ["libhost.a", app] },
         arm64musl: { inputs: ["libhost.a", app] },
+        arm64v1musl: { inputs: ["libhost.a", app] },
         x64musl: { inputs: ["libhost.a", app] },
+        x64v1musl: { inputs: ["libhost.a", app] },
         arm64win: { inputs: ["host.lib", app] },
         x64win: { inputs: ["host.lib", app] },
     }

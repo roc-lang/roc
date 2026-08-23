@@ -25,7 +25,9 @@ pub const ModuleId = u32;
 
 /// Information about a discovered local import during canonicalization
 pub const DiscoveredLocalImport = struct {
-    /// The module name (e.g., "Foo")
+    /// Exact source target used by canonicalization (e.g. "../Shared/Foo").
+    import_name: []const u8,
+    /// Package-root-relative logical module path (e.g. "Shared/Foo").
     module_name: []const u8,
     /// The resolved filesystem path
     path: []const u8,
@@ -43,6 +45,8 @@ pub const CanonicalizeImport = struct {
     import_name: []const u8,
     /// The fully-ready semantic env for this import
     module_env: *const ModuleEnv,
+    /// Exact type declaration selected by a package/platform public entry.
+    selected_type_decl: ?can.CIR.Statement.Idx = null,
 };
 
 /// Information about detected import cycles
@@ -69,6 +73,8 @@ pub const ParseTask = struct {
     /// the module is staged elsewhere (e.g. a default app written to a temp dir),
     /// so sibling imports resolve against the user's original directory.
     source_dir: []const u8,
+    /// Package source root used for leading `/` and parent-bound checks.
+    package_root: []const u8,
     /// Compiler role for this source module
     module_role: ModuleEnv.ModuleRole,
     /// Dependency depth from root
@@ -95,9 +101,8 @@ pub const CanonicalizeTask = struct {
     cached_ast: *AST,
     /// Real imported semantic envs available to canonicalization
     imported_modules: []const CanonicalizeImport,
-    /// Validate this module as an explicitly requested checked-artifact root
-    /// instead of as a standalone `roc check` root.
-    validate_as_explicit_roots: bool,
+    /// Post-canonicalization validation this module receives.
+    validation: can.Can.Validation,
 };
 
 /// Task to type-check a canonicalized module
@@ -124,6 +129,10 @@ pub const TypeCheckTask = struct {
     platform_requirements: ?PlatformRequirementSurface = null,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+    /// How this module's compile-time roots are established. Decides whether
+    /// an app root's entrypoint contract with its platform is enforced, and
+    /// participates in the checked-artifact cache identity.
+    validation: can.Can.Validation = .checking,
     /// True when this module is the platform root of an app build: its
     /// check-time publication is skipped so finalization publishes the
     /// relation-bearing platform root exactly once.
@@ -133,16 +142,21 @@ pub const TypeCheckTask = struct {
 /// The platform root's requirement surface, borrowed from its completed
 /// type check: the checked platform ModuleEnv (stable once the module is
 /// Done), the cache-identity context derived from its published artifact,
-/// and the platform path for diagnostics. Plain borrowed data — nothing here
-/// is owned, so copies are free and there is nothing to deinit.
+/// and the platform path for diagnostics. The coordinator's stored surface
+/// borrows all data; a worker-task copy additionally borrows its task-owned
+/// owner-module slice, which the worker frees after checking.
 pub const PlatformRequirementSurface = struct {
     env: *const ModuleEnv,
+    /// Exact owner closure of the platform root whose requirement types are
+    /// copied into the app. Populated on the worker-task copy of the surface.
+    owner_modules: []const *const ModuleEnv = &.{},
     context: CheckedArtifact.PlatformRequirementContextKey,
     path: []const u8,
 
     pub fn checkerInput(self: *const PlatformRequirementSurface) check.Check.PlatformRequirementInput {
         return .{
             .env = self.env,
+            .owner_modules = self.owner_modules,
             .path = self.path,
         };
     }
@@ -202,6 +216,8 @@ pub const ParsedResult = struct {
     discovered_local_imports: std.ArrayList(DiscoveredLocalImport),
     /// Discovered external imports (cross-package qualified imports)
     discovered_external_imports: std.ArrayList(DiscoveredExternalImport),
+    /// True when lexical import resolution rejected a target before any file access.
+    import_resolution_failed: bool,
     /// Any reports generated during parsing
     reports: std.ArrayList(Report),
     /// Timing: nanoseconds spent parsing
@@ -417,6 +433,7 @@ pub const WorkerResult = union(enum) {
         switch (self.*) {
             .parsed => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.import_name);
                     gpa.free(imp.module_name);
                     gpa.free(imp.path);
                 }
@@ -430,6 +447,7 @@ pub const WorkerResult = union(enum) {
             },
             .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
+                    gpa.free(imp.import_name);
                     gpa.free(imp.module_name);
                     gpa.free(imp.path);
                 }
@@ -487,6 +505,7 @@ test "WorkerTask accessors" {
             .module_name = "Main",
             .path = "/path/to/Main.roc",
             .source_dir = "/path/to",
+            .package_root = "/path/to",
             .depth = 0,
             .module_role = .user,
         },
@@ -511,6 +530,7 @@ test "WorkerResult accessors" {
             .cached_ast = undefined,
             .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
             .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
+            .import_resolution_failed = false,
             .reports = reports,
             .parse_ns = 1000,
         },

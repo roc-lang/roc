@@ -16,97 +16,84 @@ UNEXPECTED STATEMENT - fuzz_crash_043.md:2:5:2:6
 MALFORMED TYPE - fuzz_crash_043.md:2:3:2:4
 DECLARATION HAS NO VALUE - fuzz_crash_043.md:2:1:2:4
 # PROBLEMS
+── ✗ unexpected statement ─────────────────────────────── fuzz_crash_043.md:1:20
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  app[]{f:platform""}{                                                      │
- │                     ‾                                                      │
- └──────────────────────────────────────────────────── fuzz_crash_043.md:1:20 ┘
+I was parsing a statement, and this token cannot start a statement here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+app[]{f:platform""}{
+                   ^
 
-    For example:
-        answer = 42
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-    I found `{` here.
+For example:
+    answer = 42
 
+I found { here.
 
-┌────────────────────────┐
-│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
-└┬───────────────────────┘  cannot start a type here.                         │
- │                                                                            │
- │  o:0}0                                                                     │
- │    ‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_043.md:2:3 ┘
+── ✗ unexpected type syntax ────────────────────────────── fuzz_crash_043.md:2:3
 
-    Types can be type variables, uppercase type names, function types, tuples,
-    records, or tag unions.
+I was parsing a type annotation, and this token cannot start a type here.
 
-    For example:
-        List(U64)
+o:0}0
+  ^
 
-    I found `0` here.
+Types can be type variables, uppercase type names, function types, tuples,
+records, or tag unions.
 
+For example:
+    List(U64)
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  o:0}0                                                                     │
- │     ‾                                                                      │
- └───────────────────────────────────────────────────── fuzz_crash_043.md:2:4 ┘
+I found 0 here.
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_043.md:2:4
 
-    For example:
-        answer = 42
+I was parsing a statement, and this token cannot start a statement here.
 
-    I found `}` here.
-    This closes the current construct, so the parser was looking for the
-    missing item before it.
+o:0}0
+   ^
 
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  o:0}0                                                                     │
- │      ‾                                                                     │
- └───────────────────────────────────────────────────── fuzz_crash_043.md:2:5 ┘
+For example:
+    answer = 42
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I found } here.
+This closes the current construct, so the parser was looking for the missing
+item before it.
 
-    For example:
-        answer = 42
+── ✗ unexpected statement ──────────────────────────────── fuzz_crash_043.md:2:5
 
-    I found `0` here.
+I was parsing a statement, and this token cannot start a statement here.
 
+o:0}0
+    ^
 
-┌────────────────┐
-│ MALFORMED TYPE ├─ This type annotation is malformed or contains invalid ────┐
-└┬───────────────┘  syntax.                                                   │
- │                                                                            │
- │  o:0}0                                                                     │
- │    ‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_043.md:2:3 ┘
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
+I found 0 here.
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  o:0}0                                                                     │
- │  ‾‾‾                                                                       │
- └───────────────────────────────────────────────────── fuzz_crash_043.md:2:1 ┘
+── ✗ malformed type ────────────────────────────────────── fuzz_crash_043.md:2:3
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+This type annotation is malformed or contains invalid syntax.
+
+o:0}0
+  ^
+
+── ● declaration has no value ──────────────────────────── fuzz_crash_043.md:2:1
+
+This declaration has a type annotation but no implementation.
+
+o:0}0
+^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -144,7 +131,7 @@ o :
 (can-ir
 	(d-let
 		(p-assign (ident "o"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed))))
 ~~~

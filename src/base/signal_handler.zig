@@ -19,7 +19,39 @@ const supports_posix_signals = switch (builtin.os.tag) {
     .netbsd,
     .openbsd,
     => true,
-    else => false,
+    .freestanding,
+    .other,
+    .contiki,
+    .fuchsia,
+    .hermit,
+    .managarm,
+    .haiku,
+    .hurd,
+    .illumos,
+    .plan9,
+    .rtems,
+    .serenity,
+    .windows,
+    .driverkit,
+    .maccatalyst,
+    .uefi,
+    .@"3ds",
+    .ps3,
+    .ps4,
+    .ps5,
+    .psp,
+    .vita,
+    .emscripten,
+    .wasi,
+    .amdhsa,
+    .amdpal,
+    .cuda,
+    .mesa3d,
+    .nvcl,
+    .opencl,
+    .opengl,
+    .vulkan,
+    => false,
 };
 
 const supports_windows_exceptions = builtin.os.tag == .windows;
@@ -182,7 +214,7 @@ fn stackPointerFromSignalContext(context: ?*anyopaque) ?usize {
             // its trailing FP/SIMD __reserved area is __aligned__(16). That
             // alignment inserts 8 bytes of padding after the 1024-bit uc_sigmask,
             // so uc_mcontext must be modeled as a 16-aligned struct rather than
-            // flattened — otherwise every field shifts 8 bytes early and `sp`
+            // flattened—otherwise every field shifts 8 bytes early and `sp`
             // lands on regs[30] (the link register). The trailing 16-aligned
             // reserved field reproduces that alignment (mirrors std's mcontext_t).
             const stack_t = extern struct { ss_sp: ?*anyopaque, ss_flags: i32, ss_size: usize };
@@ -204,7 +236,63 @@ fn stackPointerFromSignalContext(context: ?*anyopaque) ?usize {
             const uc: *const ucontext_t = @ptrCast(@alignCast(raw_context));
             return @intCast(uc.uc_mcontext.sp);
         },
-        else => return null,
+        .alpha,
+        .amdgcn,
+        .arc,
+        .arceb,
+        .arm,
+        .armeb,
+        .aarch64_be,
+        .avr,
+        .bpfeb,
+        .bpfel,
+        .csky,
+        .hexagon,
+        .hppa,
+        .hppa64,
+        .kalimba,
+        .kvx,
+        .lanai,
+        .loongarch32,
+        .loongarch64,
+        .m68k,
+        .microblaze,
+        .microblazeel,
+        .mips,
+        .mipsel,
+        .mips64,
+        .mips64el,
+        .msp430,
+        .nvptx,
+        .nvptx64,
+        .or1k,
+        .powerpc,
+        .powerpcle,
+        .powerpc64,
+        .powerpc64le,
+        .propeller,
+        .riscv32,
+        .riscv32be,
+        .riscv64,
+        .riscv64be,
+        .s390x,
+        .sh,
+        .sheb,
+        .sparc,
+        .sparc64,
+        .spirv32,
+        .spirv64,
+        .thumb,
+        .thumbeb,
+        .ve,
+        .wasm32,
+        .wasm64,
+        .x86_16,
+        .x86,
+        .xcore,
+        .xtensa,
+        .xtensaeb,
+        => return null,
     }
 }
 
@@ -245,8 +333,8 @@ pub fn currentThreadStackBoundsForTest() ?StackBounds {
 }
 
 /// Distance from the stack pointer within which a fault counts as a stack
-/// overflow. A genuine overflow faults inside the frame being set up — the
-/// stack-probe/push that ran past the guard — so the fault address is close to
+/// overflow. A genuine overflow faults inside the frame being set up—the
+/// stack-probe/push that ran past the guard—so the fault address is close to
 /// the stack pointer. A null or wild write faults far from it. This proximity
 /// test is the primary, bounds-independent signal, because the reported stack
 /// bounds are not always trustworthy: `pthread_getattr_np` on a static-musl
@@ -312,7 +400,7 @@ fn installPosixProcessHandlers(callbacks: Callbacks) bool {
 
 // Per-thread guarantee reserved so EXCEPTION_STACK_OVERFLOW can dispatch.
 // Without this, an overflow on a worker thread takes the process down before
-// any handler runs — the OS only reserves a guarantee for the main thread.
+// any handler runs—the OS only reserves a guarantee for the main thread.
 // 32 KB is well below the default 1 MB stack and large enough to host our
 // minimal handler frame.
 const WINDOWS_STACK_GUARANTEE: ULONG = 32 * 1024;
@@ -413,11 +501,13 @@ fn getFaultAddress(info: *const posix.siginfo_t) usize {
         builtin.os.tag == .watchos or
         builtin.os.tag == .visionos or
         builtin.os.tag == .freebsd or
-        builtin.os.tag == .dragonfly or
-        builtin.os.tag == .netbsd or
-        builtin.os.tag == .openbsd)
+        builtin.os.tag == .dragonfly)
     {
         return @intFromPtr(info.addr);
+    } else if (comptime builtin.os.tag == .openbsd) {
+        return @intFromPtr(info.data.fault.addr);
+    } else if (comptime builtin.os.tag == .netbsd) {
+        return @intFromPtr(info.info.reason.fault.addr);
     } else {
         return 0;
     }
@@ -558,7 +648,7 @@ test "classifyFault reports a null/wild write as access violation, not overflow"
 test "classifyFault: a stack pointer below reported bounds is not overflow on its own" {
     // When the reported bounds are unreliable (a real hazard: pthread_getattr_np
     // on a static-musl main thread reports a stack the real sp isn't in), a
-    // "stack pointer below low" must not be treated as overflow by itself — the
+    // "stack pointer below low" must not be treated as overflow by itself—the
     // fault has to corroborate by being near the stack pointer.
     const bounds = StackBounds.init(0x7000, 0x9000, 0x1000, null, null).?;
 

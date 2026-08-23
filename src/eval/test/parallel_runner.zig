@@ -9,10 +9,10 @@
 //! Each test goes through a front-end (parse, canonicalize, type-check)
 //! and is then evaluated by up to four independent backends:
 //!
-//!   1. **Interpreter** — walks the LIR directly.
-//!   2. **Dev backend** — lowers LIR to native machine code.
-//!   3. **WASM backend** — statement-only LIR compiled to wasm.
-//!   4. **LLVM backend** — lowers statement-only LIR to LLVM bitcode when
+//!   1. **Interpreter**—walks the LIR directly.
+//!   2. **Dev backend**—lowers LIR to native machine code.
+//!   3. **WASM backend**—statement-only LIR compiled to wasm.
+//!   4. **LLVM backend**—lowers statement-only LIR to LLVM bitcode when
 //!      the runner is invoked with `--llvm`.
 //!
 //! ALL backends run via Str.inspect and must produce identical output strings.
@@ -157,6 +157,132 @@ pub const TestCase = struct {
         llvm: bool = false,
     };
 };
+
+fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.ConstScalar {
+    return switch (value) {
+        .scalar => |scalar| scalar,
+        .pending,
+        .zst,
+        .str,
+        .list,
+        .box,
+        .tuple,
+        .record,
+        .crash,
+        .tag,
+        .nominal,
+        .fn_value,
+        => null,
+    };
+}
+
+fn constList(value: check.CheckedArtifact.ConstValue) ?check.ConstStore.ConstList {
+    return switch (value) {
+        .list => |items| items,
+        .pending,
+        .zst,
+        .scalar,
+        .str,
+        .box,
+        .tuple,
+        .record,
+        .crash,
+        .tag,
+        .nominal,
+        .fn_value,
+        => null,
+    };
+}
+
+fn constF32ListMatches(
+    store: *const check.CheckedArtifact.ConstStore,
+    list: check.ConstStore.ConstList,
+    expected: []const u32,
+) bool {
+    return switch (list) {
+        .nodes => |items| blk: {
+            if (items.len != expected.len) break :blk false;
+            for (items, expected) |item, bits| {
+                if ((constF32Bits(store.get(item)) orelse break :blk false) != bits) break :blk false;
+            }
+            break :blk true;
+        },
+        .scalar_bytes => |scalar_bytes| blk: {
+            if (scalar_bytes.element != .f32 or scalar_bytes.len != expected.len) break :blk false;
+            const bytes = store.blobBytes(scalar_bytes.bytes);
+            if (bytes.len != expected.len * @sizeOf(u32)) break :blk false;
+            for (expected, 0..) |bits, i| {
+                if (std.mem.readInt(u32, bytes[i * 4 ..][0..4], .little) != bits) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn constF64ListMatches(
+    store: *const check.CheckedArtifact.ConstStore,
+    list: check.ConstStore.ConstList,
+    expected: []const u64,
+) bool {
+    return switch (list) {
+        .nodes => |items| blk: {
+            if (items.len != expected.len) break :blk false;
+            for (items, expected) |item, bits| {
+                if ((constF64Bits(store.get(item)) orelse break :blk false) != bits) break :blk false;
+            }
+            break :blk true;
+        },
+        .scalar_bytes => |scalar_bytes| blk: {
+            if (scalar_bytes.element != .f64 or scalar_bytes.len != expected.len) break :blk false;
+            const bytes = store.blobBytes(scalar_bytes.bytes);
+            if (bytes.len != expected.len * @sizeOf(u64)) break :blk false;
+            for (expected, 0..) |bits, i| {
+                if (std.mem.readInt(u64, bytes[i * 8 ..][0..8], .little) != bits) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+
+fn constF32Bits(value: check.CheckedArtifact.ConstValue) ?u32 {
+    const scalar = constScalar(value) orelse return null;
+    return switch (scalar) {
+        .f32_bits => |bits| bits,
+        .i8,
+        .i16,
+        .i32,
+        .i64,
+        .i128,
+        .u8,
+        .u16,
+        .u32,
+        .u64,
+        .u128,
+        .f64_bits,
+        .dec_bits,
+        => null,
+    };
+}
+
+fn constF64Bits(value: check.CheckedArtifact.ConstValue) ?u64 {
+    const scalar = constScalar(value) orelse return null;
+    return switch (scalar) {
+        .f64_bits => |bits| bits,
+        .i8,
+        .i16,
+        .i32,
+        .i64,
+        .i128,
+        .u8,
+        .u16,
+        .u32,
+        .u64,
+        .u128,
+        .f32_bits,
+        .dec_bits,
+        => null,
+    };
+}
 
 //
 // Test outcome
@@ -369,7 +495,7 @@ fn forkAndEval(
         _ = std.c.setsid();
 
         // Arena batches allocations into fewer mmap calls; child _exit()s
-        // immediately so the OS reclaims everything — no deinit needed.
+        // immediately so the OS reclaims everything—no deinit needed.
         var child_arena = collections.SingleThreadArena.init(base.defaultGpa());
         const child_alloc = child_arena.allocator();
         const result_str = eval_fn(child_alloc, lowered) catch |err| {
@@ -477,7 +603,7 @@ fn forkAndEval(
         return .{ .child_error = "ChildExecFailed" };
     }
 
-    // Success — return the string read from the pipe.
+    // Success—return the string read from the pipe.
     const owned = result_buf.toOwnedSlice(base.defaultGpa()) catch {
         result_buf.deinit(base.defaultGpa());
         return .{ .child_error = "ChildExecFailed" };
@@ -670,7 +796,7 @@ fn forkAndEvalWithStats(
 //
 
 //
-// Test execution — unified interpreter + backend comparison
+// Test execution—unified interpreter + backend comparison
 //
 
 fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) TestOutcome {
@@ -682,7 +808,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 var compiled = helpers.compileInspectedProgram(allocator, io, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
-                        .message = "INVALID_SYNTAX — skipped inspect test has parse/check/lower errors",
+                        .message = "INVALID_SYNTAX—skipped inspect test has parse/check/lower errors",
                         .has_backend_details = false,
                         .backends = undefined,
                     };
@@ -701,7 +827,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                     helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports)) catch {
                     return .{
                         .status = .fail,
-                        .message = "INVALID_SYNTAX — skipped allocation test has parse/check/lower errors",
+                        .message = "INVALID_SYNTAX—skipped allocation test has parse/check/lower errors",
                         .has_backend_details = false,
                         .backends = undefined,
                     };
@@ -717,7 +843,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 var resources = helpers.parseAndCanonicalizeProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
-                        .message = "INVALID_SYNTAX — skipped compile-time float-bits test has parse/check errors",
+                        .message = "INVALID_SYNTAX—skipped compile-time float-bits test has parse/check errors",
                         .has_backend_details = false,
                         .backends = undefined,
                     };
@@ -733,7 +859,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 var compiled = helpers.compileInspectedProgram(allocator, io, tc.source_kind, tc.source, tc.imports) catch {
                     return .{
                         .status = .fail,
-                        .message = "INVALID_SYNTAX — skipped crash test has parse/check/lower errors",
+                        .message = "INVALID_SYNTAX—skipped crash test has parse/check/lower errors",
                         .has_backend_details = false,
                         .backends = undefined,
                     };
@@ -779,7 +905,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
         };
     };
 
-    // Any skipped backend means the test didn't get full coverage — report as skip.
+    // Any skipped backend means the test didn't get full coverage—report as skip.
     if (outcome.status == .pass and hasAnySkip(tc.skip)) {
         var backends: [NUM_BACKENDS]BackendDetail = undefined;
         if (outcome.has_backend_details) backends = outcome.backends;
@@ -884,7 +1010,7 @@ fn runComptimeFloatBitsTest(
 
     const node = switch (roots[0].payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .expect => {
+        .pending, .fn_value, .discarded, .expect => {
             return .{
                 .status = .fail,
                 .message = "compile-time float root did not produce a ConstStore node",
@@ -898,75 +1024,51 @@ fn runComptimeFloatBitsTest(
     const const_store = &resources.checked_artifact.const_store;
 
     const matches = switch (expected) {
-        .comptime_f32_bits => |expected_bits| switch (stored) {
-            .scalar => |scalar| switch (scalar) {
-                .f32_bits => |actual_bits| actual_bits == expected_bits,
-                else => false,
-            },
-            else => false,
+        .comptime_f32_bits => |expected_bits| if (constF32Bits(stored)) |actual_bits|
+            actual_bits == expected_bits
+        else
+            false,
+        .comptime_f64_bits => |expected_bits| if (constF64Bits(stored)) |actual_bits|
+            actual_bits == expected_bits
+        else
+            false,
+        .comptime_f32_list_bits => |expected_bits| blk: {
+            const items = constList(stored) orelse break :blk false;
+            break :blk constF32ListMatches(const_store, items, expected_bits);
         },
-        .comptime_f64_bits => |expected_bits| switch (stored) {
-            .scalar => |scalar| switch (scalar) {
-                .f64_bits => |actual_bits| actual_bits == expected_bits,
-                else => false,
-            },
-            else => false,
+        .comptime_f64_list_bits => |expected_bits| blk: {
+            const items = constList(stored) orelse break :blk false;
+            break :blk constF64ListMatches(const_store, items, expected_bits);
         },
-        .comptime_f32_list_bits => |expected_bits| switch (stored) {
-            .list => |items| blk: {
-                if (items.len != expected_bits.len) break :blk false;
-                for (items, expected_bits) |item, bits| {
-                    const actual = switch (const_store.get(item)) {
-                        .scalar => |scalar| switch (scalar) {
-                            .f32_bits => |actual_bits| actual_bits,
-                            else => break :blk false,
-                        },
-                        else => break :blk false,
-                    };
-                    if (actual != bits) break :blk false;
-                }
-                break :blk true;
-            },
-            else => false,
-        },
-        .comptime_f64_list_bits => |expected_bits| switch (stored) {
-            .list => |items| blk: {
-                if (items.len != expected_bits.len) break :blk false;
-                for (items, expected_bits) |item, bits| {
-                    const actual = switch (const_store.get(item)) {
-                        .scalar => |scalar| switch (scalar) {
-                            .f64_bits => |actual_bits| actual_bits,
-                            else => break :blk false,
-                        },
-                        else => break :blk false,
-                    };
-                    if (actual != bits) break :blk false;
-                }
-                break :blk true;
-            },
-            else => false,
-        },
-        else => unreachable,
+        .inspect_str,
+        .allocations_at_most,
+        .problem,
+        .crash,
+        .problem_and_crash,
+        => unreachable,
     };
     if (!matches) {
         const message = switch (expected) {
-            .comptime_f32_bits => |expected_bits| switch (stored) {
-                .scalar => |scalar| switch (scalar) {
-                    .f32_bits => |actual_bits| try std.fmt.allocPrint(allocator, "ConstStore F32 bits: expected 0x{x:0>8}, got 0x{x:0>8}", .{ expected_bits, actual_bits }),
-                    else => "ConstStore root was not an F32 scalar",
-                },
-                else => "ConstStore root was not a scalar",
-            },
-            .comptime_f64_bits => |expected_bits| switch (stored) {
-                .scalar => |scalar| switch (scalar) {
-                    .f64_bits => |actual_bits| try std.fmt.allocPrint(allocator, "ConstStore F64 bits: expected 0x{x:0>16}, got 0x{x:0>16}", .{ expected_bits, actual_bits }),
-                    else => "ConstStore root was not an F64 scalar",
-                },
-                else => "ConstStore root was not a scalar",
-            },
+            .comptime_f32_bits => |expected_bits| if (constF32Bits(stored)) |actual_bits|
+                try std.fmt.allocPrint(allocator, "ConstStore F32 bits: expected 0x{x:0>8}, got 0x{x:0>8}", .{ expected_bits, actual_bits })
+            else if (constScalar(stored) != null)
+                "ConstStore root was not an F32 scalar"
+            else
+                "ConstStore root was not a scalar",
+            .comptime_f64_bits => |expected_bits| if (constF64Bits(stored)) |actual_bits|
+                try std.fmt.allocPrint(allocator, "ConstStore F64 bits: expected 0x{x:0>16}, got 0x{x:0>16}", .{ expected_bits, actual_bits })
+            else if (constScalar(stored) != null)
+                "ConstStore root was not an F64 scalar"
+            else
+                "ConstStore root was not a scalar",
             .comptime_f32_list_bits => "ConstStore F32 list did not contain the expected exact element bits",
             .comptime_f64_list_bits => "ConstStore F64 list did not contain the expected exact element bits",
-            else => unreachable,
+            .inspect_str,
+            .allocations_at_most,
+            .problem,
+            .crash,
+            .problem_and_crash,
+            => unreachable,
         };
         return .{
             .status = .fail,
@@ -1011,7 +1113,7 @@ fn materializedComptimeFloatBitsMatch(
     resources: *helpers.ParsedResources,
     target: roc_target.RocTarget,
     expected: TestCase.Expected,
-) (std.mem.Allocator.Error || error{UnsupportedTarget})!bool {
+) (std.mem.Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{UnsupportedTarget})!bool {
     const compile_time_root = resources.checked_artifact.compile_time_roots.roots[0];
     const pattern = compile_time_root.pattern orelse return false;
     const top_level = resources.checked_artifact.top_level_values.lookupByPattern(pattern) orelse return false;
@@ -1021,7 +1123,7 @@ fn materializedComptimeFloatBitsMatch(
     };
     const const_node = switch (compile_time_root.payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .expect => return false,
+        .pending, .fn_value, .discarded, .expect => return false,
     };
     const static_request = lir.CheckedPipeline.StaticDataRequest{
         .const_locator = const_locator,
@@ -1068,7 +1170,12 @@ fn materializedComptimeFloatBitsMatch(
         .comptime_f64_bits => |bits| bytesEqualIntegerAt(u64, root_export.bytes, root_export.symbol_offset, bits),
         .comptime_f32_list_bits => |bits| materializedListBitsMatch(u32, exports, root_export, bits),
         .comptime_f64_list_bits => |bits| materializedListBitsMatch(u64, exports, root_export, bits),
-        else => unreachable,
+        .inspect_str,
+        .allocations_at_most,
+        .problem,
+        .crash,
+        .problem_and_crash,
+        => unreachable,
     };
 }
 
@@ -1389,7 +1496,7 @@ fn runTestProblem(
 ) RunnerError!TestOutcome {
     var timer = Timer.start() catch unreachable;
     var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports) catch {
-        // Parse or canonicalize error means a problem was found — that's a pass.
+        // Parse or canonicalize error means a problem was found—that's a pass.
         const elapsed = timer.read();
         return .{
             .status = .pass,
@@ -1615,14 +1722,97 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .type_var_marked_unused,
         .underscore_in_type_declaration,
         .module_header_deprecated,
+        .roc_version_mismatch,
         .deprecated_number_suffix,
         => false,
-        else => true,
+        .not_implemented,
+        .exposed_but_not_implemented,
+        .provided_value_is_required,
+        .redundant_exposed,
+        .invalid_num_literal,
+        .empty_tuple,
+        .ident_already_in_scope,
+        .ident_not_in_scope,
+        .read_uninitialized_var,
+        .self_referential_definition,
+        .circular_value_definition,
+        .local_reference_before_definition,
+        .mutually_recursive_local_definitions,
+        .erroneous_value_use,
+        .erroneous_value_expr,
+        .qualified_ident_does_not_exist,
+        .invalid_top_level_statement,
+        .invalid_associated_statement,
+        .expr_not_canonicalized,
+        .range_op_chained,
+        .invalid_string_interpolation,
+        .unreachable_string_pattern_capture,
+        .pattern_arg_invalid,
+        .pattern_not_canonicalized,
+        .can_lambda_not_implemented,
+        .lambda_body_not_canonicalized,
+        .if_condition_not_canonicalized,
+        .if_then_not_canonicalized,
+        .if_else_not_canonicalized,
+        .if_expr_without_else,
+        .malformed_type_annotation,
+        .malformed_where_clause,
+        .where_clause_not_allowed_in_type_decl,
+        .where_alias_constraint_not_on_receiver,
+        .open_ext_not_allowed_in_type_decl,
+        .unnamed_field_not_allowed_in_structural_record,
+        .optional_field_cannot_have_default,
+        .unnamed_field_cannot_have_default,
+        .record_default_not_literal,
+        .var_across_function_boundary,
+        .type_redeclared,
+        .tuple_elem_not_canonicalized,
+        .file_import_not_found,
+        .file_import_io_error,
+        .file_import_absolute_path,
+        .file_import_not_utf8,
+        .module_not_found,
+        .value_not_exposed,
+        .type_not_exposed,
+        .private_type_in_exposed_type,
+        .private_type_in_exposed_field,
+        .type_from_missing_module,
+        .module_not_imported,
+        .nested_type_not_found,
+        .nested_value_not_found,
+        .record_builder_map2_not_found,
+        .too_many_exports,
+        .undeclared_type,
+        .undeclared_type_var,
+        .type_alias_but_needed_nominal,
+        .crash_expects_string,
+        .type_module_missing_matching_type,
+        .type_module_has_alias_not_nominal,
+        .default_app_missing_main,
+        .default_app_wrong_arity,
+        .cannot_import_default_app,
+        .execution_requires_app_or_default_app,
+        .type_name_case_mismatch,
+        .redundant_expose_main_type,
+        .invalid_main_type_rename_in_exposing,
+        .type_alias_redeclared,
+        .nominal_type_redeclared,
+        .builtin_type_shadowed_warning,
+        .type_parameter_conflict,
+        .duplicate_record_field,
+        .duplicate_tag,
+        .f64_pattern_literal,
+        .type_var_starting_with_dollar,
+        .break_outside_loop,
+        .infinite_loop_never_exits,
+        .return_outside_fn,
+        .mutually_recursive_type_aliases,
+        => true,
     };
 }
 
 //
-// Serialization — child-to-parent result protocol
+// Serialization—child-to-parent result protocol
 //
 
 /// Build the wire bytes for a TestOutcome into an in-memory buffer. Used by
@@ -1796,7 +1986,7 @@ fn retryFailedForAttribution(
         }
 
         for (BACKEND_NAMES, 0..) |name, bi| {
-            // Skip backends that aren't implemented at compile time — no
+            // Skip backends that aren't implemented at compile time—no
             // point retrying. (When Phase-1 set has_backend_details=true,
             // these rows are already populated correctly; when it didn't,
             // the placeholder is .fail and we'd otherwise spuriously retry.)
@@ -2037,7 +2227,7 @@ fn printHelp() void {
         \\      Traces all refcount operations: alloc, dealloc, realloc, incref, decref, free.
         \\      Shows pointer addresses, sizes, and list/str metadata for each RC operation.
         \\
-        \\  Both flags are comptime — they are compiled out when disabled (zero overhead).
+        \\  Both flags are comptime—they are compiled out when disabled (zero overhead).
         \\  Combine with --filter and --threads 1 for readable single-test output.
         \\
         \\EXIT CODE:
@@ -2515,7 +2705,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
             switch (outcome.status) {
                 .pass => passed += 1,
                 .skip => skipped += 1,
-                else => {
+                .fail, .crash, .timeout => {
                     failed += 1;
                     std.debug.print("  FAIL  {s}", .{tc.name});
                     if (outcome.message) |msg| std.debug.print(": {s}", .{msg});

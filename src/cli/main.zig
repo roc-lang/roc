@@ -48,12 +48,12 @@ const ctx_mod = @import("ctx");
 const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
+const canonical = check.CanonicalNames;
 const bundle = @import("bundle");
 const unbundle = @import("unbundle");
 
 comptime {
     if (builtin.is_test) {
-        _ = @import("libc_finder.zig");
         _ = @import("test_shared_memory_system.zig");
     }
 }
@@ -123,7 +123,6 @@ comptime {
         std.testing.refAllDecls(@import("ReplSession.zig"));
     }
 }
-const libc_finder = @import("libc_finder.zig");
 const linker = @import("linker.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
@@ -149,7 +148,7 @@ fn resolveThreadDefaults(max_threads: ?usize) struct { usize, Mode } {
 }
 
 /// Options for constructing the orchestration core (`BuildEnv`) for a CLI
-/// command. Every entry path — check, build, run, test, docs, bundle — wires
+/// command. Every entry path—check, build, run, test, docs, bundle—wires
 /// the core through `initCliBuildEnv`, so thread defaults, the working
 /// directory, cache attachment, and the publication mode are configured in
 /// exactly one place.
@@ -193,7 +192,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     // Arena-owned so the path outlives the returned BuildEnv, which borrows it.
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(ctx.io.std_io, ".", ctx.arena);
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, RocTarget.detectNative(), cwd, ctx.io.std_io);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.host_cpu.nativeTarget(), cwd, ctx.io.std_io);
     errdefer build_env.deinit();
 
     build_env.compiler_version = build_options.compiler_version;
@@ -248,7 +247,6 @@ const CliMainError =
     CliError ||
     Allocator.Error ||
     cli_args.ParseError ||
-    libc_finder.FindLibcError ||
     linker.LinkError ||
     bundle.BundleError ||
     unbundle.UnbundleError ||
@@ -257,7 +255,7 @@ const CliMainError =
     fmt.FormatStdinError ||
     ReplLine.ReadLineError ||
     eval.BuiltinModules.InitError ||
-    eval.test_helpers.TestHelperError ||
+    eval.Inspected.Error ||
     ipc.CoordinationError ||
     ipc.platform.SharedMemoryError ||
     lir.LirImage.ImageError ||
@@ -305,6 +303,7 @@ const CliMainError =
     std.Io.Dir.StatFileError ||
     std.Io.Dir.WriteFileError ||
     std.Io.File.OpenError ||
+    std.Io.File.LockError ||
     std.Io.File.ReadPositionalError ||
     std.Io.File.ReadStreamingError ||
     std.Io.File.Reader.Error ||
@@ -469,7 +468,7 @@ const BuiltinsObjects = struct {
     const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_builtins.o");
     const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_builtins.o");
 
-    /// WebAssembly target builtins (wasm32-freestanding) - not used by dev backend
+    /// WebAssembly target builtins (wasm32-freestanding)
     const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/roc_builtins.o");
 
     /// Cross-compilation target builtins (Windows targets)
@@ -479,6 +478,11 @@ const BuiltinsObjects = struct {
     /// Cross-compilation target builtins (macOS targets)
     const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins.o");
     const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins.o");
+
+    /// Cross-compilation target builtins (BSD targets)
+    const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_builtins.o");
+    const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/roc_builtins.o");
+    const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_builtins.o");
 
     /// Extern-symbol-mode builtins: host operations are linker-resolved
     /// symbols (the symbol ABI) instead of RocOps vtable calls.
@@ -498,9 +502,18 @@ const BuiltinsObjects = struct {
     const arm64win_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_builtins_extern.obj");
     const x64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_builtins_extern.o");
     const arm64mac_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_builtins_extern.o");
+    const x64freebsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_builtins_extern.o");
+    const x64openbsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/roc_builtins_extern.o");
+    const x64netbsd_extern = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_builtins_extern.o");
 
     /// Get the appropriate builtins object bytes for the given target
-    pub fn forTarget(target: RocTarget) []const u8 {
+    ///
+    /// A `v1` target uses its default twin's object. The cross-compile target
+    /// queries in `build.zig` name no CPU model, so Zig resolves them to the
+    /// architecture baseline and these objects already contain no instruction
+    /// above it. `assertCrossTargetsAreBaseline` in `build.zig` keeps that true.
+    pub fn forTarget(requested: RocTarget) []const u8 {
+        const target = requested.defaultCpuTarget();
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
@@ -511,13 +524,36 @@ const BuiltinsObjects = struct {
             .arm64win => arm64win,
             .x64mac => x64mac,
             .arm64mac => arm64mac,
-            // Fallback for other targets (will use native, may not work for cross-compilation)
-            else => native,
+            .x64freebsd => x64freebsd,
+            .x64openbsd => x64openbsd,
+            .x64netbsd => x64netbsd,
+            .x64linux,
+            .x64elf,
+            .x64v1mac,
+            .x64v1win,
+            .x64v1freebsd,
+            .x64v1openbsd,
+            .x64v1netbsd,
+            .x64v1musl,
+            .x64v1glibc,
+            .x64v1linux,
+            .x64v1elf,
+            .arm64linux,
+            .arm64v1win,
+            .arm64v1linux,
+            .arm64v1musl,
+            .arm64v1glibc,
+            .arm32linux,
+            .arm32musl,
+            .wasm32v1,
+            => native,
         };
     }
 
-    /// Get the extern-symbol-mode builtins object bytes for the given target
-    pub fn forTargetExtern(target: RocTarget) []const u8 {
+    /// Get the extern-symbol-mode builtins object bytes for the given target.
+    /// See `forTarget` for why a `v1` target shares its twin's object.
+    pub fn forTargetExtern(requested: RocTarget) []const u8 {
+        const target = requested.defaultCpuTarget();
         return switch (target) {
             .x64musl => x64musl_extern,
             .arm64musl => arm64musl_extern,
@@ -528,8 +564,29 @@ const BuiltinsObjects = struct {
             .arm64win => arm64win_extern,
             .x64mac => x64mac_extern,
             .arm64mac => arm64mac_extern,
-            // Fallback for other targets (will use native, may not work for cross-compilation)
-            else => native_extern,
+            .x64freebsd => x64freebsd_extern,
+            .x64openbsd => x64openbsd_extern,
+            .x64netbsd => x64netbsd_extern,
+            .x64linux,
+            .x64elf,
+            .x64v1mac,
+            .x64v1win,
+            .x64v1freebsd,
+            .x64v1openbsd,
+            .x64v1netbsd,
+            .x64v1musl,
+            .x64v1glibc,
+            .x64v1linux,
+            .x64v1elf,
+            .arm64linux,
+            .arm64v1win,
+            .arm64v1linux,
+            .arm64v1musl,
+            .arm64v1glibc,
+            .arm32linux,
+            .arm32musl,
+            .wasm32v1,
+            => native_extern,
         };
     }
 
@@ -537,7 +594,7 @@ const BuiltinsObjects = struct {
     pub fn filename(target: RocTarget) []const u8 {
         return switch (target.toOsTag()) {
             .windows => "roc_builtins.obj",
-            else => "roc_builtins.o",
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "roc_builtins.o",
         };
     }
 
@@ -545,22 +602,93 @@ const BuiltinsObjects = struct {
     pub fn filenameExtern(target: RocTarget) []const u8 {
         return switch (target.toOsTag()) {
             .windows => "roc_builtins_extern.obj",
-            else => "roc_builtins_extern.o",
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "roc_builtins_extern.o",
         };
     }
 };
 
-const DefaultPlatformRuntimeObjects = struct {
-    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_platform.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_default_platform.o");
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_default_platform.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_default_platform.o");
-    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_default_platform.o");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_default_platform.o");
-    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_default_platform.obj");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_default_platform.obj");
+fn DefaultPlatformObjects(comptime base_name: []const u8) type {
+    return struct {
+        const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/" ++ base_name ++ ".o");
+        const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/" ++ base_name ++ ".o");
+        const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/" ++ base_name ++ ".o");
+        const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/" ++ base_name ++ ".o");
+        const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/" ++ base_name ++ ".o");
+        const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/" ++ base_name ++ ".o");
+        const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/" ++ base_name ++ ".obj");
+        const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/" ++ base_name ++ ".obj");
+        const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/" ++ base_name ++ ".o");
+        const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/" ++ base_name ++ ".o");
+        const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/" ++ base_name ++ ".o");
 
-    pub fn forTarget(target: RocTarget) ?[]const u8 {
+        pub fn forTarget(requested: RocTarget) ?[]const u8 {
+            const target = requested.defaultCpuTarget();
+            return switch (target) {
+                .x64musl => x64musl,
+                .arm64musl => arm64musl,
+                .x64glibc, .x64linux => x64glibc,
+                .arm64glibc, .arm64linux => arm64glibc,
+                .x64mac => x64mac,
+                .arm64mac => arm64mac,
+                .x64win => x64win,
+                .arm64win => arm64win,
+                .x64freebsd => x64freebsd,
+                .x64openbsd => x64openbsd,
+                .x64netbsd => x64netbsd,
+                .x64elf,
+                .x64v1mac,
+                .x64v1win,
+                .x64v1freebsd,
+                .x64v1openbsd,
+                .x64v1netbsd,
+                .x64v1musl,
+                .x64v1glibc,
+                .x64v1linux,
+                .x64v1elf,
+                .arm64v1win,
+                .arm64v1linux,
+                .arm64v1musl,
+                .arm64v1glibc,
+                .arm32linux,
+                .arm32musl,
+                .wasm32,
+                .wasm32v1,
+                => null,
+            };
+        }
+
+        pub fn filename(target: RocTarget) []const u8 {
+            return if (target.isWindows()) base_name ++ ".obj" else base_name ++ ".o";
+        }
+    };
+}
+
+const DefaultPlatformRuntimeObjects = DefaultPlatformObjects("roc_default_runtime");
+const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_platform");
+
+/// Prebuilt boxy runtime objects (the `roc_boxy_*` C-ABI wrappers plus
+/// `roc_boxy_init_embedded`), linked by `roc build --opt=dev` into programs that
+/// emit boxy statements. Shipped for every target that carries a builtins
+/// object, so a standalone dev build of a generic program works wherever a
+/// standalone dev build works at all.
+const BoxyRuntimeObjects = struct {
+    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_boxy_runtime.o");
+    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_boxy_runtime.o");
+    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_boxy_runtime.o");
+    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_boxy_runtime.o");
+    const x64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64mac/roc_boxy_runtime.o");
+    const arm64mac = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64mac/roc_boxy_runtime.o");
+    const x64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64win/roc_boxy_runtime.obj");
+    const arm64win = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64win/roc_boxy_runtime.obj");
+    const x64freebsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64freebsd/roc_boxy_runtime.o");
+    const x64openbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64openbsd/roc_boxy_runtime.o");
+    const x64netbsd = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64netbsd/roc_boxy_runtime.o");
+    const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/roc_boxy_runtime.o");
+
+    /// The boxy runtime object bytes for `target`, or null when the target has
+    /// no runtime and boxy programs cannot be built standalone for it.
+    pub fn forTarget(requested: RocTarget) ?[]const u8 {
+        const target = requested.defaultCpuTarget();
         return switch (target) {
             .x64musl => x64musl,
             .arm64musl => arm64musl,
@@ -570,12 +698,34 @@ const DefaultPlatformRuntimeObjects = struct {
             .arm64mac => arm64mac,
             .x64win => x64win,
             .arm64win => arm64win,
-            else => null,
+            .x64freebsd => x64freebsd,
+            .x64openbsd => x64openbsd,
+            .x64netbsd => x64netbsd,
+            .wasm32 => wasm32,
+            .x64elf,
+            .x64v1mac,
+            .x64v1win,
+            .x64v1freebsd,
+            .x64v1openbsd,
+            .x64v1netbsd,
+            .x64v1musl,
+            .x64v1glibc,
+            .x64v1linux,
+            .x64v1elf,
+            .arm64v1win,
+            .arm64v1linux,
+            .arm64v1musl,
+            .arm64v1glibc,
+            .arm32linux,
+            .arm32musl,
+            .wasm32v1,
+            => null,
         };
     }
 
+    /// The scratch-directory filename to write the runtime object under.
     pub fn filename(target: RocTarget) []const u8 {
-        return if (target.isWindows()) "roc_default_platform.obj" else "roc_default_platform.o";
+        return if (target.isWindows()) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
     }
 };
 
@@ -773,8 +923,8 @@ fn configuredSharedMemorySize() usize {
 }
 
 /// Floor for the retry loop in `createSharedMemory`. Set to the
-/// macOS/Windows reservation — documented as "ample headroom for real
-/// programs" — so a smaller reservation still produces a usable arena. On
+/// macOS/Windows reservation—documented as "ample headroom for real
+/// programs"—so a smaller reservation still produces a usable arena. On
 /// 32-bit targets the preferred size is already smaller than 8 GiB and an
 /// 8 GiB literal doesn't fit in `usize`, so the floor is the preferred size
 /// itself (single attempt, no retry); `-Dshared-memory-size` builds are
@@ -815,10 +965,8 @@ fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) (Allocator
 
         if (kernel32.CreateHardLinkW(dest_w, source_w, null) == .FALSE) {
             const err = std.os.windows.GetLastError();
-            switch (err) {
-                .ALREADY_EXISTS => return error.PathAlreadyExists,
-                else => return error.Unexpected,
-            }
+            if (err == .ALREADY_EXISTS) return error.PathAlreadyExists;
+            return error.Unexpected;
         }
     } else {
         // On POSIX systems, use the link system call
@@ -878,9 +1026,23 @@ pub fn createUniqueTempDir(ctx: *CliCtx) (Allocator.Error || std.Io.Dir.CreateDi
                 // Directory already exists, try again with a new random suffix
                 continue;
             },
-            else => {
-                return err;
-            },
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.DiskQuota,
+            error.FileNotFound,
+            error.LinkQuotaExceeded,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PermissionDenied,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemResources,
+            error.Unexpected,
+            => return err,
         };
 
         return dir_path;
@@ -918,7 +1080,11 @@ pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_hand
     // integer on both platforms -- on Windows it is a HANDLE (a pointer), and
     // `ipc.coordination.parseHandle` turns the integer back into one.
     const handle_int = if (is_windows) @intFromPtr(shm_handle.fd) else shm_handle.fd;
-    const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ handle_int, shm_handle.size });
+    const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}\n{}", .{
+        handle_int,
+        shm_handle.size,
+        shm_handle.page_size,
+    });
     try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
     try fd_file.sync(ctx.io.std_io);
 }
@@ -950,9 +1116,23 @@ pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_na
                 // Directory already exists, try again with a new random suffix
                 continue;
             },
-            else => {
-                return err;
-            },
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.DiskQuota,
+            error.FileNotFound,
+            error.LinkQuotaExceeded,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PermissionDenied,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemResources,
+            error.Unexpected,
+            => return err,
         };
 
         // Try to create the fd file
@@ -962,7 +1142,31 @@ pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_na
                 std.Io.Dir.cwd().deleteDir(ctx.io.std_io, temp_dir_path) catch {};
                 continue;
             },
-            else => {
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.DeviceBusy,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileNotFound,
+            error.FileTooBig,
+            error.IsDir,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => {
                 // Clean up directory on other errors
                 std.Io.Dir.cwd().deleteDir(ctx.io.std_io, temp_dir_path) catch {};
                 return err;
@@ -971,7 +1175,11 @@ pub fn createTempDirStructure(ctx: *CliCtx, exe_path: []const u8, exe_display_na
         // Note: We'll close this explicitly later, before spawning the child
 
         // Write shared memory info to file (POSIX only - Windows uses command line args)
-        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
+        const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}\n{}", .{
+            shm_handle.fd,
+            shm_handle.size,
+            shm_handle.page_size,
+        });
 
         try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
 
@@ -1043,7 +1251,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     var gpa, const is_safe = gpa: {
         // Debug builds use the leak-checking debug allocator; -Ddebug-gpa forces it
         // in release builds too (e.g. to leak-check a ReleaseSafe binary). Everything
-        // else uses the fast target allocator — see base.defaultGpa.
+        // else uses the fast target allocator—see base.defaultGpa.
         const use_debug_allocator = builtin.os.tag != .freestanding and
             (builtin.mode == .Debug or build_options.debug_gpa);
         if (use_debug_allocator) {
@@ -1177,7 +1385,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .unbundle => .unbundle,
         .bump => .bump,
         .install => .install,
-        else => .unknown,
+        .docs, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
@@ -1186,8 +1394,8 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
     ctx.initIo(); // Must be called after ctx is at its final stack location
     defer ctx.deinit(); // deinit flushes I/O
 
-    try switch (parsed_args) {
-        .run => |run_args| {
+    (switch (parsed_args) {
+        .run => |run_args| run_blk: {
             if (std.mem.eql(u8, run_args.path, "main.roc")) {
                 std.Io.Dir.cwd().access(ctx.io.std_io, run_args.path, .{}) catch |err| switch (err) {
                     error.FileNotFound => {
@@ -1208,7 +1416,18 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
                         ) catch {};
                         return error.FileNotFound;
                     },
-                    else => {
+                    error.AccessDenied,
+                    error.BadPathName,
+                    error.Canceled,
+                    error.FileBusy,
+                    error.InputOutput,
+                    error.NameTooLong,
+                    error.PermissionDenied,
+                    error.ReadOnlyFileSystem,
+                    error.SymLinkLoop,
+                    error.SystemResources,
+                    error.Unexpected,
+                    => {
                         ctx.io.stderr().print(
                             "Error: Unable to access default 'main.roc': {}\n",
                             .{err},
@@ -1218,45 +1437,20 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
                 };
             }
 
-            rocRun(&ctx, run_args, args[0]) catch |err| switch (err) {
-                error.CliError => {
-                    // Problems already recorded in context, render them below
-                },
-                else => return err,
-            };
+            break :run_blk rocRun(&ctx, run_args, args[0]);
         },
         .check => |check_args| rocCheck(&ctx, check_args, args[0]),
-        .build => |build_args| rocBuild(&ctx, build_args, args[0]) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .build => |build_args| rocBuildCommand(&ctx, build_args, args[0]),
         .bundle => |bundle_args| rocBundle(&ctx, bundle_args),
         .unbundle => |unbundle_args| rocUnbundle(&ctx, unbundle_args),
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args, args[0]),
         .repl => |repl_args| rocRepl(&ctx, repl_args),
-        .glue => |glue_args| rocGlue(&ctx, glue_args) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .glue => |glue_args| rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
-        .bump => |bump_args| rocBump(&ctx, bump_args) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
-        .install => |install_args| rocInstall(&ctx, install_args, args[0]) catch |err| switch (err) {
-            error.CliError => {
-                // Problems already recorded in context, render them below
-            },
-            else => return err,
-        },
+        .bump => |bump_args| rocBump(&ctx, bump_args),
+        .install => |install_args| rocInstall(&ctx, install_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
             .transport = lsp_args.debug_io,
             .build = lsp_args.debug_build,
@@ -1281,6 +1475,17 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
             };
             return error.InvalidArguments;
         },
+    }) catch |err| {
+        // Commands report by recording a problem and returning `CliError`, and
+        // a few print straight to stderr instead. Either way the user has been
+        // told something. An error that arrives here having produced no output
+        // at all is a compiler bug, and exiting 1 in silence hides it behind
+        // what looks like a crash, so name the error rather than let it pass.
+        if (ctx.io.bytesWritten() == 0 and !ctx.hasProblems()) {
+            ctx.addProblemIgnoreError(.{ .unreported_error = .{ .err_name = @errorName(err) } });
+        }
+        try ctx.renderProblemsTo(ctx.io.stderr());
+        return err;
     };
 
     // Render any problems accumulated during command execution
@@ -1371,7 +1576,13 @@ fn generatePlatformHostShimFromLirData(
     // function); they all carry the same symbol.
     const hosted_symbols = checked_hosted_symbols orelse try hostedSymbolsFromLirDispatch(ctx.arena, store);
 
-    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(ctx.gpa, store, std_target);
+    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
+        ctx.gpa,
+        store,
+        &.{},
+        &.{},
+        std_target,
+    );
     codegen.layout_store = layouts;
     defer codegen.deinit();
 
@@ -1497,9 +1708,10 @@ fn generatePlatformHostShim(
     // The host shim's C-ABI lowering needs layout sizes for the target being
     // built, so resolve the width-independent image for that pointer width.
     const shim_target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, shim_target_usize, ctx.arena) catch |err| {
+    var view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, shim_target_usize, ctx.arena) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
+    defer view.deinit();
 
     return generatePlatformHostShimFromLirData(
         ctx,
@@ -1522,7 +1734,34 @@ fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.Cre
     // User-facing output paths should still fail normally if the parent directory is missing.
     std.Io.Dir.cwd().createDirPath(std_io, path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
     };
 }
 
@@ -1563,7 +1802,18 @@ fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
     while (true) {
         const bytes_read = file.readStreaming(ctx.io.std_io, &.{&read_buf}) catch |err| switch (err) {
             error.EndOfStream => break,
-            else => {
+            error.AccessDenied,
+            error.Canceled,
+            error.ConnectionResetByPeer,
+            error.InputOutput,
+            error.IsDir,
+            error.LockViolation,
+            error.NotOpenForReading,
+            error.SocketUnconnected,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => {
                 return ctx.fail(.{ .file_read_failed = .{
                     .path = path,
                     .err = err,
@@ -1602,6 +1852,16 @@ const CheckedHostedTable = struct {
     symbols: []const []const u8,
 };
 
+const HostedTargetKey = struct {
+    module_key: [32]u8,
+    def_idx: u32,
+};
+
+const HostedBindingView = struct {
+    table: *const check.CheckedArtifact.HostedBindingTable,
+    names: *const canonical.CanonicalNameStore,
+};
+
 fn checkedModuleKeySeen(seen_keys: []const [32]u8, key: [32]u8) bool {
     for (seen_keys) |seen_key| {
         if (std.mem.eql(u8, &seen_key, &key)) return true;
@@ -1629,86 +1889,74 @@ fn appendHostedCacheEntriesFromView(
     }
 }
 
-const HostedSectionMap = struct {
-    keys: []const []const u8,
-    symbols: []const []const u8,
-};
-
-fn hostedSectionMapFromEnv(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!HostedSectionMap {
-    const section = env.hosted_entries.items.items;
-    const keys = try allocator.alloc([]const u8, section.len);
-    errdefer {
-        for (keys) |key| allocator.free(key);
-        allocator.free(keys);
-    }
-    const symbols = try allocator.alloc([]const u8, section.len);
-    errdefer allocator.free(symbols);
-
-    for (section, 0..) |entry, index| {
-        var func_text = env.getIdentText(entry.func_ident);
-        if (func_text.len > 0 and func_text[func_text.len - 1] == '!') {
-            func_text = func_text[0 .. func_text.len - 1];
-        }
-        keys[index] = if (entry.module_ident) |module_ident|
-            try std.fmt.allocPrint(allocator, "{s}.{s}", .{ env.getIdentText(module_ident), func_text })
-        else
-            try allocator.dupe(u8, func_text);
-        symbols[index] = env.getString(entry.symbol);
-    }
-
-    return .{ .keys = keys, .symbols = symbols };
-}
-
-fn deinitHostedSectionMap(allocator: Allocator, map: HostedSectionMap) void {
-    for (map.keys) |key| allocator.free(key);
-    allocator.free(map.keys);
-    allocator.free(map.symbols);
-}
-
-fn findHostedSectionEnv(
+fn findHostedBindingView(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
-) ?*const ModuleEnv {
-    const root_env = root_artifact.moduleEnvConst();
-    if (root_env.hosted_entries.items.items.len != 0) return root_env;
+) ?HostedBindingView {
+    if (root_artifact.module_identity.kind == .platform) {
+        return .{ .table = &root_artifact.hosted_bindings, .names = &root_artifact.canonical_names };
+    }
     for (imported_artifacts) |view| {
-        if (view.module_env.hosted_entries.items.items.len != 0) return view.module_env;
+        if (view.module_identity.kind == .platform) {
+            return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+        }
     }
     for (relation_artifacts) |view| {
-        if (view.module_env.hosted_entries.items.items.len != 0) return view.module_env;
+        if (view.module_identity.kind == .platform) {
+            return .{ .table = view.hosted_bindings, .names = view.canonical_names };
+        }
     }
     return null;
 }
 
-fn applyHostedSectionMap(entries: []HostedCacheEntry, map: HostedSectionMap) void {
-    if (entries.len != map.keys.len) {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("default roc command invariant violated: hosted section size {d} differs from checked hosted catalog size {d}", .{ map.keys.len, entries.len });
-        }
-        unreachable;
+/// Replace the scanned hosted declarations with the ones the platform header's
+/// hosted section binds.
+///
+/// The section is what gives each hosted function its linker symbol and its
+/// host dispatch slot, so it decides how many slots there are and which
+/// declaration occupies each one. A declaration the section never names has
+/// neither and gets no entry.
+fn applyHostedBindings(
+    allocator: Allocator,
+    entries: *std.ArrayList(HostedCacheEntry),
+    binding_view: HostedBindingView,
+) Allocator.Error!void {
+    const bindings = binding_view.table.bindings;
+
+    var declared_by_target = std.AutoHashMap(HostedTargetKey, usize).init(allocator);
+    defer declared_by_target.deinit();
+    try declared_by_target.ensureTotalCapacity(@intCast(entries.items.len));
+    for (entries.items, 0..) |entry, index| {
+        declared_by_target.putAssumeCapacityNoClobber(.{
+            .module_key = entry.module_key,
+            .def_idx = entry.def_idx,
+        }, index);
     }
 
-    for (entries) |*entry| {
-        const dispatch_index = blk: {
-            for (map.keys, 0..) |key, index| {
-                if (std.mem.eql(u8, key, entry.order_key)) break :blk index;
-            }
+    var bound = std.ArrayList(HostedCacheEntry).empty;
+    errdefer bound.deinit(allocator);
+    try bound.ensureTotalCapacity(allocator, bindings.len);
+    for (bindings, 0..) |binding, dispatch_index| {
+        const entry_index = declared_by_target.get(.{
+            .module_key = binding.target_checked_module.bytes,
+            .def_idx = @intFromEnum(binding.target_def),
+        }) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("default roc command invariant violated: hosted function '{s}' is missing from the platform hosted section", .{entry.order_key});
+                std.debug.panic("default roc command invariant violated: the hosted section names a function with no hosted declaration in scope", .{});
             }
             unreachable;
         };
+        var entry = entries.items[entry_index];
         entry.dispatch_index = @intCast(dispatch_index);
-        entry.external_symbol_name = map.symbols[dispatch_index];
+        entry.external_symbol_name = binding_view.names.externalSymbolNameText(binding.external_symbol_name);
+        bound.appendAssumeCapacity(entry);
     }
 
-    const DispatchSort = struct {
-        pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {
-            return a.dispatch_index < b.dispatch_index;
-        }
-    };
-    std.mem.sort(HostedCacheEntry, entries, {}, DispatchSort.lessThan);
+    // Bindings are walked in declaration order, so the table is already
+    // ordered by dispatch index.
+    entries.deinit(allocator);
+    entries.* = bound;
 }
 
 fn checkedHostedTable(
@@ -1735,28 +1983,25 @@ fn checkedHostedTable(
         try appendHostedCacheEntriesFromView(allocator, &hosted_entries, &seen_keys, view);
     }
 
-    const SortContext = struct {
-        pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {
-            return switch (std.mem.order(u8, a.order_key, b.order_key)) {
-                .lt => true,
-                .gt => false,
-                .eq => if (a.def_idx != b.def_idx)
-                    a.def_idx < b.def_idx
-                else
-                    std.mem.order(u8, &a.module_key, &b.module_key) == .lt,
-            };
+    if (findHostedBindingView(root_artifact, imported_artifacts, relation_artifacts)) |binding_view| {
+        try applyHostedBindings(allocator, &hosted_entries, binding_view);
+    } else {
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: HostedCacheEntry, b: HostedCacheEntry) bool {
+                return switch (std.mem.order(u8, a.order_key, b.order_key)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => if (a.def_idx != b.def_idx)
+                        a.def_idx < b.def_idx
+                    else
+                        std.mem.order(u8, &a.module_key, &b.module_key) == .lt,
+                };
+            }
+        };
+        std.mem.sort(HostedCacheEntry, hosted_entries.items, {}, SortContext.lessThan);
+        for (hosted_entries.items, 0..) |*entry, index| {
+            entry.dispatch_index = @intCast(index);
         }
-    };
-    std.mem.sort(HostedCacheEntry, hosted_entries.items, {}, SortContext.lessThan);
-
-    for (hosted_entries.items, 0..) |*entry, index| {
-        entry.dispatch_index = @intCast(index);
-    }
-
-    if (findHostedSectionEnv(root_artifact, imported_artifacts, relation_artifacts)) |env| {
-        const map = try hostedSectionMapFromEnv(allocator, env);
-        defer deinitHostedSectionMap(allocator, map);
-        applyHostedSectionMap(hosted_entries.items, map);
     }
 
     const entries = try hosted_entries.toOwnedSlice(allocator);
@@ -2010,12 +2255,15 @@ fn entrypointAbiDigestFromLirData(
     platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
     target: RocTarget,
 ) (Allocator.Error || CliError)![32]u8 {
-    const abi_target: layout.abi.Target = switch (target.toCpuArch()) {
-        .aarch64 => layout.abi.aarch64Target(target.toOsTag()),
-        .x86_64 => if (target.toOsTag() == .windows) .x86_64_windows else .x86_64_sysv,
-        .wasm32 => .wasm32,
-        else => return ctx.fail(.{ .shim_generation_failed = .{ .err = error.UnsupportedTarget } }),
-    };
+    const cpu_arch = target.toCpuArch();
+    const abi_target: layout.abi.Target = if (cpu_arch == .aarch64)
+        layout.abi.aarch64Target(target.toOsTag())
+    else if (cpu_arch == .x86_64)
+        if (target.toOsTag() == .windows) .x86_64_windows else .x86_64_sysv
+    else if (cpu_arch == .wasm32)
+        .wasm32
+    else
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = error.UnsupportedTarget } });
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-entrypoint-abi-v1");
@@ -2125,31 +2373,13 @@ fn defaultRunCheckedHostIdentity(
     return hasher.finalResult();
 }
 
-fn defaultRunLinkInputsIdentity(
-    ctx: *CliCtx,
-    target: RocTarget,
-    libc_info: ?libc_finder.LibcInfo,
-) CliError!?[32]u8 {
+fn defaultRunLinkInputsIdentity(target: RocTarget) ?[32]u8 {
     const runtime_bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-default-link-inputs-v2");
+    updateHashBytes(&hasher, "roc-run-default-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
     hasher.update(&bytesDigest(runtime_bytes));
-
-    if (libc_info) |info| {
-        updateHashBytes(&hasher, "libc");
-        updateHashBytes(&hasher, info.arch);
-        updateHashBytes(&hasher, info.dynamic_linker);
-        const dynamic_linker_digest = try fileContentsDigest(ctx, info.dynamic_linker);
-        hasher.update(&dynamic_linker_digest);
-        updateHashBytes(&hasher, info.lib_dir);
-        updateHashBytes(&hasher, info.libc_path);
-        const libc_digest = try fileContentsDigest(ctx, info.libc_path);
-        hasher.update(&libc_digest);
-    } else {
-        updateHashBytes(&hasher, "no-libc");
-    }
 
     return hasher.finalResult();
 }
@@ -2272,11 +2502,50 @@ test "interpreter executable cache digest changes for platform host shim entrypo
 }
 
 fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget }!void {
-    const native_target = RocTarget.detectNative();
+    // Name the host by the CPU level it executes, so a target rejected only
+    // because this machine's CPU is older than it requires says so.
+    const native_target = roc_target.host_cpu.nativeTarget();
     try ctx.io.stderr().print(
         "Error: unsupported target for the default roc command: {s} cannot be executed on this host ({s}).\n\nUse `roc build --target={s}` to produce an artifact for that target.\n",
         .{ @tagName(target), @tagName(native_target), @tagName(target) },
     );
+    return error.UnsupportedTarget;
+}
+
+fn rejectTargetCpuIncompatible(
+    ctx: *CliCtx,
+    target: RocTarget,
+    targets_config: roc_target.TargetsConfig,
+    platform_source: ?[]const u8,
+) error{ WriteFailed, UnsupportedTarget }!void {
+    try ctx.io.stderr().print(
+        "Error: the {s} target requires CPU features this host does not support.\n\n",
+        .{@tagName(target)},
+    );
+
+    if (target.baselineCpuTarget()) |baseline_target| {
+        if (targets_config.getLinkSpec(baseline_target)) |link_spec| {
+            if (link_spec.output == .exe) {
+                try ctx.io.stderr().print(
+                    "Use `--target={s}` to select the platform's baseline-CPU executable.\n",
+                    .{@tagName(baseline_target)},
+                );
+            } else {
+                try ctx.io.stderr().print(
+                    "This host needs {s}, but that platform target produces {s} rather than an executable.\n",
+                    .{ @tagName(baseline_target), @tagName(link_spec.output) },
+                );
+            }
+        } else {
+            const result = platform_validation.createUnsupportedTargetResult(
+                platform_source orelse "<unknown>",
+                baseline_target,
+                targets_config,
+            );
+            renderValidationError(ctx, result);
+        }
+    }
+
     return error.UnsupportedTarget;
 }
 
@@ -2353,7 +2622,7 @@ fn rocRunInstalled(ctx: *CliCtx, args: cli_args.RunArgs) CliMainError!void {
         return error.InvalidArguments;
     }
     const term = try runCompiledExecutable(ctx, entry.artifact_path, entry.artifact_path, args.app_args);
-    try finishCompiledRun(ctx, entry.artifact_path, term, 0);
+    try finishCompiledRun(ctx, entry.artifact_path, term, .{});
 }
 
 const install_manifest_size_limit = 64 * 1024;
@@ -2364,7 +2633,7 @@ const SourceRefResolveError = CliError || Allocator.Error || error{ UnsupportedW
 
 /// A source argument resolved to a compilable local path, together with the
 /// bundle URL it came from when the source was a managed URL/installed root.
-/// The URL — not the extracted path — is the root's package identity.
+/// The URL—not the extracted path—is the root's package identity.
 const ResolvedSourceArg = struct {
     path: []const u8,
     url: ?[]const u8,
@@ -2408,7 +2677,7 @@ const ResolvedInstalledEntry = struct {
 
 /// Resolve a shorthand to its published install entry, validating the
 /// manifest and the presence of the built artifact. Missing or corrupt state
-/// is an explicit error — never a fallback to a cache entry or a redownload.
+/// is an explicit error—never a fallback to a cache entry or a redownload.
 fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.Error)!ResolvedInstalledEntry {
     const root = install_store.installRootDir(ctx.coreCtx(), ctx.arena) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -2431,7 +2700,38 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
                 .reason = "its install.json manifest is missing",
             } });
         },
-        else => return ctx.fail(.{ .install_entry_corrupt = .{
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.OutOfMemory,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
             .reason = "its install.json manifest could not be read",
@@ -2447,7 +2747,7 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
     defer parsed.deinit();
 
     // The recorded URL is the entry's identity, so it must still be a valid
-    // bundle URL — a manifest that fails this check is corrupt, and nothing
+    // bundle URL—a manifest that fails this check is corrupt, and nothing
     // downstream may be handed an unvalidated URL.
     _ = base.url.parseUrlPath(parsed.manifest().url) catch {
         return ctx.fail(.{ .install_entry_corrupt = .{
@@ -2478,7 +2778,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     // Check if this is a default_app (headerless file with main!) before
     // linking the platform host shim.
-    if (try readDefaultAppSource(ctx, args.path)) |source| {
+    if (try readDefaultAppSource(ctx, args.path, .default_app)) |source| {
         // Headerless default apps never hot reload; they just run once. The shared-memory
         // shim is the run mechanism where the default platform runtime exists (Linux native,
         // or any cross-target run); elsewhere we use the plain run-once path.
@@ -2507,7 +2807,34 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => {
             return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
         },
     };
@@ -2561,7 +2888,18 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                     ctx.io.stderr().print("that specifies which targets are supported and what files to link.\n", .{}) catch {};
                     return error.PlatformNotSupported;
                 },
-                else => {
+                error.ParseError => {
+                    // validatePlatformHeader already rendered the syntax
+                    // diagnostics; stop here so we don't fall through and
+                    // print a misleading "no compatible target" error too.
+                    return error.PlatformNotSupported;
+                },
+                error.FileReadError,
+                error.MissingFilesDirectory,
+                error.MissingTargetFile,
+                error.OutOfMemory,
+                error.UnsupportedTarget,
+                => {
                     std.log.debug("Could not validate platform header: {}", .{err});
                 },
             }
@@ -2591,7 +2929,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     var entrypoint_names: []const []const u8 = &.{};
     var hosted_symbols: []const []const u8 = &.{};
     var checked_host_identity: [32]u8 = undefined;
-    var warning_count: usize = 0;
+    var diagnostics = CheckDiagnosticCounts{};
 
     switch (args.opt) {
         .dev => {
@@ -2604,6 +2942,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 null,
                 args.max_threads,
                 args.opt,
+                currentRuntimeSpecializationStrategy(args.specialization_strategy),
                 resolutionConfigFromLimits(args.resolve_limits),
                 !args.no_cache,
                 &reporter,
@@ -2612,7 +2951,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             entrypoint_names = result.entrypoint_names;
             hosted_symbols = result.hosted_symbols;
             checked_host_identity = result.checked_host_identity;
-            warning_count = result.counts.warnings;
+            diagnostics = result.counts;
         },
         .interpreter => {
             const shm_result = try buildLirImageWithBuildEnv(
@@ -2622,6 +2961,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 null,
                 args.max_threads,
                 args.opt,
+                currentRuntimeSpecializationStrategy(args.specialization_strategy),
                 resolutionConfigFromLimits(args.resolve_limits),
                 !args.no_cache,
                 &reporter,
@@ -2630,7 +2970,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             entrypoint_names = shm_result.entrypoint_names;
             hosted_symbols = shm_result.hosted_symbols;
             checked_host_identity = shm_result.checked_host_identity;
-            warning_count = shm_result.warning_count;
+            diagnostics = shm_result.diagnostics;
         },
         .size, .speed => unreachable,
     }
@@ -2865,7 +3205,8 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                         }
                         unreachable;
                     };
-                    const view = try viewLirImageFromHandle(shm_handle, base.target.TargetUsize.native, ctx.arena);
+                    var view = try viewLirImageFromHandle(shm_handle, base.target.TargetUsize.native, ctx.arena);
+                    defer view.deinit();
                     break :blk try hostedSymbolsFromLir(ctx.arena, &view.store);
                 },
                 .size, .speed => unreachable,
@@ -2904,7 +3245,21 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         std.log.debug("Caching executable to: {s}", .{exe_cache_path});
         std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
             error.FileNotFound => {}, // OK, doesn't exist
-            else => std.log.debug("Could not delete existing cache file: {}", .{err}),
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.FileBusy,
+            error.FileSystem,
+            error.IsDir,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NotDir,
+            error.PermissionDenied,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemResources,
+            error.Unexpected,
+            => std.log.debug("Could not delete existing cache file: {}", .{err}),
         };
         createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
             // If hardlinking fails, fall back to copying
@@ -2948,24 +3303,22 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             checked_host_identity,
             result.watch_inputs,
             null,
-            warning_count,
+            diagnostics,
         );
-    } else if (comptime is_windows) {
-        // Windows: Use handle inheritance approach
-        std.log.debug("Using Windows handle inheritance approach", .{});
-        try runWithWindowsHandleInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
     } else {
-        // POSIX: Use existing file descriptor inheritance approach
-        std.log.debug("Using POSIX file descriptor inheritance approach", .{});
-        try runWithPosixFdInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
+        const termination = if (comptime is_windows) blk: {
+            std.log.debug("Using Windows handle inheritance approach", .{});
+            break :blk try runWithWindowsHandleInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
+        } else blk: {
+            std.log.debug("Using POSIX file descriptor inheritance approach", .{});
+            break :blk try runWithPosixFdInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
+        };
+        std.log.debug("Interpreter execution completed", .{});
+        try finishRunTermination(ctx, exe_path, termination, diagnostics);
     }
-    std.log.debug("Interpreter execution completed", .{});
-
-    // Exit with code 2 if there were warnings (but no errors)
-    exitOnWarnings(ctx, warning_count);
 }
 
-fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
+fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -2980,8 +3333,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) Cl
     const output_filename = try compiledRunOutputFilename(ctx, args.path);
     const exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, output_filename });
 
-    var warning_count: usize = 0;
-    try rocBuild(ctx, .{
+    const build_result = try rocBuildOnce(ctx, .{
         .path = args.path,
         .opt = args.opt,
         .target = args.target,
@@ -2992,8 +3344,6 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) Cl
         .max_threads = args.max_threads,
         .wasm_memory = null,
         .wasm_stack_size = null,
-        .exit_on_warnings = false,
-        .warning_count_out = &warning_count,
         .require_executable_output = true,
         .require_host_runnable_output = true,
         .suppress_build_status = true,
@@ -3001,14 +3351,14 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) Cl
         .synthetic_default_platform = false,
         .source_dir_override = null,
         .root_source_url = args.root_source_url,
-    }, arg0);
+    });
 
-    const term = try runCompiledExecutable(ctx, exe_path, args.path, args.app_args);
+    const term = try runCompiledExecutable(ctx, build_result.output_path, args.path, args.app_args);
 
     compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
     cleanup_temp_dir = false;
 
-    try finishCompiledRun(ctx, exe_path, term, warning_count);
+    try finishCompiledRun(ctx, build_result.output_path, term, build_result.diagnostics);
 }
 
 fn compiledRunOutputFilename(ctx: *CliCtx, roc_path: []const u8) Allocator.Error![]const u8 {
@@ -3151,48 +3501,49 @@ const NativeRunTermination = union(enum) {
     unknown: u32,
 };
 
-fn classifyNativeRunTermination(term: std.process.Child.Term, warning_count: usize) NativeRunTermination {
+fn classifyNativeRunTermination(term: std.process.Child.Term) NativeRunTermination {
     return switch (term) {
-        .exited => |code| if (code != 0)
-            .{ .exit_code = code }
-        else if (warning_count > 0)
-            .{ .exit_code = 2 }
-        else
-            .success,
+        .exited => |code| if (code == 0) .success else .{ .exit_code = code },
         .signal => |signal| .{ .signal = signal },
         .stopped => |signal| .{ .stopped = signal },
         .unknown => |status| .{ .unknown = status },
     };
 }
 
-fn finishCompiledRun(
+fn finishRunTermination(
     ctx: *CliCtx,
     exe_path: []const u8,
-    term: std.process.Child.Term,
-    warning_count: usize,
-) (CliError || error{WriteFailed})!void {
-    switch (classifyNativeRunTermination(term, warning_count)) {
-        .success => return,
+    termination: NativeRunTermination,
+    diagnostics: CheckDiagnosticCounts,
+) (CliError || error{ WriteFailed, CompilationFailed })!void {
+    switch (termination) {
+        .success => try finishCheckDiagnostics(ctx, diagnostics),
         .exit_code => |code| {
+            std.log.debug("Child process {s} exited with code: {}", .{ exe_path, code });
+            try failOnCheckErrors(diagnostics);
             ctx.io.flush();
             std.process.exit(code);
         },
         .signal => |signal| {
             const sig_num = @intFromEnum(signal);
+            std.log.debug("Child process {s} killed by signal: {}", .{ exe_path, sig_num });
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_signaled = .{ .signal = sig_num },
             };
             renderValidationError(ctx, result);
+            try failOnCheckErrors(diagnostics);
             ctx.io.flush();
             std.process.exit(128 +| @as(u8, @truncate(sig_num)));
         },
         .stopped => |signal| {
+            try failOnCheckErrors(diagnostics);
             return ctx.fail(.{ .child_process_signaled = .{
                 .command = exe_path,
                 .signal = @intFromEnum(signal),
             } });
         },
         .unknown => |status| {
+            try failOnCheckErrors(diagnostics);
             return ctx.fail(.{ .child_process_failed = .{
                 .command = exe_path,
                 .exit_code = status,
@@ -3201,16 +3552,76 @@ fn finishCompiledRun(
     }
 }
 
+fn finishCompiledRun(
+    ctx: *CliCtx,
+    exe_path: []const u8,
+    term: std.process.Child.Term,
+    diagnostics: CheckDiagnosticCounts,
+) (CliError || error{ WriteFailed, CompilationFailed })!void {
+    return finishRunTermination(ctx, exe_path, classifyNativeRunTermination(term), diagnostics);
+}
+
+/// How to classify a headerless file that failed to parse. A syntax error such
+/// as an unbalanced paren swallows every declaration after it, `main!`
+/// included, so such a file cannot be classified reliably.
+const UnparsableHeaderless = enum {
+    /// Report it as not a default app. `roc check` and `roc build` use this:
+    /// their plain-module paths already report the syntax errors against the
+    /// user's own file.
+    not_default_app,
+    /// Claim it as a default app anyway. `roc run` uses this: its staged-app
+    /// path remaps diagnostics back to the user's file, whereas falling
+    /// through ends in a misleading "expected app header" about a file that
+    /// never had a header to begin with.
+    default_app,
+};
+
 /// Check if a file is a default_app (headerless file with a main! function).
 /// On success, returns the file source (caller owns the allocation).
-/// Returns null if the file is not a default_app.
-fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.Error!?[]const u8 {
+/// Returns null if the file is not a default_app; `unparsable` decides which
+/// answer a headerless file that failed to parse gets.
+fn readDefaultAppSource(
+    ctx: *CliCtx,
+    file_path: []const u8,
+    unparsable: UnparsableHeaderless,
+) std.mem.Allocator.Error!?[]const u8 {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
     const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         // Any other read failure (e.g. file not found) means this isn't a
         // default app to handle here; fall through to the normal path.
-        else => return null,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return null,
     };
 
     const module_name = base.module_path.getModuleNameAlloc(ctx.arena, file_path) catch |err| switch (err) {
@@ -3248,8 +3659,11 @@ fn readDefaultAppSource(ctx: *CliCtx, file_path: []const u8) std.mem.Allocator.E
     }
 
     if (!ast.hasMainBangDecl()) {
-        ctx.gpa.free(source);
-        return null;
+        const may_still_be_default_app = unparsable == .default_app and ast.hasErrors();
+        if (!may_still_be_default_app) {
+            ctx.gpa.free(source);
+            return null;
+        }
     }
 
     return source;
@@ -3320,6 +3734,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         .{ .original_path = args.path, .original_source = original_source },
         args.max_threads,
         args.opt,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         &reporter,
@@ -3328,7 +3743,8 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
 
     reporter.finish();
 
-    const view = try viewLirImageFromHandle(shm_result.handle, base.target.TargetUsize.native, ctx.arena);
+    var view = try viewLirImageFromHandle(shm_result.handle, base.target.TargetUsize.native, ctx.arena);
+    defer view.deinit();
 
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
@@ -3346,16 +3762,17 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         @ptrCast(&cli_args_list),
     );
 
+    try failOnCheckErrors(shm_result.diagnostics);
     const exit_code = result_buf[0];
     if (exit_code != 0) std.process.exit(exit_code);
     if (echo_env.inline_expect_failed) std.process.exit(1);
-    exitOnWarnings(ctx, shm_result.warning_count);
+    exitOnWarnings(ctx, shm_result.diagnostics.warnings);
 }
 
 fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) CliMainError!void {
     defer ctx.gpa.free(original_source);
 
-    const native_target = RocTarget.detectNative();
+    const native_target = roc_target.host_cpu.nativeTarget();
     const default_target = defaultRunShimTarget(native_target);
     const selected_target = if (args.target) |target_str| blk: {
         const requested = RocTarget.fromString(target_str) orelse {
@@ -3365,13 +3782,6 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         if (!devShimTargetCompatible(requested, native_target)) {
             try rejectRunTargetNotExecutable(ctx, requested);
             unreachable;
-        }
-        if (requested.isStatic()) {
-            try ctx.io.stderr().print(
-                "Error: shared-memory dev runs for headerless default apps require a dynamic Linux target; got {s}.\n",
-                .{@tagName(requested)},
-            );
-            return error.UnsupportedTarget;
         }
         break :blk requested;
     } else default_target;
@@ -3399,7 +3809,34 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     };
     ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } }),
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } }),
     };
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
@@ -3434,6 +3871,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         .{ .original_path = args.path, .original_source = original_source },
         args.max_threads,
         args.opt,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         &reporter,
@@ -3453,17 +3891,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
     const lowered = &lowered_result.lowered;
     const enable_debug = builtin.mode == .Debug;
     const exe_checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
-    const libc_info: ?libc_finder.LibcInfo = if (selected_target.isDynamic())
-        libc_finder.findLibc(ctx) catch |err| {
-            try ctx.io.stderr().print(
-                "Error: could not find system libc for shared-memory default app run: {}\n",
-                .{err},
-            );
-            return err;
-        }
-    else
-        null;
-    const link_inputs_identity = (try defaultRunLinkInputsIdentity(ctx, selected_target, libc_info)) orelse {
+    const link_inputs_identity = defaultRunLinkInputsIdentity(selected_target) orelse {
         return rejectRunTargetNotExecutable(ctx, selected_target);
     };
 
@@ -3529,18 +3957,9 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             shim_path,
             runtime_path,
         };
-        var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 5);
-        if (libc_info) |info| {
-            try extra_args.append("-dynamic-linker");
-            try extra_args.append(info.dynamic_linker);
-            try extra_args.append("-L");
-            try extra_args.append(info.lib_dir);
-            try extra_args.append("-lc");
-        }
-
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(selected_target.toOsTag()),
-            .target_abi = if (selected_target.isStatic()) .musl else .gnu,
+            .target_abi = llvmBuildLinkAbi(selected_target, true),
             .target_os = selected_target.toOsTag(),
             .target_arch = selected_target.toCpuArch(),
             .output_path = exe_path,
@@ -3548,7 +3967,6 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
             .can_exit_early = false,
             .disable_output = false,
             .scratch_dir = temp_dir,
-            .extra_args = extra_args.items,
         };
 
         linker.link(ctx, link_config) catch |err| {
@@ -3560,7 +3978,21 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
 
         std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
             error.FileNotFound => {},
-            else => std.log.debug("Could not delete existing cache file: {}", .{err}),
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.FileBusy,
+            error.FileSystem,
+            error.IsDir,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NotDir,
+            error.PermissionDenied,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemResources,
+            error.Unexpected,
+            => std.log.debug("Could not delete existing cache file: {}", .{err}),
         };
         createHardlink(ctx, exe_path, exe_cache_path) catch {
             std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
@@ -3569,20 +4001,19 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         };
     }
 
-    // Headerless default apps never hot reload — they compile through throwaway synthetic
+    // Headerless default apps never hot reload—they compile through throwaway synthetic
     // source files, so there is nothing stable to reload. They just run once.
     const internal_static_data = successfulInternalStaticData(&lowered_result, "default app run");
     const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, false);
     defer closeSharedMemoryHandle(shm_handle);
 
-    if (comptime is_windows) {
-        try runWithWindowsHandleInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
-    } else {
+    const termination = if (comptime is_windows)
+        try runWithWindowsHandleInheritance(ctx, exe_path, args.path, shm_handle, args.app_args)
+    else
         try runWithPosixFdInheritance(ctx, exe_path, args.path, shm_handle, args.app_args);
-    }
     cleanup_temp_dir = false;
 
-    exitOnWarnings(ctx, lowered_result.counts.warnings);
+    try finishRunTermination(ctx, exe_path, termination, lowered_result.counts);
 }
 
 /// Append an argument to a command line buffer with proper Windows quoting.
@@ -3628,7 +4059,7 @@ fn runWithWindowsHandleInheritance(
     source_path: []const u8,
     shm_handle: SharedMemoryHandle,
     app_args: []const []const u8,
-) (CliError || error{OutOfMemory})!void {
+) (CliError || error{OutOfMemory})!NativeRunTermination {
     // Make the shared memory handle inheritable
     if (windows.SetHandleInformation(@ptrCast(shm_handle.fd), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT) == 0) {
         return ctx.fail(.{ .shared_memory_failed = .{
@@ -3770,7 +4201,8 @@ fn runWithWindowsHandleInheritance(
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
-    // Check exit code and propagate to parent
+    // Preserve the exit status so the command boundary can combine it with
+    // checking diagnostics after all requested work has completed.
     if (exit_code != 0) {
         std.log.debug("Child process {s} exited with code: {}", .{ exe_path, exit_code });
         if (exit_code == 0xC0000005) { // STATUS_ACCESS_VIOLATION
@@ -3784,11 +4216,11 @@ fn runWithWindowsHandleInheritance(
             };
             renderValidationError(ctx, result);
         }
-        // Propagate the exit code (truncated to u8 for compatibility)
-        std.process.exit(@truncate(exit_code));
+        return .{ .exit_code = @truncate(exit_code) };
     }
 
     std.log.debug("Child process completed successfully", .{});
+    return .success;
 }
 
 /// Run child process using POSIX file descriptor inheritance (existing approach for Unix)
@@ -3799,7 +4231,7 @@ fn runWithPosixFdInheritance(
     source_path: []const u8,
     shm_handle: SharedMemoryHandle,
     app_args: []const []const u8,
-) (CliError || error{OutOfMemory})!void {
+) (CliError || error{OutOfMemory})!NativeRunTermination {
     // Write the coordination file (.txt) next to the executable
     // The executable is already in a unique temp directory
     std.log.debug("Writing fd coordination file for: {s}", .{exe_path});
@@ -3872,40 +4304,7 @@ fn runWithPosixFdInheritance(
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
-    // Check the termination status
-    switch (term) {
-        .exited => |exit_code| {
-            if (exit_code == 0) {
-                std.log.debug("Child process completed successfully", .{});
-            } else {
-                // Propagate the exit code from the child process to our parent
-                std.log.debug("Child process {s} exited with code: {}", .{ exe_path, exit_code });
-                std.process.exit(exit_code);
-            }
-        },
-        .signal => |signal| {
-            const sig_num = @intFromEnum(signal);
-            std.log.debug("Child process {s} killed by signal: {}", .{ exe_path, sig_num });
-            const result = platform_validation.targets_validator.ValidationResult{
-                .process_signaled = .{ .signal = sig_num },
-            };
-            renderValidationError(ctx, result);
-            // Standard POSIX convention: exit with 128 + signal number
-            std.process.exit(128 +| @as(u8, @truncate(sig_num)));
-        },
-        .stopped => |signal| {
-            return ctx.fail(.{ .child_process_signaled = .{
-                .command = exe_path,
-                .signal = @intFromEnum(signal),
-            } });
-        },
-        .unknown => |status| {
-            return ctx.fail(.{ .child_process_failed = .{
-                .command = exe_path,
-                .exit_code = status,
-            } });
-        },
-    }
+    return classifyNativeRunTermination(term);
 }
 
 const HotShimChild = struct {
@@ -3914,6 +4313,7 @@ const HotShimChild = struct {
     done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     term: ?std.process.Child.Term = null,
     wait_error: ?std.process.Child.WaitError = null,
+    joined: bool = false,
 
     fn waitThread(self: *HotShimChild, io: std.Io) void {
         self.term = self.child.wait(io) catch |err| {
@@ -3922,6 +4322,37 @@ const HotShimChild = struct {
             return;
         };
         self.done.store(true, .seq_cst);
+    }
+
+    /// Join the wait thread once. Idempotent so the watch loop can join as
+    /// soon as the child reports it exited, and `shutdown` can still join a
+    /// child that never got that far.
+    fn join(self: *HotShimChild) void {
+        if (self.joined) return;
+        self.joined = true;
+        self.thread.join();
+    }
+
+    /// Release the child: kill it if it is still running, join the wait
+    /// thread, then free the allocation.
+    ///
+    /// The single `defer` at the point of creation owns this, so every exit
+    /// from the watch loop -- returned error included -- frees exactly once.
+    fn shutdown(self: *HotShimChild, ctx: *CliCtx) void {
+        if (!self.joined) self.terminate();
+        self.join();
+        ctx.gpa.destroy(self);
+    }
+
+    fn terminate(self: *HotShimChild) void {
+        const pid = self.child.id orelse return;
+        switch (builtin.os.tag) {
+            .windows => {
+                _ = std.os.windows.ntdll.NtTerminateProcess(pid, @enumFromInt(1));
+            },
+            .wasi => {},
+            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => std.posix.kill(pid, .KILL) catch {},
+        }
     }
 };
 
@@ -3988,22 +4419,6 @@ fn spawnHotShimChild(
     return watched;
 }
 
-fn terminateHotShimChild(child: *HotShimChild) void {
-    if (child.child.id) |pid| {
-        switch (builtin.os.tag) {
-            .windows => {
-                _ = std.os.windows.ntdll.NtTerminateProcess(pid, @enumFromInt(1));
-            },
-            .wasi => {},
-            else => std.posix.kill(pid, .KILL) catch {},
-        }
-    }
-}
-
-fn destroyHotShimChild(ctx: *CliCtx, child: *HotShimChild) void {
-    ctx.gpa.destroy(child);
-}
-
 const HotReloadRebuild = struct {
     child: *WatchChild,
     argv: WatchChildArgv,
@@ -4023,6 +4438,11 @@ const HotReloadRebuild = struct {
         std.Io.Dir.cwd().deleteFile(ctx.io.std_io, self.inputs_path) catch {};
         ctx.gpa.free(self.inputs_path);
     }
+};
+
+const HotReloadRebuildFinish = struct {
+    changed_during_refresh: bool,
+    published: bool,
 };
 
 const HotReloadSourceRewrite = struct {
@@ -4111,6 +4531,13 @@ fn buildHotReloadChildArgv(
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--shm-size={}", .{shm_handle.mapped_size});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--expected-host={s}", .{expected_hex[0..]});
     try appendOwnedArg(ctx.gpa, &argv, &owned, "--watch-inputs-file={s}", .{inputs_path});
+    try appendOwnedArg(
+        ctx.gpa,
+        &argv,
+        &owned,
+        "--specialization-strategy={s}",
+        .{@tagName(currentRuntimeSpecializationStrategy(args.specialization_strategy))},
+    );
     if (source_rewrite) |rewrite| {
         try appendOwnedArg(ctx.gpa, &argv, &owned, "--synthetic-source={s}", .{rewrite.source_path});
         try appendOwnedArg(ctx.gpa, &argv, &owned, "--synthetic-output={s}", .{rewrite.synthetic_app_path});
@@ -4176,7 +4603,9 @@ fn finishHotReloadRebuild(
     state: *WatchState,
     signal: *WatchEventSignal,
     rebuild: *HotReloadRebuild,
-) CliMainError!bool {
+    control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
+) CliMainError!HotReloadRebuildFinish {
     joinWatchChild(rebuild.child);
     if (rebuild.child.output_error) |err| return err;
 
@@ -4190,16 +4619,33 @@ fn finishHotReloadRebuild(
             error.WatchInputsMissing,
             error.WatchInputsReadFailed,
             error.WatchInputsMalformed,
-            => return false,
-            else => |e| return e,
+            => return .{
+                .changed_during_refresh = false,
+                .published = false,
+            },
+            error.Canceled,
+            error.CurrentDirUnlinked,
+            error.NameTooLong,
+            error.OutOfMemory,
+            error.Unexpected,
+            => |e| return e,
         };
     const changed_during_refresh = try refreshWatchState(ctx, state, signal, new_inputs);
 
-    if (rebuild_succeeded) {
+    const published = rebuild_succeeded and try publishPreparedHotReloadCandidate(
+        control,
+        shm_handle,
+        rebuild.allocation,
+        changed_during_refresh,
+    );
+    if (published) {
         try reportHotReloadRebuildPublished(ctx, rebuild);
     }
 
-    return changed_during_refresh;
+    return .{
+        .changed_during_refresh = changed_during_refresh,
+        .published = published,
+    };
 }
 
 fn reportHotReloadRebuildPublished(ctx: *CliCtx, rebuild: *HotReloadRebuild) CliOutputWriteError!void {
@@ -4238,13 +4684,28 @@ fn reportHotReloadAcknowledgement(
 fn hotReloadRecycleUnpublishedAllocation(
     gpa: Allocator,
     control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
     tracker: *HotReloadDescriptorTracker,
     allocation: HotReloadImageAllocation,
-) Allocator.Error!void {
+) CliMainError!void {
     if (ipc.hot_reload.publishedImage(control)) |image| {
         if (image.generation == allocation.generation and image.descriptor_offset == allocation.descriptor_offset) {
             try hotReloadTrackDescriptor(gpa, tracker, image.descriptor_offset);
             return;
+        }
+    }
+
+    if (hotReloadDescriptor(shm_handle, allocation.descriptor_offset) catch null) |descriptor| {
+        const snapshot = ipc.hot_reload.descriptorSnapshot(descriptor);
+        if (hotReloadPreparedAllocationMatches(shm_handle, allocation, snapshot)) {
+            ipc.hot_reload.markDescriptorReclaimed(descriptor);
+            if (snapshot.allocation_start == allocation.append_offset) {
+                try SharedMemoryAllocator.rewindMappedHeader(
+                    hotReloadBasePtr(shm_handle),
+                    shm_handle.mapped_size,
+                    allocation.append_offset,
+                );
+            }
         }
     }
     try hotReloadReleaseDescriptorSlot(gpa, tracker, allocation.descriptor_offset, allocation.preserve_descriptor_refs);
@@ -4398,6 +4859,50 @@ fn hotReloadValidAllocation(
     if (snapshot.image_offset >= snapshot.allocation_end) return false;
     if (snapshot.image_size <= snapshot.image_offset) return false;
     if (snapshot.image_size > snapshot.allocation_end) return false;
+    return true;
+}
+
+fn hotReloadPreparedAllocationMatches(
+    shm_handle: SharedMemoryHandle,
+    allocation: HotReloadImageAllocation,
+    snapshot: ipc.hot_reload.ImageDescriptorSnapshot,
+) bool {
+    if (snapshot.state != .writing) return false;
+    if (snapshot.generation != allocation.generation) return false;
+    if (!hotReloadValidAllocation(shm_handle, @sizeOf(SharedMemoryAllocator.Header), snapshot)) return false;
+
+    if (allocation.region_start != 0) {
+        const used_reclaimed_region = snapshot.allocation_start == allocation.region_start and
+            snapshot.allocation_end <= allocation.region_end;
+        const used_append_fallback = snapshot.allocation_start == allocation.append_offset and
+            snapshot.allocation_end <= allocation.image_limit;
+        return used_reclaimed_region or used_append_fallback;
+    }
+
+    return snapshot.allocation_start == allocation.append_offset and
+        snapshot.allocation_end <= allocation.image_limit;
+}
+
+fn publishPreparedHotReloadCandidate(
+    control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
+    allocation: HotReloadImageAllocation,
+    inputs_changed: bool,
+) error{InvalidSharedMemory}!bool {
+    if (inputs_changed) return false;
+
+    const descriptor = try hotReloadDescriptor(shm_handle, allocation.descriptor_offset);
+    const snapshot = ipc.hot_reload.descriptorSnapshot(descriptor);
+    if (!hotReloadPreparedAllocationMatches(shm_handle, allocation, snapshot)) {
+        return error.InvalidSharedMemory;
+    }
+
+    ipc.hot_reload.publishDescriptor(
+        control,
+        allocation.generation,
+        allocation.descriptor_offset,
+        descriptor,
+    );
     return true;
 }
 
@@ -4608,7 +5113,7 @@ fn runHotReloadDevShim(
     expected_host_identity: [32]u8,
     initial_watch_inputs: []const compile.watch_inputs.Input,
     source_rewrite: ?HotReloadSourceRewrite,
-    warning_count: usize,
+    diagnostics: CheckDiagnosticCounts,
 ) CliMainError!void {
     var signal = WatchEventSignal{};
     var state = WatchState{};
@@ -4619,14 +5124,7 @@ fn runHotReloadDevShim(
     errdefer if (initial_input_set_needs_deinit) initial_input_set.deinit(ctx);
 
     const host_child = try spawnHotShimChild(ctx, exe_path, args.path, hotReloadHostChildHandle(shm_handle), args.app_args);
-    var host_child_joined = false;
-    errdefer {
-        if (!host_child_joined) {
-            terminateHotShimChild(host_child);
-            host_child.thread.join();
-        }
-        destroyHotShimChild(ctx, host_child);
-    }
+    defer host_child.shutdown(ctx);
 
     initial_input_set_needs_deinit = false;
     var pending_rebuild = try refreshWatchState(ctx, &state, &signal, initial_input_set);
@@ -4669,15 +5167,15 @@ fn runHotReloadDevShim(
 
         if (active_rebuild) |*rebuild| {
             if (rebuild.child.done.load(.seq_cst)) {
-                const changed_during_refresh = finishHotReloadRebuild(ctx, &state, &signal, rebuild) catch |err| {
-                    try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+                const finished = finishHotReloadRebuild(ctx, &state, &signal, rebuild, hot_reload_control, shm_handle) catch |err| {
+                    try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, shm_handle, &hot_reload_tracker, rebuild.allocation);
                     rebuild.deinit(ctx);
                     active_rebuild = null;
                     return err;
                 };
-                pending_rebuild = changed_during_refresh or pending_rebuild;
-                if (!hotReloadRebuildSucceeded(rebuild.child)) {
-                    try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+                pending_rebuild = finished.changed_during_refresh or pending_rebuild;
+                if (!finished.published) {
+                    try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, shm_handle, &hot_reload_tracker, rebuild.allocation);
                 }
                 rebuild.deinit(ctx);
                 active_rebuild = null;
@@ -4694,7 +5192,7 @@ fn runHotReloadDevShim(
         if (try consumeDebouncedWatchChange(ctx, &signal, &state)) {
             if (active_rebuild) |*rebuild| {
                 rebuild.cancelAndJoin();
-                try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+                try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, shm_handle, &hot_reload_tracker, rebuild.allocation);
                 rebuild.deinit(ctx);
                 active_rebuild = null;
             }
@@ -4721,7 +5219,7 @@ fn runHotReloadDevShim(
                 allocation,
                 source_rewrite,
             ) catch |err| {
-                try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, allocation);
+                try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, shm_handle, &hot_reload_tracker, allocation);
                 return err;
             };
             next_generation += 1;
@@ -4731,9 +5229,7 @@ fn runHotReloadDevShim(
         std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
     }
 
-    host_child.thread.join();
-    host_child_joined = true;
-    defer destroyHotShimChild(ctx, host_child);
+    host_child.join();
     _ = try reportHotReloadAcknowledgement(
         ctx,
         hot_reload_control,
@@ -4743,7 +5239,7 @@ fn runHotReloadDevShim(
 
     if (active_rebuild) |*rebuild| {
         rebuild.cancelAndJoin();
-        try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, &hot_reload_tracker, rebuild.allocation);
+        try hotReloadRecycleUnpublishedAllocation(ctx.gpa, hot_reload_control, shm_handle, &hot_reload_tracker, rebuild.allocation);
         rebuild.deinit(ctx);
         active_rebuild = null;
     }
@@ -4766,7 +5262,7 @@ fn runHotReloadDevShim(
             .err = error.ProcessWaitFailed,
         } });
     };
-    try finishCompiledRun(ctx, exe_path, term, warning_count);
+    try finishCompiledRun(ctx, exe_path, term, diagnostics);
 }
 
 /// Handle for cross-platform shared memory operations.
@@ -4780,6 +5276,9 @@ pub const SharedMemoryHandle = struct {
     /// This may be much larger than `size` since the bump allocator reserves
     /// a large virtual address region upfront.
     mapped_size: usize,
+    /// The page size this process observed, published to the child so it does
+    /// not have to ask the OS itself. See `ipc.FdInfo.page_size`.
+    page_size: usize,
 };
 
 fn hotReloadHostChildHandle(handle: SharedMemoryHandle) SharedMemoryHandle {
@@ -4798,6 +5297,7 @@ test "hot reload host child maps the full shared-memory reservation" {
         .ptr = @as(*anyopaque, @ptrFromInt(0x5678)),
         .size = 4096,
         .mapped_size = 8192,
+        .page_size = 4096,
     };
 
     const child = hotReloadHostChildHandle(original);
@@ -4824,6 +5324,7 @@ test "hot reload worker args require append offset" {
         "--shm-size=8192",
         "--expected-host=" ++ zero_host,
         "--watch-inputs-file=watch-inputs",
+        "--specialization-strategy=lss",
         "--no-color=1",
     });
 
@@ -4834,6 +5335,7 @@ test "hot reload worker args require append offset" {
     try std.testing.expectEqual(@as(usize, 3072), parsed.region_end);
     try std.testing.expectEqual(@as(usize, 4096), parsed.append_offset);
     try std.testing.expectEqual(true, parsed.preserve_descriptor_refs);
+    try std.testing.expectEqual(base.SpecializationStrategy.lss, parsed.specialization_strategy);
     try std.testing.expect(parsed.no_color);
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
@@ -4849,6 +5351,7 @@ test "hot reload worker args require append offset" {
         "--shm-size=8192",
         "--expected-host=" ++ zero_host,
         "--watch-inputs-file=watch-inputs",
+        "--specialization-strategy=lss",
     }));
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
@@ -4860,6 +5363,7 @@ test "hot reload worker args require append offset" {
         "--shm-size=8192",
         "--expected-host=" ++ zero_host,
         "--watch-inputs-file=watch-inputs",
+        "--specialization-strategy=lss",
     }));
 }
 
@@ -4869,6 +5373,7 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
         .ptr = shm.base_ptr,
         .size = shm.getUsedSize(),
         .mapped_size = shm.total_size,
+        .page_size = shm.page_size,
     };
 }
 
@@ -4908,6 +5413,78 @@ fn testingInitHotReloadDescriptorTracker(
     try hotReloadInitDescriptorTracker(tracker, initial_descriptor_offset);
     tracker.descriptor_floor = lowest_descriptor_offset;
     tracker.next_descriptor_offset = hotReloadPreviousDescriptorOffset(lowest_descriptor_offset) orelse return error.InvalidSharedMemory;
+}
+
+test "hot reload parent publishes only current prepared candidate" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+
+    const allocation = HotReloadImageAllocation{
+        .generation = 2,
+        .descriptor_offset = desc1_offset,
+        .image_limit = desc1_offset,
+        .region_start = 1024,
+        .region_end = 1536,
+        .append_offset = 2048,
+    };
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+
+    try std.testing.expect(!try publishPreparedHotReloadCandidate(control, handle, allocation, true));
+    try std.testing.expectEqual(@as(u64, 1), ipc.hot_reload.publishedGeneration(control));
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.writing, ipc.hot_reload.descriptorSnapshot(desc1).state);
+
+    try std.testing.expect(try publishPreparedHotReloadCandidate(control, handle, allocation, false));
+    try std.testing.expectEqual(@as(u64, 2), ipc.hot_reload.publishedGeneration(control));
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.published, ipc.hot_reload.descriptorSnapshot(desc1).state);
+}
+
+test "hot reload stale prepared candidate reclaims append allocation" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
+
+    const allocation = HotReloadImageAllocation{
+        .generation = 2,
+        .descriptor_offset = desc1_offset,
+        .image_limit = desc1_offset,
+        .region_start = 1024,
+        .region_end = 1536,
+        .append_offset = 2048,
+    };
+    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try testingInitHotReloadDescriptorTracker(&tracker, desc0_offset, desc1_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+
+    try std.testing.expect(!try publishPreparedHotReloadCandidate(control, handle, allocation, true));
+    try hotReloadRecycleUnpublishedAllocation(std.testing.allocator, control, handle, &tracker, allocation);
+
+    try std.testing.expectEqual(@as(u64, 1), ipc.hot_reload.publishedGeneration(control));
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(@as(usize, 2048), try SharedMemoryAllocator.mappedHeaderUsedSize(shm.base_ptr, shm.total_size));
+    try std.testing.expectEqual(@as(usize, 1), tracker.free_descriptor_slots.items.len);
+    try std.testing.expectEqual(desc1_offset, tracker.free_descriptor_slots.items[0].offset);
 }
 
 test "hot reload allocation coalesces adjacent reclaimed image regions" {
@@ -5132,6 +5709,30 @@ test "hot reload allocation can use reclaimed region when append has no room" {
     try std.testing.expectEqual(desc1_offset, allocation.append_offset);
 }
 
+/// Counts of checker diagnostics preserved until the command determines its
+/// final process status.
+const CheckDiagnosticCounts = struct {
+    errors: usize = 0,
+    warnings: usize = 0,
+};
+
+const BuildResult = struct {
+    output_path: []const u8,
+    diagnostics: CheckDiagnosticCounts,
+};
+
+fn checkedArtifactForBuild(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    source_path: []const u8,
+) CliError!*const check.CheckedArtifact.CheckedModuleArtifact {
+    const artifact = build_env.executableRootCheckedArtifact();
+    if (artifact.hasUnboundPlatformRequirements()) {
+        return ctx.fail(.{ .platform_requires_app = .{ .platform_path = source_path } });
+    }
+    return artifact;
+}
+
 /// Result of setting up shared memory with type checking information.
 /// Contains the shared memory handle for the compiled modules and
 /// counts of errors and warnings encountered during compilation.
@@ -5140,14 +5741,54 @@ pub const SharedMemoryResult = struct {
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
     checked_host_identity: [32]u8,
-    error_count: usize,
-    warning_count: usize,
+    diagnostics: CheckDiagnosticCounts,
 };
 
-const CoordinatorReportCounts = struct {
-    errors: usize,
-    warnings: usize,
-};
+fn renderSummaryHeaderLine(
+    writer: anytype,
+    error_count: usize,
+    warning_count: usize,
+    path: []const u8,
+    config: reporting.ReportingConfig,
+) error{WriteFailed}!void {
+    const palette = reporting.ColorUtils.getPaletteForConfig(config);
+
+    const error_suffix = if (error_count == 1) "" else "s";
+    const warning_suffix = if (warning_count == 1) "" else "s";
+
+    var error_buf: [32]u8 = undefined;
+    const err_str = std.fmt.bufPrint(&error_buf, "{} error{s}", .{ error_count, error_suffix }) catch "";
+
+    var warn_buf: [32]u8 = undefined;
+    const warn_str = std.fmt.bufPrint(&warn_buf, "{} warning{s}", .{ warning_count, warning_suffix }) catch "";
+
+    const total_w = @min(config.getMaxLineWidth(), 120);
+    const prefix_w = 3 + err_str.len + 5 + warn_str.len + 1;
+
+    const sanitised_path = reporting.sanitisePathForSnapshots(path);
+    const loc_w = if (sanitised_path.len > 0) 1 + reporting.source_region.displayWidth(sanitised_path) else 0;
+
+    const dashes = @max(total_w -| prefix_w -| loc_w, 1);
+
+    try writer.writeAll(palette.secondary);
+    try writer.writeAll("── ");
+    try writer.writeAll(palette.error_color);
+    try writer.writeAll(err_str);
+    try writer.writeAll(palette.reset);
+    try writer.writeAll(" and ");
+    try writer.writeAll(palette.warning);
+    try writer.writeAll(warn_str);
+    try writer.writeAll(palette.secondary);
+    try writer.writeByte(' ');
+    try writer.splatBytesAll("─", dashes);
+    if (sanitised_path.len > 0) {
+        try writer.writeByte(' ');
+        try writer.writeAll(palette.primary);
+        try writer.writeAll(sanitised_path);
+    }
+    try writer.writeAll(palette.reset);
+    try writer.writeAll("\n\n");
+}
 
 fn writeDiagnosticCounts(writer: *std.Io.Writer, error_count: anytype, warning_count: anytype, use_color: bool) std.Io.Writer.Error!void {
     const error_suffix = if (error_count == 1) "" else "s";
@@ -5198,6 +5839,40 @@ test "diagnostic summaries support colored and plain output" {
     );
 }
 
+test "diagnostic summary header has exact colors and bounded width" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    var plain_config = reporting.ReportingConfig.initColorTerminal();
+    plain_config.color_preference = .never;
+    plain_config.max_line_width = 80;
+    try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
+    try std.testing.expectEqualStrings(
+        "── 1 error and 1 warning " ++ ("─" ** 43) ++ " example.roc\n\n",
+        output.written(),
+    );
+
+    output.clearRetainingCapacity();
+    var color_config = reporting.ReportingConfig.initColorTerminal();
+    color_config.max_line_width = 80;
+    try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", color_config);
+    try std.testing.expectEqualStrings(
+        ansi_term.bright_black ++ "── " ++
+            ansi_term.red ++ "1 error" ++ ansi_term.reset ++ " and " ++
+            ansi_term.yellow ++ "1 warning" ++ ansi_term.bright_black ++ " " ++
+            ("─" ** 43) ++ " " ++ ansi_term.cyan ++ "example.roc" ++ ansi_term.reset ++ "\n\n",
+        output.written(),
+    );
+
+    inline for (.{ .{ 55, 55 }, .{ 200, 120 } }) |case| {
+        output.clearRetainingCapacity();
+        plain_config.max_line_width = case[0];
+        try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
+        const first_newline = std.mem.findScalar(u8, output.written(), '\n') orelse unreachable;
+        try std.testing.expectEqual(@as(usize, case[1]), reporting.source_region.displayWidth(output.written()[0..first_newline]));
+    }
+}
+
 const LoweredCoordinatorResult = struct {
     lowered: lir.CheckedPipeline.LoweredProgram,
     internal_static_data: ?[]backend.StaticDataExport,
@@ -5206,7 +5881,7 @@ const LoweredCoordinatorResult = struct {
     checked_host_identity: [32]u8,
     watch_inputs: []const compile.watch_inputs.Input,
     watch_inputs_allocator: Allocator,
-    counts: CoordinatorReportCounts,
+    counts: CheckDiagnosticCounts,
 
     fn deinit(self: *LoweredCoordinatorResult) void {
         if (self.internal_static_data) |static_data| {
@@ -5233,12 +5908,12 @@ fn successfulInternalStaticData(result: *const LoweredCoordinatorResult, label: 
 
 /// Render every report drained from the core and print the run-path summary
 /// trailer. Draining moves the reports out of the core, so calling this again
-/// renders nothing new — re-rendering a report is structurally impossible
+/// renders nothing new—re-rendering a report is structurally impossible
 /// rather than a call-site convention (the PR 9759 bug class). Version-bump
 /// notes and synthetic default-app path remapping are applied by the core
 /// during the drain.
-fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path: []const u8) Allocator.Error!CoordinatorReportCounts {
-    var counts = CoordinatorReportCounts{ .errors = 0, .warnings = 0 };
+fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path: []const u8) Allocator.Error!CheckDiagnosticCounts {
+    var counts = CheckDiagnosticCounts{};
     const report_config = ctx.reportConfig(.stderr);
 
     const drained = try build_env.drainReports();
@@ -5247,7 +5922,6 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
     for (drained) |mod| {
         for (mod.reports) |*report| {
             switch (report.severity) {
-                .info => continue,
                 .fatal, .runtime_error => counts.errors += 1,
                 .warning => counts.warnings += 1,
             }
@@ -5259,10 +5933,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
 
     if (counts.errors > 0 or counts.warnings > 0) {
         const stderr = ctx.io.stderr();
-        stderr.writeAll("\n") catch {};
-        stderr.writeAll("Found ") catch {};
-        writeDiagnosticCounts(stderr, counts.errors, counts.warnings, report_config.shouldUseColors()) catch {};
-        stderr.print(" for {s}.\n", .{display_path}) catch {};
+        renderSummaryHeaderLine(stderr, counts.errors, counts.warnings, display_path, report_config) catch {};
     }
 
     ctx.io.flush();
@@ -5271,7 +5942,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
 
 fn sharedMemoryResult(
     shm: *SharedMemoryAllocator,
-    counts: CoordinatorReportCounts,
+    counts: CheckDiagnosticCounts,
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
     checked_host_identity: [32]u8,
@@ -5282,12 +5953,12 @@ fn sharedMemoryResult(
             .ptr = shm.base_ptr,
             .size = shm.getUsedSize(),
             .mapped_size = shm.total_size,
+            .page_size = shm.page_size,
         },
         .entrypoint_names = entrypoint_names,
         .hosted_symbols = hosted_symbols,
         .checked_host_identity = checked_host_identity,
-        .error_count = counts.errors,
-        .warning_count = counts.warnings,
+        .diagnostics = counts,
     };
 }
 
@@ -5301,7 +5972,7 @@ fn closeSharedMemoryHandle(handle: SharedMemoryHandle) void {
     }
 }
 
-fn viewLirImageFromHandle(handle: SharedMemoryHandle, target_usize: base.target.TargetUsize, arena: std.mem.Allocator) lir.LirImage.ImageError!lir.LirImage.ProgramView {
+fn viewLirImageFromHandle(handle: SharedMemoryHandle, target_usize: base.target.TargetUsize, arena: std.mem.Allocator) lir.LirImage.ViewError!lir.LirImage.ProgramView {
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(handle.ptr));
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
     return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, handle.size, target_usize, arena);
@@ -5317,18 +5988,47 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
     if (args.opt != .dev) return false;
     if (args.target != null) return true;
 
-    const native_target = RocTarget.detectNative();
+    const native_target = roc_target.host_cpu.nativeTarget();
     const default_target = defaultRunShimTarget(native_target);
     return devShimTargetCompatible(default_target, native_target) and
         default_target.toOsTag() == .linux and
         DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
 }
 
+/// The Linux target the headerless default app runs on, keeping the CPU level
+/// of the native target it came from.
+///
+/// Default apps run on the freestanding default platform: raw syscalls, its own
+/// `_start`, and a machine-code shim that reaches the kernel directly. Nothing
+/// in the executable calls libc, so every Linux host links the same static
+/// executable no matter which libc it ships -- matching what `llvmBuildLinkAbi`
+/// already does for `roc build`.
 fn defaultRunShimTarget(native: RocTarget) RocTarget {
     return switch (native) {
-        .x64musl, .x64glibc, .x64linux => .x64linux,
-        .arm64musl, .arm64glibc, .arm64linux => .arm64linux,
-        else => native,
+        .x64musl, .x64glibc, .x64linux => .x64musl,
+        .arm64musl, .arm64glibc, .arm64linux => .arm64musl,
+        .x64v1musl, .x64v1glibc, .x64v1linux => .x64v1musl,
+        .arm64v1musl, .arm64v1glibc, .arm64v1linux => .arm64v1musl,
+        .x64mac,
+        .x64win,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        .x64elf,
+        .x64v1mac,
+        .x64v1win,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1elf,
+        .arm64mac,
+        .arm64win,
+        .arm64v1win,
+        .arm32linux,
+        .arm32musl,
+        .wasm32,
+        .wasm32v1,
+        => native,
     };
 }
 
@@ -5353,6 +6053,7 @@ const HotReloadDevWorkerArgs = struct {
     shm_size: usize,
     expected_host_identity: [32]u8,
     watch_inputs_file: []const u8,
+    specialization_strategy: base.SpecializationStrategy,
     synthetic_source_path: ?[]const u8,
     synthetic_output_path: ?[]const u8,
     source_dir_override: ?[]const u8,
@@ -5400,6 +6101,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var shm_size: ?usize = null;
     var expected_host_identity: ?[32]u8 = null;
     var watch_inputs_file: ?[]const u8 = null;
+    var specialization_strategy: ?base.SpecializationStrategy = null;
     var synthetic_source_path: ?[]const u8 = null;
     var synthetic_output_path: ?[]const u8 = null;
     var source_dir_override: ?[]const u8 = null;
@@ -5435,6 +6137,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             expected_host_identity = try parseHotReloadDigest(value);
         } else if (hotReloadFlagValue(arg, "--watch-inputs-file")) |value| {
             watch_inputs_file = value;
+        } else if (hotReloadFlagValue(arg, "--specialization-strategy")) |value| {
+            specialization_strategy = std.meta.stringToEnum(base.SpecializationStrategy, value) orelse return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--synthetic-source")) |value| {
             synthetic_source_path = value;
         } else if (hotReloadFlagValue(arg, "--synthetic-output")) |value| {
@@ -5470,6 +6174,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
         .shm_size = shm_size orelse return error.InvalidArguments,
         .expected_host_identity = expected_host_identity orelse return error.InvalidArguments,
         .watch_inputs_file = watch_inputs_file orelse return error.InvalidArguments,
+        .specialization_strategy = specialization_strategy orelse return error.InvalidArguments,
         .synthetic_source_path = synthetic_source_path,
         .synthetic_output_path = synthetic_output_path,
         .source_dir_override = source_dir_override,
@@ -5533,6 +6238,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         } else null,
         args.max_threads,
         .dev,
+        args.specialization_strategy,
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         null,
@@ -5554,7 +6260,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
     }
 
     const lowered = &lowered_result.lowered;
-    const publication = try writeDevRunImageToSharedMemory(
+    _ = try writeDevRunImageToSharedMemory(
         ctx,
         &shm,
         selected_target,
@@ -5572,12 +6278,6 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         },
     );
     shm.updateHeader();
-    ipc.hot_reload.publishDescriptor(
-        control,
-        args.generation,
-        publication.descriptor_offset,
-        publication.descriptor orelse return error.InvalidSharedMemory,
-    );
 }
 
 fn writeDevRunImageToSharedMemory(
@@ -5614,12 +6314,17 @@ fn writeDevRunImageToSharedMemory(
         try readonly_data.appendSlice(ctx.gpa, internal_static_data);
         try readonly_data.appendSlice(ctx.gpa, static_strings.exports);
 
-        var codegen = try backend.HostLirCodeGen.init(
+        // This image executes in this process, so its instructions are held to
+        // what this machine's CPU runs rather than to the target's level.
+        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(
             ctx.gpa,
             store,
             layouts,
             static_strings.entries,
+            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+            lowered.lir_result.boxy_erased_arg_desc_params.items,
             .preserve,
+            roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
@@ -5712,6 +6417,9 @@ fn writeDevRunImageToSharedMemory(
         const generated_code = codegen.getGeneratedCode();
         const relocations = codegen.getRelocations();
 
+        var sidecar_blob = try lir.LirImage.buildSidecarBlob(ctx.gpa, &lowered.lir_result);
+        defer sidecar_blob.deinit(ctx.gpa);
+
         var empty_region_buffer: [0]u8 = .{};
         var fixed_region_buffer = std.heap.FixedBufferAllocator.init(&empty_region_buffer);
         var image_allocator = shm.allocator();
@@ -5736,6 +6444,7 @@ fn writeDevRunImageToSharedMemory(
                 code_symbols,
                 relocations,
                 readonly_data.items,
+                sidecar_blob.bytes,
             );
             const required_capacity = required_bound - allocation.region_start;
 
@@ -5766,6 +6475,8 @@ fn writeDevRunImageToSharedMemory(
             code_symbols,
             relocations,
             readonly_data.items,
+            sidecar_blob.bytes,
+            sidecar_blob.sidecar,
         );
         const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
         const image_bound: usize = @intCast(header.image_size);
@@ -5807,6 +6518,7 @@ fn publishDevRunImage(
             .ptr = shm.base_ptr,
             .size = shm.getUsedSize(),
             .mapped_size = shm.total_size,
+            .page_size = shm.page_size,
         });
         break :blk .{
             .generation = 1,
@@ -5839,6 +6551,7 @@ fn publishDevRunImage(
         .ptr = shm.base_ptr,
         .size = shm.getUsedSize(),
         .mapped_size = shm.total_size,
+        .page_size = shm.page_size,
     };
 }
 
@@ -5870,6 +6583,7 @@ fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *
         // expect_err statements only occur in top-level expect test roots,
         // never in program entrypoints.
         error.ExpectErr => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
     ops.crash(message);
 }
@@ -5882,7 +6596,14 @@ fn evaluateLirImageEntrypoint(
     ret_ptr: ?*anyopaque,
     arg_ptr: ?*anyopaque,
 ) Allocator.Error!void {
-    var interpreter = try eval.LirInterpreter.init(allocator, &view.store, &view.layouts, ops, .preserve);
+    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+        allocator,
+        &view.store,
+        &view.layouts,
+        eval.LirInterpreter.BoxyTables.fromImageView(view),
+        ops,
+        .preserve,
+    );
     defer interpreter.deinit();
 
     _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
@@ -5892,8 +6613,16 @@ fn evaluateLirImageEntrypoint(
             }
             unreachable;
         },
-        else => |e| {
-            reportCliInterpreterError(ops, &interpreter, e);
+        error.OutOfMemory,
+        error.RuntimeError,
+        error.ComptimeExhaustiveness,
+        error.DivisionByZero,
+        error.Crash,
+        error.ExpectErr,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
+        => {
+            reportCliInterpreterError(ops, &interpreter, @errorCast(err));
             return;
         },
     };
@@ -5922,6 +6651,7 @@ fn lowerLirWithBuildEnv(
     synthetic_default_app: ?SyntheticDefaultAppMapping,
     max_threads: ?usize,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     resolution_config: compile.package_resolution.Config,
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
@@ -5959,7 +6689,31 @@ fn lowerLirWithBuildEnv(
                 .path = roc_file_path,
                 .context = .source_file,
             } }),
-            else => |e| e,
+            error.AccessDenied,
+            error.BuiltinLowLevelAnnotationMustBeFunction,
+            error.DownloadFailed,
+            error.ExpectedPlatformString,
+            error.ExpectedString,
+            error.FileError,
+            error.Internal,
+            error.InvalidDependency,
+            error.InvalidNullByteInPath,
+            error.InvalidUrl,
+            error.IoError,
+            error.LockedMemoryLimitExceeded,
+            error.LowLevelOperationsNotFound,
+            error.MissingFilesDirectory,
+            error.MissingTargetFile,
+            error.NoCacheDir,
+            error.NoPackageSource,
+            error.PathOutsideWorkspace,
+            error.StreamTooLong,
+            error.SystemResources,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            error.UnsupportedBuiltinAnnotationOnly,
+            error.UnsupportedHeader,
+            => |e| e,
         };
     };
 
@@ -5982,10 +6736,7 @@ fn lowerLirWithBuildEnv(
     build_env.compileDiscovered() catch |err| {
         if (reporter) |r| r.fail();
         _ = try renderDrainedBuildEnvReports(ctx, &build_env, display_path);
-        return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => |e| e,
-        };
+        return err;
     };
 
     const counts = try renderDrainedBuildEnvReports(ctx, &build_env, display_path);
@@ -6004,8 +6755,9 @@ fn lowerLirWithBuildEnv(
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    if (reporter) |r| r.begin("Specialization");
+    if (reporter) |r| r.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (reporter != null and reporter.?.always) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         lir_allocator,
         ctx.gpa,
@@ -6014,12 +6766,13 @@ fn lowerLirWithBuildEnv(
         relation_artifacts,
         .{ .platform_entrypoints = artifact },
         opt,
+        specialization_strategy,
         base.target.TargetUsize.native,
         false,
         &spec_timing,
     );
     errdefer lowered.deinit();
-    if (reporter) |r| r.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    if (reporter) |r| finishPostCheckLowering(r, &spec_timing);
 
     const internal_static_data: ?[]backend.StaticDataExport = switch (artifact) {
         .lir_image => null,
@@ -6083,6 +6836,7 @@ pub fn buildLirImageWithBuildEnv(
     synthetic_default_app: ?SyntheticDefaultAppMapping,
     max_threads: ?usize,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     resolution_config: compile.package_resolution.Config,
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
@@ -6105,6 +6859,7 @@ pub fn buildLirImageWithBuildEnv(
         synthetic_default_app,
         max_threads,
         opt,
+        specialization_strategy,
         resolution_config,
         enable_checked_cache,
         reporter,
@@ -6328,7 +7083,35 @@ fn validateBundleUrl(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemo
             .url = url,
             .reason = "This URL contains more than one version number. A package URL must contain exactly one MAJOR.MINOR.PATCH version before its hash.",
         } }),
-        else => ctx.fail(.{ .invalid_url = .{
+        error.ChecksumFailure,
+        error.DecompressionFailed,
+        error.DictionaryIdFlagUnsupported,
+        error.DirectoryCreateFailed,
+        error.EndOfStream,
+        error.ExpandedSizeLimitExceeded,
+        error.FileCreateFailed,
+        error.FileError,
+        error.FileTooLarge,
+        error.FileWriteFailed,
+        error.HashMismatch,
+        error.HttpError,
+        error.InvalidFilename,
+        error.InvalidHash,
+        error.InvalidPath,
+        error.InvalidProxyUrl,
+        error.InvalidTarHeader,
+        error.InvalidUrl,
+        error.LocalhostWasNotLoopback,
+        error.MalformedBlock,
+        error.MalformedFrame,
+        error.NetworkError,
+        error.NoDataExtracted,
+        error.NoHashInUrl,
+        error.OutOfMemory,
+        error.ReadFailed,
+        error.UnexpectedEndOfStream,
+        error.WriteFailed,
+        => ctx.fail(.{ .invalid_url = .{
             .url = url,
             .reason = "Invalid URL format or missing hash. URLs must end with a base58-encoded BLAKE3 hash filename (e.g., '<hash>.tar.zst').",
         } }),
@@ -6348,13 +7131,16 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     };
     const package_dir_path = try std.fs.path.join(ctx.arena, &.{ cache_dir_path, base58_hash });
 
-    // 3. Check if already cached
+    const platform_source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
+
+    // 3. Check if already cached. The check is the bundle's main.roc entry
+    // point rather than its directory: this cache is shared with the
+    // compiler's package resolution, whose rule is that a hash-named
+    // directory holds a complete bundle. A directory without its entry point
+    // is a leftover from an interrupted extraction, and gets replaced during
+    // publishing below rather than trusted.
     const already_cached = blk: {
-        var d = std.Io.Dir.cwd().openDir(ctx.io.std_io, package_dir_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => break :blk false,
-            else => return ctx.fail(.{ .directory_not_found = .{ .path = package_dir_path } }),
-        };
-        d.close(ctx.io.std_io);
+        std.Io.Dir.cwd().access(ctx.io.std_io, platform_source_path, .{}) catch break :blk false;
         break :blk true;
     };
 
@@ -6369,33 +7155,36 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
                 .err = make_err,
             } });
         };
+        sweepStalePackageStagingDirs(ctx.io.std_io, cache_dir_path);
 
-        // Create package directory
-        std.Io.Dir.cwd().createDir(ctx.io.std_io, package_dir_path, .default_dir) catch |make_err| switch (make_err) {
-            error.PathAlreadyExists => {}, // Race condition, another process created it
-            else => {
-                return ctx.fail(.{ .directory_create_failed = .{
-                    .path = package_dir_path,
-                    .err = make_err,
-                } });
-            },
+        // Download into a staging directory and publish it with a rename, so
+        // the hash-named directory never exists half-written. Other processes
+        // read this cache while we fill it, and a directory under the hash is
+        // their only signal that the bundle is complete.
+        const staging_dir_path = try packageStagingDirPath(ctx, package_dir_path);
+        std.Io.Dir.cwd().createDir(ctx.io.std_io, staging_dir_path, .default_dir) catch |make_err| {
+            return ctx.fail(.{ .directory_create_failed = .{
+                .path = staging_dir_path,
+                .err = make_err,
+            } });
         };
 
         // Download and extract (path-based, no Dir handle needed)
         var gpa_copy = ctx.gpa;
-        _ = download.downloadAndExtract(&gpa_copy, ctx.io.std_io, url, package_dir_path, .{}) catch |download_err| {
-            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, package_dir_path) catch {};
+        _ = download.downloadAndExtract(&gpa_copy, ctx.io.std_io, url, staging_dir_path, .{}) catch |download_err| {
+            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
             return ctx.fail(.{ .download_failed = .{
                 .url = url,
                 .err = download_err,
             } });
         };
 
+        try publishPackageDir(ctx, url, staging_dir_path, package_dir_path, platform_source_path);
+
         std.log.info("Bundle cached at {s}", .{package_dir_path});
     }
 
     // Platforms must have a main.roc entry point
-    const platform_source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
     std.Io.Dir.cwd().access(ctx.io.std_io, platform_source_path, .{}) catch {
         // The problem is rendered after this frame returns, so the slice of
         // searched paths must live on the arena, not this stack frame.
@@ -6410,6 +7199,87 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     return .{
         .source_path = platform_source_path,
     };
+}
+
+/// A staging path next to the final hash-named directory, so publishing is a
+/// rename within one directory rather than a copy across filesystems. The
+/// random component keeps concurrent downloads of the same bundle out of
+/// each other's way, and the `.tmp` suffix is what the stale sweep matches.
+fn packageStagingDirPath(ctx: *CliCtx, package_dir_path: []const u8) error{OutOfMemory}![]u8 {
+    var suffix: [8]u8 = undefined;
+    ctx.io.std_io.random(&suffix);
+    return std.fmt.allocPrint(ctx.arena, "{s}.{s}.tmp", .{ package_dir_path, std.fmt.bytesToHex(suffix, .lower) });
+}
+
+/// Move a finished staging directory into its hash-named slot in the package
+/// cache. Mirrors the publish step of the compiler's package resolution,
+/// which shares this cache: losing the rename to a concurrent process is
+/// success, since bundles are content-addressed and hash-verified, and a
+/// slot holding a directory with no entry point is an interrupted
+/// extraction's leftover that gets moved aside and deleted. Moving rather
+/// than deleting in place matters when a concurrent process publishes a good
+/// copy between our check and our repair: a rename cannot tear that copy
+/// out from under whoever is already reading it.
+fn publishPackageDir(
+    ctx: *CliCtx,
+    url: []const u8,
+    staging_dir_path: []const u8,
+    package_dir_path: []const u8,
+    entry_point_path: []const u8,
+) (CliError || error{OutOfMemory})!void {
+    std.Io.Dir.cwd().rename(staging_dir_path, std.Io.Dir.cwd(), package_dir_path, ctx.io.std_io) catch {
+        const entry_point_exists = exists: {
+            std.Io.Dir.cwd().access(ctx.io.std_io, entry_point_path, .{}) catch break :exists false;
+            break :exists true;
+        };
+        if (entry_point_exists) {
+            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
+            return;
+        }
+
+        const trash_dir_path = try packageStagingDirPath(ctx, package_dir_path);
+        std.Io.Dir.cwd().rename(package_dir_path, std.Io.Dir.cwd(), trash_dir_path, ctx.io.std_io) catch {};
+        defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, trash_dir_path) catch {};
+        std.Io.Dir.cwd().rename(staging_dir_path, std.Io.Dir.cwd(), package_dir_path, ctx.io.std_io) catch |rename_err| {
+            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
+            // Someone published in the gap between that move and this retry.
+            // Their copy is as good as ours.
+            const published_by_another = published: {
+                std.Io.Dir.cwd().access(ctx.io.std_io, entry_point_path, .{}) catch break :published false;
+                break :published true;
+            };
+            if (published_by_another) return;
+            return ctx.fail(.{ .download_failed = .{
+                .url = url,
+                .err = rename_err,
+            } });
+        };
+    };
+}
+
+/// Reclaim package cache staging directories stranded by processes that died
+/// mid-download. Nothing ever reads them again, and one older than a day
+/// cannot belong to a live download. The compiler's package resolution runs
+/// the same sweep over this cache with the same naming scheme, so either
+/// downloader cleans up after the other. Best-effort: any failure just
+/// leaves the sweep to a future download.
+fn sweepStalePackageStagingDirs(std_io: std.Io, cache_dir_path: []const u8) void {
+    var dir = std.Io.Dir.cwd().openDir(std_io, cache_dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(std_io);
+
+    const now_ns: i128 = std.Io.Timestamp.now(std_io, .real).nanoseconds;
+    var it = dir.iterate();
+    while (true) {
+        const entry = (it.next(std_io) catch break) orelse break;
+        if (entry.kind != .directory) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".tmp")) continue;
+
+        const info = dir.statFile(std_io, entry.name, .{}) catch continue;
+        const mtime_ns: i128 = @intCast(info.mtime.nanoseconds);
+        if (now_ns - mtime_ns <= stale_staging_max_age_ns) continue;
+
+        dir.deleteTree(std_io, entry.name) catch {};
+    }
 }
 
 /// Default output basename for `roc build <url>`: the last path segment of
@@ -6470,7 +7340,7 @@ fn sweepStaleStagingDirs(std_io: std.Io, version_dir: []const u8) void {
 /// publish the completed entry with a single atomic rename so a partial
 /// installation is never visible. After this succeeds, `roc run <shorthand>`
 /// needs neither the network nor any cache.
-fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMainError!void {
+fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
     if (!install_store.isValidShorthand(args.shorthand)) {
         return ctx.fail(.{ .invalid_shorthand = .{ .name = args.shorthand } });
     }
@@ -6497,7 +7367,38 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
                 .reason = "its install.json manifest is missing",
             } });
         },
-        else => return ctx.fail(.{ .install_entry_corrupt = .{
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.OutOfMemory,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = args.shorthand,
             .path = entry.entry_dir,
             .reason = "its install.json manifest could not be read",
@@ -6601,7 +7502,7 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
             .compiler_owned => |plugin_platform| switch (plugin_platform) {
                 .glue => .glue,
             },
-            else => .executable,
+            .none, .path_or_url => .executable,
         };
     };
 
@@ -6610,8 +7511,7 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
             try ctx.io.stdout().print("Building {s} with --opt=speed ...\n", .{args.shorthand});
             ctx.io.flush();
 
-            var warning_count: usize = 0;
-            try rocBuild(ctx, .{
+            const build_result = try rocBuildOnce(ctx, .{
                 .path = staging.main_roc_path,
                 .opt = .speed,
                 .target = null,
@@ -6622,8 +7522,6 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
                 .max_threads = args.max_threads,
                 .wasm_memory = null,
                 .wasm_stack_size = null,
-                .exit_on_warnings = false,
-                .warning_count_out = &warning_count,
                 .require_executable_output = true,
                 .require_host_runnable_output = true,
                 .suppress_build_status = true,
@@ -6631,7 +7529,8 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
                 .synthetic_default_platform = false,
                 .source_dir_override = null,
                 .root_source_url = args.url,
-            }, arg0);
+            });
+            try failOnCheckErrors(build_result.diagnostics);
         },
         .glue => {
             try ctx.io.stdout().print("Building {s} glue plugin with --opt=speed ...\n", .{args.shorthand});
@@ -6792,7 +7691,7 @@ fn discoverAndAddBundleModules(
     var build_env = try initCliBuildEnv(ctx, .{ .max_threads = 1 });
     defer build_env.deinit();
 
-    // Run the build — the Coordinator discovers all transitive module dependencies
+    // Run the build—the Coordinator discovers all transitive module dependencies
     build_env.build(abs_entry) catch {
         // Drain and display any errors from the build
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
@@ -6807,11 +7706,10 @@ fn discoverAndAddBundleModules(
                     .warning => {
                         try stderr.print("{s}: warning in module\n", .{mod.abs_path});
                     },
-                    .info => {},
                 }
             }
         }
-        // Build errors are not fatal for bundling — continue to check what we can
+        // Build errors are not fatal for bundling—continue to check what we can
     };
 
     // Detect platform from BuildEnv packages using the accessor
@@ -6874,7 +7772,20 @@ fn discoverAndAddBundleModules(
                 return switch (result) {
                     .missing_target_file => error.MissingTargetFile,
                     .missing_files_directory => error.MissingFilesDirectory,
-                    else => error.MissingTargetFile,
+                    .valid,
+                    .missing_targets_section,
+                    .extra_file,
+                    .empty_targets,
+                    .unsupported_target,
+                    .missing_cross_compile_host,
+                    .unsupported_glibc_cross,
+                    .no_platform_found,
+                    .invalid_target,
+                    .linker_failed,
+                    .linker_not_available,
+                    .process_crashed,
+                    .process_signaled,
+                    => error.MissingTargetFile,
                 };
             }
         }
@@ -6981,7 +7892,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     // inside the archive (the unbundle side rejects them, and a relative path
     // is what the user actually wants extracted). If any input is absolute we
     // rebase all paths against their longest common parent directory and pass
-    // that directory to the bundle library — so the archive itself only ever
+    // that directory to the bundle library—so the archive itself only ever
     // contains relative paths.
     var any_absolute = false;
     for (paths_to_use) |path| {
@@ -7149,7 +8060,21 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
                 try stderr.print("Error: Invalid file path - {s}\n", .{formatBundlePathValidationReason(error_ctx.reason)});
                 try stderr.print("Path: {s}\n", .{error_ctx.path});
             },
-            else => {},
+            error.AccessDenied,
+            error.CompressionFailed,
+            error.FileNotFound,
+            error.FileOpenFailed,
+            error.FilePathTooLong,
+            error.FileReadFailed,
+            error.FileStatFailed,
+            error.FileTooLarge,
+            error.FlushFailed,
+            error.IsDir,
+            error.OutOfMemory,
+            error.SystemResources,
+            error.TarWriteFailed,
+            error.WriteFailed,
+            => {},
         }
         return err;
     };
@@ -7209,7 +8134,18 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
             error.FileNotFound => {
                 // Good, directory doesn't exist
             },
-            else => return err,
+            error.AccessDenied,
+            error.BadPathName,
+            error.Canceled,
+            error.FileBusy,
+            error.InputOutput,
+            error.NameTooLong,
+            error.PermissionDenied,
+            error.ReadOnlyFileSystem,
+            error.SymLinkLoop,
+            error.SystemResources,
+            error.Unexpected,
+            => return err,
         };
 
         if (cwd.openDir(ctx.io.std_io, dir_name, .{})) |_| {
@@ -7259,7 +8195,24 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
                     try stderr.print("Archive: {s}\n", .{archive_path});
                     had_errors = true;
                 },
-                else => {
+                error.ChecksumFailure,
+                error.DecompressionFailed,
+                error.DictionaryIdFlagUnsupported,
+                error.DirectoryCreateFailed,
+                error.EndOfStream,
+                error.ExpandedSizeLimitExceeded,
+                error.FileCreateFailed,
+                error.FileTooLarge,
+                error.FileWriteFailed,
+                error.InvalidTarHeader,
+                error.MalformedBlock,
+                error.MalformedFrame,
+                error.NoDataExtracted,
+                error.OutOfMemory,
+                error.ReadFailed,
+                error.UnexpectedEndOfStream,
+                error.WriteFailed,
+                => {
                     try stderr.print("Error unbundling {s}: {s}\n", .{ archive_path, @errorName(err) });
                     had_errors = true;
                 },
@@ -7275,7 +8228,7 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
     }
 }
 
-fn rocBuild(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMainError!void {
+fn resolveBuildArgs(ctx: *CliCtx, args_in: cli_args.BuildArgs) SourceRefResolveError!cli_args.BuildArgs {
     var args = args_in;
     const resolved_source = try resolveSourceArg(ctx, args_in.path, args_in.watch);
     args.path = resolved_source.path;
@@ -7290,6 +8243,12 @@ fn rocBuild(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMain
         }
     }
 
+    return args;
+}
+
+fn rocBuildCommand(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMainError!void {
+    const args = try resolveBuildArgs(ctx, args_in);
+
     // `roc build --watch` rebuilds on every change. The watch loop reruns this same
     // command (minus --watch) per change; the child writes its discovered inputs to
     // the --watch-inputs-file so the next iteration watches the right files.
@@ -7297,26 +8256,54 @@ fn rocBuild(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMain
         return runWatchCommand(ctx, arg0, .{ .build = args });
     }
 
+    const result = try rocBuildOnce(ctx, args);
+    try finishCheckDiagnostics(ctx, result.diagnostics);
+}
+
+fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
+    if (args.fuzz and args.opt != .size and args.opt != .speed) {
+        try ctx.io.stderr().print(
+            "Error: `roc build --fuzz` requires the LLVM backend; use --opt=speed or --opt=size.\n",
+            .{},
+        );
+        return error.UnsupportedTarget;
+    }
+
     // Headerless apps build through a synthetic default platform.
-    if (try readDefaultAppSource(ctx, args.path)) |source| {
+    if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source| {
         return rocBuildDefaultApp(ctx, args, source);
     }
 
     // Select build path based on optimization level
     switch (args.opt) {
-        .dev => try rocBuildNative(ctx, args),
-        .interpreter => try rocBuildEmbedded(ctx, args),
-        .size, .speed => try rocBuildLlvm(ctx, args),
+        .dev => return rocBuildNative(ctx, args),
+        .interpreter => return rocBuildEmbedded(ctx, args),
+        .size, .speed => return rocBuildLlvm(ctx, args),
     }
 }
 
-fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) CliMainError!void {
+fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) CliMainError!BuildResult {
     defer ctx.gpa.free(original_source);
+
+    if (defaultBuildTarget(args).toOsTag() == .openbsd) {
+        return ctx.fail(.{ .unsupported_default_platform_target = .{
+            .target = "x64openbsd",
+        } });
+    }
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    if (args.keep_temp) {
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
+        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{temp_dir});
+        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+        defer report.deinit();
+        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+    }
+    defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
@@ -7350,19 +8337,51 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     }
 
     switch (synthetic_args.opt) {
-        .dev => try rocBuildNative(ctx, synthetic_args),
-        .interpreter => try rocBuildEmbedded(ctx, synthetic_args),
-        .size, .speed => try rocBuildLlvm(ctx, synthetic_args),
+        .dev => return rocBuildNative(ctx, synthetic_args),
+        .interpreter => return rocBuildEmbedded(ctx, synthetic_args),
+        .size, .speed => return rocBuildLlvm(ctx, synthetic_args),
     }
 }
 
 fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     if (args.target) |target_str| {
-        if (RocTarget.fromString(target_str)) |target| {
-            return switch (target) {
-                .x64mac, .arm64mac, .x64win, .arm64win => echo_platform.build_c_platform_main_source,
+        if (RocTarget.fromString(target_str)) |requested| {
+            // Which default platform a target gets follows from its OS and
+            // architecture, which a `v1` target shares with its default twin.
+            return switch (requested.defaultCpuTarget()) {
+                .x64mac,
+                .arm64mac,
+                .x64win,
+                .arm64win,
+                .x64openbsd,
+                => echo_platform.build_c_platform_main_source,
                 .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
-                else => echo_platform.build_platform_main_source,
+                .x64musl,
+                .x64glibc,
+                .x64linux,
+                .x64elf,
+                .x64freebsd,
+                .x64netbsd,
+                .x64v1mac,
+                .x64v1win,
+                .x64v1freebsd,
+                .x64v1openbsd,
+                .x64v1netbsd,
+                .x64v1musl,
+                .x64v1glibc,
+                .x64v1linux,
+                .x64v1elf,
+                .arm64linux,
+                .arm64musl,
+                .arm64glibc,
+                .arm64v1win,
+                .arm64v1linux,
+                .arm64v1musl,
+                .arm64v1glibc,
+                .arm32linux,
+                .arm32musl,
+                .wasm32v1,
+                => echo_platform.build_platform_main_source,
             };
         }
 
@@ -7370,9 +8389,16 @@ fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     }
 
     return switch (RocTarget.detectNative().toOsTag()) {
-        .macos, .windows => echo_platform.build_c_platform_main_source,
-        else => echo_platform.build_platform_main_source,
+        .macos, .windows, .openbsd => echo_platform.build_c_platform_main_source,
+        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => echo_platform.build_platform_main_source,
     };
+}
+
+fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
+    if (args.target) |target_str| {
+        if (RocTarget.fromString(target_str)) |requested| return requested.defaultCpuTarget();
+    }
+    return RocTarget.detectNative().defaultCpuTarget();
 }
 
 /// Build using the dev backend to generate native machine code.
@@ -7457,7 +8483,7 @@ fn selectBuildPlatformTarget(
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
 ) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
-    return switch (target_selection.selectBuildTarget(targets_config, target_arg)) {
+    return switch (target_selection.selectBuildTarget(targets_config, target_arg, roc_target.host_cpu.level())) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
             renderValidationError(ctx, .{ .invalid_target = .{ .target_str = target_str } });
@@ -7472,6 +8498,10 @@ fn selectBuildPlatformTarget(
             renderValidationError(ctx, result);
             return error.UnsupportedTarget;
         },
+        .incompatible_cpu => |target| {
+            try rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
+            unreachable;
+        },
         .requires_executable => unreachable,
         .no_default => {
             if (targets_config.targets.len == 0) {
@@ -7480,11 +8510,18 @@ fn selectBuildPlatformTarget(
                 });
                 return error.UnsupportedTarget;
             }
-            const native_target = RocTarget.detectNative();
-            try ctx.io.stderr().print(
+            const native_target = roc_target.host_cpu.nativeTarget();
+            const stderr = ctx.io.stderr();
+            try stderr.print(
                 "Error: roc build requires --target or a platform target for wasm32 or the detected native host ({s}).\n",
                 .{@tagName(native_target)},
             );
+            if (native_target.cpuLevel() == .v1) {
+                try stderr.print(
+                    "\nThis machine's CPU does not run the instructions {s} uses, so building for\nthis machine means building for {s}.\n",
+                    .{ @tagName(native_target.defaultCpuTarget()), @tagName(native_target) },
+                );
+            }
             return error.UnsupportedTarget;
         },
         .not_runnable_on_host => unreachable,
@@ -7497,7 +8534,7 @@ fn selectRunPlatformTarget(
     platform_source: ?[]const u8,
     target_arg: ?[]const u8,
 ) error{ InvalidTarget, UnsupportedTarget, WriteFailed }!target_selection.SelectedTarget {
-    return switch (target_selection.selectRunTarget(targets_config, target_arg)) {
+    return switch (target_selection.selectRunTarget(targets_config, target_arg, roc_target.host_cpu.level())) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
             const result = platform_validation.targets_validator.ValidationResult{
@@ -7515,6 +8552,10 @@ fn selectRunPlatformTarget(
             renderValidationError(ctx, result);
             return error.UnsupportedTarget;
         },
+        .incompatible_cpu => |target| {
+            try rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
+            unreachable;
+        },
         .requires_executable => |selected| {
             try rejectRequiredExecutableOutput(ctx, selected);
             unreachable;
@@ -7526,7 +8567,7 @@ fn selectRunPlatformTarget(
                 });
                 return error.UnsupportedTarget;
             }
-            const native_target = RocTarget.detectNative();
+            const native_target = roc_target.host_cpu.nativeTarget();
             const result = platform_validation.createUnsupportedTargetResult(
                 platform_source orelse "<unknown>",
                 native_target,
@@ -7615,6 +8656,290 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
     return runtime_path;
 }
 
+fn lirResultNeedsBoxyRuntime(result: *const lir.Program.Result) bool {
+    return eval.boxy_runtime.resultNeedsRuntime(result);
+}
+
+/// Add the boxy runtime object and its embedded sidecar to a standalone
+/// link. The runtime object provides the `roc_boxy_*` wrappers and
+/// `roc_boxy_init_embedded`; a companion data object carries the sidecar those
+/// symbols read (the descriptor tables, layout store, and string store the
+/// program's boxy statements index).
+fn appendBoxyRuntimeLinkInputs(
+    ctx: *CliCtx,
+    object_files: *std.array_list.Managed([]const u8),
+    scratch_dir: []const u8,
+    target: RocTarget,
+    lir_result: *const lir.Program.Result,
+) CliMainError!void {
+    const runtime_bytes = BoxyRuntimeObjects.forTarget(target) orelse {
+        try ctx.io.stderr().print(
+            "Error: standalone dev builds of generic (boxy) programs are not supported for the '{s}' target.\n",
+            .{@tagName(target)},
+        );
+        return error.UnsupportedTarget;
+    };
+
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, BoxyRuntimeObjects.filename(target) });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch {
+        return error.NativeCompilationFailed;
+    };
+
+    var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch {
+        return error.NativeCompilationFailed;
+    };
+    defer sidecar_blob.deinit(ctx.gpa);
+
+    const blob_len_val: u64 = @intCast(sidecar_blob.bytes.len);
+    const blob_len_bytes = try ctx.arena.dupe(u8, std.mem.asBytes(&blob_len_val));
+    const desc_bytes = try ctx.arena.dupe(u8, std.mem.asBytes(&sidecar_blob.sidecar));
+
+    const sidecar_exports = [_]backend.StaticDataExport{
+        .{ .symbol_name = "roc_boxy_sidecar_blob", .bytes = sidecar_blob.bytes, .alignment = 16, .is_global = true },
+        .{ .symbol_name = "roc_boxy_sidecar_blob_len", .bytes = blob_len_bytes, .alignment = 8, .is_global = true },
+        .{ .symbol_name = "roc_boxy_sidecar_desc", .bytes = desc_bytes, .alignment = 8, .is_global = true },
+    };
+
+    const sidecar_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_boxy_sidecar.o" });
+    var sidecar_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    sidecar_compiler.compileStaticDataObjectAndWrite(&sidecar_exports, target, sidecar_path, ctx.coreCtx()) catch {
+        return error.NativeCompilationFailed;
+    };
+
+    try object_files.append(sidecar_path);
+    try object_files.append(runtime_path);
+}
+
+fn mergeBoxyRuntimeWasm(
+    ctx: *CliCtx,
+    module: *backend.wasm.WasmModule,
+    lir_result: *const lir.Program.Result,
+    mode: backend.wasm.WasmModule.MergeMode,
+) CliMainError!void {
+    if (!lirResultNeedsBoxyRuntime(lir_result)) return;
+    const runtime_bytes = BoxyRuntimeObjects.forTarget(.wasm32) orelse return error.UnsupportedTarget;
+
+    var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch return error.NativeCompilationFailed;
+    defer sidecar_blob.deinit(ctx.gpa);
+    backend.wasm.BoxyRuntimeLink.merge(ctx.gpa, module, .{
+        .runtime_object = runtime_bytes,
+        .sidecar_blob = sidecar_blob.bytes,
+        .sidecar_desc = sidecar_blob.sidecar,
+    }, mode) catch |err| {
+        std.log.err("Failed to merge wasm Boxy runtime: {}", .{err});
+        return err;
+    };
+}
+
+fn mergeBoxySidecarWasm(
+    ctx: *CliCtx,
+    module: *backend.wasm.WasmModule,
+    lir_result: *const lir.Program.Result,
+    mode: backend.wasm.WasmModule.MergeMode,
+) CliMainError!void {
+    if (!lirResultNeedsBoxyRuntime(lir_result)) return;
+
+    var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch return error.NativeCompilationFailed;
+    defer sidecar_blob.deinit(ctx.gpa);
+    backend.wasm.BoxyRuntimeLink.mergeSidecar(
+        ctx.gpa,
+        module,
+        sidecar_blob.bytes,
+        sidecar_blob.sidecar,
+        mode,
+    ) catch |err| {
+        std.log.err("Failed to merge wasm Boxy sidecar: {}", .{err});
+        return err;
+    };
+}
+
+fn preparedWasmHostCacheKey(
+    platform_files_pre: []const []const u8,
+    platform_files_post: []const []const u8,
+    builtins_bytes: []const u8,
+    boxy_runtime_bytes: []const u8,
+) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-prepared-wasm-host-v3");
+    updateHashU32(&hasher, @intCast(platform_files_pre.len));
+    for (platform_files_pre) |bytes| updateHashBytes(&hasher, bytes);
+    updateHashU32(&hasher, @intCast(platform_files_post.len));
+    for (platform_files_post) |bytes| updateHashBytes(&hasher, bytes);
+    updateHashBytes(&hasher, builtins_bytes);
+    updateHashBytes(&hasher, boxy_runtime_bytes);
+    return hasher.finalResult();
+}
+
+test "prepared Wasm host cache key covers ordered inputs and Boxy runtime bytes" {
+    const pre = [_][]const u8{ "host-a", "host-b" };
+    const reversed_pre = [_][]const u8{ "host-b", "host-a" };
+    const post = [_][]const u8{"host-post"};
+    const baseline_key = preparedWasmHostCacheKey(&pre, &post, "builtins", "boxy-runtime");
+    const repeated_key = preparedWasmHostCacheKey(&pre, &post, "builtins", "boxy-runtime");
+    const reordered_key = preparedWasmHostCacheKey(&reversed_pre, &post, "builtins", "boxy-runtime");
+    const regrouped_key = preparedWasmHostCacheKey(&post, &pre, "builtins", "boxy-runtime");
+    const changed_builtins_key = preparedWasmHostCacheKey(&pre, &post, "other-builtins", "boxy-runtime");
+    const changed_runtime_key = preparedWasmHostCacheKey(&pre, &post, "builtins", "other-runtime");
+
+    try std.testing.expectEqual(baseline_key, repeated_key);
+    try std.testing.expect(!std.mem.eql(u8, &baseline_key, &reordered_key));
+    try std.testing.expect(!std.mem.eql(u8, &baseline_key, &regrouped_key));
+    try std.testing.expect(!std.mem.eql(u8, &baseline_key, &changed_builtins_key));
+    try std.testing.expect(!std.mem.eql(u8, &baseline_key, &changed_runtime_key));
+}
+
+const PreparedWasmHost = union(enum) {
+    cached: compile.manager.CacheModule.CacheData,
+    owned: []u8,
+
+    fn bytes(self: PreparedWasmHost) []const u8 {
+        return switch (self) {
+            .cached => |data| data.data(),
+            .owned => |data| data,
+        };
+    }
+
+    fn deinit(self: PreparedWasmHost, allocator: Allocator) void {
+        switch (self) {
+            .cached => |data| data.deinit(allocator),
+            .owned => |data| allocator.free(data),
+        }
+    }
+};
+
+/// Link the platform, builtins, and Boxy runtime exactly once for each
+/// content-addressed input set. The returned object has already had Wasm's
+/// strong/weak and COMDAT rules applied, so later surgical links do not need
+/// to reconstruct linker semantics.
+fn loadPreparedWasmHost(
+    ctx: *CliCtx,
+    cache_manager: *CacheManager,
+    cache_dir: []const u8,
+    link_inputs: PlatformLinkInputs,
+) CliMainError!PreparedWasmHost {
+    var host_inputs: std.ArrayList([]u8) = .empty;
+    defer freeOwnedWasmInputs(ctx, &host_inputs);
+
+    for (link_inputs.platform_files_pre) |path| {
+        _ = try appendOwnedWasmInput(ctx, &host_inputs, path);
+    }
+    const pre_end = host_inputs.items.len;
+    for (link_inputs.platform_files_post) |path| {
+        _ = try appendOwnedWasmInput(ctx, &host_inputs, path);
+    }
+    const post_end = host_inputs.items.len;
+
+    const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
+    const runtime_bytes = BoxyRuntimeObjects.forTarget(.wasm32) orelse return error.UnsupportedTarget;
+    const cache_key = preparedWasmHostCacheKey(
+        host_inputs.items[0..pre_end],
+        host_inputs.items[pre_end..post_end],
+        builtins_bytes,
+        runtime_bytes,
+    );
+    if (cache_manager.loadRawBytesMapped(cache_key, cache_dir)) |cached| {
+        return .{ .cached = cached };
+    }
+
+    try cache_manager.ensureCacheSubdirIn(cache_key, cache_dir);
+    const cache_path = try cache_manager.computeCacheFilePath(cache_key, cache_dir);
+    defer ctx.gpa.free(cache_path);
+    const lock_path = try std.fmt.allocPrint(ctx.gpa, "{s}.lock", .{cache_path});
+    defer ctx.gpa.free(lock_path);
+    var lock_file = try std.Io.Dir.createFileAbsolute(ctx.io.std_io, lock_path, .{
+        .read = true,
+        .truncate = false,
+    });
+    defer lock_file.close(ctx.io.std_io);
+    try lock_file.lock(ctx.io.std_io, .exclusive);
+    defer lock_file.unlock(ctx.io.std_io);
+
+    // Another process may have prepared this exact host while this process
+    // waited for the content-addressed lock.
+    if (cache_manager.loadRawBytesMapped(cache_key, cache_dir)) |cached| {
+        return .{ .cached = cached };
+    }
+
+    var platform_exports = std.array_list.Managed([]const u8).init(ctx.arena);
+    for (link_inputs.platform_files_pre, host_inputs.items[0..pre_end]) |path, bytes| {
+        try appendWasmInputBytesExportNames(ctx, &platform_exports, path, bytes);
+    }
+    for (link_inputs.platform_files_post, host_inputs.items[pre_end..post_end]) |path, bytes| {
+        try appendWasmInputBytesExportNames(ctx, &platform_exports, path, bytes);
+    }
+
+    const temp_dir = try createUniqueTempDir(ctx);
+    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+
+    var linker_inputs = try std.array_list.Managed([]const u8).initCapacity(
+        ctx.arena,
+        link_inputs.platform_files_pre.len + link_inputs.platform_files_post.len + 2,
+    );
+
+    for (host_inputs.items[0..pre_end], 0..) |bytes, i| {
+        const extension = if (backend.wasm.ObjectArchive.isArchive(bytes)) ".a" else ".o";
+        const filename = try std.fmt.allocPrint(ctx.arena, "platform-pre-{d}{s}", .{ i, extension });
+        const path = try std.fs.path.join(ctx.arena, &.{ temp_dir, filename });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, path, bytes) catch |err| {
+            std.log.err("Failed to stage Wasm host input for preparation: {}", .{err});
+            return error.WasmOutputWriteFailed;
+        };
+        linker_inputs.appendAssumeCapacity(path);
+    }
+
+    const builtins_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "roc_builtins.o" });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, builtins_bytes) catch |err| {
+        std.log.err("Failed to write Wasm builtins for prepared host: {}", .{err});
+        return error.WasmOutputWriteFailed;
+    };
+    linker_inputs.appendAssumeCapacity(builtins_path);
+
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "roc_boxy_runtime.o" });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch |err| {
+        std.log.err("Failed to write Boxy runtime for prepared host: {}", .{err});
+        return error.WasmOutputWriteFailed;
+    };
+    linker_inputs.appendAssumeCapacity(runtime_path);
+    for (host_inputs.items[pre_end..post_end], 0..) |bytes, i| {
+        const extension = if (backend.wasm.ObjectArchive.isArchive(bytes)) ".a" else ".o";
+        const filename = try std.fmt.allocPrint(ctx.arena, "platform-post-{d}{s}", .{ i, extension });
+        const path = try std.fs.path.join(ctx.arena, &.{ temp_dir, filename });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, path, bytes) catch |err| {
+            std.log.err("Failed to stage Wasm host input for preparation: {}", .{err});
+            return error.WasmOutputWriteFailed;
+        };
+        linker_inputs.appendAssumeCapacity(path);
+    }
+
+    const prepared_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "roc_prepared_host.o" });
+    linker.linkWasmRelocatable(ctx, prepared_path, linker_inputs.items) catch |err| {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = link_inputs.target_name,
+        } });
+    };
+
+    const linked_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, prepared_path, ctx.gpa, .unlimited);
+    defer ctx.gpa.free(linked_bytes);
+
+    var prepared_module = try preloadWasmObject(ctx, prepared_path, null, linked_bytes);
+    defer prepared_module.deinit();
+    try exportWasmFunctionsByName(&prepared_module, platform_exports.items);
+    const prepared_bytes = try prepared_module.encodeRelocatable(ctx.gpa);
+    cache_manager.storeRawBytes(cache_key, prepared_bytes, cache_dir);
+    return .{ .owned = prepared_bytes };
+}
+
+fn writeDefaultPlatformExecutableObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
+    const bytes = DefaultPlatformExecutableObjects.forTarget(target) orelse return null;
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformExecutableObjects.filename(target) });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
+        std.log.err("Failed to write default platform executable object {s}: {}", .{ runtime_path, err });
+        return err;
+    };
+    return runtime_path;
+}
+
 /// The host inputs of a link, in link order.
 fn hostInputPaths(ctx: *CliCtx, link_inputs: PlatformLinkInputs) std.mem.Allocator.Error![]const []const u8 {
     var paths = try std.array_list.Managed([]const u8).initCapacity(
@@ -7636,8 +8961,10 @@ fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
 }
 
 fn llvmBuildLinkAbi(target: RocTarget, synthetic_default_platform: bool) linker.TargetAbi {
-    if (synthetic_default_platform and target.toOsTag() == .linux) {
-        return .musl;
+    if (synthetic_default_platform) {
+        const os = target.toOsTag();
+        if (os == .linux) return .musl;
+        if (os == .freebsd or os == .netbsd) return .freestanding;
     }
     return linker.TargetAbi.fromRocTarget(target);
 }
@@ -7677,7 +9004,7 @@ fn rejectRequiredExecutableOutput(ctx: *CliCtx, selected: target_selection.Selec
             try stderr.print("the archive.\n", .{});
         },
         .shared => {
-            if (selected.target == .wasm32) {
+            if (selected.target.toCpuArch() == .wasm32) {
                 try stderr.print("Error: This platform cannot be run directly.\n\n", .{});
                 try stderr.print("This platform targets wasm32 and produces a .wasm module. Use 'roc build'\n", .{});
                 try stderr.print("to produce the wasm artifact, then load it with the host application.\n", .{});
@@ -7783,12 +9110,16 @@ fn configuredWasmStackBytes(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTarg
     return linker.DEFAULT_WASM_STACK_SIZE;
 }
 
-fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) usize {
+/// The configured initial wasm memory, or null when neither the CLI nor the
+/// platform's targets config specifies one. Null lets the linker size memory
+/// from the data segments plus the stack, which is always sufficient for
+/// those regions. The host must grow memory for its heap independently.
+fn configuredWasmMinimumMemory(args: cli_args.BuildArgs, wasm: ?roc_target.WasmTargetConfig) ?usize {
     if (args.wasm_memory) |bytes| return bytes;
     if (wasm) |config| {
         if (config.minimum_memory) |bytes| return bytes;
     }
-    return linker.DEFAULT_WASM_INITIAL_MEMORY;
+    return null;
 }
 
 /// Whether linked wasm output may assume linear memory starts zero-filled.
@@ -7838,26 +9169,14 @@ fn configureWasmDataBase(module: *backend.wasm.WasmModule, wasm: ?roc_target.Was
     }
 }
 
-fn exportConfiguredWasmEntrypoints(module: *backend.wasm.WasmModule) CliMainError!void {
-    try module.exportGlobalSymbols();
-}
-
 fn addWasmObject(
     ctx: *CliCtx,
     module: *backend.wasm.WasmModule,
     path: []const u8,
     member_name: ?[]const u8,
     bytes: []const u8,
-    loaded_module: *bool,
 ) (backend.wasm.WasmModule.ParseError || backend.wasm.WasmModule.MergeError)!void {
     var next_module = try preloadWasmObject(ctx, path, member_name, bytes);
-
-    if (!loaded_module.*) {
-        module.* = next_module;
-        loaded_module.* = true;
-        return;
-    }
-
     defer next_module.deinit();
 
     var merge_result = try module.mergeModule(&next_module);
@@ -7869,12 +9188,11 @@ fn addWasmInput(
     module: *backend.wasm.WasmModule,
     owned_inputs: *std.ArrayList([]u8),
     path: []const u8,
-    loaded_module: *bool,
 ) CliMainError!void {
     const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
 
     if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
-        try addWasmObject(ctx, module, path, null, bytes, loaded_module);
+        try addWasmObject(ctx, module, path, null, bytes);
         return;
     }
 
@@ -7890,18 +9208,36 @@ fn addWasmInput(
     };
 
     while (true) {
-        const maybe_member = iter.next() catch |err| {
+        const member = (iter.next() catch |err| {
             std.log.err("Failed to read wasm archive {s}: {}", .{ path, err });
             return err;
-        };
-        const member = maybe_member orelse break;
+        }) orelse break;
         member_count += 1;
-        try addWasmObject(ctx, module, path, member.name, member.bytes, loaded_module);
+        try addWasmObject(ctx, module, path, member.name, member.bytes);
     }
 
     if (member_count == 0) {
         std.log.err("Wasm archive {s} does not contain object members", .{path});
         return error.EmptyArchive;
+    }
+}
+
+fn exportWasmFunctionsByName(
+    module: *backend.wasm.WasmModule,
+    names: []const []const u8,
+) CliMainError!void {
+    for (names) |name| {
+        var already_exported = false;
+        for (module.exports.items) |exp| {
+            if (exp.kind == .func and std.mem.eql(u8, exp.name, name)) {
+                already_exported = true;
+                break;
+            }
+        }
+        if (already_exported) continue;
+
+        const function_index = try module.findDefinedFunctionIndexExact(name);
+        try module.addExport(name, .func, function_index);
     }
 }
 
@@ -7938,6 +9274,15 @@ fn appendWasmInputExportNames(
 ) CliMainError!void {
     const bytes = try appendOwnedWasmInput(ctx, owned_inputs, path);
 
+    try appendWasmInputBytesExportNames(ctx, exports, path, bytes);
+}
+
+fn appendWasmInputBytesExportNames(
+    ctx: *CliCtx,
+    exports: *std.array_list.Managed([]const u8),
+    path: []const u8,
+    bytes: []const u8,
+) CliMainError!void {
     if (backend.wasm.ObjectArchive.isWasmObject(bytes)) {
         try appendWasmObjectExportNames(ctx, exports, path, null, bytes);
         return;
@@ -7997,6 +9342,7 @@ fn writeDevWasmObject(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
+    cpu_level: roc_target.CpuLevel,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .Debug) {
@@ -8018,7 +9364,10 @@ fn writeDevWasmObject(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
         &wasm_module,
+        cpu_level,
     );
     wasm_module_owned_here = false;
     defer codegen.deinit();
@@ -8043,6 +9392,7 @@ fn writeDevWasmObject(
         var merge_result = try codegen.module.mergeModuleForObject(&builtins_module);
         merge_result.deinit();
     }
+    try mergeBoxyRuntimeWasm(ctx, &codegen.module, &lowered.lir_result, .relocatable_object);
 
     const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&codegen.module) catch |err| {
         std.log.err("Failed to locate wasm builtin symbols after object merge: {}", .{err});
@@ -8054,6 +9404,7 @@ fn writeDevWasmObject(
     defer ctx.gpa.free(static_rc_helpers);
     codegen.static_data_rc_helpers = static_rc_helpers;
     try codegen.registerIndirectCallTypes();
+    if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
     try codegen.compileStaticDataRcHelpers(static_rc_helpers);
 
@@ -8092,6 +9443,8 @@ fn rocBuildWasmSurgical(
     link_type: roc_target.OutputKind,
     final_output_path: []const u8,
     build_cache_dir: []const u8,
+    cache_manager: *CacheManager,
+    wasm_host_cache_dir: []const u8,
     platform_dir: []const u8,
     targets_config: roc_target.TargetsConfig,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -8110,7 +9463,7 @@ fn rocBuildWasmSurgical(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports);
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -8124,7 +9477,7 @@ fn rocBuildWasmSurgical(
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
 
     if (link_inputs.wasm != null) {
-        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports);
+        const obj_path = try writeDevWasmObject(ctx, build_cache_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
         const object_files = try ctx.arena.alloc([]const u8, 1);
         object_files[0] = obj_path;
         const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
@@ -8148,6 +9501,7 @@ fn rocBuildWasmSurgical(
             .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
             .wasm_debug_info = args.debug,
             .wasm_optimize = wasmOptimizeMode(args.opt),
+            .wasm_cpu_level = target.cpuLevel(),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .wasm_exports = wasm_exports,
             .platform_files_dir = link_inputs.platform_files_dir,
@@ -8163,32 +9517,49 @@ fn rocBuildWasmSurgical(
         return;
     }
 
-    var loaded_module = true;
-    var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
+    const needs_boxy_runtime = lirResultNeedsBoxyRuntime(&lowered.lir_result);
+    var prepared_host: ?PreparedWasmHost = null;
+    defer if (prepared_host) |host| host.deinit(ctx.gpa);
+    var wasm_module_owned_here = true;
+    var wasm_module = if (needs_boxy_runtime) blk: {
+        prepared_host = try loadPreparedWasmHost(
+            ctx,
+            cache_manager,
+            wasm_host_cache_dir,
+            link_inputs,
+        );
+        break :blk try preloadWasmObject(ctx, "Boxy-prepared Wasm host", null, prepared_host.?.bytes());
+    } else backend.wasm.WasmModule.init(ctx.gpa);
+    errdefer if (wasm_module_owned_here) wasm_module.deinit();
+
+    if (needs_boxy_runtime) {
+        try wasm_module.prepareObjectAbiForFinalLink();
+    } else {
+        for (link_inputs.platform_files_pre) |path| {
+            try addWasmInput(ctx, &wasm_module, &owned_inputs, path);
+        }
+        for (link_inputs.platform_files_post) |path| {
+            try addWasmInput(ctx, &wasm_module, &owned_inputs, path);
+        }
+
+        try wasm_module.exportGlobalSymbols();
+        try wasm_module.prepareObjectAbiForFinalLink();
+
+        const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
+        if (builtins_bytes.len > 0) {
+            var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
+                std.log.err("Failed to preload wasm builtins: {}", .{err});
+                return err;
+            };
+            defer builtins_module.deinit();
+
+            var merge_result = try wasm_module.mergeModule(&builtins_module);
+            merge_result.deinit();
+        }
+    }
     configureWasmDataBase(&wasm_module, link_inputs.wasm);
-    errdefer if (loaded_module) wasm_module.deinit();
 
-    for (link_inputs.platform_files_pre) |path| {
-        try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
-    }
-    for (link_inputs.platform_files_post) |path| {
-        try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
-    }
-
-    try exportConfiguredWasmEntrypoints(&wasm_module);
-    wasm_module.removeMemoryAndTableImports();
-
-    const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
-    if (builtins_bytes.len > 0) {
-        var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, true) catch |err| {
-            std.log.err("Failed to preload wasm builtins: {}", .{err});
-            return err;
-        };
-        defer builtins_module.deinit();
-
-        var merge_result = try wasm_module.mergeModule(&builtins_module);
-        merge_result.deinit();
-    }
+    try mergeBoxySidecarWasm(ctx, &wasm_module, &lowered.lir_result, .final_link);
 
     const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&wasm_module) catch |err| {
         std.log.err("Failed to locate wasm builtin symbols after merge: {}", .{err});
@@ -8199,10 +9570,13 @@ fn rocBuildWasmSurgical(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
         &wasm_module,
+        target.cpuLevel(),
     );
     defer codegen.deinit();
-    loaded_module = false;
+    wasm_module_owned_here = false;
     codegen.configureBuiltinRelocs(builtin_symbols);
     codegen.configureStaticDataAddressTracking();
 
@@ -8212,6 +9586,7 @@ fn rocBuildWasmSurgical(
     try codegen.registerIndirectCallTypes();
     codegen.configureSymbolAbi();
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
+    if (needs_boxy_runtime) try codegen.registerBoxySymbolTargets();
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
     try codegen.compileStaticDataRcHelpers(static_rc_helpers);
 
@@ -8356,29 +9731,23 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
 }
 
 fn devBackendPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
-    return switch (target_arch) {
-        .x86_64 => "x64 Backend",
-        .aarch64 => "arm64 Backend",
-        .wasm32 => "wasm32 Bytecode Generation",
-        else => {
-            if (builtin.mode == .Debug) {
-                std.debug.panic(
-                    "dev code-generation timing requested for unsupported architecture {s}",
-                    .{@tagName(target_arch)},
-                );
-            }
-            unreachable;
-        },
-    };
+    if (target_arch == .x86_64) return "x64 Backend";
+    if (target_arch == .aarch64) return "arm64 Backend";
+    if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
+    if (builtin.mode == .Debug) {
+        std.debug.panic(
+            "dev code-generation timing requested for unsupported architecture {s}",
+            .{@tagName(target_arch)},
+        );
+    }
+    unreachable;
 }
 
 fn devInstructionGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
-    return switch (target_arch) {
-        .x86_64 => "x64 Instruction Generation",
-        .aarch64 => "arm64 Instruction Generation",
-        .wasm32 => "wasm32 Bytecode Generation",
-        else => devBackendPhaseName(target_arch),
-    };
+    if (target_arch == .x86_64) return "x64 Instruction Generation";
+    if (target_arch == .aarch64) return "arm64 Instruction Generation";
+    if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
+    return devBackendPhaseName(target_arch);
 }
 
 fn devBackendBreakdown(timing: backend.ObjectFileCompiler.TimingSnapshot) [8]progress.SubTiming {
@@ -8405,7 +9774,7 @@ test "dev backend timing labels name the backend and emitted instruction format"
 fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
     return switch (target.toOsTag()) {
         .macos, .windows => false,
-        else => true,
+        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => true,
     };
 }
 
@@ -8419,6 +9788,18 @@ fn llvmCpuNameForTarget(std_target: std.Target) []const u8 {
 
 fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allocator.Error![]const u8 {
     return roc_target.llvmFeatureString(allocator, std_target);
+}
+
+fn llvmObjectUsesPic(link_type: roc_target.OutputKind, fuzz: bool) bool {
+    return link_type == .shared or fuzz;
+}
+
+test "LLVM fuzz output uses position-independent code" {
+    try std.testing.expect(llvmObjectUsesPic(.archive, true));
+    try std.testing.expect(llvmObjectUsesPic(.exe, true));
+    try std.testing.expect(llvmObjectUsesPic(.shared, false));
+    try std.testing.expect(!llvmObjectUsesPic(.archive, false));
+    try std.testing.expect(!llvmObjectUsesPic(.exe, false));
 }
 
 fn compileLlvmAppObject(
@@ -8443,6 +9824,8 @@ fn compileLlvmAppObject(
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
         ctx.gpa,
         &lowered.lir_result.store,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
         std_target,
     );
     codegen.layout_store = &lowered.lir_result.layouts;
@@ -8474,9 +9857,9 @@ fn compileLlvmAppObject(
 
     const target_name = @tagName(target);
     const opt_name = @tagName(args.opt);
-    // Shared libraries need position-independent code; keep their objects
-    // separate from exe objects in the artifact directory.
-    const pic = link_type == .shared;
+    // Shared libraries and fuzz hosts need position-independent code; keep
+    // their objects separate from ordinary exe/archive objects.
+    const pic = llvmObjectUsesPic(link_type, args.fuzz);
     const kind_suffix: []const u8 = if (pic) "_pic" else "";
     const debug_suffix: []const u8 = if (emit_debug_info) "_debug" else "";
     var tuning_hash = std.hash.Crc32.init();
@@ -8484,8 +9867,9 @@ fn compileLlvmAppObject(
     tuning_hash.update(&[_]u8{0});
     tuning_hash.update(llvm_features);
     const tuning_hash_value = tuning_hash.final();
-    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
-    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix });
+    const fuzz_suffix: []const u8 = if (args.fuzz) "_fuzz" else "";
+    const bitcode_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}{s}.bc", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix, fuzz_suffix });
+    const object_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_{s}_{s}_{x}{s}{s}{s}.o", .{ target_name, opt_name, tuning_hash_value, kind_suffix, debug_suffix, fuzz_suffix });
     const artifact_dir = try createUniqueTempDir(ctx);
     errdefer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, artifact_dir) catch {};
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, bitcode_filename });
@@ -8512,6 +9896,7 @@ fn compileLlvmAppObject(
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = args.debug,
+        .fuzz = args.fuzz,
         .link_builtins = true,
         .pic = pic,
         // Linked LLVM output uses the symbol ABI: builtins reach the host
@@ -8569,6 +9954,7 @@ fn writeCombinedLlvmWasmObject(
     ctx: *CliCtx,
     artifact_dir: []const u8,
     app_object_path: []const u8,
+    lir_result: *const lir.Program.Result,
     static_data_exports: []const backend.StaticDataExport,
     opt: cli_args.OptLevel,
     owned_inputs: *std.ArrayList([]u8),
@@ -8585,6 +9971,7 @@ fn writeCombinedLlvmWasmObject(
     var app_merge = try wasm_module.mergeModuleForObject(&app_module);
     app_merge.deinit();
 
+    try mergeBoxyRuntimeWasm(ctx, &wasm_module, lir_result, .relocatable_object);
     try mergeStaticDataWasmModule(ctx, &wasm_module, static_data_exports, .relocatable_object);
     try wasm_module.verifyNoLinkObjectContract();
 
@@ -8604,6 +9991,7 @@ fn writeCombinedLlvmWasmObject(
 fn rocBuildWasmLlvm(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
+    target: RocTarget,
     link_type: roc_target.OutputKind,
     final_output_path: []const u8,
     platform_dir: []const u8,
@@ -8623,7 +10011,7 @@ fn rocBuildWasmLlvm(
     const app_object = try compileLlvmAppObject(
         ctx,
         args,
-        .wasm32,
+        target,
         link_type,
         lowered,
         entrypoints,
@@ -8640,12 +10028,12 @@ fn rocBuildWasmLlvm(
     var owned_inputs: std.ArrayList([]u8) = .empty;
     defer freeOwnedWasmInputs(ctx, &owned_inputs);
 
-    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, .wasm32, link_type);
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
-        try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{combined_obj});
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, static_data_exports, args.opt, &owned_inputs);
+        try writeArchiveOutput(ctx, target, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
 
@@ -8654,107 +10042,46 @@ fn rocBuildWasmLlvm(
         return error.UnsupportedTarget;
     }
 
-    if (link_inputs.wasm != null) {
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, static_data_exports, args.opt, &owned_inputs);
-        const object_files = try ctx.arena.alloc([]const u8, 1);
-        object_files[0] = combined_obj;
-        const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
+    const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, static_data_exports, args.opt, &owned_inputs);
+    const object_files = try ctx.arena.alloc([]const u8, 1);
+    object_files[0] = combined_obj;
+    const wasm_exports = try collectWasmPlatformExports(ctx, link_inputs, &owned_inputs);
 
-        const link_config = linker.LinkConfig{
-            .target_format = .wasm,
-            .target_abi = null,
-            .target_os = .freestanding,
-            .target_arch = .wasm32,
-            .output_path = final_output_path,
-            .object_files = object_files,
-            .platform_files_pre = link_inputs.platform_files_pre,
-            .platform_files_post = link_inputs.platform_files_post,
-            .extra_args = &.{},
-            .can_exit_early = false,
-            .disable_output = false,
-            .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-            .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-            .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-            .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
-            .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
-            .wasm_debug_info = args.debug,
-            .wasm_optimize = wasmOptimizeMode(args.opt),
-            .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
-            .wasm_exports = wasm_exports,
-            .platform_files_dir = link_inputs.platform_files_dir,
-            .scratch_dir = app_object.artifact_dir,
-        };
-
-        linker.link(ctx, link_config) catch |err| {
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = link_inputs.target_name,
-            } });
-        };
-        return;
-    }
-
-    var loaded_module = true;
-    var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
-    configureWasmDataBase(&wasm_module, link_inputs.wasm);
-    errdefer if (loaded_module) wasm_module.deinit();
-
-    for (link_inputs.platform_files_pre) |path| {
-        try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
-    }
-    for (link_inputs.platform_files_post) |path| {
-        try addWasmInput(ctx, &wasm_module, &owned_inputs, path, &loaded_module);
-    }
-
-    try exportConfiguredWasmEntrypoints(&wasm_module);
-    wasm_module.removeMemoryAndTableImports();
-
-    const app_bytes = try appendOwnedWasmInput(ctx, &owned_inputs, app_object.object_path);
-    var app_module = try preloadWasmObject(ctx, app_object.object_path, null, app_bytes);
-    defer app_module.deinit();
-    var app_merge = try wasm_module.mergeModule(&app_module);
-    app_merge.deinit();
-
-    try mergeStaticDataWasmModule(ctx, &wasm_module, static_data_exports, .final_link);
-
-    var host_to_app_map: std.ArrayList(backend.wasm.WasmModule.HostToAppEntry) = .empty;
-    defer host_to_app_map.deinit(ctx.gpa);
-    try host_to_app_map.ensureTotalCapacity(ctx.gpa, entrypoints.len);
-
-    for (entrypoints) |entry| {
-        const fn_index = try wasm_module.findDefinedFunctionIndexExact(entry.symbol_name);
-        host_to_app_map.appendAssumeCapacity(.{
-            .name = entry.symbol_name,
-            .fn_index = fn_index,
-        });
-    }
-
-    try wasm_module.linkHostToAppCalls(host_to_app_map.items);
-
-    const memory_config = configuredWasmMemory(args, link_inputs.wasm);
-    try wasm_module.finalizeMemoryAndTableWithConfig(memory_config);
-    try wasm_module.resolveRelocations();
-
-    const called_fns = try ctx.gpa.alloc(bool, wasm_module.liveFunctionCount());
-    defer ctx.gpa.free(called_fns);
-    @memset(called_fns, false);
-    try wasm_module.eliminateDeadCode(called_fns);
-
-    try wasm_module.verifyNoBuiltinImports();
-    try wasm_module.materializeFuncBodies();
-
-    const wasm_bytes = try wasm_module.encode(ctx.gpa);
-    defer ctx.gpa.free(wasm_bytes);
-    backend.writeFileWindowsAvSafe(ctx.io.std_io, final_output_path, wasm_bytes) catch |err| {
-        std.log.err("Failed to write wasm output: {}", .{err});
-        return error.WasmOutputWriteFailed;
+    const link_config = linker.LinkConfig{
+        .target_format = .wasm,
+        .target_abi = null,
+        .target_os = .freestanding,
+        .target_arch = .wasm32,
+        .output_path = final_output_path,
+        .object_files = object_files,
+        .platform_files_pre = link_inputs.platform_files_pre,
+        .platform_files_post = link_inputs.platform_files_post,
+        .extra_args = &.{},
+        .can_exit_early = false,
+        .disable_output = false,
+        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
+        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
+        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
+        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+        .wasm_debug_info = args.debug,
+        .wasm_optimize = wasmOptimizeMode(args.opt),
+        .wasm_cpu_level = target.cpuLevel(),
+        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
+        .wasm_exports = wasm_exports,
+        .platform_files_dir = link_inputs.platform_files_dir,
+        .scratch_dir = app_object.artifact_dir,
     };
 
-    wasm_module.deinit();
-    loaded_module = false;
+    linker.link(ctx, link_config) catch |err| {
+        return ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = link_inputs.target_name,
+        } });
+    };
 }
 
-fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
+fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -8811,6 +10138,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const target = selected.target;
     const link_type = selected.output;
 
+    if (args.fuzz and target.toCpuArch() == .wasm32) {
+        try ctx.io.stderr().writeAll("Error: `roc build --fuzz` does not support WebAssembly targets.\n");
+        return error.UnsupportedTarget;
+    }
+
     if (target.isDynamic() and builtin.target.os.tag != .linux) {
         renderValidationError(ctx, .{
             .unsupported_glibc_cross = .{
@@ -8821,7 +10153,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         return error.UnsupportedCrossCompilation;
     }
 
-    if (target != .wasm32 and target.ptrBitWidth() != 64) {
+    if (target.toCpuArch() != .wasm32 and target.ptrBitWidth() != 64) {
         try ctx.io.stderr().print(
             "Error: roc build --opt={s} requires a 64-bit native host target, but {s} has {d}-bit pointers.\n",
             .{ @tagName(args.opt), @tagName(target), target.ptrBitWidth() },
@@ -8831,19 +10163,17 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
-    switch (target_arch) {
-        .x86_64, .aarch64, .wasm32 => {},
-        else => {
-            try ctx.io.stderr().print(
-                "Error: roc build --opt={s} does not support the '{s}' architecture.\n",
-                .{ @tagName(args.opt), @tagName(target_arch) },
-            );
-            return error.UnsupportedTarget;
-        },
+    if (target_arch != .x86_64 and target_arch != .aarch64 and target_arch != .wasm32) {
+        try ctx.io.stderr().print(
+            "Error: roc build --opt={s} does not support the '{s}' architecture.\n",
+            .{ @tagName(args.opt), @tagName(target_arch) },
+        );
+        return error.UnsupportedTarget;
     }
 
     if (args.require_executable_output and link_type != .exe) {
-        return rejectRequiredExecutableOutput(ctx, selected);
+        try rejectRequiredExecutableOutput(ctx, selected);
+        unreachable;
     }
 
     const final_output_path = if (args.output != null)
@@ -8873,7 +10203,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         return error.NoPlatformSource;
     };
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
@@ -8881,8 +10211,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin("Specialization");
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    reporter.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -8891,12 +10223,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         relation_artifacts,
         .linked_output,
         args.opt,
+        specialization_strategy,
         target_usize,
         args.synthetic_default_platform,
         &spec_timing,
     );
     defer lowered.deinit();
-    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    finishPostCheckLowering(&reporter, &spec_timing);
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -8922,11 +10255,12 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         unreachable;
     }
 
-    if (target == .wasm32) {
+    if (target.toCpuArch() == .wasm32) {
         reporter.begin("LLVM IR Generation");
         try rocBuildWasmLlvm(
             ctx,
             args,
+            target,
             link_type,
             final_output_path,
             platform_dir,
@@ -8940,7 +10274,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     } else {
         reporter.begin("LLVM IR Generation");
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformRuntimeObjects.forTarget(target) != null;
+        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformExecutableObjects.forTarget(target) != null;
 
         const app_object = try compileLlvmAppObject(
             ctx,
@@ -8954,7 +10288,16 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             args.synthetic_default_platform,
             &reporter,
         );
-        defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
+
+        if (args.keep_temp) {
+            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+            const config = reporting.ReportingConfig.initColorTerminal();
+            const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{app_object.artifact_dir});
+            var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+            defer report.deinit();
+            reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+        }
+        defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
         var static_data_obj_path: ?[]const u8 = null;
         if (static_data_exports.len > 0) {
@@ -8978,11 +10321,14 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             try object_files.append(path);
         }
         if (enable_default_platform_runtime) {
-            if (try writeDefaultPlatformRuntimeObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
+            if (try writeDefaultPlatformExecutableObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
                 try object_files.append(runtime_path);
             } else {
                 return error.UnsupportedTarget;
             }
+        }
+        if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) {
+            try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result);
         }
         reporter.end();
 
@@ -9055,14 +10401,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
     }
 
-    if (args.warning_count_out) |warning_count_out| {
-        warning_count_out.* = total_warning_count;
-    }
-
-    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
+    return .{
+        .output_path = final_output_path,
+        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
+    };
 }
 
-fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
+fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -9077,16 +10422,49 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
 
     const cache_config = CacheConfig{
-        .enabled = true,
-        .verbose = false,
+        .enabled = !args.no_cache,
+        .verbose = args.verbose,
         .roc_ctx = ctx.coreCtx(),
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    var prepared_host_cache_manager = CacheManager.init(ctx.gpa, .{
+        .enabled = true,
+        .verbose = args.verbose,
+        .roc_ctx = ctx.coreCtx(),
+    }, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
+    const wasm_host_cache_dir = try cache_manager.config.getWasmHostCacheDir(ctx.arena);
     ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
     };
 
     var build_env = try initCliBuildEnv(ctx, .{
@@ -9133,7 +10511,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const link_type = selected.output;
 
     if (args.require_executable_output and link_type != .exe) {
-        return rejectRequiredExecutableOutput(ctx, selected);
+        try rejectRequiredExecutableOutput(ctx, selected);
+        unreachable;
     }
 
     const target_arch = target.toCpuArch();
@@ -9148,15 +10527,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         return error.UnsupportedCrossCompilation;
     }
 
-    switch (target_arch) {
-        .x86_64, .aarch64, .wasm32 => {},
-        else => {
-            try ctx.io.stderr().print(
-                "Error: The native object backend does not support the '{s}' architecture.\n",
-                .{@tagName(target_arch)},
-            );
-            return error.UnsupportedTarget;
-        },
+    if (target_arch != .x86_64 and target_arch != .aarch64 and target_arch != .wasm32) {
+        try ctx.io.stderr().print(
+            "Error: The native object backend does not support the '{s}' architecture.\n",
+            .{@tagName(target_arch)},
+        );
+        return error.UnsupportedTarget;
     }
     const code_generation_phase_name = devBackendPhaseName(target_arch);
 
@@ -9187,7 +10563,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         return error.NoPlatformSource;
     };
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
@@ -9195,8 +10571,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
 
-    reporter.begin("Specialization");
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    reporter.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -9205,12 +10583,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         relation_artifacts,
         .linked_output,
         args.opt,
+        specialization_strategy,
         target_usize,
         args.synthetic_default_platform,
         &spec_timing,
     );
     defer lowered.deinit();
-    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    finishPostCheckLowering(&reporter, &spec_timing);
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -9238,6 +10617,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             link_type,
             final_output_path,
             build_cache_dir,
+            &prepared_host_cache_manager,
+            wasm_host_cache_dir,
             platform_dir,
             resolved_targets_config,
             &lowered,
@@ -9257,7 +10638,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         if (!args.suppress_build_status) {
             try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
         }
-        return;
+        return .{
+            .output_path = final_output_path,
+            .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
+        };
     }
 
     reporter.begin(code_generation_phase_name);
@@ -9269,7 +10653,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     }
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
-    object_compiler.enable_default_platform_runtime = args.synthetic_default_platform;
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
 
@@ -9283,12 +10666,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
     const obj_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, obj_filename });
-    object_compiler.compileToObjectFileAndWrite(
+    const uses_boxy = object_compiler.compileToObjectFileAndWrite(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         entrypoints,
         static_data_exports,
         lowered.lir_result.store.getProcSpecs(),
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
         target,
         obj_path,
         ctx.coreCtx(),
@@ -9311,12 +10696,21 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
     if (args.synthetic_default_platform) {
-        if (try writeDefaultPlatformRuntimeObject(ctx, build_scratch_dir, target)) |runtime_path| {
+        if (try writeDefaultPlatformExecutableObject(ctx, build_scratch_dir, target)) |runtime_path| {
             try object_files.append(runtime_path);
         } else {
             return error.UnsupportedTarget;
         }
     }
+    // Boxy programs reference the `roc_boxy_*` runtime and, in their
+    // entrypoints, call `roc_boxy_init_embedded`. Link the boxy runtime object
+    // and a data object carrying the sidecar those symbols read.
+    if (uses_boxy) {
+        try appendBoxyRuntimeLinkInputs(ctx, &object_files, build_scratch_dir, target, &lowered.lir_result);
+    }
+    reporter.end();
+
+    reporter.begin("Linking");
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
     } else {
@@ -9384,16 +10778,15 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
     }
 
-    if (args.warning_count_out) |warning_count_out| {
-        warning_count_out.* = total_warning_count;
-    }
-
-    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
+    return .{
+        .output_path = final_output_path,
+        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
+    };
 }
 
 /// Build a standalone binary with the interpreter and an embedded LIR image.
 /// This is the primary build path that creates executables or libraries without requiring IPC.
-fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
+fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
 
     var reporter = makeReporter(ctx, "roc build", args.timings);
@@ -9417,7 +10810,34 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
     ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
     };
 
     var build_env = try initCliBuildEnv(ctx, .{
@@ -9463,7 +10883,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const target = selected.target;
     const link_type = selected.output;
 
-    const native_target = RocTarget.detectNative();
+    const native_target = roc_target.host_cpu.nativeTarget();
     if (target != native_target) {
         const stderr = ctx.io.stderr();
         try stderr.print("Error: The interpreter backend only supports building for the native target ({s}).\n\n", .{@tagName(native_target)});
@@ -9473,7 +10893,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     }
 
     if (args.require_executable_output and link_type != .exe) {
-        return rejectRequiredExecutableOutput(ctx, selected);
+        try rejectRequiredExecutableOutput(ctx, selected);
+        unreachable;
     }
 
     const target_arch = target.toCpuArch();
@@ -9505,7 +10926,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         return error.NoPlatformSource;
     };
 
-    const root_artifact = build_env.executableRootCheckedArtifact();
+    const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
@@ -9518,8 +10939,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    reporter.begin("Specialization");
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    reporter.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
     var lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
@@ -9528,12 +10951,13 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         relation_artifacts,
         .{ .platform_entrypoints = .lir_image },
         args.opt,
+        specialization_strategy,
         base.target.TargetUsize.native,
         false,
         &spec_timing,
     );
     defer lowered.deinit();
-    reporter.endWithBreakdownSequential(&specializationBreakdown(spec_timing.snapshot()));
+    finishPostCheckLowering(&reporter, &spec_timing);
 
     reporter.begin("LIR Image Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
@@ -9617,6 +11041,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
             .wasm_debug_info = args.debug,
             .wasm_optimize = wasmOptimizeMode(args.opt),
+            .wasm_cpu_level = target.cpuLevel(),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .platform_files_dir = link_inputs.platform_files_dir,
             .scratch_dir = build_cache_dir,
@@ -9644,11 +11069,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns_embed, args.verbose, cache_stats, cache_percent);
     }
 
-    if (args.warning_count_out) |warning_count_out| {
-        warning_count_out.* = total_warning_count;
-    }
-
-    exitBuildOnWarningsIfRequested(ctx, args, &build_env, total_warning_count);
+    return .{
+        .output_path = final_output_path,
+        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
+    };
 }
 
 // Test cache blob format
@@ -9703,6 +11127,86 @@ const CliTestRunSummary = struct {
     cached_modules: u32 = 0,
 };
 
+fn writeCliTestRunSummary(
+    writer: *std.Io.Writer,
+    summary: CliTestRunSummary,
+    elapsed_ns: u64,
+    fully_cached: bool,
+    use_color: bool,
+) std.Io.Writer.Error!void {
+    const all_passed = summary.failed == 0 and summary.compiler_errors == 0;
+    if (all_passed) {
+        try writer.print("All ({}) tests passed", .{summary.passed});
+    } else {
+        const total_tests = summary.passed + summary.failed + summary.compiler_errors;
+        try writer.print("Ran {} tests", .{total_tests});
+    }
+
+    try writer.writeAll(" in ");
+    try formatElapsedTime(writer, elapsed_ns);
+    try writer.writeByte('.');
+    if (fully_cached) try writer.writeAll(" (cached)");
+
+    if (all_passed) {
+        try writer.writeByte('\n');
+        return;
+    }
+
+    const green = if (use_color) ansi_term.green else "";
+    const red = if (use_color) ansi_term.red else "";
+    const yellow = if (use_color) ansi_term.yellow else "";
+    const reset = if (use_color) ansi_term.reset else "";
+    try writer.print(":\n    {s}{}{s} passed\n    {s}{}{s} failed\n    {s}{}{s} compiler errors\n", .{
+        green,
+        summary.passed,
+        reset,
+        red,
+        summary.failed,
+        reset,
+        yellow,
+        summary.compiler_errors,
+        reset,
+    });
+}
+
+test "issue 10624: roc test summaries share duration and cache formatting" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+
+    const cases = [_]struct {
+        summary: CliTestRunSummary,
+        fully_cached: bool,
+        expected: []const u8,
+    }{
+        .{
+            .summary = .{ .passed = 3 },
+            .fully_cached = false,
+            .expected = "All (3) tests passed in 1.2 ms.\n",
+        },
+        .{
+            .summary = .{ .passed = 3 },
+            .fully_cached = true,
+            .expected = "All (3) tests passed in 1.2 ms. (cached)\n",
+        },
+        .{
+            .summary = .{ .passed = 1, .failed = 1, .compiler_errors = 1 },
+            .fully_cached = false,
+            .expected = "Ran 3 tests in 1.2 ms.:\n    1 passed\n    1 failed\n    1 compiler errors\n",
+        },
+        .{
+            .summary = .{ .passed = 1, .failed = 1, .compiler_errors = 1 },
+            .fully_cached = true,
+            .expected = "Ran 3 tests in 1.2 ms. (cached):\n    1 passed\n    1 failed\n    1 compiler errors\n",
+        },
+    };
+
+    for (cases) |case| {
+        output.clearRetainingCapacity();
+        try writeCliTestRunSummary(&output.writer, case.summary, 1_200_000, case.fully_cached, false);
+        try std.testing.expectEqualStrings(case.expected, output.written());
+    }
+}
+
 const CliTestPlanEntry = struct {
     module_index: u32,
     root_index: u32,
@@ -9748,6 +11252,60 @@ const CliTestPlan = struct {
         deinitCliTestPlanEntries(allocator, self.entries);
     }
 };
+
+const CliTestCacheStats = struct {
+    modules_total: u64 = 0,
+    modules_cached: u64 = 0,
+    roots_total: u64 = 0,
+    roots_cached: u64 = 0,
+};
+
+fn cliTestCacheStats(plan: *const CliTestPlan) CliTestCacheStats {
+    var stats = CliTestCacheStats{
+        .modules_total = plan.modules.len,
+        .roots_total = plan.entries.len,
+    };
+    for (plan.modules) |module| {
+        if (module.cached_results != null) {
+            stats.modules_cached += 1;
+            stats.roots_cached += module.entry_count;
+        }
+    }
+    return stats;
+}
+
+fn cliTestCacheCounters(stats: CliTestCacheStats) [6]progress.Counter {
+    return .{
+        .{ .name = "Modules total", .count = stats.modules_total },
+        .{ .name = "Modules cached", .count = stats.modules_cached },
+        .{ .name = "Modules uncached", .count = stats.modules_total - stats.modules_cached },
+        .{ .name = "Roots total", .count = stats.roots_total },
+        .{ .name = "Roots cached", .count = stats.roots_cached },
+        .{ .name = "Roots uncached", .count = stats.roots_total - stats.roots_cached },
+    };
+}
+
+test "CLI test cache counters expose partial module and root hits" {
+    const counters = cliTestCacheCounters(.{
+        .modules_total = 46,
+        .modules_cached = 45,
+        .roots_total = 361,
+        .roots_cached = 356,
+    });
+
+    try std.testing.expectEqualStrings("Modules total", counters[0].name);
+    try std.testing.expectEqual(@as(u64, 46), counters[0].count);
+    try std.testing.expectEqualStrings("Modules cached", counters[1].name);
+    try std.testing.expectEqual(@as(u64, 45), counters[1].count);
+    try std.testing.expectEqualStrings("Modules uncached", counters[2].name);
+    try std.testing.expectEqual(@as(u64, 1), counters[2].count);
+    try std.testing.expectEqualStrings("Roots total", counters[3].name);
+    try std.testing.expectEqual(@as(u64, 361), counters[3].count);
+    try std.testing.expectEqualStrings("Roots cached", counters[4].name);
+    try std.testing.expectEqual(@as(u64, 356), counters[4].count);
+    try std.testing.expectEqualStrings("Roots uncached", counters[5].name);
+    try std.testing.expectEqual(@as(u64, 5), counters[5].count);
+}
 
 const CliCachedModuleTestResults = struct {
     results: []CliTestResultItem,
@@ -9813,15 +11371,26 @@ fn cliTestTranscriptEventPayload(event: CliTestTranscriptEvent) []const u8 {
 }
 
 fn cliTestCacheKey(
-    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey,
+    specialization_strategy: base.SpecializationStrategy,
 ) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(cli_test_cache_magic);
     hasher.update(build_options.compiler_version);
-    hasher.update(&artifact.key.bytes);
+    hasher.update(@tagName(specialization_strategy));
+    hasher.update(&artifact_key.bytes);
     var out: [32]u8 = undefined;
     hasher.final(&out);
     return out;
+}
+
+test "CLI test cache key includes specialization strategy" {
+    const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
+        .bytes = [_]u8{0x5a} ** 32,
+    };
+    const lss_key = cliTestCacheKey(artifact_key, .lss);
+    const boxy_key = cliTestCacheKey(artifact_key, .boxy);
+    try std.testing.expect(!std.mem.eql(u8, &lss_key, &boxy_key));
 }
 
 fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
@@ -9840,6 +11409,7 @@ fn storeCliTestResultsInCache(
     ctx: *CliCtx,
     cache_manager: ?*CacheManager,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    specialization_strategy: base.SpecializationStrategy,
     results: []const CliTestResultItem,
 ) (Allocator.Error || error{NoHomeDirectory})!void {
     const manager = cache_manager orelse return;
@@ -9878,7 +11448,7 @@ fn storeCliTestResultsInCache(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    manager.storeRawBytes(cliTestCacheKey(artifact), bytes.items, entries_dir);
+    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy), bytes.items, entries_dir);
 }
 
 fn loadCliTestTranscriptEvents(
@@ -9935,6 +11505,7 @@ fn loadCachedCliTestResults(
     ctx: *CliCtx,
     cache_manager: ?*CacheManager,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    specialization_strategy: base.SpecializationStrategy,
     module: BuildEnv.CompiledModuleInfo,
     test_roots: []const check.CheckedArtifact.RootRequest,
 ) (Allocator.Error || error{NoHomeDirectory})!?CliCachedModuleTestResults {
@@ -9942,7 +11513,7 @@ fn loadCachedCliTestResults(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    const data = manager.loadRawBytes(cliTestCacheKey(artifact), entries_dir) orelse return null;
+    const data = manager.loadRawBytes(cliTestCacheKey(artifact.key, specialization_strategy), entries_dir) orelse return null;
     defer ctx.gpa.free(data);
 
     var offset: usize = 0;
@@ -10121,7 +11692,7 @@ fn testRootRegion(
 ) base.Region {
     return switch (root.source) {
         .statement => |statement| env.store.getStatementRegion(statement),
-        else => {
+        .def, .expr, .required_binding, .hoisted => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("CLI test invariant violated: test root was not published from an expect statement", .{});
             }
@@ -10153,7 +11724,7 @@ fn collectExpectBindingPatterns(
 ) Allocator.Error![]CIR.Pattern.Idx {
     const statement_idx = switch (root.source) {
         .statement => |statement| statement,
-        else => return allocator.alloc(CIR.Pattern.Idx, 0),
+        .def, .expr, .required_binding, .hoisted => return allocator.alloc(CIR.Pattern.Idx, 0),
     };
     const statement = env.store.getStatement(statement_idx);
     if (statement != .s_expect) return allocator.alloc(CIR.Pattern.Idx, 0);
@@ -10207,6 +11778,7 @@ fn collectExpectBindingPatterns(
                         .s_import,
                         .s_alias_decl,
                         .s_nominal_decl,
+                        .s_where_alias_decl,
                         .s_type_anno,
                         .s_type_var_alias,
                         .s_runtime_error,
@@ -10293,6 +11865,9 @@ fn collectExpectBindingPatterns(
             .e_str_segment,
             .e_bytes_literal,
             .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_empty_list,
             .e_empty_record,
@@ -10317,13 +11892,8 @@ fn sourceBindingForPattern(env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) 
         const def = env.store.getDef(def_idx);
         if (def.pattern != pattern_idx) continue;
 
-        switch (env.store.getExpr(def.expr)) {
-            .e_lambda,
-            .e_closure,
-            .e_hosted_lambda,
-            => return null,
-            else => {},
-        }
+        const expr_tag = std.meta.activeTag(env.store.getExpr(def.expr));
+        if (expr_tag == .e_lambda or expr_tag == .e_closure or expr_tag == .e_hosted_lambda) return null;
 
         const pattern_region = env.store.getPatternRegion(def.pattern);
         const expr_region = env.store.getExprRegion(def.expr);
@@ -10396,6 +11966,27 @@ fn cliTestExecutionMode(opt: cli_args.OptLevel) CliTestExecutionMode {
     };
 }
 
+fn currentRuntimeSpecializationStrategy(
+    explicit: ?base.SpecializationStrategy,
+) base.SpecializationStrategy {
+    return explicit orelse .lss;
+}
+
+fn loweringProgressLabel(strategy: base.SpecializationStrategy) []const u8 {
+    return switch (strategy) {
+        .lss => "Specializing",
+        .boxy => "Lowering",
+    };
+}
+
+test "runtime specialization strategy helpers" {
+    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(null));
+    try std.testing.expectEqual(base.SpecializationStrategy.lss, currentRuntimeSpecializationStrategy(.lss));
+    try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.boxy));
+    try std.testing.expectEqualStrings("Specializing", loweringProgressLabel(.lss));
+    try std.testing.expectEqualStrings("Lowering", loweringProgressLabel(.boxy));
+}
+
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
         .size, .speed => .wrappers,
@@ -10411,6 +12002,13 @@ fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
 }
 
 fn tagReachabilityForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => true,
+        .dev, .interpreter => false,
+    };
+}
+
+fn proveRangesForOpt(opt: cli_args.OptLevel) bool {
     return switch (opt) {
         .size, .speed => true,
         .dev, .interpreter => false,
@@ -10468,10 +12066,11 @@ fn lowerCheckedSourceToLir(
     relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
     roots: CheckedLirRoots,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     target_usize: base.target.TargetUsize,
     proc_debug_names: bool,
     timing: ?*lir.CheckedPipeline.Timing,
-) Allocator.Error!lir.CheckedPipeline.LoweredProgram {
+) lir.CheckedPipeline.LowerResourceError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
         .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -10493,7 +12092,7 @@ fn lowerCheckedSourceToLir(
             // Host-visible data exports exist only in linked outputs.
             .include_provided_data_exports = switch (roots) {
                 .linked_output => true,
-                else => false,
+                .platform_entrypoints, .test_plan => false,
             },
             // Internal readonly values are embedded by linked outputs and dev
             // RunImages. LirImage deliberately remains pointer-width independent.
@@ -10507,20 +12106,31 @@ fn lowerCheckedSourceToLir(
             },
             .test_plan_metadata = switch (roots) {
                 .test_plan => |plan| plan.metadata,
-                else => &.{},
+                .platform_entrypoints, .linked_output => &.{},
+            },
+            .procedure_template_root_grouping = switch (roots) {
+                .test_plan => .shared_adjacent,
+                .platform_entrypoints, .linked_output => .isolated,
             },
         },
         .{
             .target_usize = target_usize,
+            .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .consume_dead_boxes = switch (roots) {
+                .linked_output => true,
+                .platform_entrypoints => |artifact| artifact == .dev_run_image,
+                .test_plan => false,
+            },
             // Test lowering executes inline expects at every opt level; other
             // backends omit them from optimized output.
             .inline_expects = switch (roots) {
                 .test_plan => .run,
-                else => inlineExpectModeForOpt(opt),
+                .platform_entrypoints, .linked_output => inlineExpectModeForOpt(opt),
             },
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
+            .prove_ranges = proveRangesForOpt(opt),
             .proc_debug_names = proc_debug_names,
             .timing = timing,
         },
@@ -10663,6 +12273,7 @@ fn interpreterTestFailureMessage(
         error.Crash => interpreter.getCrashMessage() orelse "Test crashed",
         error.ExpectErr => interpreter.getExpectErrMessage() orelse
             "The `?` operator evaluated an `Err` inside an `expect`",
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
     };
     return try allocator.dupe(u8, message);
 }
@@ -10689,7 +12300,7 @@ fn appendFailedCliTestResult(
 
 fn copyCliTestTranscriptEventsFromEval(
     allocator: Allocator,
-    events: []const eval.test_helpers.BoolRootEvent,
+    events: []const eval.Inspected.BoolRootEvent,
 ) Allocator.Error![]CliTestTranscriptEvent {
     if (events.len == 0) return &.{};
 
@@ -10878,10 +12489,11 @@ fn runInterpreterTestRoots(
     var roc_ops = echo_platform.makeDefaultRocOps(&host_env.echo_env, &hosted_fn_array);
     host_env.installCallbacks(&roc_ops);
     echo_platform.g_roc_ops = &roc_ops;
-    var interpreter = try eval.LirInterpreter.init(
+    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         &roc_ops,
         .preserve,
     );
@@ -10901,7 +12513,14 @@ fn runInterpreterTestRoots(
             // source snippet at the `?` itself.
             const failure_region = switch (err) {
                 error.ExpectErr => interpreter.getExpectErrRegion() orelse run.region,
-                else => run.region,
+                error.ComptimeExhaustiveness,
+                error.Crash,
+                error.DivisionByZero,
+                error.InvalidHostedFunctionSignature,
+                error.OutOfMemory,
+                error.RuntimeError,
+                error.UnsupportedHostedFunction,
+                => run.region,
             };
             const message = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err);
             var message_owned = true;
@@ -10913,7 +12532,14 @@ fn runInterpreterTestRoots(
                     message_owned = false;
                     break :blk null;
                 },
-                else => blk: {
+                error.ComptimeExhaustiveness,
+                error.DivisionByZero,
+                error.ExpectErr,
+                error.InvalidHostedFunctionSignature,
+                error.OutOfMemory,
+                error.RuntimeError,
+                error.UnsupportedHostedFunction,
+                => blk: {
                     message_owned = false;
                     break :blk message;
                 },
@@ -10991,7 +12617,7 @@ fn addCliTestResultToSummary(summary: *CliTestRunSummary, result: CliTestResult)
 fn cliTestResultItemFromEval(
     ctx: *CliCtx,
     run: CliTestRootRun,
-    eval_result: eval.test_helpers.BoolRootEvalResult,
+    eval_result: eval.Inspected.BoolRootEvalResult,
 ) Allocator.Error!CliTestResultItem {
     var transcript: []const CliTestTranscriptEvent = try copyCliTestTranscriptEventsFromEval(ctx.gpa, eval_result.events);
     errdefer deinitCliTestTranscriptEvents(ctx.gpa, transcript);
@@ -11044,7 +12670,7 @@ fn cliTestResultItemFromEval(
 fn appendEvalResultForRun(
     ctx: *CliCtx,
     run: CliTestRootRun,
-    eval_result: eval.test_helpers.BoolRootEvalResult,
+    eval_result: eval.Inspected.BoolRootEvalResult,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
 ) Allocator.Error!void {
@@ -11061,8 +12687,9 @@ fn runCompiledTestRoots(
     root_runs: []const CliTestRootRun,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
+    dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
 ) Allocator.Error!void {
-    var bool_roots = try ctx.gpa.alloc(eval.test_helpers.BoolRoot, root_runs.len);
+    var bool_roots = try ctx.gpa.alloc(eval.Inspected.BoolRoot, root_runs.len);
     defer ctx.gpa.free(bool_roots);
 
     for (root_runs, 0..) |run, i| {
@@ -11075,35 +12702,138 @@ fn runCompiledTestRoots(
     }
 
     const eval_results = switch (mode) {
-        .dev => eval.test_helpers.devEvalBoolRoots(
+        .dev => eval.Inspected.devEvalBoolRootsWithTiming(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
+            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
+            dev_timing,
         ),
-        .llvm_size => eval.test_helpers.llvmEvalBoolRoots(
+        .llvm_size => eval.Inspected.llvmEvalBoolRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
+            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
             .size,
         ),
-        .llvm_speed => eval.test_helpers.llvmEvalBoolRoots(
+        .llvm_speed => eval.Inspected.llvmEvalBoolRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
+            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
             .speed,
         ),
         .interpreter => unreachable,
     } catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptEmbeddedBuiltins,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.HostedFunctionNotBound,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidHandle,
+        error.InvalidHostedFunctionSignature,
+        error.InvalidLirImage,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LinkFailed,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingDynamicLinkingInformation,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.PageSizeQueryFailed,
+        error.ParseError,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SocketUnconnected,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempFileError,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.TypeCheckError,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedHostedFunction,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => {
             try appendCompilerErrorsForRuns(ctx, mode, err, root_runs, results, summary);
             return;
         },
     };
-    defer eval.test_helpers.deinitBoolRootEvalResults(ctx.gpa, eval_results);
+    defer eval.Inspected.deinitBoolRootEvalResults(ctx.gpa, eval_results);
 
     for (root_runs, eval_results) |run, eval_result| {
         try appendEvalResultForRun(ctx, run, eval_result, results, summary);
@@ -11117,7 +12847,9 @@ fn lowerPlannedTestModule(
     planned: *const CliTestPlanModule,
     plan_entries: []const CliTestPlanEntry,
     opt: cli_args.OptLevel,
-) Allocator.Error!CliLoweredTestModule {
+    specialization_strategy: base.SpecializationStrategy,
+    timing: ?*lir.CheckedPipeline.Timing,
+) lir.CheckedPipeline.LowerResourceError!CliLoweredTestModule {
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, planned.artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, planned.artifact);
@@ -11153,9 +12885,10 @@ fn lowerPlannedTestModule(
             .metadata = root_plan_metadata,
         } },
         opt,
+        specialization_strategy,
         base.target.TargetUsize.native,
         false,
-        null,
+        timing,
     );
     errdefer lowered.deinit();
 
@@ -11175,12 +12908,15 @@ fn runCheckedArtifactTests(
     planned: *const CliTestPlanModule,
     plan_entries: []const CliTestPlanEntry,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
-) (Allocator.Error || error{NoHomeDirectory})!CliTestRunSummary {
+    timing: ?*lir.CheckedPipeline.Timing,
+    dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
+) (Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
     const artifact = planned.artifact;
-    var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt);
+    var lowered_module = try lowerPlannedTestModule(ctx, build_env, 0, planned, plan_entries, opt, specialization_strategy, timing);
     defer lowered_module.deinit(ctx.gpa);
 
     var results = std.ArrayList(CliTestResultItem).empty;
@@ -11193,12 +12929,12 @@ fn runCheckedArtifactTests(
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .interpreter => try runInterpreterTestRoots(ctx, &lowered_module.lowered, lowered_module.root_runs, &results, &summary),
-        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary),
+        .dev => try runCompiledTestRoots(ctx, mode, &lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing),
         .llvm_size, .llvm_speed => unreachable,
     }
     summary.modules_with_tests = 1;
 
-    try storeCliTestResultsInCache(ctx, cache_manager, artifact, results.items);
+    try storeCliTestResultsInCache(ctx, cache_manager, artifact, specialization_strategy, results.items);
 
     try module_results.append(ctx.gpa, .{
         .env = module.semantic.env,
@@ -11231,7 +12967,7 @@ fn runLlvmLoweredTestModulesOnce(
 ) ReportRenderError!void {
     if (lowered_modules.len == 0) return;
 
-    var bool_modules = std.ArrayList(eval.test_helpers.BoolRootModule).empty;
+    var bool_modules = std.ArrayList(eval.Inspected.BoolRootModule).empty;
     defer {
         for (bool_modules.items) |module| {
             ctx.gpa.free(@constCast(module.roots));
@@ -11243,7 +12979,7 @@ fn runLlvmLoweredTestModulesOnce(
     defer live_runs.deinit(ctx.gpa);
 
     for (lowered_modules) |*lowered_module| {
-        const bool_roots = try ctx.gpa.alloc(eval.test_helpers.BoolRoot, lowered_module.root_runs.len);
+        const bool_roots = try ctx.gpa.alloc(eval.Inspected.BoolRoot, lowered_module.root_runs.len);
         errdefer ctx.gpa.free(bool_roots);
         for (lowered_module.root_runs, 0..) |run, root_index| {
             bool_roots[root_index] = .{
@@ -11260,12 +12996,13 @@ fn runLlvmLoweredTestModulesOnce(
         try bool_modules.append(ctx.gpa, .{
             .store = &lowered_module.lowered.lir_result.store,
             .layouts = &lowered_module.lowered.lir_result.layouts,
+            .tables = eval.boxy_runtime.BoxyTables.fromResult(&lowered_module.lowered.lir_result),
             .roots = bool_roots,
         });
     }
 
-    var completion_callback: ?eval.test_helpers.BoolRootCompletionCallback = null;
-    var event_callback: ?eval.test_helpers.BoolRootEventCallback = null;
+    var completion_callback: ?eval.Inspected.BoolRootCompletionCallback = null;
+    var event_callback: ?eval.Inspected.BoolRootEventCallback = null;
     if (live_output) |live| {
         live.setRuns(live_runs.items);
         completion_callback = .{
@@ -11279,7 +13016,7 @@ fn runLlvmLoweredTestModulesOnce(
     }
     defer if (live_output) |live| live.clearRuns();
 
-    const eval_results = eval.test_helpers.llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
+    const eval_results = eval.Inspected.llvmEvalBoolRootModulesWithMaxWorkersAndCallbacks(
         ctx.gpa,
         bool_modules.items,
         switch (mode) {
@@ -11292,7 +13029,106 @@ fn runLlvmLoweredTestModulesOnce(
         event_callback,
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => {
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptEmbeddedBuiltins,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.HostedFunctionNotBound,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidHandle,
+        error.InvalidHostedFunctionSignature,
+        error.InvalidLirImage,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LinkFailed,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingDynamicLinkingInformation,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.PageSizeQueryFailed,
+        error.ParseError,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SocketUnconnected,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempFileError,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.TypeCheckError,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedHostedFunction,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => {
             for (lowered_modules) |*lowered_module| {
                 var results = std.ArrayList(CliTestResultItem).empty;
                 errdefer {
@@ -11321,7 +13157,7 @@ fn runLlvmLoweredTestModulesOnce(
             return;
         },
     };
-    defer eval.test_helpers.deinitBoolRootEvalResults(ctx.gpa, eval_results);
+    defer eval.Inspected.deinitBoolRootEvalResults(ctx.gpa, eval_results);
     if (live_output) |live| try live.checkError();
 
     var eval_index: usize = 0;
@@ -11370,12 +13206,14 @@ fn runOptimizedTestPlan(
     build_env: *BuildEnv,
     test_plan: *CliTestPlan,
     opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     max_workers: ?usize,
     cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
     total: *CliTestRunSummary,
     live_output: ?*CliOptimizedLiveTestOutput,
-) (ReportRenderError || error{NoHomeDirectory})!void {
+    timing: ?*lir.CheckedPipeline.Timing,
+) (ReportRenderError || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!void {
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .llvm_size, .llvm_speed => {},
@@ -11421,7 +13259,7 @@ fn runOptimizedTestPlan(
 
         try lowered_modules.append(
             ctx.gpa,
-            try lowerPlannedTestModule(ctx, build_env, planned_index, planned, test_plan.entries, opt),
+            try lowerPlannedTestModule(ctx, build_env, planned_index, planned, test_plan.entries, opt, specialization_strategy, timing),
         );
     }
 
@@ -11430,7 +13268,7 @@ fn runOptimizedTestPlan(
     for (lowered_modules.items) |*lowered_module| {
         const planned = &test_plan.modules[lowered_module.planned_index];
         if (summaries[lowered_module.planned_index].compiler_errors == 0) {
-            try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, fresh_results[lowered_module.planned_index].?);
+            try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, fresh_results[lowered_module.planned_index].?);
         }
     }
 
@@ -11481,7 +13319,7 @@ const WatchChildOutputError = std.Io.File.MultiReader.UnendingError || std.Io.Ti
 const WatchCommandError = error{UnsupportedWatchMode} || WatchInputsPathError || WatchSpawnChildError || WatchCollectPathsError || WatchRefreshError || WatchReadInputsError || WatchChangeError || WatchChildOutputError || CliOutputWriteError;
 const ReportRenderError = Allocator.Error || CliOutputWriteError;
 const CheckFileWithBuildEnvPreservedError = compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || Allocator.Error || std.Io.Dir.RealPathFileAllocError || error{ ExpectedAppHeader, InvalidPackageName };
-const RocTestError = WatchCommandError || compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || WatchWriteInputsError || ReportRenderError || std.Io.Dir.RealPathFileAllocError || SourceRefResolveError || error{ CompilationFailed, TestsFailed, NoHomeDirectory };
+const RocTestError = lir.CheckedPipeline.HostedBindingError || WatchCommandError || compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || WatchWriteInputsError || ReportRenderError || std.Io.Dir.RealPathFileAllocError || SourceRefResolveError || error{ CompilationFailed, TestsFailed, NoHomeDirectory };
 const RocCheckError = WatchCommandError || CheckFileWithBuildEnvPreservedError || WatchWriteInputsError || ReportRenderError || CliError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || SourceRefResolveError || error{CheckFailed};
 
 const WatchEventSignal = struct {
@@ -11497,7 +13335,7 @@ const WatchFileState = union(enum) {
         return switch (a) {
             .hash => |a_hash| switch (b) {
                 .hash => |b_hash| std.mem.eql(u8, &a_hash, &b_hash),
-                else => false,
+                .missing, .unreadable => false,
             },
             .missing => b == .missing,
             .unreadable => b == .unreadable,
@@ -11572,7 +13410,7 @@ const WatchChild = struct {
 
         while (multi_reader.fill(64, .none)) |_| {} else |err| switch (err) {
             error.EndOfStream => {},
-            else => |e| return e,
+            error.Canceled, error.ConcurrencyUnavailable, error.Timeout => return @errorCast(err),
         }
         try multi_reader.checkAnyError();
 
@@ -11999,10 +13837,13 @@ fn exitOnWarnings(ctx: *CliCtx, warning_count: usize) void {
     std.process.exit(2);
 }
 
-fn exitBuildOnWarningsIfRequested(ctx: *CliCtx, args: cli_args.BuildArgs, build_env: *BuildEnv, total_warning_count: usize) void {
-    if (!args.exit_on_warnings) return;
-    if (total_warning_count > 0) writeBuildWatchInputsOnExit(ctx, args, build_env);
-    exitOnWarnings(ctx, total_warning_count);
+fn failOnCheckErrors(diagnostics: CheckDiagnosticCounts) error{CompilationFailed}!void {
+    if (diagnostics.errors > 0) return error.CompilationFailed;
+}
+
+fn finishCheckDiagnostics(ctx: *CliCtx, diagnostics: CheckDiagnosticCounts) error{CompilationFailed}!void {
+    try failOnCheckErrors(diagnostics);
+    exitOnWarnings(ctx, diagnostics.warnings);
 }
 
 fn writeHotReloadWatchPathsFile(
@@ -12020,7 +13861,37 @@ fn readWatchInputsFile(ctx: *CliCtx, file_path: []const u8, extra_paths: []const
     const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(watch_inputs_file_limit)) catch |err| switch (err) {
         error.FileNotFound => return error.WatchInputsMissing,
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.WatchInputsReadFailed,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return error.WatchInputsReadFailed,
     };
     defer ctx.gpa.free(bytes);
 
@@ -12095,7 +13966,37 @@ fn readWatchFileState(ctx: *CliCtx, path: []const u8) WatchSnapshotError!WatchFi
     const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .limited(watch_file_hash_limit)) catch |err| switch (err) {
         error.FileNotFound => return .missing,
         error.OutOfMemory => return error.OutOfMemory,
-        else => return .unreadable,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.ConnectionResetByPeer,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return .unreadable,
     };
     defer ctx.gpa.free(bytes);
 
@@ -12193,7 +14094,13 @@ fn refreshWatchState(
                 ctx.io.flush();
                 return err;
             },
-            else => return err,
+            error.AlreadyStarted,
+            error.LockedMemoryLimitExceeded,
+            error.OutOfMemory,
+            error.SystemResources,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            => return err,
         };
     }
 
@@ -12217,8 +14124,14 @@ fn refreshWatchState(
 fn watchStateHasByteChanges(ctx: *CliCtx, state: *WatchState) WatchChangeError!bool {
     if (state.inputs.len == 0) return true;
     const current = try computeWatchSnapshot(ctx, state.inputs);
-    defer ctx.gpa.free(current);
-    return watchSnapshotChanged(state.snapshot, current);
+    if (!watchSnapshotChanged(state.snapshot, current)) {
+        ctx.gpa.free(current);
+        return false;
+    }
+
+    ctx.gpa.free(state.snapshot);
+    state.snapshot = current;
+    return true;
 }
 
 fn consumeDebouncedWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!bool {
@@ -12317,6 +14230,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             try argv.append(ctx.gpa, "test");
             try appendOwnedArg(ctx.gpa, &argv, &owned, "--opt={s}", .{@tagName(args.opt)});
             if (args.main) |main_path| try appendOwnedArg(ctx.gpa, &argv, &owned, "--main={s}", .{main_path});
+            if (args.timings) try argv.append(ctx.gpa, "--timings");
             if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
@@ -12330,6 +14244,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.target) |target| try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{target});
             if (args.output) |output| try appendOwnedArg(ctx.gpa, &argv, &owned, "--output={s}", .{output});
             if (args.debug) try argv.append(ctx.gpa, "--debug");
+            if (args.fuzz) try argv.append(ctx.gpa, "--fuzz");
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.timings) try argv.append(ctx.gpa, "--timings");
             if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
@@ -12401,7 +14316,7 @@ fn terminateWatchChild(child: *WatchChild) void {
             _ = std.os.windows.ntdll.NtTerminateProcess(child.id, @enumFromInt(1));
         },
         .wasi => {},
-        else => {
+        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => {
             std.posix.kill(child.id, .KILL) catch {};
         },
     }
@@ -12519,6 +14434,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
+    var reporter = makeReporter(ctx, "roc test", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+    errdefer reporter.fail();
+
+    reporter.begin("Type Checking");
+
     // --- Normal compilation path ---
 
     var build_env = try initCliBuildEnv(ctx, .{
@@ -12529,8 +14451,18 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .track_watch_inputs = args.watch_inputs_file != null,
         .root_source_url = args.root_source_url,
         .main_source_url = args.main_source_url,
+        // `roc test` never links a program, so it publishes no executable
+        // artifacts: the app/platform entrypoint pairing is not part of what
+        // running the root file's `expect`s needs.
+        .post_check_publication_mode = .none,
     });
     defer build_env.deinit();
+
+    // `roc test` runs the file's top-level `expect`s and nothing else, so the
+    // file needs no entrypoint: a headerless file that is neither a type module
+    // nor a default app is tested as a plain module, and an app is tested
+    // whether or not it supplies the definitions its platform requires.
+    build_env.setRootValidation(.explicit_roots);
 
     var extra_buf: [2][]const u8 = undefined;
     const extra_paths = appendExtraWatchPaths(.{ .test_cmd = args }, &extra_buf);
@@ -12567,6 +14499,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     const modules = try build_env.getCompiledModules(ctx.gpa);
     defer ctx.gpa.free(modules);
 
+    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
+
+    reporter.begin("Test Planning");
+
     const report_config = testReportingConfig(ctx);
 
     var module_results = std.ArrayList(CliModuleTestResult).empty;
@@ -12580,11 +14516,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var test_plan = try buildCliTestPlan(ctx, modules);
     defer test_plan.deinit(ctx.gpa);
 
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
     for (test_plan.modules) |*planned| {
         if (try loadCachedCliTestResults(
             ctx,
             build_env.cache_manager,
             planned.artifact,
+            specialization_strategy,
             planned.module,
             planned.test_roots,
         )) |cached| {
@@ -12592,6 +14530,12 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             planned.cached_summary = cached.summary;
         }
     }
+    reporter.end();
+    reporter.recordCounters("Test result cache", &cliTestCacheCounters(cliTestCacheStats(&test_plan)));
+
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
+    var dev_timing = eval.test_helpers.DevBoolRootTiming.init(ctx.io.std_io);
 
     var total = CliTestRunSummary{};
     const test_mode = cliTestExecutionMode(args.opt);
@@ -12608,7 +14552,36 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     if (use_live_optimized_output) {
         const spill_temp_dir = createUniqueTempDir(ctx) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.WriteFailed,
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.DeviceBusy,
+            error.DiskQuota,
+            error.FailedToCreateUniqueTempDir,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileNotFound,
+            error.FileTooBig,
+            error.IsDir,
+            error.LinkQuotaExceeded,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.PathAlreadyExists,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.Streaming,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => return error.WriteFailed,
         };
         live_coordinator = try CliTestTranscriptCoordinator.init(
             ctx.gpa,
@@ -12626,17 +14599,23 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         live_output = try CliOptimizedLiveTestOutput.init(ctx, &live_coordinator.?, test_plan.entries.len);
     }
 
+    // This wall-time phase includes lowering, backend code generation, and
+    // execution. The completed timing rows recorded below split out the
+    // expensive subsets without pretending their durations are extra work.
+    reporter.begin("Compile + Run Tests (wall)");
     switch (test_mode) {
         .llvm_size, .llvm_speed => try runOptimizedTestPlan(
             ctx,
             &build_env,
             &test_plan,
             args.opt,
+            specialization_strategy,
             args.max_threads,
             build_env.cache_manager,
             &module_results,
             &total,
             if (live_output) |*output| output else null,
+            &spec_timing,
         ),
         .interpreter, .dev => {
             for (test_plan.modules) |*planned| {
@@ -12650,8 +14629,11 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                     planned,
                     test_plan.entries,
                     args.opt,
+                    specialization_strategy,
                     build_env.cache_manager,
                     &module_results,
+                    &spec_timing,
+                    &dev_timing,
                 );
                 total.passed += summary.passed;
                 total.failed += summary.failed;
@@ -12661,15 +14643,15 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             }
         },
     }
+    reporter.end();
+    recordPostCheckLowering(&reporter, &spec_timing);
+    if (test_mode == .dev) recordDevTestExecution(&reporter, &dev_timing);
+    reporter.finish();
 
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
-    const cached_suffix = if (total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests)
-        " (cached)"
-    else
-        "";
+    const fully_cached = total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests;
 
     // Render the per-module bodies once into in-memory buffers so we can
     // print them after the summary line.
@@ -12689,11 +14671,12 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         );
     }
 
+    try stdout.writeAll(stdout_body.written());
+    try stderr.writeAll(stderr_body.written());
+
     // Report results
     if (total.failed == 0 and total.compiler_errors == 0) {
-        try stdout.writeAll(stdout_body.written());
-        try stderr.writeAll(stderr_body.written());
-        try stdout.print("All ({}) tests passed in {d:.1} ms.{s}\n", .{ total.passed, elapsed_ms, cached_suffix });
+        try writeCliTestRunSummary(stdout, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
         // Diagnostics determine the command status only after every independent
         // test root has run; they never gate checked-artifact execution.
         if (diag.errors > 0) return error.CompilationFailed;
@@ -12703,27 +14686,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         return;
     }
 
-    const total_tests = total.passed + total.failed + total.compiler_errors;
-    try stdout.writeAll(stdout_body.written());
-    try stderr.writeAll(stderr_body.written());
-    const green = if (report_config.shouldUseColors()) ansi_term.green else "";
-    const red = if (report_config.shouldUseColors()) ansi_term.red else "";
-    const yellow = if (report_config.shouldUseColors()) ansi_term.yellow else "";
-    const reset = if (report_config.shouldUseColors()) ansi_term.reset else "";
-    try stderr.print("Ran {} tests{s} in {d:.1}ms:\n    {s}{}{s} passed\n    {s}{}{s} failed\n    {s}{}{s} compiler errors\n", .{
-        total_tests,
-        cached_suffix,
-        elapsed_ms,
-        green,
-        total.passed,
-        reset,
-        red,
-        total.failed,
-        reset,
-        yellow,
-        total.compiler_errors,
-        reset,
-    });
+    try writeCliTestRunSummary(stderr, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
 
     return error.TestsFailed;
 }
@@ -13208,7 +15171,7 @@ const CliOptimizedLiveTestOutput = struct {
     fn publishEvalResult(
         self: *CliOptimizedLiveTestOutput,
         call_index: usize,
-        eval_result: eval.test_helpers.BoolRootEvalResult,
+        eval_result: eval.Inspected.BoolRootEvalResult,
     ) void {
         if (builtin.mode == .Debug and call_index >= self.runs.len) {
             std.debug.panic("CLI optimized live output received out-of-range call index {d} for {d} roots", .{ call_index, self.runs.len });
@@ -13249,7 +15212,7 @@ const CliOptimizedLiveTestOutput = struct {
     fn publishEvent(
         self: *CliOptimizedLiveTestOutput,
         call_index: usize,
-        event_view: eval.test_helpers.BoolRootEventView,
+        event_view: eval.Inspected.BoolRootEventView,
     ) void {
         if (builtin.mode == .Debug and call_index >= self.runs.len) {
             std.debug.panic("CLI optimized live output received out-of-range event call index {d} for {d} roots", .{ call_index, self.runs.len });
@@ -13259,6 +15222,7 @@ const CliOptimizedLiveTestOutput = struct {
             .dbg => |payload| .{ .stream = .stderr, .kind = .dbg, .payload = payload },
             .expect_failed => |payload| .{ .stream = .stderr, .kind = .expect_failed, .payload = payload },
             .crashed => |payload| .{ .stream = .stderr, .kind = .crashed, .payload = payload },
+            .effect => unreachable,
         };
 
         self.lock();
@@ -13273,7 +15237,7 @@ const CliOptimizedLiveTestOutput = struct {
     fn completionCallback(
         context: *anyopaque,
         call_index: usize,
-        eval_result: *const eval.test_helpers.BoolRootEvalResult,
+        eval_result: *const eval.Inspected.BoolRootEvalResult,
     ) void {
         const self: *CliOptimizedLiveTestOutput = @ptrCast(@alignCast(context));
         self.publishEvalResult(call_index, eval_result.*);
@@ -13282,7 +15246,7 @@ const CliOptimizedLiveTestOutput = struct {
     fn eventCallback(
         context: *anyopaque,
         call_index: usize,
-        event: eval.test_helpers.BoolRootEventView,
+        event: eval.Inspected.BoolRootEventView,
     ) void {
         const self: *CliOptimizedLiveTestOutput = @ptrCast(@alignCast(context));
         self.publishEvent(call_index, event);
@@ -13561,10 +15525,7 @@ fn printTestProblem(
     };
     if (should_print_detail) {
         if (failure_detail) |msg| {
-            switch (severity) {
-                .warning => try report.addWarningMessage(msg),
-                else => try report.addErrorMessage(msg),
-            }
+            if (severity == .warning) try report.addWarningMessage(msg) else try report.addErrorMessage(msg);
         }
     }
 
@@ -13600,7 +15561,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
 
     // The line editor handles Ctrl-C itself (press twice in a row to quit).
     // Ignore SIGINT at the process level so a Ctrl-C while the terminal is
-    // momentarily in cooked mode — during startup or while evaluating — can't
+    // momentarily in cooked mode—during startup or while evaluating—can't
     // hard-kill the REPL instead of going through that flow.
     if (mode == .interactive and builtin.os.tag != .windows) {
         const ignore_sigint = std.posix.Sigaction{
@@ -13616,9 +15577,14 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
 
     // Publishing the Builtin module here is the dominant startup cost (~1s). Do
     // it before printing the greeting so the greeting and the first prompt appear
-    // together and the REPL is immediately interactive — otherwise the greeting
+    // together and the REPL is immediately interactive—otherwise the greeting
     // shows with no prompt until this finishes.
-    var session = try ReplSession.init(ctx.gpa, ctx.coreCtx(), backend_kind);
+    var session = try ReplSession.init(
+        ctx.gpa,
+        ctx.coreCtx(),
+        backend_kind,
+        currentRuntimeSpecializationStrategy(repl_args.specialization_strategy),
+    );
     defer session.deinit();
 
     if (mode == .interactive) {
@@ -13693,7 +15659,10 @@ fn processReplInput(
     defer session.freeStatementSlices(statements);
 
     for (statements) |statement| {
-        const result = try session.stepWithConfig(statement, report_config);
+        const result = if (parseReplCommand(statement)) |command|
+            try session.executeCommandWithConfig(command, report_config)
+        else
+            try session.stepWithConfig(statement, report_config);
         defer result.deinit(ctx.gpa);
 
         switch (result) {
@@ -13708,12 +15677,38 @@ fn processReplInput(
                     try stderr.print("{s}\n", .{diagnostic});
                 }
             },
+            .runtime_crash => |message| {
+                had_diagnostics.* = true;
+                try stderr.print(
+                    "This Roc code crashed with: \"{f}\"\n",
+                    .{std.zig.fmtString(message)},
+                );
+            },
             .none => {},
             .exit => return true,
         }
     }
 
     return false;
+}
+
+/// Parse terminal-only commands before handing Roc source to `ReplSession`.
+/// Other frontends use their own controls and call language stepping directly.
+fn parseReplCommand(input: []const u8) ?ReplSession.Command {
+    const line = std.mem.trim(u8, input, " \t\r\n");
+    if (std.mem.eql(u8, line, ":help")) return .help;
+    if (std.mem.eql(u8, line, ":defs")) return .definitions;
+    if (std.mem.startsWith(u8, line, ":t ")) {
+        return .{ .type_of = std.mem.trim(u8, line[3..], " \t") };
+    }
+    if (std.mem.eql(u8, line, ":exit") or
+        std.mem.eql(u8, line, ":quit") or
+        std.mem.eql(u8, line, ":q") or
+        std.mem.eql(u8, line, "exit"))
+    {
+        return .exit;
+    }
+    return null;
 }
 
 fn replReportingConfig(ctx: *CliCtx, mode: ReplMode) reporting.ReportingConfig {
@@ -13736,6 +15731,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
     // instead of compiling a dylib on the fly.
     var glue_spec = args.glue_spec;
     var installed_dylib_path: ?[]const u8 = null;
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
     switch (install_store.classifySourceRef(args.glue_spec)) {
         .local_path => {},
         .url => glue_spec = (try resolveUrlBundle(ctx, args.glue_spec)).source_path,
@@ -13749,7 +15745,9 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
                 return error.InvalidArguments;
             }
             glue_spec = entry.paths.main_roc_path;
-            installed_dylib_path = entry.artifact_path;
+            if (specialization_strategy == .lss) {
+                installed_dylib_path = entry.artifact_path;
+            }
         },
     }
     const platform_path = (try resolveSourceArg(ctx, args.platform_path, false)).path;
@@ -13759,6 +15757,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
         .output_dir = args.output_dir,
         .platform_path = platform_path,
         .report_config = ctx.reportConfig(.stderr),
+        .specialization_strategy = specialization_strategy,
         .no_cache = args.no_cache,
         .installed_dylib_path = installed_dylib_path,
         .opt = switch (args.opt) {
@@ -13775,7 +15774,19 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
                     .{ args.glue_spec, args.glue_spec },
                 );
             },
-            else => {},
+            error.BuildEnvInit,
+            error.CompilationFailed,
+            error.DevBackendUnavailable,
+            error.FileNotFound,
+            error.GlueSpecNotFound,
+            error.ModuleRetrieval,
+            error.NotPlatformFile,
+            error.OutOfMemory,
+            error.ParseFailed,
+            error.PlatformPathResolution,
+            error.TempDirCreation,
+            error.WriteFailed,
+            => {},
         }
         return err;
     };
@@ -13789,8 +15800,11 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
 
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
+    // Formatting a file brings its `roc` version pin up to date when this
+    // compiler is a newer nightly than the one it names.
+    const format_options: fmt.Options = .{ .compiler_version = build_options.compiler_version };
     if (args.stdin) {
-        fmt.formatStdin(ctx.gpa, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
+        fmt.formatStdin(ctx.gpa, format_options, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
         return;
     }
 
@@ -13804,7 +15818,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
         defer unformatted_files.deinit(ctx.gpa);
 
         for (args.paths) |path| {
-            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, ctx.io.std_io, stderr);
+            var result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, true, format_options, ctx.io.std_io, stderr);
             defer result.deinit();
             if (result.unformatted_files) |files| {
                 try unformatted_files.appendSlice(ctx.gpa, files.items);
@@ -13830,7 +15844,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     } else {
         var success_count: usize = 0;
         for (args.paths) |path| {
-            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false, ctx.io.std_io, stderr);
+            const result = try fmt.formatPath(ctx.gpa, ctx.arena, std.Io.Dir.cwd(), path, false, format_options, ctx.io.std_io, stderr);
             success_count += result.success;
             failure_count += result.failure;
         }
@@ -13880,7 +15894,7 @@ fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
 
 fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
     return .{
-        .{ .name = "Specialization", .ns = timing.monotype_ns },
+        .{ .name = "Monotype Lowering", .ns = timing.monotype_ns },
         .{ .name = "LIR Generation", .ns = timing.postcheck_to_lir_ns },
         .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
         .{ .name = "ARC", .ns = timing.arc_ns },
@@ -13891,16 +15905,265 @@ fn compileTimeEvaluationBreakdown(timing: anytype) [8]progress.SubTiming {
     };
 }
 
-fn specializationBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [7]progress.SubTiming {
+const post_check_lowering_phase_name = "Post-Check Lowering";
+
+fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [24]progress.SubTiming {
+    const classified_body_ns = timing.monotype_procedure_body_type_graph_ns +|
+        timing.monotype_procedure_body_call_dispatch_ns +|
+        timing.monotype_procedure_body_draft_ir_ns +|
+        timing.monotype_procedure_body_reachability_ns +|
+        timing.monotype_procedure_body_source_mapping_ns +|
+        timing.monotype_procedure_body_local_proc_context_ns;
     return .{
-        .{ .name = "Specialization", .ns = timing.monotype_ns },
-        .{ .name = "Lifting", .ns = timing.lift_ns },
+        .{ .name = "Monotype Setup", .ns = timing.monotype_setup_ns },
+        .{ .name = "Root + Wrapper Setup", .ns = timing.monotype_procedure_root_wrapper_ns },
+        .{ .name = "Specialization Lookup + Reservation", .ns = timing.monotype_procedure_lookup_reservation_ns },
+        .{ .name = "Dispatch Evidence", .ns = timing.monotype_procedure_dispatch_evidence_ns },
+        .{ .name = "Body Graph Setup", .ns = timing.monotype_procedure_body_graph_setup_ns },
+        .{ .name = "Body Traversal + Binding", .ns = timing.monotype_procedure_body_lowering_ns -| classified_body_ns },
+        .{ .name = "Body Type Graph", .ns = timing.monotype_procedure_body_type_graph_ns },
+        .{ .name = "Body Call Dispatch", .ns = timing.monotype_procedure_body_call_dispatch_ns },
+        .{ .name = "Body Draft IR Construction", .ns = timing.monotype_procedure_body_draft_ir_ns },
+        .{ .name = "Body Reachability + Proofs", .ns = timing.monotype_procedure_body_reachability_ns },
+        .{ .name = "Body Source Mapping", .ns = timing.monotype_procedure_body_source_mapping_ns },
+        .{ .name = "Body Local Procedure Context", .ns = timing.monotype_procedure_body_local_proc_context_ns },
+        .{ .name = "Body Sealing + Commit", .ns = timing.monotype_procedure_body_finalization_ns },
+        .{ .name = "Procedure Completion", .ns = timing.monotype_procedure_completion_ns },
+        .{ .name = "Layout Requests", .ns = timing.monotype_layout_requests_ns },
+        .{ .name = "Static Data Requests", .ns = timing.monotype_static_data_requests_ns },
+        .{ .name = "Monotype Finalization", .ns = timing.monotype_finalization_ns },
+        .{ .name = "Closure Lifting", .ns = timing.lift_ns },
         .{ .name = "SpecConstr", .ns = timing.spec_constr_ns },
-        .{ .name = "Lambda Sets", .ns = timing.lambda_solve_ns },
+        .{ .name = "Lambda-Set Solving", .ns = timing.lambda_solve_ns },
+        .{ .name = "Inline Planning", .ns = timing.inline_plan_ns },
         .{ .name = "LIR Generation", .ns = timing.lir_gen_ns },
         .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
         .{ .name = "ARC", .ns = timing.arc_ns },
     };
+}
+
+fn finishPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.CheckedPipeline.Timing) void {
+    const snapshot = timing.snapshot();
+    reporter.endWithBreakdownSequential(&postCheckLoweringBreakdown(snapshot));
+    reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+}
+
+fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
+    return timing.monotype_ns +|
+        timing.lift_ns +|
+        timing.spec_constr_ns +|
+        timing.lambda_solve_ns +|
+        timing.inline_plan_ns +|
+        timing.lir_gen_ns +|
+        timing.lir_passes_ns +|
+        timing.arc_ns;
+}
+
+fn recordPostCheckLowering(reporter: *progress.Reporter, timing: *const lir.CheckedPipeline.Timing) void {
+    const snapshot = timing.snapshot();
+    reporter.recordCompletedWithBreakdown(
+        post_check_lowering_phase_name,
+        postCheckLoweringTotalNs(snapshot),
+        .{},
+        &postCheckLoweringBreakdown(snapshot),
+    );
+    reporter.recordCounters("Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
+    reporter.recordCounters("Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
+}
+
+fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot) [6]progress.SubTiming {
+    return .{
+        .{ .name = "Static Strings", .ns = timing.static_strings_ns },
+        .{ .name = "Codegen Setup", .ns = timing.codegen_setup_ns },
+        .{ .name = "Procedure Codegen", .ns = timing.procedure_codegen_ns },
+        .{ .name = "Entrypoint Codegen", .ns = timing.entrypoint_codegen_ns },
+        .{ .name = "Executable Memory", .ns = timing.executable_memory_ns },
+        .{ .name = "Root Execution", .ns = timing.root_execution_ns },
+    };
+}
+
+fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test_helpers.DevBoolRootTiming) void {
+    const snapshot = timing.snapshot();
+    const total_ns = snapshot.static_strings_ns +|
+        snapshot.codegen_setup_ns +|
+        snapshot.procedure_codegen_ns +|
+        snapshot.entrypoint_codegen_ns +|
+        snapshot.executable_memory_ns +|
+        snapshot.root_execution_ns;
+    reporter.recordCompletedWithBreakdown(
+        "Dev Codegen + Execution",
+        total_ns,
+        .{},
+        &devTestExecutionBreakdown(snapshot),
+    );
+}
+
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [17]progress.Counter {
+    const counters = diagnostics.specialization;
+    return .{
+        .{ .name = "Template requests", .count = counters.template_requests },
+        .{ .name = "Template hits", .count = counters.template_hits },
+        .{ .name = "Template misses", .count = counters.template_misses },
+        .{ .name = "Nested requests", .count = counters.nested_requests },
+        .{ .name = "Nested hits", .count = counters.nested_hits },
+        .{ .name = "Nested misses", .count = counters.nested_misses },
+        .{ .name = "Template lookup candidates", .count = counters.template_lookup_candidates },
+        .{ .name = "Nested lookup candidates", .count = counters.nested_lookup_candidates },
+        .{ .name = "Type digest root requests", .count = counters.specialization_type_digest_requests },
+        .{ .name = "Type digest node cache hits", .count = counters.specialization_type_digest_cache_hits },
+        .{ .name = "Type digest node cache misses", .count = counters.specialization_type_digest_cache_misses },
+        .{ .name = "Type digest nodes visited", .count = counters.specialization_type_digest_nodes_visited },
+        .{ .name = "Exact type checks", .count = counters.exact_type_checks },
+        .{ .name = "Nominal backing reuses", .count = counters.nominal_backing_reuses },
+        .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
+        .{ .name = "Missing evidence", .count = counters.evidence_missing },
+        .{ .name = "Total specialization misses", .count = counters.template_misses +| counters.nested_misses },
+    };
+}
+
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [19]progress.Counter {
+    const graph = diagnostics.graph;
+    return .{
+        .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
+        .{ .name = "Nodes created", .count = graph.nodes_created },
+        .{ .name = "Unification requests", .count = graph.unify_requests },
+        .{ .name = "Union classes joined", .count = graph.class_unions },
+        .{ .name = "Active type requests", .count = graph.active_type_requests },
+        .{ .name = "Imported active type hits", .count = graph.active_type_imported_hits },
+        .{ .name = "Active snapshot hits", .count = graph.active_snapshot_cache_hits },
+        .{ .name = "Active snapshot misses", .count = graph.active_snapshot_cache_misses },
+        .{ .name = "Snapshot nodes materialized", .count = graph.active_snapshot_nodes_materialized },
+        .{ .name = "Snapshot invalidation requests", .count = graph.active_snapshot_invalidations },
+        .{ .name = "Snapshot entries invalidated", .count = graph.active_snapshot_entries_invalidated },
+        .{ .name = "Monotype import requests", .count = graph.mono_import_requests },
+        .{ .name = "Monotype import hits", .count = graph.mono_import_hits },
+        .{ .name = "Monotype import misses", .count = graph.mono_import_misses },
+        .{ .name = "Generated-private scans", .count = graph.generated_private_scans },
+        .{ .name = "Generated-private cache hits", .count = graph.generated_private_cache_hits },
+        .{ .name = "Generated-private nodes visited", .count = graph.generated_private_nodes_visited },
+        .{ .name = "Finished-Monotype scans", .count = graph.finished_mono_scans },
+        .{ .name = "Finished-Monotype nodes visited", .count = graph.finished_mono_nodes_visited },
+    };
+}
+
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [21]progress.Counter {
+    const body = diagnostics.body;
+    return .{
+        .{ .name = "Body contexts created", .count = body.body_contexts_created },
+        .{ .name = "Type instantiation scopes", .count = body.instantiation_scopes_created },
+        .{ .name = "Checked node requests", .count = body.checked_node_requests },
+        .{ .name = "Checked node cache hits", .count = body.checked_node_cache_hits },
+        .{ .name = "Checked node cache misses", .count = body.checked_node_cache_misses },
+        .{ .name = "Fresh checked node requests", .count = body.fresh_checked_node_requests },
+        .{ .name = "Call expressions", .count = body.call_expressions },
+        .{ .name = "Dispatch expressions", .count = body.dispatch_expressions },
+        .{ .name = "Deferred template requests", .count = body.deferred_template_requests },
+        .{ .name = "Cross-root template reuses", .count = body.cross_root_template_reuses },
+        .{ .name = "Caller-owned template bodies lowered", .count = body.caller_owned_template_bodies_lowered },
+        .{ .name = "Deferred template reuses", .count = body.deferred_template_reuses },
+        .{ .name = "Deferred template bodies lowered", .count = body.deferred_template_bodies_lowered },
+        .{ .name = "Lowered template bodies discarded", .count = body.lowered_template_bodies_discarded },
+        .{ .name = "Lowered nested bodies discarded", .count = body.lowered_nested_bodies_discarded },
+        .{ .name = "Expression relations", .count = body.expr_relation_requests },
+        .{ .name = "Argument spans prepared", .count = body.argument_spans_prepared },
+        .{ .name = "Arguments prepared", .count = body.arguments_prepared },
+        .{ .name = "Nested callable checks", .count = body.nested_callable_checks },
+        .{ .name = "Nested lambdas prepared", .count = body.nested_lambdas_prepared },
+        .{ .name = "Nested closures prepared", .count = body.nested_closures_prepared },
+    };
+}
+
+test "post-check timing names distinct work and keep inlining separate from SpecConstr" {
+    const rows = postCheckLoweringBreakdown(.{
+        .monotype_setup_ns = 1,
+        .monotype_procedure_specialization_ns = 35,
+        .monotype_procedure_root_wrapper_ns = 2,
+        .monotype_procedure_lookup_reservation_ns = 3,
+        .monotype_procedure_dispatch_evidence_ns = 4,
+        .monotype_procedure_body_graph_setup_ns = 5,
+        .monotype_procedure_body_lowering_ns = 27,
+        .monotype_procedure_body_type_graph_ns = 1,
+        .monotype_procedure_body_call_dispatch_ns = 2,
+        .monotype_procedure_body_draft_ir_ns = 3,
+        .monotype_procedure_body_reachability_ns = 4,
+        .monotype_procedure_body_source_mapping_ns = 5,
+        .monotype_procedure_body_local_proc_context_ns = 6,
+        .monotype_procedure_body_finalization_ns = 7,
+        .monotype_procedure_completion_ns = 8,
+        .monotype_layout_requests_ns = 9,
+        .monotype_static_data_requests_ns = 10,
+        .monotype_finalization_ns = 11,
+        .lift_ns = 12,
+        .spec_constr_ns = 13,
+        .lambda_solve_ns = 14,
+        .inline_plan_ns = 15,
+        .lir_gen_ns = 16,
+        .lir_passes_ns = 17,
+        .arc_ns = 18,
+    });
+
+    try std.testing.expectEqualStrings("Root + Wrapper Setup", rows[1].name);
+    try std.testing.expectEqualStrings("Specialization Lookup + Reservation", rows[2].name);
+    try std.testing.expectEqualStrings("Dispatch Evidence", rows[3].name);
+    try std.testing.expectEqualStrings("Body Graph Setup", rows[4].name);
+    try std.testing.expectEqualStrings("Body Traversal + Binding", rows[5].name);
+    try std.testing.expectEqualStrings("Body Type Graph", rows[6].name);
+    try std.testing.expectEqualStrings("Body Call Dispatch", rows[7].name);
+    try std.testing.expectEqualStrings("Body Draft IR Construction", rows[8].name);
+    try std.testing.expectEqualStrings("Body Reachability + Proofs", rows[9].name);
+    try std.testing.expectEqualStrings("Body Source Mapping", rows[10].name);
+    try std.testing.expectEqualStrings("Body Local Procedure Context", rows[11].name);
+    try std.testing.expectEqualStrings("Body Sealing + Commit", rows[12].name);
+    try std.testing.expectEqualStrings("Procedure Completion", rows[13].name);
+    const expected_body_ns = [_]u64{ 6, 1, 2, 3, 4, 5, 6 };
+    for (rows[5..12], expected_body_ns) |row, expected_ns| try std.testing.expectEqual(expected_ns, row.ns);
+    try std.testing.expectEqualStrings("SpecConstr", rows[18].name);
+    try std.testing.expectEqualStrings("Inline Planning", rows[20].name);
+    try std.testing.expectEqual(@as(u64, 13), rows[18].ns);
+    try std.testing.expectEqual(@as(u64, 15), rows[20].ns);
+    for (rows) |row| {
+        try std.testing.expect(!std.mem.eql(u8, post_check_lowering_phase_name, row.name));
+    }
+}
+
+test "post-check diagnostics preserve labeled Monotype counts" {
+    var diagnostics: postcheck.Monotype.Lower.Diagnostics = .{};
+    diagnostics.specialization.template_requests = 101;
+    diagnostics.specialization.nested_misses = 102;
+    diagnostics.graph.nodes_created = 201;
+    diagnostics.graph.generated_private_nodes_visited = 202;
+    diagnostics.body.instantiation_scopes_created = 303;
+    diagnostics.body.checked_node_cache_hits = 301;
+    diagnostics.body.deferred_template_reuses = 305;
+    diagnostics.body.cross_root_template_reuses = 306;
+    diagnostics.body.nested_closures_prepared = 302;
+
+    const specialization = monotypeSpecializationCounters(diagnostics);
+    try std.testing.expectEqualStrings("Template requests", specialization[0].name);
+    try std.testing.expectEqual(@as(u64, 101), specialization[0].count);
+    try std.testing.expectEqualStrings("Nested misses", specialization[5].name);
+    try std.testing.expectEqual(@as(u64, 102), specialization[5].count);
+
+    const graph = monotypeGraphCounters(diagnostics);
+    try std.testing.expectEqualStrings("Nodes created", graph[1].name);
+    try std.testing.expectEqual(@as(u64, 201), graph[1].count);
+    try std.testing.expectEqualStrings("Generated-private nodes visited", graph[16].name);
+    try std.testing.expectEqual(@as(u64, 202), graph[16].count);
+
+    const body = monotypeBodyCounters(diagnostics);
+    try std.testing.expectEqualStrings("Type instantiation scopes", body[1].name);
+    try std.testing.expectEqual(@as(u64, 303), body[1].count);
+    try std.testing.expectEqualStrings("Checked node cache hits", body[3].name);
+    try std.testing.expectEqual(@as(u64, 301), body[3].count);
+    try std.testing.expectEqualStrings("Cross-root template reuses", body[9].name);
+    try std.testing.expectEqual(@as(u64, 306), body[9].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[11].name);
+    try std.testing.expectEqual(@as(u64, 305), body[11].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[20].name);
+    try std.testing.expectEqual(@as(u64, 302), body[20].count);
 }
 
 fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
@@ -13983,7 +16246,17 @@ fn nsToMs(ns: u64) u32 {
     return @intCast((ns + 500_000) / 1_000_000);
 }
 
-fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) @TypeOf(err)!void {
+fn ReturnErrorSet(comptime Fn: type) type {
+    const return_type = @typeInfo(Fn).@"fn".return_type.?;
+    return @typeInfo(return_type).error_union.error_set;
+}
+
+const ProcessFileError = ReturnErrorSet(@TypeOf(rocCheckDefaultAppPreserved)) ||
+    ReturnErrorSet(@TypeOf(checkFileWithBuildEnvPreserved)) ||
+    ReturnErrorSet(@TypeOf(rocCheckDefaultApp)) ||
+    ReturnErrorSet(@TypeOf(checkFileWithBuildEnv));
+
+fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const u8) ProcessFileError!void {
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
         // Custom BuildEnv errors - these need special messages
@@ -13997,7 +16270,93 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) @Type
         error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
 
         // Catch-all for any other errors
-        else => stderr.print("{s}\n", .{@errorName(err)}) catch {},
+        error.AccessDenied,
+        error.AlreadyStarted,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BrokenPipe,
+        error.BuiltinArtifactVersionMismatch,
+        error.BuiltinLowLevelAnnotationMustBeFunction,
+        error.Canceled,
+        error.CheckFailed,
+        error.CliError,
+        error.ConcurrencyUnavailable,
+        error.ConnectionResetByPeer,
+        error.CorruptArtifact,
+        error.CorruptBuiltinArtifact,
+        error.CorruptEmbeddedBuiltins,
+        error.CurrentDirUnlinked,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DownloadFailed,
+        error.EmptyCode,
+        error.FileBusy,
+        error.FileError,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileSystem,
+        error.FileTooBig,
+        error.InputOutput,
+        error.InvalidBatchScriptArg,
+        error.InvalidExe,
+        error.InvalidName,
+        error.InvalidNullByteInPath,
+        error.InvalidProcessGroupId,
+        error.InvalidUrl,
+        error.InvalidUserId,
+        error.InvalidWtf8,
+        error.IoError,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.LowLevelOperationsNotFound,
+        error.MissingFilesDirectory,
+        error.MissingTargetFile,
+        error.MmapFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoCacheDir,
+        error.NoDevice,
+        error.NoPackageSource,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OperationUnsupported,
+        error.OutOfMemory,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessAlreadyExec,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.ResourceLimitReached,
+        error.SocketUnconnected,
+        error.StaleEmbeddedBuiltins,
+        error.StreamTooLong,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.ThreadQuotaExceeded,
+        error.Timeout,
+        error.Unexpected,
+        error.UnrecognizedVolume,
+        error.UnsupportedBuiltinAnnotationOnly,
+        error.UnsupportedPlatform,
+        error.UnsupportedWatchMode,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WatchBackendFailed,
+        error.WatchInputsMalformed,
+        error.WatchInputsMissing,
+        error.WatchInputsReadFailed,
+        error.WouldBlock,
+        error.WriteFailed,
+        => stderr.print("{s}\n", .{@errorName(err)}) catch {},
     }
 
     return err;
@@ -14098,36 +16457,43 @@ fn remapDefaultAppDocumentElement(
     original_line_starts: []const u32,
     synthetic_header_lines: u32,
 ) Allocator.Error!void {
-    switch (element.*) {
-        .source_code_region => |*region| try remapDefaultAppSourceRegion(
+    if (element.* == .source_code_region) {
+        try remapDefaultAppSourceRegion(
             allocator,
-            region,
+            &element.source_code_region,
             original_path,
             original_source,
             original_line_starts,
             synthetic_header_lines,
-        ),
-        .source_code_with_underlines => |*underlines| {
-            const old_start_line = underlines.display_region.start_line;
-            try remapDefaultAppSourceRegion(
-                allocator,
-                &underlines.display_region,
-                original_path,
-                original_source,
-                original_line_starts,
-                synthetic_header_lines,
-            );
-            if (old_start_line <= synthetic_header_lines) return;
-            for (underlines.underline_regions) |*underline| {
-                if (underline.start_line > synthetic_header_lines) {
-                    underline.start_line -= synthetic_header_lines;
-                }
-                if (underline.end_line > synthetic_header_lines) {
-                    underline.end_line -= synthetic_header_lines;
-                }
+        );
+    } else if (element.* == .source_code_with_underlines) {
+        const underlines = &element.source_code_with_underlines;
+        const old_start_line = underlines.display_region.start_line;
+        try remapDefaultAppSourceRegion(
+            allocator,
+            &underlines.display_region,
+            original_path,
+            original_source,
+            original_line_starts,
+            synthetic_header_lines,
+        );
+        if (old_start_line <= synthetic_header_lines) return;
+        for (underlines.underline_regions) |*underline| {
+            if (underline.start_line > synthetic_header_lines) {
+                underline.start_line -= synthetic_header_lines;
             }
-        },
-        else => {},
+            if (underline.end_line > synthetic_header_lines) {
+                underline.end_line -= synthetic_header_lines;
+            }
+        }
+    } else if (element.* == .source_location) {
+        const location = &element.source_location;
+        if (location.line <= synthetic_header_lines) return;
+
+        const filename = try allocator.dupe(u8, original_path);
+        if (location.filename) |old_filename| allocator.free(old_filename);
+        location.filename = filename;
+        location.line -= synthetic_header_lines;
     }
 }
 
@@ -14240,7 +16606,68 @@ fn checkFileWithBuildEnvPreserved(
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => {},
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.BuiltinArtifactVersionMismatch,
+            error.BuiltinLowLevelAnnotationMustBeFunction,
+            error.Canceled,
+            error.CorruptArtifact,
+            error.CorruptBuiltinArtifact,
+            error.CorruptEmbeddedBuiltins,
+            error.DeviceBusy,
+            error.DownloadFailed,
+            error.EmptyCode,
+            error.ExpectedAppHeader,
+            error.ExpectedPlatformString,
+            error.ExpectedString,
+            error.FileBusy,
+            error.FileError,
+            error.FileNotFound,
+            error.FileSystem,
+            error.FileTooBig,
+            error.InputOutput,
+            error.Internal,
+            error.InvalidDependency,
+            error.InvalidNullByteInPath,
+            error.InvalidPackageName,
+            error.InvalidUrl,
+            error.IoError,
+            error.IsDir,
+            error.LockedMemoryLimitExceeded,
+            error.LowLevelOperationsNotFound,
+            error.MissingFilesDirectory,
+            error.MissingTargetFile,
+            error.MmapFailed,
+            error.MprotectFailed,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoCacheDir,
+            error.NoDevice,
+            error.NoPackageSource,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.OperationUnsupported,
+            error.PathAlreadyExists,
+            error.PathOutsideWorkspace,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.StaleEmbeddedBuiltins,
+            error.StreamTooLong,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            error.UnrecognizedVolume,
+            error.UnsupportedBuiltinAnnotationOnly,
+            error.UnsupportedHeader,
+            error.UnsupportedPlatform,
+            error.UnwindRegistrationFailed,
+            error.VirtualAllocFailed,
+            error.VirtualProtectFailed,
+            => {},
         }
 
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
@@ -14250,7 +16677,6 @@ fn checkFileWithBuildEnvPreserved(
         for (drained) |mod| {
             for (mod.reports) |report| {
                 switch (report.severity) {
-                    .info => {},
                     .runtime_error, .fatal => error_count += 1,
                     .warning => warning_count += 1,
                 }
@@ -14300,7 +16726,6 @@ fn checkFileWithBuildEnvPreserved(
     for (drained) |mod| {
         for (mod.reports) |report| {
             switch (report.severity) {
-                .info => {},
                 .runtime_error, .fatal => error_count += 1,
                 .warning => warning_count += 1,
             }
@@ -14385,7 +16810,68 @@ fn checkFileWithBuildEnv(
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
         switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => {},
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.BuiltinArtifactVersionMismatch,
+            error.BuiltinLowLevelAnnotationMustBeFunction,
+            error.Canceled,
+            error.CorruptArtifact,
+            error.CorruptBuiltinArtifact,
+            error.CorruptEmbeddedBuiltins,
+            error.DeviceBusy,
+            error.DownloadFailed,
+            error.EmptyCode,
+            error.ExpectedAppHeader,
+            error.ExpectedPlatformString,
+            error.ExpectedString,
+            error.FileBusy,
+            error.FileError,
+            error.FileNotFound,
+            error.FileSystem,
+            error.FileTooBig,
+            error.InputOutput,
+            error.Internal,
+            error.InvalidDependency,
+            error.InvalidNullByteInPath,
+            error.InvalidPackageName,
+            error.InvalidUrl,
+            error.IoError,
+            error.IsDir,
+            error.LockedMemoryLimitExceeded,
+            error.LowLevelOperationsNotFound,
+            error.MissingFilesDirectory,
+            error.MissingTargetFile,
+            error.MmapFailed,
+            error.MprotectFailed,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoCacheDir,
+            error.NoDevice,
+            error.NoPackageSource,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.OperationUnsupported,
+            error.PathAlreadyExists,
+            error.PathOutsideWorkspace,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.StaleEmbeddedBuiltins,
+            error.StreamTooLong,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.ThreadQuotaExceeded,
+            error.Unexpected,
+            error.UnrecognizedVolume,
+            error.UnsupportedBuiltinAnnotationOnly,
+            error.UnsupportedHeader,
+            error.UnsupportedPlatform,
+            error.UnwindRegistrationFailed,
+            error.VirtualAllocFailed,
+            error.VirtualProtectFailed,
+            => {},
         }
 
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
@@ -14396,7 +16882,6 @@ fn checkFileWithBuildEnv(
         for (drained) |mod| {
             for (mod.reports) |report| {
                 switch (report.severity) {
-                    .info => {},
                     .runtime_error, .fatal => error_count += 1,
                     .warning => warning_count += 1,
                 }
@@ -14434,7 +16919,6 @@ fn checkFileWithBuildEnv(
     for (drained) |mod| {
         for (mod.reports) |report| {
             switch (report.severity) {
-                .info => {},
                 .runtime_error, .fatal => error_count += 1,
                 .warning => warning_count += 1,
             }
@@ -14490,12 +16974,7 @@ fn finishRocCheck(
     ctx.io.flush();
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.writeAll("Found ") catch {};
-        writeDiagnosticCounts(stderr, check_result.error_count, check_result.warning_count, stderr_report_config.shouldUseColors()) catch {};
-        stderr.writeAll(" in ") catch {};
-        formatElapsedTimeMs(stderr, elapsed) catch {};
-        stderr.print(" for {s}.\n", .{args.path}) catch {};
+        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, args.path, stderr_report_config) catch {};
 
         if (args.verbose) {
             printVerboseStats(stderr, check_result);
@@ -14708,7 +17187,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         var extra_buf: [2][]const u8 = undefined;
         const extra_paths = appendExtraWatchPaths(.{ .check = args }, &extra_buf);
 
-        if (try readDefaultAppSource(ctx, args.path)) |source| {
+        if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source| {
             var default_result = rocCheckDefaultAppPreserved(
                 ctx,
                 args,
@@ -14766,7 +17245,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         return finishRocCheck(ctx, args, stdout, stderr, timer_start_ns, check_result);
     }
 
-    var check_result = if (try readDefaultAppSource(ctx, args.path)) |source|
+    var check_result = if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source|
         rocCheckDefaultApp(ctx, args, source, cache_config) catch |err| {
             reporter.fail();
             return handleProcessFileError(err, stderr, args.path);
@@ -14925,7 +17404,38 @@ fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u
     const file_content = std.Io.Dir.cwd().readFileAlloc(io, file_path, ctx.gpa, .limited(10 * 1024 * 1024)) catch |err| {
         switch (err) {
             error.FileNotFound => try sendResponse(io, stream, "404 Not Found", "text/plain", "File Not Found"),
-            else => try sendResponse(io, stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.ConnectionResetByPeer,
+            error.DeviceBusy,
+            error.FileBusy,
+            error.FileLocksUnsupported,
+            error.FileTooBig,
+            error.InputOutput,
+            error.IsDir,
+            error.LockViolation,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.NotOpenForReading,
+            error.OutOfMemory,
+            error.PathAlreadyExists,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.ReadOnlyFileSystem,
+            error.SocketUnconnected,
+            error.StreamTooLong,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => try sendResponse(io, stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
         }
         return;
     };
@@ -15257,16 +17767,15 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
     const root_name = build_env.discovered_pkg_name orelse return error.Internal;
     const root_pkg = build_env.packages.getPtr(root_name) orelse return error.Internal;
 
-    switch (root_pkg.kind) {
-        .package, .platform => {},
-        else => return ctx.fail(.{ .bump_failed = .{
+    if (root_pkg.kind != .package and root_pkg.kind != .platform) {
+        return ctx.fail(.{ .bump_failed = .{
             .title = "Not A Package",
             .message = try std.fmt.allocPrint(
                 ctx.arena,
                 "roc bump compares package APIs, but the {s} module ({s}) has neither a package nor a platform header.",
                 .{ side, root_pkg.root_file },
             ),
-        } }),
+        } });
     }
 
     // Map every compiled module's identity to the package that owns it, so type
@@ -15308,14 +17817,19 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
                 break :origin_blk .{ .unstable = pkg.root_file };
             };
             const coord_pkg = coord_entry.value_ptr.*;
-            for (coord_pkg.modules.items) |*module_state| {
+            for (coord_pkg.modules.items, 0..) |*module_state, module_idx| {
                 if (module_state.moduleEnv()) |mod_env| {
                     // Checked types record origins under the package-qualified
                     // module name; register the bare name too for roots whose
                     // modules are referenced unqualified.
+                    const is_platform_root = root_pkg.kind == .platform and
+                        std.mem.eql(u8, pkg_name, root_name) and
+                        coord_pkg.root_module_id != null and
+                        @as(usize, coord_pkg.root_module_id.?) == module_idx;
                     const origin = bump.extract.OriginMap.Origin{
                         .kind = origin_kind,
-                        .module_name = mod_env.module_name,
+                        .module_name = if (is_platform_root) "" else mod_env.module_name,
+                        .artifact = module_state.checkedArtifact(),
                     };
                     const identity_hash = mod_env.contentIdentityHash() orelse return error.Internal;
                     try origins.putIdentity(ctx.gpa, identity_hash, origin);
@@ -15326,22 +17840,53 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         }
     }
 
-    const public_modules = try build_env.getPublicRootModules(ctx.gpa);
-    defer ctx.gpa.free(public_modules);
-
     var inputs = std.ArrayListUnmanaged(bump.extract.ModuleInput).empty;
     defer inputs.deinit(ctx.gpa);
 
-    for (public_modules) |module| {
-        const artifact = module.semantic.checked_artifact orelse return error.Internal;
-        try inputs.append(ctx.gpa, .{
-            .exposed_name = module.name,
-            .module_env = module.semantic.env,
-            .artifact = artifact,
-        });
+    {
+        const public_modules = try build_env.getPublicRootModules(ctx.gpa);
+        defer ctx.gpa.free(public_modules);
+        for (public_modules) |module| {
+            const artifact = module.semantic.checked_artifact orelse return error.Internal;
+            try inputs.append(ctx.gpa, .{
+                .exposed_name = module.name,
+                .module_env = module.semantic.env,
+                .artifact = artifact,
+                .public_type_decl = module.public_type_decl,
+            });
+        }
     }
 
-    if (inputs.items.len == 0) {
+    if (root_pkg.kind == .platform and root_pkg.public_surface.root_names.items.len > 0) {
+        const root_module = build_env.rootModule(root_name) orelse return error.Internal;
+        const root_data = root_module.semanticData() orelse return error.Internal;
+        const root_artifact = root_data.checked_artifact orelse return error.Internal;
+        try inputs.append(ctx.gpa, .{
+            .exposed_name = root_module.name,
+            .module_env = root_data.env,
+            .artifact = root_artifact,
+            .exposed_names = root_pkg.public_surface.root_names.items,
+        });
+    }
+    const api_input_count = inputs.items.len;
+
+    {
+        const routing_modules = try build_env.getCompiledPublicModules(ctx.gpa);
+        defer ctx.gpa.free(routing_modules);
+        for (routing_modules) |module| {
+            if (std.mem.eql(u8, module.package_name, root_name)) continue;
+            if (module.public_type_decl == null) continue;
+            const artifact = module.semantic.checked_artifact orelse return error.Internal;
+            try inputs.append(ctx.gpa, .{
+                .exposed_name = module.name,
+                .module_env = module.semantic.env,
+                .artifact = artifact,
+                .public_type_decl = module.public_type_decl,
+            });
+        }
+    }
+
+    if (api_input_count == 0) {
         return ctx.fail(.{ .bump_failed = .{
             .title = "No Exposed Modules",
             .message = try std.fmt.allocPrint(
@@ -15353,7 +17898,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
     }
 
     var extract_failure: ?bump.extract.Failure = null;
-    return bump.extract.extractPackageApi(ctx.gpa, inputs.items, &origins, &extract_failure) catch |err| switch (err) {
+    return bump.extract.extractPackageApi(ctx.gpa, inputs.items, api_input_count, &origins, &extract_failure) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.ExtractFailed => {
             const info = extract_failure.?;
@@ -15403,8 +17948,6 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     const stderr = ctx.io.stderr();
     const report_config = ctx.reportConfig(.stderr);
 
-    const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds;
-
     // Set up cache configuration based on command line args
     const cache_config = CacheConfig{
         .enabled = !args.no_cache,
@@ -15434,7 +17977,6 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     defer result_with_env.deinit(ctx.gpa);
 
     const check_result = &result_with_env.check_result;
-    const elapsed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .real).nanoseconds - timer_start_ns));
 
     // Render reports grouped by module
     for (check_result.reports) |module| {
@@ -15450,13 +17992,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     }
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.print("Found {} error(s) and {} warning(s) in ", .{
-            check_result.error_count,
-            check_result.warning_count,
-        }) catch {};
-        formatElapsedTime(stderr, elapsed) catch {};
-        stderr.print(" for {s}.", .{args.path}) catch {};
+        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, args.path, report_config) catch {};
 
         if (check_result.error_count > 0) {
             return error.DocsFailed;
@@ -15517,13 +18053,45 @@ fn generateDocs(
     };
     defer ctx.gpa.free(modules);
 
+    var public_type_projections = std.ArrayList(extract.PublicTypeProjection).empty;
+    defer public_type_projections.deinit(ctx.gpa);
+    {
+        const routing_modules = try build_env.getCompiledPublicModules(ctx.gpa);
+        defer ctx.gpa.free(routing_modules);
+        for (routing_modules) |module_info| {
+            const source_decl = module_info.public_type_decl orelse continue;
+            const artifact = module_info.semantic.checked_artifact orelse unreachable;
+            try public_type_projections.append(ctx.gpa, .{
+                .public_name = module_info.name,
+                .package_name = build_env.displayNameForPackage(module_info.package_name),
+                .source_env = module_info.semantic.env,
+                .source_identity = &artifact.key.module_identity_hash,
+                .source_decl = source_decl,
+                .public_order = module_info.public_order,
+            });
+        }
+    }
+    extract.sortPublicTypeProjections(public_type_projections.items);
+
     for (modules) |module_info| {
         // Docs show display names (root alias, or "app"/"module" for the
         // root itself), never internal identity keys (URLs, absolute paths).
         const sched_pkg_name = build_env.displayNameForPackage(module_info.package_name);
         modules_seen += 1;
 
-        var mod_docs = extract.extractModuleDocs(ctx.gpa, module_info.semantic.env, sched_pkg_name, module_info.path) catch |err| {
+        var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.semantic.env, sched_pkg_name, module_info.path, .{
+            .exposed_names = module_info.docs_exposed_names,
+            .public_type = if (module_info.public_type_decl) |source_decl| .{
+                .public_name = module_info.name,
+                .package_name = sched_pkg_name,
+                .source_env = module_info.semantic.env,
+                .source_identity = &(module_info.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_decl = source_decl,
+                .public_order = module_info.public_order,
+            } else null,
+            .public_types = public_type_projections.items,
+            .checked_artifact = module_info.semantic.checked_artifact,
+        }) catch |err| {
             std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_info.name, err });
             extract_failed += 1;
             continue;
@@ -15544,7 +18112,7 @@ fn generateDocs(
             // yet no module was scheduled to document. This happens when the
             // source's module name shadows a compiler builtin (e.g. a file
             // declaring `Builtin`) or otherwise isn't built as a standalone
-            // module — there are no canonicalization or type errors to report.
+            // module—there are no canonicalization or type errors to report.
             std.debug.print(
                 "  The file compiled successfully but produced no standalone module to document.\n" ++
                     "  This typically means its module name shadows a compiler builtin, or it is a\n" ++
@@ -15599,7 +18167,34 @@ fn generateDocs(
     // Create output directory
     std.Io.Dir.cwd().createDirPath(ctx.io.std_io, base_output_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
     };
 
     // Load the language reference articles when requested. They are read from
@@ -15826,6 +18421,40 @@ test "refreshWatchState reports stale snapshot for existing watch set" {
     try testing.expect(changed);
 }
 
+test "watch byte change advances snapshot before rebuild completes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.txt" });
+    defer allocator.free(watched_path);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "old" });
+
+    var signal = WatchEventSignal{};
+    var state = WatchState{};
+    defer state.deinit(&ctx);
+    const initial_inputs = try collectWatchInputSet(&ctx, null, &.{watched_path});
+    try testing.expect(!try refreshWatchState(&ctx, &state, &signal, initial_inputs));
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "new" });
+
+    try testing.expect(try watchStateHasByteChanges(&ctx, &state));
+    try testing.expect(!try watchStateHasByteChanges(&ctx, &state));
+}
+
 test "appendWindowsQuotedArg" {
     const testing = std.testing;
 
@@ -15903,22 +18532,29 @@ test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content m
     try testing.expect(!isCompilerOwnedBuiltinSourcePath(allocator, io, missing));
 }
 
-test "classifyNativeRunTermination preserves warning exit code" {
+test "classifyNativeRunTermination preserves successful exit" {
     const testing = std.testing;
 
-    const result = classifyNativeRunTermination(.{ .exited = 0 }, 1);
+    const result = classifyNativeRunTermination(.{ .exited = 0 });
 
-    try testing.expect(result == .exit_code);
-    try testing.expectEqual(@as(u8, 2), result.exit_code);
+    try testing.expect(result == .success);
 }
 
 test "classifyNativeRunTermination preserves signal termination" {
     const testing = std.testing;
 
-    const result = classifyNativeRunTermination(.{ .signal = @enumFromInt(11) }, 0);
+    const result = classifyNativeRunTermination(.{ .signal = @enumFromInt(11) });
 
     try testing.expect(result == .signal);
     try testing.expectEqual(@as(std.posix.SIG, @enumFromInt(11)), result.signal);
+}
+
+test "check errors determine command failure after work completes" {
+    const testing = std.testing;
+
+    try testing.expectError(error.CompilationFailed, failOnCheckErrors(.{ .errors = 1, .warnings = 2 }));
+    try failOnCheckErrors(.{ .warnings = 2 });
+    try failOnCheckErrors(.{});
 }
 
 test "longestCommonParentDir" {
@@ -15935,7 +18571,7 @@ test "longestCommonParentDir" {
         .{ .paths = &.{ "/tmp/pkg/main.roc", "/tmp/pkg/Mod.roc" }, .expected = "/tmp/pkg" },
         // Files in sibling subdirectories: common parent.
         .{ .paths = &.{ "/tmp/nested/a/main.roc", "/tmp/nested/b/Mod.roc" }, .expected = "/tmp/nested" },
-        // Names share a byte prefix but no directory boundary — must back up.
+        // Names share a byte prefix but no directory boundary—must back up.
         .{ .paths = &.{ "/tmp/abc/a.roc", "/tmp/abd/b.roc" }, .expected = "/tmp" },
         // Only root in common.
         .{ .paths = &.{ "/etc/foo.roc", "/var/bar.roc" }, .expected = "/" },

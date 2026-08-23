@@ -37,6 +37,8 @@ pub const LambdaMono = struct {
 pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
 pub const SolvedLirLower = @import("solved_lir_lower.zig");
+/// Boxy checked-to-LIR planning and lowering components.
+pub const Boxy = @import("boxy/mod.zig");
 pub const StructuralTest = @import("structural_test.zig");
 
 test "postcheck declarations are referenced" {
@@ -63,4 +65,18 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("solved_inline.zig"));
     std.testing.refAllDecls(@import("solved_lir_lower.zig"));
     std.testing.refAllDecls(@import("structural_test.zig"));
+}
+
+test "lambda solved unification loop is iterative" {
+    const source = @embedFile("lambda_solved/solve.zig");
+    const process_start = std.mem.find(u8, source, "    fn processUnifyPair(") orelse
+        @panic("lambda solved processUnifyPair function not found");
+    const apply_start = std.mem.findPos(u8, source, process_start, "    fn applyUnifyFinish(") orelse
+        @panic("lambda solved applyUnifyFinish helper not found");
+    const process_source = source[process_start..apply_start];
+
+    try std.testing.expect(std.mem.find(u8, process_source, "try self.unify(") == null);
+    try std.testing.expect(std.mem.find(u8, process_source, "try self.unifySpans(") == null);
+    try std.testing.expect(std.mem.find(u8, process_source, "try self.mergeTags(") != null);
+    try std.testing.expect(std.mem.find(u8, process_source, "try self.pushUnifyPair(") != null);
 }

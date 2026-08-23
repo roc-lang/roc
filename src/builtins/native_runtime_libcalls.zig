@@ -4,8 +4,8 @@
 //! The eval LLVM backend merges the (target-independent) builtins bitcode into
 //! the user module and re-codegens the whole thing for the host's native
 //! target. That final instruction selection lowers operations with no native
-//! instruction — 128-bit multiply/divide/remainder and 128-bit<->float
-//! conversions — to compiler-rt libcalls (`__divti3`, `__fixsfti`, ...). Those
+//! instruction—128-bit multiply/divide/remainder and 128-bit<->float
+//! conversions—to compiler-rt libcalls (`__divti3`, `__fixsfti`, ...). Those
 //! symbols are not in the builtins bitcode (they are introduced *after* it,
 //! during native codegen), so the produced shared object references them as
 //! *undefined* symbols.
@@ -120,9 +120,14 @@ pub fn resolve(name: []const u8) ?usize {
 /// `eval_loader` (static-musl Linux) and the OS dynamic loader (other Unixes)
 /// bind them via `resolve` / their own compiler-rt instead, but Windows loads
 /// the eval image with `LoadLibrary`, which requires a fully linked DLL.
-pub fn exportLibcalls() void {
+///
+/// `linkage` is `.weak` for an object that only needs these when nothing else
+/// in the link supplies them: a strong definition elsewhere then wins, which
+/// COFF requires, since it rejects two strong definitions of `__udivti3`
+/// outright where ELF would pick one.
+pub fn exportLibcalls(comptime linkage: std.builtin.GlobalLinkage) void {
     inline for (entries) |entry| {
-        @export(entry[1], .{ .name = entry[0] });
+        @export(entry[1], .{ .name = entry[0], .linkage = linkage });
     }
 }
 

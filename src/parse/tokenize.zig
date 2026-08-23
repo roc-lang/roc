@@ -67,14 +67,21 @@ pub const Token = struct {
         LowerIdent,
         MalformedUnicodeIdent,
         Underscore,
-        DotLowerIdent,
+        // Keep these dot-suffix classes contiguous and in this order. The hot
+        // parser kernel uses range branches over them; changing the order must
+        // be followed by the ReleaseFast assembly audit required by design.md.
         DotInt,
-        DotUpperIdent,
         NoSpaceDotInt,
+        DotLowerIdent,
         NoSpaceDotLowerIdent,
+        DotQuestionLowerIdent,
+        NoSpaceDotQuestionLowerIdent,
+        DotUpperIdent,
         NoSpaceDotUpperIdent,
         MalformedDotUnicodeIdent,
         MalformedNoSpaceDotUnicodeIdent,
+        MalformedDotQuestionUnicodeIdent,
+        MalformedNoSpaceDotQuestionUnicodeIdent,
 
         NamedUnderscore,
         MalformedNamedUnderscoreUnicode,
@@ -186,10 +193,12 @@ pub const Token = struct {
                 .LowerIdent,
                 .Underscore,
                 .DotLowerIdent,
+                .DotQuestionLowerIdent,
                 .DotInt,
                 .DotUpperIdent,
                 .NoSpaceDotInt,
                 .NoSpaceDotLowerIdent,
+                .NoSpaceDotQuestionLowerIdent,
                 .NoSpaceDotUpperIdent,
                 .NamedUnderscore,
                 .OpaqueName,
@@ -275,10 +284,12 @@ pub const Token = struct {
                 => false,
 
                 .MalformedDotUnicodeIdent,
+                .MalformedDotQuestionUnicodeIdent,
                 .MalformedInvalidEscapeSequence,
                 .MalformedInvalidUnicodeEscapeSequence,
                 .MalformedNamedUnderscoreUnicode,
                 .MalformedNoSpaceDotUnicodeIdent,
+                .MalformedNoSpaceDotQuestionUnicodeIdent,
                 .MalformedNumberBadSuffix,
                 .MalformedNumberNoDigits,
                 .MalformedNumberNoExponentDigits,
@@ -294,75 +305,65 @@ pub const Token = struct {
         }
 
         pub fn isInterned(tok: Tag) bool {
-            return switch (tok) {
-                .UpperIdent,
-                .LowerIdent,
-                .DotLowerIdent,
-                .DotUpperIdent,
-                .NoSpaceDotLowerIdent,
-                .NoSpaceDotUpperIdent,
-                .NamedUnderscore,
-                .MalformedNamedUnderscoreUnicode,
-                .MalformedNoSpaceDotUnicodeIdent,
-                .MalformedUnicodeIdent,
-                .MalformedDotUnicodeIdent,
-                .MalformedOpaqueNameUnicode,
-                .OpaqueName,
-                => true,
-                else => false,
-            };
+            return tok == .UpperIdent or
+                tok == .LowerIdent or
+                tok == .DotLowerIdent or
+                tok == .DotUpperIdent or
+                tok == .NoSpaceDotLowerIdent or
+                tok == .NoSpaceDotUpperIdent or
+                tok == .NamedUnderscore or
+                tok == .MalformedNamedUnderscoreUnicode or
+                tok == .MalformedNoSpaceDotUnicodeIdent or
+                tok == .MalformedUnicodeIdent or
+                tok == .MalformedDotUnicodeIdent or
+                tok == .MalformedOpaqueNameUnicode or
+                tok == .OpaqueName or
+                tok == .DotQuestionLowerIdent or
+                tok == .NoSpaceDotQuestionLowerIdent or
+                tok == .MalformedNoSpaceDotQuestionUnicodeIdent or
+                tok == .MalformedDotQuestionUnicodeIdent;
         }
 
         pub fn hasUnderscoreFlags(tok: Tag) bool {
-            return switch (tok) {
-                .LowerIdent,
-                .NamedUnderscore,
-                => true,
-                else => false,
-            };
+            return tok == .LowerIdent or tok == .NamedUnderscore;
         }
 
         /// Returns true if this token can end an expression, meaning a following
         /// minus sign should be treated as a binary operator rather than unary.
         /// For example, in `x-1`, the minus after `x` (LowerIdent) should be binary.
         pub fn canEndExpression(tok: Tag) bool {
-            return switch (tok) {
-                // Identifiers can end expressions
-                .LowerIdent,
-                .UpperIdent,
-                .MalformedUnicodeIdent,
-                .NamedUnderscore,
-                .MalformedNamedUnderscoreUnicode,
-                .OpaqueName,
-                .MalformedOpaqueNameUnicode,
-                // Dot access can end expressions
-                .DotLowerIdent,
-                .DotUpperIdent,
-                .DotInt,
-                .NoSpaceDotLowerIdent,
-                .NoSpaceDotUpperIdent,
-                .NoSpaceDotInt,
-                .MalformedDotUnicodeIdent,
-                .MalformedNoSpaceDotUnicodeIdent,
-                // Numbers can end expressions
-                .Int,
-                .Float,
-                .MalformedNumberBadSuffix,
-                .MalformedNumberUnicodeSuffix,
-                .MalformedNumberNoDigits,
-                .MalformedNumberNoExponentDigits,
-                // Closing brackets can end expressions
-                .CloseRound,
-                .CloseSquare,
-                .CloseCurly,
-                .CloseStringInterpolation,
-                // String literals can end expressions
-                .StringEnd,
-                .SingleQuote,
-                .MalformedSingleQuote,
-                => true,
-                else => false,
-            };
+            return tok == .LowerIdent or
+                tok == .UpperIdent or
+                tok == .MalformedUnicodeIdent or
+                tok == .NamedUnderscore or
+                tok == .MalformedNamedUnderscoreUnicode or
+                tok == .OpaqueName or
+                tok == .MalformedOpaqueNameUnicode or
+                tok == .DotLowerIdent or
+                tok == .DotUpperIdent or
+                tok == .DotInt or
+                tok == .NoSpaceDotLowerIdent or
+                tok == .NoSpaceDotUpperIdent or
+                tok == .NoSpaceDotInt or
+                tok == .MalformedDotUnicodeIdent or
+                tok == .MalformedNoSpaceDotUnicodeIdent or
+                tok == .Int or
+                tok == .Float or
+                tok == .MalformedNumberBadSuffix or
+                tok == .MalformedNumberUnicodeSuffix or
+                tok == .MalformedNumberNoDigits or
+                tok == .MalformedNumberNoExponentDigits or
+                tok == .CloseRound or
+                tok == .CloseSquare or
+                tok == .CloseCurly or
+                tok == .CloseStringInterpolation or
+                tok == .StringEnd or
+                tok == .SingleQuote or
+                tok == .MalformedSingleQuote or
+                tok == .DotQuestionLowerIdent or
+                tok == .NoSpaceDotQuestionLowerIdent or
+                tok == .MalformedDotQuestionUnicodeIdent or
+                tok == .MalformedNoSpaceDotQuestionUnicodeIdent;
         }
 
         /// This function is used to keep around the first malformed node.
@@ -454,11 +455,15 @@ pub const Token = struct {
                 .MalformedNamedUnderscoreUnicode,
                 .MalformedUnicodeIdent,
                 .MalformedDotUnicodeIdent,
+                .MalformedDotQuestionUnicodeIdent,
                 .MalformedNoSpaceDotUnicodeIdent,
+                .MalformedNoSpaceDotQuestionUnicodeIdent,
                 => .variable,
 
                 .DotLowerIdent,
+                .DotQuestionLowerIdent,
                 .NoSpaceDotLowerIdent,
+                .NoSpaceDotQuestionLowerIdent,
                 => .field,
 
                 .DotUpperIdent,
@@ -546,6 +551,29 @@ pub const Token = struct {
             };
         }
     };
+
+    comptime {
+        const ordered_dot_suffix_tags = [_]Tag{
+            .DotInt,
+            .NoSpaceDotInt,
+            .DotLowerIdent,
+            .NoSpaceDotLowerIdent,
+            .DotQuestionLowerIdent,
+            .NoSpaceDotQuestionLowerIdent,
+            .DotUpperIdent,
+            .NoSpaceDotUpperIdent,
+            .MalformedDotUnicodeIdent,
+            .MalformedNoSpaceDotUnicodeIdent,
+            .MalformedDotQuestionUnicodeIdent,
+            .MalformedNoSpaceDotQuestionUnicodeIdent,
+        };
+        const first = @intFromEnum(ordered_dot_suffix_tags[0]);
+        for (ordered_dot_suffix_tags, 0..) |tag, offset| {
+            if (@intFromEnum(tag) != first + offset) {
+                @compileError("dot suffix token tags must remain contiguous for parser dispatch");
+            }
+        }
+    }
 
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
         .{ "and", .OpAnd },
@@ -1412,6 +1440,30 @@ pub const Tokenizer = struct {
                                     .MalformedNumberBadSuffix;
                             }
                             try self.pushTokenNormalHere(gpa, tag, start);
+                        } else if (n == '?') {
+                            const begins_field = if (self.cursor.peekAt(2)) |c|
+                                (c >= 'a' and c <= 'z') or c >= 0x80
+                            else
+                                false;
+
+                            if (begins_field) {
+                                // Optional record-field access is one lexical unit, just like
+                                // ordinary `.field` access. Only trivia before the dot is
+                                // permitted; `.`/`?`/the lowercase field name stay adjacent.
+                                self.cursor.pos += 2;
+                                const text_start = self.cursor.pos;
+                                const valid = self.cursor.chompIdentGeneral();
+                                const tag: Token.Tag = if (valid)
+                                    if (sp) .DotQuestionLowerIdent else .NoSpaceDotQuestionLowerIdent
+                                else if (sp)
+                                    .MalformedDotQuestionUnicodeIdent
+                                else
+                                    .MalformedNoSpaceDotQuestionUnicodeIdent;
+                                try self.pushTokenInternedHere(gpa, tag, start, text_start);
+                            } else {
+                                self.cursor.pos += 1;
+                                try self.pushTokenNormalHere(gpa, .Dot, start);
+                            }
                         } else if (n >= 'a' and n <= 'z') {
                             var tag: Token.Tag = if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent;
                             self.cursor.pos += 1;
@@ -2203,6 +2255,14 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                     try buf2.append('z');
                 }
             },
+            .DotQuestionLowerIdent => {
+                std.debug.assert(length >= 3);
+                try buf2.append('.');
+                try buf2.append('?');
+                for (2..length) |_| {
+                    try buf2.append('z');
+                }
+            },
             .DotUpperIdent => {
                 try buf2.append('.');
                 try buf2.append('Z');
@@ -2219,6 +2279,14 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .NoSpaceDotLowerIdent => {
                 try buf2.append('.');
                 for (1..length) |_| {
+                    try buf2.append('z');
+                }
+            },
+            .NoSpaceDotQuestionLowerIdent => {
+                std.debug.assert(length >= 3);
+                try buf2.append('.');
+                try buf2.append('?');
+                for (2..length) |_| {
                     try buf2.append('z');
                 }
             },
@@ -2577,7 +2645,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .MalformedInvalidEscapeSequence,
             .MalformedUnicodeIdent,
             .MalformedDotUnicodeIdent,
+            .MalformedDotQuestionUnicodeIdent,
             .MalformedNoSpaceDotUnicodeIdent,
+            .MalformedNoSpaceDotQuestionUnicodeIdent,
             .MalformedUnknownToken,
             .MalformedNamedUnderscoreUnicode,
             .MalformedOpaqueNameUnicode,
@@ -2725,6 +2795,98 @@ test "tokenizer" {
     try testTokenization(gpa, "0B1010", &[_]Token.Tag{.Int}); // Uppercase binary (will emit warning)
     try testTokenization(gpa, "0x1A", &[_]Token.Tag{.Int}); // Hex
     try testTokenization(gpa, "0X1A", &[_]Token.Tag{.Int}); // Uppercase hex (will emit warning)
+}
+
+test "optional record field access tokenization" {
+    const gpa = std.testing.allocator;
+
+    // The accessor is a single interned token. Trivia before the dot is tracked
+    // separately so multiline access chains retain the same distinction as
+    // ordinary `.field` access.
+    try testTokenization(gpa, ".?field", &.{.DotQuestionLowerIdent});
+    try testTokenization(gpa, "record.?field", &.{ .LowerIdent, .NoSpaceDotQuestionLowerIdent });
+    try testTokenization(gpa, "record .?field", &.{ .LowerIdent, .DotQuestionLowerIdent });
+    try testTokenization(gpa, "record\n.?field", &.{ .LowerIdent, .DotQuestionLowerIdent });
+    try testTokenization(gpa, "record # comment\n.?field", &.{ .LowerIdent, .DotQuestionLowerIdent });
+    try testTokenization(gpa, "record.?if", &.{ .LowerIdent, .NoSpaceDotQuestionLowerIdent });
+    try testTokenization(gpa, "record.?effectful!", &.{ .LowerIdent, .NoSpaceDotQuestionLowerIdent });
+
+    // Existing question-mark operators remain separate after the accessor.
+    try testTokenization(gpa, "record.?field?", &.{ .LowerIdent, .NoSpaceDotQuestionLowerIdent, .NoSpaceOpQuestion });
+    try testTokenization(gpa, "record.?field??0", &.{ .LowerIdent, .NoSpaceDotQuestionLowerIdent, .OpDoubleQuestion, .Int });
+
+    // An optional accessor can participate in an ordinary postfix chain. It
+    // also ends an expression for the tokenizer's binary-minus decision.
+    try testTokenization(gpa, "record.?field.next", &.{ .LowerIdent, .NoSpaceDotQuestionLowerIdent, .NoSpaceDotLowerIdent });
+    try testTokenization(gpa, "record.?field(", &.{ .LowerIdent, .NoSpaceDotQuestionLowerIdent, .NoSpaceOpenRound });
+    try testTokenization(gpa, "record.?field-1", &.{ .LowerIdent, .NoSpaceDotQuestionLowerIdent, .OpBinaryMinus, .Int });
+
+    // Only the adjacent `.?lowercase` spelling forms the composite token.
+    // Keeping malformed boundaries split gives the parser precise tokens for
+    // its optional-access diagnostic and recovery.
+    try testTokenization(gpa, "record.?", &.{ .LowerIdent, .Dot, .NoSpaceOpQuestion });
+    try testTokenization(gpa, "record.?Field", &.{ .LowerIdent, .Dot, .NoSpaceOpQuestion, .UpperIdent });
+    try testTokenization(gpa, "record.?0", &.{ .LowerIdent, .Dot, .NoSpaceOpQuestion, .Int });
+    try testTokenization(gpa, "record.?_field", &.{ .LowerIdent, .Dot, .NoSpaceOpQuestion, .NamedUnderscore });
+    try testTokenization(gpa, "record.?$field", &.{ .LowerIdent, .Dot, .NoSpaceOpQuestion, .LowerIdent });
+    try testTokenization(gpa, "record.? field", &.{ .LowerIdent, .Dot, .NoSpaceOpQuestion, .LowerIdent });
+    try testTokenization(gpa, "record. ?field", &.{ .LowerIdent, .Dot, .OpQuestion, .LowerIdent });
+    try testTokenization(gpa, "record.??field", &.{ .LowerIdent, .Dot, .OpDoubleQuestion, .LowerIdent });
+}
+
+test "optional record field access token metadata" {
+    const valid_tags = [_]Token.Tag{
+        .DotQuestionLowerIdent,
+        .NoSpaceDotQuestionLowerIdent,
+    };
+    for (valid_tags) |tag| {
+        try std.testing.expect(!tag.isMalformed());
+        try std.testing.expect(tag.isInterned());
+        try std.testing.expect(tag.canEndExpression());
+        try std.testing.expectEqual(Token.Tag.HighlightCategory.field, tag.highlightCategory());
+    }
+
+    const malformed_tags = [_]Token.Tag{
+        .MalformedDotQuestionUnicodeIdent,
+        .MalformedNoSpaceDotQuestionUnicodeIdent,
+    };
+    for (malformed_tags) |tag| {
+        try std.testing.expect(tag.isMalformed());
+        try std.testing.expect(tag.isInterned());
+        try std.testing.expect(tag.canEndExpression());
+        try std.testing.expectEqual(Token.Tag.HighlightCategory.variable, tag.highlightCategory());
+    }
+}
+
+test "optional record field access interns only the field name" {
+    const gpa = std.testing.allocator;
+    const source = "record.?field";
+    var messages: [4]Diagnostic = undefined;
+
+    var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+    defer env.deinit(gpa);
+
+    var tokenizer = try Tokenizer.init(&env, gpa, source, &messages);
+    defer tokenizer.deinit(gpa);
+    try tokenizer.tokenize(gpa);
+
+    const field_token: Token.Idx = 1;
+    try std.testing.expectEqual(Token.Tag.NoSpaceDotQuestionLowerIdent, tokenizer.output.tokenTag(field_token));
+    const field_ident = tokenizer.output.resolveIdentifier(field_token) orelse return error.TestExpectedIdentifier;
+    try std.testing.expectEqualStrings("field", env.getIdent(field_ident));
+
+    const field_region = tokenizer.output.resolve(field_token);
+    try std.testing.expectEqual(@as(u32, 6), field_region.start.offset);
+    try std.testing.expectEqual(@as(u32, 13), field_region.end.offset);
+}
+
+test "optional record field access malformed unicode tokenization" {
+    const gpa = std.testing.allocator;
+
+    try testTokenization(gpa, ".?日", &.{.MalformedDotQuestionUnicodeIdent});
+    try testTokenization(gpa, "record.?日本", &.{ .LowerIdent, .MalformedNoSpaceDotQuestionUnicodeIdent });
+    try testTokenization(gpa, "record .?field日", &.{ .LowerIdent, .MalformedDotQuestionUnicodeIdent });
+    try testTokenization(gpa, "record.?field日", &.{ .LowerIdent, .MalformedNoSpaceDotQuestionUnicodeIdent });
 }
 
 test "tokenizer with invalid UTF-8" {

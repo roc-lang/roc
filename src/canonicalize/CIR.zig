@@ -21,10 +21,12 @@ pub const NodeStore = @import("NodeStore.zig");
 pub const Node = @import("Node.zig");
 pub const Expr = @import("Expression.zig").Expr;
 pub const DerivedMethodKind = @import("Expression.zig").DerivedMethodKind;
+pub const AnnotationOnlyKind = @import("Expression.zig").AnnotationOnlyKind;
 pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;
 pub const Diagnostic = @import("Diagnostic.zig").Diagnostic;
+pub const DeclaredTypeKind = @import("Diagnostic.zig").DeclaredTypeKind;
 
 /// Indices of builtin type declarations within the Builtin module.
 /// Generated at build time into typed static data embedded in the compiler.
@@ -53,6 +55,7 @@ pub const BuiltinIndices = struct {
     http_header_encoding_type: Statement.Idx,
     http_header_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
+    range_type: Statement.Idx,
     u8_type: Statement.Idx,
     i8_type: Statement.Idx,
     u16_type: Statement.Idx,
@@ -105,6 +108,7 @@ pub const BuiltinIndices = struct {
     http_header_encoding_ident: Ident.Idx,
     http_header_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
+    range_ident: Ident.Idx,
     u8_ident: Ident.Idx,
     i8_ident: Ident.Idx,
     u16_ident: Ident.Idx,
@@ -194,6 +198,7 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "HttpHeaderEncoding", .qualified_name = "Builtin.Encoding.HttpHeaderEncoding", .type_field = "http_header_encoding_type", .ident_field = "http_header_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderEncoding" }, .auto_import = false },
     .{ .display_name = "HttpHeader", .qualified_name = "Builtin.Encoding.HttpHeader", .type_field = "http_header_type", .ident_field = "http_header_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "HttpHeader" } }, .auto_import = false },
     .{ .display_name = "Utf8Problem", .qualified_name = "Builtin.Str.Utf8Problem", .type_field = "utf8_problem_type", .ident_field = "utf8_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf8Problem" } } },
+    .{ .display_name = "Range", .qualified_name = "Builtin.Num.Range", .type_field = "range_type", .ident_field = "range_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Range" } } },
     .{ .display_name = "U8", .qualified_name = "Builtin.Num.U8", .type_field = "u8_type", .ident_field = "u8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U8" } }, .num_kind = .u8 },
     .{ .display_name = "I8", .qualified_name = "Builtin.Num.I8", .type_field = "i8_type", .ident_field = "i8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I8" } }, .num_kind = .i8 },
     .{ .display_name = "U16", .qualified_name = "Builtin.Num.U16", .type_field = "u16_type", .ident_field = "u16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U16" } }, .num_kind = .u16 },
@@ -348,26 +353,22 @@ pub const Def = struct {
         // This prevents crashes from cross-module node index issues
         const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @enumFromInt(@intFromEnum(self.pattern));
         const pattern_node = cir.store.nodes.get(pattern_node_idx);
-        const is_valid_pattern = switch (pattern_node.tag) {
-            .pattern_identifier,
-            .pattern_as,
-            .pattern_applied_tag,
-            .pattern_nominal,
-            .pattern_nominal_external,
-            .pattern_record_destructure,
-            .pattern_list,
-            .pattern_tuple,
-            .pattern_num_literal,
-            .pattern_dec_literal,
-            .pattern_f32_literal,
-            .pattern_f64_literal,
-            .pattern_small_dec_literal,
-            .pattern_str_literal,
-            .pattern_str_interpolation,
-            .pattern_underscore,
-            => true,
-            else => false,
-        };
+        const is_valid_pattern = pattern_node.tag == .pattern_identifier or
+            pattern_node.tag == .pattern_as or
+            pattern_node.tag == .pattern_applied_tag or
+            pattern_node.tag == .pattern_nominal or
+            pattern_node.tag == .pattern_nominal_external or
+            pattern_node.tag == .pattern_record_destructure or
+            pattern_node.tag == .pattern_list or
+            pattern_node.tag == .pattern_tuple or
+            pattern_node.tag == .pattern_num_literal or
+            pattern_node.tag == .pattern_dec_literal or
+            pattern_node.tag == .pattern_f32_literal or
+            pattern_node.tag == .pattern_f64_literal or
+            pattern_node.tag == .pattern_small_dec_literal or
+            pattern_node.tag == .pattern_str_literal or
+            pattern_node.tag == .pattern_str_interpolation or
+            pattern_node.tag == .pattern_underscore;
 
         if (is_valid_pattern) {
             try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
@@ -433,7 +434,7 @@ pub const WhereClause = union(enum) {
     pub const Owner = extern struct {
         rigid_var: TypeAnno.Idx,
         clauses: IdxSpan,
-        introduced_in_scope: bool,
+        owned_by_annotation: bool,
         _padding: [3]u8 = .{ 0, 0, 0 },
 
         pub const Span = extern struct { span: base.DataSpan };
@@ -441,6 +442,12 @@ pub const WhereClause = union(enum) {
     pub const Span = extern struct {
         span: base.DataSpan,
         owners: Owner.Span,
+
+        /// A declaration with no constraints at all.
+        pub const empty = Span{
+            .span = base.DataSpan.empty(),
+            .owners = .{ .span = base.DataSpan.empty() },
+        };
     };
 
     w_method: struct {
@@ -450,9 +457,14 @@ pub const WhereClause = union(enum) {
         ret: TypeAnno.Idx,
         effectful: bool,
     },
+    /// Applies every constraint named by a where alias to `var_`.
+    ///
+    /// `alias` is the resolved reference to the where alias declaration—a
+    /// `lookup` when the alias takes no arguments and an `apply` when it does—
+    /// so the checker never has to re-resolve the name.
     w_alias: struct {
         var_: TypeAnno.Idx,
-        alias_name: base.Ident.Idx,
+        alias: TypeAnno.Idx,
     },
     w_malformed: struct {
         diagnostic: Diagnostic.Idx,
@@ -500,12 +512,9 @@ pub const WhereClause = union(enum) {
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                try cir.store.getTypeAnno(alias.var_).pushToSExprTree(cir, tree, alias.var_);
-
-                const alias_name_str = cir.getIdent(alias.alias_name);
-                try tree.pushStringPair("name", alias_name_str);
-
                 const attrs = tree.beginNode();
+                try cir.store.getTypeAnno(alias.var_).pushToSExprTree(cir, tree, alias.var_);
+                try cir.store.getTypeAnno(alias.alias).pushToSExprTree(cir, tree, alias.alias);
                 try tree.endNode(begin, attrs);
             },
             .w_malformed => {
@@ -538,7 +547,7 @@ pub const Annotation = struct {
     /// Whether `anno` *introduces* a type variable (`.rigid_var`). Derived and
     /// populated like `mentions_type_var`.
     introduces_type_var: bool = false,
-    /// Whether the annotation contains an `_` inference hole — in `anno` or in
+    /// Whether the annotation contains an `_` inference hole—in `anno` or in
     /// any where-clause method signature. Derived by `addAnnotation` and
     /// populated on read by `getAnnotation`; the value passed at construction is
     /// ignored. A hole is inferred from the def's body, so an annotation
@@ -858,39 +867,29 @@ pub const Import = struct {
             self.map.deinit(allocator);
         }
 
-        /// Get or create an Import.Idx for the given module name.
-        /// The module name is first checked against existing imports by comparing strings.
-        /// New imports are initially unresolved (unresolved).
-        /// If ident_idx is provided, it will be stored for index-based lookups.
+        /// Get or create an Import.Idx for the given module name in a fresh CommonEnv.
+        /// New imports are initially unresolved.
         pub fn getOrPut(self: *Store, allocator: std.mem.Allocator, common: *base.CommonEnv, module_name: []const u8) Allocator.Error!Import.Idx {
             return self.getOrPutWithIdent(allocator, common, module_name, null);
         }
 
-        /// Get or create an Import.Idx for the given module name, with an associated ident.
-        /// The module name is first checked against existing imports by comparing strings.
-        /// New imports are initially unresolved (unresolved).
+        /// Get or create an Import.Idx for the given module name in a fresh CommonEnv,
+        /// with an associated ident. New imports are initially unresolved.
         /// If ident_idx is provided, it will be stored for index-based lookups.
         pub fn getOrPutWithIdent(self: *Store, allocator: std.mem.Allocator, common: *base.CommonEnv, module_name: []const u8, ident_idx: ?base.Ident.Idx) Allocator.Error!Import.Idx {
-            // First check if we already have this module name by comparing strings
-            for (self.imports.items.items, 0..) |existing_string_idx, i| {
-                const existing_name = common.getString(existing_string_idx);
-                if (std.mem.eql(u8, existing_name, module_name)) {
-                    // Found existing import with same name
-                    // Update ident if provided and not already set
-                    if (ident_idx) |ident| {
-                        if (i < self.import_idents.len()) {
-                            const current = self.import_idents.items.items[i];
-                            if (current.isNone()) {
-                                self.import_idents.items.items[i] = ident;
-                            }
-                        }
+            const string_idx = try common.insertString(allocator, module_name);
+
+            if (self.map.get(string_idx)) |idx| {
+                if (ident_idx) |ident| {
+                    const i = @intFromEnum(idx);
+                    if (i < self.import_idents.len() and self.import_idents.items.items[i].isNone()) {
+                        self.import_idents.items.items[i] = ident;
                     }
-                    return @as(Import.Idx, @enumFromInt(i));
                 }
+
+                return idx;
             }
 
-            // Not found - create new import
-            const string_idx = try common.insertString(allocator, module_name);
             const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
 
             // Add to both the list and the map, with unresolved module initially
@@ -1186,27 +1185,23 @@ pub const Report = reporting.Report;
 
 /// Checks if a type is castable for index type conversions
 pub fn isCastable(comptime T: type) bool {
-    return switch (T) {
-        Expr.Idx,
-        Pattern.Idx,
-        Statement.Idx,
-        TypeAnno.Idx,
-        Def.Idx,
-        TypeHeader.Idx,
-        RecordField.Idx,
-        Pattern.RecordDestruct.Idx,
-        Expr.IfBranch.Idx,
-        Expr.Match.Branch.Idx,
-        WhereClause.Idx,
-        Annotation.Idx,
-        TypeAnno.RecordField.Idx,
-        ExposedItem.Idx,
-        Expr.Match.BranchPattern.Idx,
-        Node.Idx,
-        TypeVar,
-        => true,
-        else => false,
-    };
+    return T == Expr.Idx or
+        T == Pattern.Idx or
+        T == Statement.Idx or
+        T == TypeAnno.Idx or
+        T == Def.Idx or
+        T == TypeHeader.Idx or
+        T == RecordField.Idx or
+        T == Pattern.RecordDestruct.Idx or
+        T == Expr.IfBranch.Idx or
+        T == Expr.Match.Branch.Idx or
+        T == WhereClause.Idx or
+        T == Annotation.Idx or
+        T == TypeAnno.RecordField.Idx or
+        T == ExposedItem.Idx or
+        T == Expr.Match.BranchPattern.Idx or
+        T == Node.Idx or
+        T == TypeVar;
 }
 
 /// Safely casts between compatible index types

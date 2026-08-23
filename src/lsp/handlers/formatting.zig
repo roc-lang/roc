@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const build_options = @import("build_options");
 const protocol = @import("../protocol.zig");
 const fmt = @import("fmt");
 const parse = @import("parse");
@@ -19,37 +20,31 @@ pub fn handler(comptime ServerType: type) type {
                 return;
             };
 
-            const obj = switch (params) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "formatting params must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(params) != .object) {
+                try self.sendError(id, .invalid_params, "formatting params must be an object");
+                return;
+            }
+            const obj = params.object;
 
             // Extract textDocument.uri
             const text_doc_value = obj.get("textDocument") orelse {
                 try self.sendError(id, .invalid_params, "missing textDocument");
                 return;
             };
-            const text_doc = switch (text_doc_value) {
-                .object => |o| o,
-                else => {
-                    try self.sendError(id, .invalid_params, "textDocument must be an object");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(text_doc_value) != .object) {
+                try self.sendError(id, .invalid_params, "textDocument must be an object");
+                return;
+            }
+            const text_doc = text_doc_value.object;
             const uri_value = text_doc.get("uri") orelse {
                 try self.sendError(id, .invalid_params, "missing uri");
                 return;
             };
-            const uri = switch (uri_value) {
-                .string => |s| s,
-                else => {
-                    try self.sendError(id, .invalid_params, "uri must be a string");
-                    return;
-                },
-            };
+            if (std.meta.activeTag(uri_value) != .string) {
+                try self.sendError(id, .invalid_params, "uri must be a string");
+                return;
+            }
+            const uri = uri_value.string;
 
             // Get the document text from the store
             const doc = self.doc_store.get(uri);
@@ -61,7 +56,9 @@ pub fn handler(comptime ServerType: type) type {
             // Format the document
             const formatted = formatSource(self.allocator, text) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => {
+                error.ParseError,
+                error.WriteFailed,
+                => {
                     std.log.err("formatting failed: {s}", .{@errorName(err)});
                     try self.sendNullResponse(id);
                     return;
@@ -135,8 +132,9 @@ fn formatSource(allocator: std.mem.Allocator, source: []const u8) FormatSourceEr
     var result: std.Io.Writer.Allocating = .init(allocator);
     defer result.deinit();
 
-    // Format the AST
-    try fmt.formatAst(ast.*, &result.writer);
+    // Format the AST, keeping formatting here identical to `roc fmt`—which
+    // includes bringing a stale `roc` version pin up to date.
+    try fmt.formatAstWithOptions(ast.*, &result.writer, .{ .compiler_version = build_options.compiler_version });
 
     return try result.toOwnedSlice();
 }

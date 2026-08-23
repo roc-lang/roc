@@ -12,17 +12,15 @@ hey : MyType
 # EXPECTED
 DECLARATION HAS NO VALUE - type_alias_anno_only.md:3:1:3:13
 # PROBLEMS
+── ● declaration has no value ────────────────────── type_alias_anno_only.md:3:1
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  hey : MyType                                                              │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────── type_alias_anno_only.md:3:1 ┘
+This declaration has a type annotation but no implementation.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+hey : MyType
+^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig

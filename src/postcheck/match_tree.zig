@@ -42,6 +42,7 @@
 //! site, `runtime_error` otherwise.
 
 const std = @import("std");
+const collections = @import("collections");
 
 /// Pattern kinds the accessor context reports. This is the module's neutral
 /// view of `PatData` across Monotype Lifted and Lambda Mono inputs; `callable`
@@ -123,7 +124,7 @@ pub const OccId = enum(u32) {
 /// `Ctx` supplies pattern access, type queries, and constructor identity:
 ///
 /// ```
-/// const PatId/TypeId/ExprId/LocalId  — input IR id types
+/// const PatId/TypeId/ExprId/LocalId/BindingSpan—input IR id/span types
 /// patKind(pat) PatKind
 /// bindLocal(pat) LocalId                                  // .bind
 /// asInfo(pat) struct { pattern: PatId, local: LocalId }   // .as_pattern
@@ -159,10 +160,12 @@ pub fn Compiler(comptime Ctx: type) type {
         pub const TypeId = Ctx.TypeId;
         pub const ExprId = Ctx.ExprId;
         pub const LocalId = Ctx.LocalId;
+        pub const BindingSpan = Ctx.BindingSpan;
 
         /// A match branch, in source order.
         pub const Branch = struct {
             pat: PatId,
+            bindings: BindingSpan = BindingSpan.empty(),
             guard: ?ExprId,
             body: ExprId,
             branch_index: u32,
@@ -185,12 +188,14 @@ pub fn Compiler(comptime Ctx: type) type {
 
         pub const Leaf = struct {
             binds: []const Bind,
+            bindings: BindingSpan,
             body: ExprId,
             branch_index: u32,
         };
 
         pub const GuardNode = struct {
             binds: []const Bind,
+            bindings: BindingSpan,
             guard: ExprId,
             body: ExprId,
             branch_index: u32,
@@ -284,6 +289,7 @@ pub fn Compiler(comptime Ctx: type) type {
         const Row = struct {
             cols: []const Col,
             binds: []const Bind,
+            bindings: BindingSpan,
             guard: ?ExprId,
             body: ExprId,
             branch_index: u32,
@@ -471,8 +477,8 @@ pub fn Compiler(comptime Ctx: type) type {
             /// one multiway test. Measured against plain first-column
             /// selection on the generated corpus
             /// (src/compile/test/match_corpus_test.zig) the two produced
-            /// identical statement totals — realistic matrices rarely give
-            /// row 0 multiple refutable columns with different run lengths —
+            /// identical statement totals—realistic matrices rarely give
+            /// row 0 multiple refutable columns with different run lengths—
             /// so run length is kept because it dominates first-column by
             /// construction whenever they do differ.
             fn selectColumn(self: *Builder, rows: []const Row) Col {
@@ -524,7 +530,7 @@ pub fn Compiler(comptime Ctx: type) type {
                             try self.normalize(child, sub.ty, sub.pat, &cols, &binds);
                         }
                     },
-                    else => unreachable,
+                    .int_switch, .eq_chain, .str_set, .list_len => unreachable,
                 }
 
                 for (row.cols) |c| {
@@ -533,6 +539,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{
                     .cols = cols.items,
                     .binds = binds.items,
+                    .bindings = row.bindings,
                     .guard = row.guard,
                     .body = row.body,
                     .branch_index = row.branch_index,
@@ -564,6 +571,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{
                     .cols = cols.items,
                     .binds = binds.items,
+                    .bindings = row.bindings,
                     .guard = row.guard,
                     .body = row.body,
                     .branch_index = row.branch_index,
@@ -577,6 +585,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{
                     .cols = try self.colsWithout(row, col.occ),
                     .binds = row.binds,
+                    .bindings = row.bindings,
                     .guard = row.guard,
                     .body = row.body,
                     .branch_index = row.branch_index,
@@ -595,6 +604,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{
                     .cols = cols.items,
                     .binds = binds.items,
+                    .bindings = row.bindings,
                     .guard = row.guard,
                     .body = row.body,
                     .branch_index = row.branch_index,
@@ -613,6 +623,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{
                     .cols = cols.items,
                     .binds = binds.items,
+                    .bindings = row.bindings,
                     .guard = row.guard,
                     .body = row.body,
                     .branch_index = row.branch_index,
@@ -751,6 +762,7 @@ pub fn Compiler(comptime Ctx: type) type {
                                 const otherwise = acc orelse try self.missTree(miss);
                                 acc = try self.mk(.{ .guard = .{
                                     .binds = row.binds,
+                                    .bindings = row.bindings,
                                     .guard = guard,
                                     .body = row.body,
                                     .branch_index = row.branch_index,
@@ -759,6 +771,7 @@ pub fn Compiler(comptime Ctx: type) type {
                             } else {
                                 acc = try self.mk(.{ .leaf = .{
                                     .binds = row.binds,
+                                    .bindings = row.bindings,
                                     .body = row.body,
                                     .branch_index = row.branch_index,
                                 } });
@@ -826,7 +839,7 @@ pub fn Compiler(comptime Ctx: type) type {
                                 return inner;
                             }
                         },
-                        else => {},
+                        .leaf, .guard, .exit_join, .exit_, .fail => {},
                     }
                 }
                 return try self.mk(.{ .exit_join = .{ .id = exit_id, .cont = state.cont, .inner = inner } });
@@ -929,6 +942,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 row.* = .{
                     .cols = cols.items,
                     .binds = binds.items,
+                    .bindings = branch.bindings,
                     .guard = branch.guard,
                     .body = branch.body,
                     .branch_index = branch.branch_index,
@@ -972,6 +986,7 @@ pub fn Compiler(comptime Ctx: type) type {
         /// buildStrArm(pat, capture_locals, on_match) StrArm
         /// strMatchSet(source, arms, on_miss) CFStmtId
         /// bindPatternLocal(local, ty, source, next) CFStmtId
+        /// lowerBindings(bindings, next) CFStmtId          // before guard/body
         /// lowerBody(body, next) CFStmtId                 // into the result local
         /// guardTemp(guard) LirLocal
         /// lowerGuard(cond, guard, next) CFStmtId
@@ -1028,7 +1043,7 @@ pub fn Compiler(comptime Ctx: type) type {
             occs: []const OccEntry,
             tree_stats: Stats,
             done: Ctx.JoinPointId,
-            uses: std.AutoHashMap(OccId, OccUse),
+            uses: collections.DenseMap(OccId, OccUse),
             exit_joins: std.AutoHashMap(u32, Ctx.JoinPointId),
             /// Statements added by delegated body/guard lowering, excluded
             /// from the lint's machinery count.
@@ -1105,7 +1120,14 @@ pub fn Compiler(comptime Ctx: type) type {
                 // Back-relative and rest reads need the parent list's length.
                 switch (entry.step) {
                     .list_elem_back, .list_rest => try self.markUse(entry.parent, .len),
-                    else => {},
+                    .root,
+                    .field,
+                    .tag_payload,
+                    .callable_payload,
+                    .list_elem_front,
+                    .nominal_backing,
+                    .str_capture,
+                    => {},
                 }
             }
 
@@ -1298,10 +1320,18 @@ pub fn Compiler(comptime Ctx: type) type {
                 return result;
             }
 
+            fn lowerBindingsCounted(self: *Emitter, bindings: BindingSpan, next: CtxStmt) Ctx.LowerError!CtxStmt {
+                const before = self.ctx.stmtCount();
+                const result = try self.ctx.lowerBindings(bindings, next);
+                self.delegated_stmts += self.ctx.stmtCount() - before;
+                return result;
+            }
+
             fn emitTree(self: *Emitter, tree: *const Tree, env: *Env) Ctx.LowerError!CtxStmt {
                 switch (tree.*) {
                     .leaf => |leaf| {
-                        const body = try self.lowerBodyCounted(leaf.body, try self.ctx.joinJump(self.done));
+                        var body = try self.lowerBodyCounted(leaf.body, try self.ctx.joinJump(self.done));
+                        body = try self.lowerBindingsCounted(leaf.bindings, body);
                         return try self.emitBinds(leaf.binds, env, body);
                     },
                     .guard => |g| {
@@ -1310,8 +1340,9 @@ pub fn Compiler(comptime Ctx: type) type {
                         const cond = try self.ctx.guardTemp(g.guard);
                         const guard_switch = try self.ctx.boolSwitch(cond, body, otherwise);
                         const before = self.ctx.stmtCount();
-                        const guarded = try self.ctx.lowerGuard(cond, g.guard, guard_switch);
+                        var guarded = try self.ctx.lowerGuard(cond, g.guard, guard_switch);
                         self.delegated_stmts += self.ctx.stmtCount() - before;
+                        guarded = try self.lowerBindingsCounted(g.bindings, guarded);
                         return try self.emitBinds(g.binds, env, guarded);
                     },
                     .test_ => |t| return try self.emitTest(t, env),
@@ -1494,6 +1525,14 @@ const MockCtx = struct {
     pub const TypeId = u32;
     pub const ExprId = u32;
     pub const LocalId = u32;
+    pub const BindingSpan = struct {
+        start: u32 = 0,
+        len: u32 = 0,
+
+        pub fn empty() @This() {
+            return .{};
+        }
+    };
     pub const LowerError = error{OutOfMemory};
 
     fn get(self: MockCtx, pat: u32) MockPat {
@@ -1601,7 +1640,7 @@ const MockCtx = struct {
             .str_lit => |s| s,
             .str_pattern => |s| s.shape,
             .list => |l| l.elems.len,
-            else => unreachable,
+            .bind, .wildcard, .as_pattern, .record, .tuple, .nominal => unreachable,
         };
     }
 
@@ -1616,10 +1655,9 @@ const MockCtx = struct {
     }
 
     pub fn strCaptureCount(self: MockCtx, pat: u32) u16 {
-        return switch (self.get(pat)) {
-            .str_pattern => |s| @intCast(s.captures.len),
-            else => 0,
-        };
+        const pattern = self.get(pat);
+        if (std.meta.activeTag(pattern) != .str_pattern) return 0;
+        return @intCast(pattern.str_pattern.captures.len);
     }
 
     pub fn strCapturePat(self: MockCtx, pat: u32, i: u16) ?u32 {
@@ -1788,7 +1826,7 @@ test "tag payloads specialize into payload occurrence columns" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // match { Ok(1) => 0, Ok(x) => 1, Err => 2 } — nested int test inside Ok.
+    // match { Ok(1) => 0, Ok(x) => 1, Err => 2 }—nested int test inside Ok.
     const ctx = MockCtx{
         .pats = &.{
             .{ .tag = .{ .variant = 0, .payloads = &.{.{ .index = 0, .ty = 9, .pat = 3 }} } },
@@ -1862,7 +1900,7 @@ test "string arms with identical shapes merge and retry on guard failure" {
     try std.testing.expectEqual(@as(u32, 1), first_arm.otherwise.leaf.branch_index);
     try std.testing.expectEqual(@as(usize, 1), first_arm.otherwise.leaf.binds.len);
     try std.testing.expectEqual(@as(u32, 101), first_arm.otherwise.leaf.binds[0].local);
-    // Guard failure retries the SAME arm's later row — not the group default.
+    // Guard failure retries the SAME arm's later row—not the group default.
     try std.testing.expectEqual(@as(u32, 2), node.arms[1].subtree.leaf.branch_index);
     try std.testing.expectEqual(@as(u32, 3), node.default.?.leaf.branch_index);
 }
@@ -1942,7 +1980,7 @@ test "continuation referenced from two miss sites keeps its exit join" {
     // match { Ok(1) => 0, _ => 1 }: the wildcard row is reachable both from
     // the tag test's default (scrutinee is Err) and from the inner literal
     // test's miss (scrutinee is Ok(n), n != 1). The continuation must compile
-    // once behind an exit join — re-lowering it would violate the sharing
+    // once behind an exit join—re-lowering it would violate the sharing
     // invariant.
     const ctx = MockCtx{
         .pats = &.{
@@ -2029,7 +2067,7 @@ test "column selection prefers the longer run" {
     const arena = arena_state.allocator();
 
     // Two-column matrix via tuples: rows (A, 1) / (B, 1) / (C, 1): the first
-    // column runs 3 deep, the second (int) also runs 3 — first wins ties.
+    // column runs 3 deep, the second (int) also runs 3—first wins ties.
     // Make column 2 run longer: (A, 1) / (_, 2) / would break col0... instead:
     // rows: (A, 1), (B, 2), (B, 3): col0 run = 3, col1 run = 3; tie -> col0.
     const ctx = MockCtx{

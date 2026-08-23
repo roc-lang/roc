@@ -1,0 +1,3 @@
+Host := [].{
+    branch! : () => Bool
+}

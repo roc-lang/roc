@@ -20,47 +20,36 @@ UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
 MOD NOT IMPORTED - type_undeclared_usage.md:8:15:8:34
 # PROBLEMS
+── ✗ undeclared type ───────────────────────────── type_undeclared_usage.md:1:10
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `UnknownType` is not declared in this scope. ───┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  MyType : UnknownType                                                      │
- │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └───────────────────────────────────────────── type_undeclared_usage.md:1:10 ┘
+The type UnknownType is not declared in this scope.
 
+MyType : UnknownType
+         ^^^^^^^^^^^
 
+── ✗ undeclared type ───────────────────────────── type_undeclared_usage.md:3:16
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `UndeclaredResult` is not declared in this ─────┐
-└┬────────────────┘  scope.                                                   │
- │                                                                            │
- │  processValue : UndeclaredResult -> Str                                    │
- │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
- └───────────────────────────────────────────── type_undeclared_usage.md:3:16 ┘
+The type UndeclaredResult is not declared in this scope.
 
+processValue : UndeclaredResult -> Str
+               ^^^^^^^^^^^^^^^^
 
+── ● unused variable ───────────────────────────── type_undeclared_usage.md:4:17
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `value` is defined here and then never used. ───┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processValue = |value| {                                                  │
- │                  ‾‾‾‾‾                                                     │
- └───────────────────────────────────────────── type_undeclared_usage.md:4:17 ┘
+Variable value is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_value`
-    to suppress this warning.
+processValue = |value| {
+                ^^^^^
 
+If you don't need this variable, prefix it with an underscore like _value to
+suppress this warning.
 
-┌─────────────────────┐
-│ MOD NOT IMPORTED ├─ There is no mod with the name `SomeMod` ──────────┐
-└┬────────────────────┘  imported into this Roc file.                         │
- │                                                                            │
- │  AnotherType : SomeMod.MissingType                                         │
- │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └───────────────────────────────────────────── type_undeclared_usage.md:8:15 ┘
+── ✗ mod not imported ───────────────────────── type_undeclared_usage.md:8:15
 
+There is no mod with the name SomeMod imported into this Roc file.
+
+AnotherType : SomeMod.MissingType
+              ^^^^^^^^^^^^^^^^^^^
 
 # TOKENS
 ~~~zig
@@ -115,12 +104,7 @@ AnotherType : SomeMod.MissingType
 (can-ir
 	(d-let
 		(p-assign (ident "processValue"))
-		(e-lambda
-			(args
-				(p-assign (ident "value")))
-			(e-block
-				(e-string
-					(e-literal (string "processed")))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -138,9 +122,9 @@ AnotherType : SomeMod.MissingType
 	(defs
 		(patt (type "Error -> Str")))
 	(type_decls
-		(alias (type "MyType")
+		(alias (type "Error")
 			(ty-header (name "MyType")))
-		(alias (type "AnotherType")
+		(alias (type "Error")
 			(ty-header (name "AnotherType"))))
 	(expressions
 		(expr (type "Error -> Str"))))

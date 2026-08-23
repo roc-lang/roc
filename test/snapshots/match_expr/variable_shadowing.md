@@ -11,9 +11,21 @@ match (value, other) {
 }
 ~~~
 # EXPECTED
-NIL
+POLYMORPHIC VALUE - variable_shadowing.md:1:1:4:2
 # PROBLEMS
-NIL
+── ✗ polymorphic value ─────────────────────────────── variable_shadowing.md:1:1
+
+This top-level value still has an unresolved polymorphic type.
+
+match (value, other) {
+    (Some(x), y) => x + y
+    (None, x) => x * 2
+}
+
+Its type is:
+a where [a.plus : a, _arg -> a, a.times : a, Dec -> a]
+Add an annotation or use this value in a way that fixes its concrete type.
+
 # TOKENS
 ~~~zig
 KwMatch,OpenRound,LowerIdent,Comma,LowerIdent,CloseRound,OpenCurly,
@@ -70,7 +82,7 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "y"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 214)
+					(e-dispatch-call (method "plus") (constraint-fn-var 224)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -85,7 +97,7 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "x"))))))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 224)
+					(e-dispatch-call (method "times") (constraint-fn-var 234)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -94,5 +106,5 @@ match (value, other) {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "a where [a.plus : a, _arg -> a, a.times : a, Dec -> a]"))
 ~~~

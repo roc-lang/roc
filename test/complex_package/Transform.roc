@@ -1,6 +1,6 @@
 ## Transform module for data transformations.
 ## Imports Util for string helpers.
-## Independent from Validator/Field — provides a separate branch of the import tree.
+## Independent from Validator/Field—provides a separate branch of the import tree.
 
 import Util
 

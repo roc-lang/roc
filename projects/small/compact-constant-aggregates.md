@@ -10,7 +10,7 @@ single `assign_list` over the whole span. A compile-time-known
 `List.repeat(List.repeat(1, 260), 260)` therefore expands to 67,600
 frame locals; issue #9898 was the `u16` span-length overflow this
 caused, and PR #9924 fixed it by widening `LocalSpan.len` to `u32`
-(`src/lir/LIR.zig:103`) — raising the ceiling without touching the
+(`src/lir/LIR.zig:103`)—raising the ceiling without touching the
 O(n) explosion.
 
 The costs scale with generated code, which is exactly where they hurt:
@@ -25,7 +25,7 @@ The costs scale with generated code, which is exactly where they hurt:
 
 Strings already solved this class: PR #9425 stores big string literals
 as static data. Lists (and by extension records/tuples of constants
-inside them) have no equivalent — neither a static-data form nor a
+inside them) have no equivalent—neither a static-data form nor a
 bounded-loop initializer.
 
 ## Background
@@ -33,7 +33,7 @@ bounded-loop initializer.
 LIR is the shared lowering target consumed by ARC insertion
 (`src/lir/arc.zig`), the certifier, and five executors (LLVM, dev
 x86-64, dev aarch64, wasm, interpreter). Adding a construct here means
-each executor implements it once against one definition — the shape
+each executor implements it once against one definition—the shape
 that worked for checked arithmetic (`src/lir/checked_arithmetic.zig`)
 and TRMC join-point loops (`src/lir/trmc.zig`), where the construct is
 defined once and no backend rediscovers the pattern.
@@ -60,7 +60,7 @@ per-backend.
 - `src/postcheck/solved_lir_lower.zig:2192` `lowerListInto` /
   `:2231` `lowerListIntoAtType`: per-element `LocalId` allocation into
   `assign_list`.
-- `src/lir/LIR.zig:101-103` `LocalSpan` with `len: u32` — the widened
+- `src/lir/LIR.zig:101-103` `LocalSpan` with `len: u32`—the widened
   ceiling from PR #9924, with the repro
   (`List.repeat(List.repeat(1, 260), 260)`) in that PR's test.
 - PR #9425: the static-data precedent for strings, including the
@@ -78,7 +78,7 @@ per-backend.
    with the layout store answering the "freezable" question.
 2. **Bounded-loop or builtin materialization for the rest.** A known-`n`
    repeat of a non-constant value lowers to the existing runtime
-   `List.repeat` builtin call (one call, no unrolling) — no new LIR
+   `List.repeat` builtin call (one call, no unrolling)—no new LIR
    construct is needed for this regime, just the decision to stop
    unrolling above a small threshold (a handful of elements, where
    unrolling genuinely wins).

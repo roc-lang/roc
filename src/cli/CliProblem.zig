@@ -165,6 +165,11 @@ pub const CliProblem = union(enum) {
         app_path: []const u8,
     },
 
+    /// A platform with app requirements was built without an app
+    platform_requires_app: struct {
+        platform_path: []const u8,
+    },
+
     /// Platform file not found
     platform_not_found: struct {
         app_path: []const u8,
@@ -216,6 +221,11 @@ pub const CliProblem = union(enum) {
         app_path: []const u8,
     },
 
+    /// The builtin platform cannot satisfy this target's runtime contract.
+    unsupported_default_platform_target: struct {
+        target: []const u8,
+    },
+
     /// The requested optimization level is not implemented for this command
     unsupported_opt_level: struct {
         command: []const u8,
@@ -226,6 +236,13 @@ pub const CliProblem = union(enum) {
     compilation_failed: struct {
         path: []const u8,
         error_count: usize,
+    },
+
+    /// A command failed without reporting anything. Recorded by the top level
+    /// so the process never exits non-zero having printed nothing, which is
+    /// indistinguishable to the user from a crash.
+    unreported_error: struct {
+        err_name: []const u8,
     },
 
     /// Linker failed
@@ -385,9 +402,12 @@ pub const CliProblem = union(enum) {
             .file_not_found,
             .platform_not_found,
             .no_platform_found,
+            .platform_requires_app,
             .build_not_supported_for_headerless,
+            .unsupported_default_platform_target,
             .unsupported_opt_level,
             .compilation_failed,
+            .unreported_error,
             .linker_failed,
             .missing_host_symbols,
             => .fatal,
@@ -443,6 +463,7 @@ pub const CliProblem = union(enum) {
             .temp_dir_failed => |info| try createTempDirFailedReport(allocator, info),
             .cache_dir_unavailable => |info| try createCacheDirUnavailableReport(allocator, info),
             .no_platform_found => |info| try createNoPlatformFoundReport(allocator, info),
+            .platform_requires_app => |info| try createPlatformRequiresAppReport(allocator, info),
             .platform_not_found => |info| try createPlatformNotFoundReport(allocator, info),
             .platform_source_not_found => |info| try createPlatformSourceNotFoundReport(allocator, info),
             .missing_platform_module => |info| try createMissingPlatformModuleReport(allocator, info),
@@ -452,8 +473,10 @@ pub const CliProblem = union(enum) {
             .absolute_platform_path => |info| try createAbsolutePlatformPathReport(allocator, info),
             .invalid_app_header => |info| try createInvalidAppHeaderReport(allocator, info),
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
+            .unsupported_default_platform_target => |info| try createUnsupportedDefaultPlatformTargetReport(allocator, info),
             .unsupported_opt_level => |info| try createUnsupportedOptLevelReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
+            .unreported_error => |info| try createUnreportedErrorReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .missing_host_symbols => |info| try createMissingHostSymbolsReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
@@ -593,6 +616,20 @@ fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) Allocator.Er
     return report;
 }
 
+fn createPlatformRequiresAppReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(
+        allocator,
+        "The platform file {s} declares app requirements, so it cannot be built by itself.",
+        .{info.platform_path},
+    );
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Platform Requires an App", headline, .fatal);
+
+    try report.document.addText("Build an app that uses this platform, or use `roc glue` to generate its host interface.");
+
+    return report;
+}
+
 fn createPlatformNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = try Report.init(allocator, "Platform Not Found", "I could not find the platform file.", .fatal);
 
@@ -721,6 +758,20 @@ fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytyp
     return report;
 }
 
+fn createUnsupportedDefaultPlatformTargetReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The builtin platform cannot build executables for {s}.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unsupported Default Platform Target", headline, .fatal);
+
+    try report.document.addText(
+        "OpenBSD requires its system C runtime for process startup and kernel calls. " ++
+            "Roc does not ship an OpenBSD sysroot, so the builtin platform cannot cross-link this target. " ++
+            "Use an app with an OpenBSD platform and build it natively on OpenBSD.",
+    );
+
+    return report;
+}
+
 fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     const headline = try std.fmt.allocPrint(allocator, "The optimization mode {s} is not implemented for {s} yet.", .{ info.opt, info.command });
     defer allocator.free(headline);
@@ -745,6 +796,23 @@ fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.
     try report.document.addText("Found ");
     try report.document.addAnnotated(count_str, .error_highlight);
     try report.document.addText(" error(s). See above for details.");
+
+    return report;
+}
+
+fn createUnreportedErrorReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(
+        allocator,
+        "The compiler stopped with the error {s} but did not say why.",
+        .{info.err_name},
+    );
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unreported Error", headline, .fatal);
+
+    try report.document.addText(
+        "This is a bug in the compiler: whatever failed should have explained itself. " ++
+            "Please report it at https://github.com/roc-lang/roc/issues, including the command you ran.",
+    );
 
     return report;
 }
@@ -823,7 +891,164 @@ fn createBumpFailedReport(allocator: Allocator, info: anytype) Allocator.Error!R
 fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     const headline = switch (info.err) {
         error.InvalidHash => try std.fmt.allocPrint(allocator, "Error: {s}.", .{@errorName(info.err)}),
-        else => try std.fmt.allocPrint(allocator, "Failed to download from {s}.", .{info.url}),
+        error.AccessDenied,
+        error.AmbiguousVersion,
+        error.AntivirusInterference,
+        error.ApiLevelQueryFailed,
+        error.ArchiveWriteFailed,
+        error.BadPathName,
+        error.BrokenDocLinks,
+        error.BrokenPipe,
+        error.BuiltinsExtractionFailed,
+        error.Canceled,
+        error.CheckFailed,
+        error.ChecksumFailure,
+        error.CliError,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConcurrencyUnavailable,
+        error.ConnectionResetByPeer,
+        error.Crash,
+        error.CrossDevice,
+        error.DecompressionFailed,
+        error.DeviceBusy,
+        error.DictionaryIdFlagUnsupported,
+        error.DirNotEmpty,
+        error.DirectoryCreateFailed,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.DocsFailed,
+        error.DuplicateSymbol,
+        error.EmptyArchive,
+        error.EndOfStream,
+        error.EntrypointNotFound,
+        error.ExpandedSizeLimitExceeded,
+        error.ExpectErr,
+        error.ExpectedAppHeader,
+        error.ExpectedPlatformString,
+        error.ExpectedString,
+        error.FailedToCreateUniqueTempDir,
+        error.FdConfigFailed,
+        error.FileBusy,
+        error.FileCreateFailed,
+        error.FileError,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileSystem,
+        error.FileTooBig,
+        error.FileTooLarge,
+        error.FileWriteFailed,
+        error.FormattingFailed,
+        error.FunctionTypeMismatch,
+        error.HandleInheritanceFailed,
+        error.HardwareFailure,
+        error.HasInternalGlobals,
+        error.HashMismatch,
+        error.HttpError,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidArchiveHeader,
+        error.InvalidArchiveMagic,
+        error.InvalidArchiveName,
+        error.InvalidArchiveSize,
+        error.InvalidArguments,
+        error.InvalidBatchScriptArg,
+        error.InvalidDependency,
+        error.InvalidExe,
+        error.InvalidFileName,
+        error.InvalidFilename,
+        error.InvalidLinkingVersion,
+        error.InvalidLirImage,
+        error.InvalidMagic,
+        error.InvalidName,
+        error.InvalidPackageName,
+        error.InvalidPath,
+        error.InvalidProcessGroupId,
+        error.InvalidProxyUrl,
+        error.InvalidSection,
+        error.InvalidTarHeader,
+        error.InvalidTarget,
+        error.InvalidUrl,
+        error.InvalidUserId,
+        error.InvalidUtf8,
+        error.InvalidVersion,
+        error.InvalidWtf8,
+        error.IsDir,
+        error.LLVMCompilationFailed,
+        error.LLVMNotAvailable,
+        error.LinkFailed,
+        error.LinkQuotaExceeded,
+        error.LocalhostWasNotLoopback,
+        error.LockViolation,
+        error.MalformedBlock,
+        error.MalformedFrame,
+        error.MissingBundleFiles,
+        error.MissingFilesDirectory,
+        error.MissingLinkingSection,
+        error.MissingRelocCode,
+        error.MissingTargetFile,
+        error.MissingTargetsSection,
+        error.NameTooLong,
+        error.NativeCompilationFailed,
+        error.NetworkError,
+        error.NetworkNotFound,
+        error.NoCacheDir,
+        error.NoDataExtracted,
+        error.NoDevice,
+        error.NoHashInUrl,
+        error.NoPlatformSource,
+        error.NoSpaceLeft,
+        error.NotAnAppHeader,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OSVersionDetectionFail,
+        error.OperationUnsupported,
+        error.OutOfMemory,
+        error.Overflow,
+        error.PathAlreadyExists,
+        error.PathOutsideWorkspace,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.PlatformNotSupported,
+        error.ProcessAlreadyExec,
+        error.ProcessCreationFailed,
+        error.ProcessExitCodeFailed,
+        error.ProcessFdQuotaExceeded,
+        error.ProcessWaitFailed,
+        error.ReadFailed,
+        error.ReadOnlyFileSystem,
+        error.ResolutionFailed,
+        error.ResourceLimitReached,
+        error.RuntimeError,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempDirCreation,
+        error.TestsFailed,
+        error.Timeout,
+        error.TypeCheckingFailed,
+        error.UnbundleFailed,
+        error.Unexpected,
+        error.UnexpectedEnd,
+        error.UnexpectedEndOfStream,
+        error.UnexpectedResult,
+        error.UnrecognizedVolume,
+        error.Unseekable,
+        error.UnsupportedCrossCompilation,
+        error.UnsupportedHeader,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLowLevel,
+        error.UnsupportedTarget,
+        error.UnsupportedWatchMode,
+        error.WasmOutputWriteFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => try std.fmt.allocPrint(allocator, "Failed to download from {s}.", .{info.url}),
     };
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Download Failed", headline, .runtime_error);
@@ -853,7 +1078,164 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
             try report.document.addSuggestion("2. Verify the URL and ensure it matches a valid platform release.");
             try report.document.addLineBreak();
         },
-        else => {
+        error.AccessDenied,
+        error.AmbiguousVersion,
+        error.AntivirusInterference,
+        error.ApiLevelQueryFailed,
+        error.ArchiveWriteFailed,
+        error.BadPathName,
+        error.BrokenDocLinks,
+        error.BrokenPipe,
+        error.BuiltinsExtractionFailed,
+        error.Canceled,
+        error.CheckFailed,
+        error.ChecksumFailure,
+        error.CliError,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConcurrencyUnavailable,
+        error.ConnectionResetByPeer,
+        error.Crash,
+        error.CrossDevice,
+        error.DecompressionFailed,
+        error.DeviceBusy,
+        error.DictionaryIdFlagUnsupported,
+        error.DirNotEmpty,
+        error.DirectoryCreateFailed,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.DocsFailed,
+        error.DuplicateSymbol,
+        error.EmptyArchive,
+        error.EndOfStream,
+        error.EntrypointNotFound,
+        error.ExpandedSizeLimitExceeded,
+        error.ExpectErr,
+        error.ExpectedAppHeader,
+        error.ExpectedPlatformString,
+        error.ExpectedString,
+        error.FailedToCreateUniqueTempDir,
+        error.FdConfigFailed,
+        error.FileBusy,
+        error.FileCreateFailed,
+        error.FileError,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileSystem,
+        error.FileTooBig,
+        error.FileTooLarge,
+        error.FileWriteFailed,
+        error.FormattingFailed,
+        error.FunctionTypeMismatch,
+        error.HandleInheritanceFailed,
+        error.HardwareFailure,
+        error.HasInternalGlobals,
+        error.HashMismatch,
+        error.HttpError,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidArchiveHeader,
+        error.InvalidArchiveMagic,
+        error.InvalidArchiveName,
+        error.InvalidArchiveSize,
+        error.InvalidArguments,
+        error.InvalidBatchScriptArg,
+        error.InvalidDependency,
+        error.InvalidExe,
+        error.InvalidFileName,
+        error.InvalidFilename,
+        error.InvalidLinkingVersion,
+        error.InvalidLirImage,
+        error.InvalidMagic,
+        error.InvalidName,
+        error.InvalidPackageName,
+        error.InvalidPath,
+        error.InvalidProcessGroupId,
+        error.InvalidProxyUrl,
+        error.InvalidSection,
+        error.InvalidTarHeader,
+        error.InvalidTarget,
+        error.InvalidUrl,
+        error.InvalidUserId,
+        error.InvalidUtf8,
+        error.InvalidVersion,
+        error.InvalidWtf8,
+        error.IsDir,
+        error.LLVMCompilationFailed,
+        error.LLVMNotAvailable,
+        error.LinkFailed,
+        error.LinkQuotaExceeded,
+        error.LocalhostWasNotLoopback,
+        error.LockViolation,
+        error.MalformedBlock,
+        error.MalformedFrame,
+        error.MissingBundleFiles,
+        error.MissingFilesDirectory,
+        error.MissingLinkingSection,
+        error.MissingRelocCode,
+        error.MissingTargetFile,
+        error.MissingTargetsSection,
+        error.NameTooLong,
+        error.NativeCompilationFailed,
+        error.NetworkError,
+        error.NetworkNotFound,
+        error.NoCacheDir,
+        error.NoDataExtracted,
+        error.NoDevice,
+        error.NoHashInUrl,
+        error.NoPlatformSource,
+        error.NoSpaceLeft,
+        error.NotAnAppHeader,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OSVersionDetectionFail,
+        error.OperationUnsupported,
+        error.OutOfMemory,
+        error.Overflow,
+        error.PathAlreadyExists,
+        error.PathOutsideWorkspace,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.PlatformNotSupported,
+        error.ProcessAlreadyExec,
+        error.ProcessCreationFailed,
+        error.ProcessExitCodeFailed,
+        error.ProcessFdQuotaExceeded,
+        error.ProcessWaitFailed,
+        error.ReadFailed,
+        error.ReadOnlyFileSystem,
+        error.ResolutionFailed,
+        error.ResourceLimitReached,
+        error.RuntimeError,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempDirCreation,
+        error.TestsFailed,
+        error.Timeout,
+        error.TypeCheckingFailed,
+        error.UnbundleFailed,
+        error.Unexpected,
+        error.UnexpectedEnd,
+        error.UnexpectedEndOfStream,
+        error.UnexpectedResult,
+        error.UnrecognizedVolume,
+        error.Unseekable,
+        error.UnsupportedCrossCompilation,
+        error.UnsupportedHeader,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLowLevel,
+        error.UnsupportedTarget,
+        error.UnsupportedWatchMode,
+        error.WasmOutputWriteFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => {
             try report.document.addText("Error: ");
             try report.document.addText(@errorName(info.err));
         },
@@ -1147,6 +1529,20 @@ test "no_platform_found generates correct report" {
     defer report.deinit();
 
     try std.testing.expectEqualStrings("No Platform Found", report.title);
+    try std.testing.expectEqual(Severity.fatal, report.severity);
+}
+
+test "platform_requires_app generates correct report" {
+    const allocator = std.testing.allocator;
+
+    const problem = CliProblem{ .platform_requires_app = .{
+        .platform_path = "platform.roc",
+    } };
+
+    var report = try problem.toReport(allocator);
+    defer report.deinit();
+
+    try std.testing.expectEqualStrings("Platform Requires an App", report.title);
     try std.testing.expectEqual(Severity.fatal, report.severity);
 }
 

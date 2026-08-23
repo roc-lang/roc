@@ -5,6 +5,7 @@
 //! also live in this file.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const eval = @import("eval");
 const layout = @import("layout");
@@ -149,7 +150,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
-        .rc = .{ .op = .decref, .layout_idx = box_u64 },
+        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = ret,
     } });
     const add = try lowLevelStmt(&store, sum, .num_plus, &.{ pre, post }, drop_cell);
@@ -196,7 +197,7 @@ test "box_prepare_update reuses a statically unique box" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = loaded } });
     const drop_prepared = try store.addCFStmt(.{ .decref = .{
         .value = prepared,
-        .rc = .{ .op = .decref, .layout_idx = box_u64 },
+        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = ret,
     } });
     const load = try lowLevelStmt(&store, loaded, .ptr_load, &.{p}, drop_prepared);
@@ -249,12 +250,12 @@ test "box_prepare_update copies a shared box and leaves the original unchanged" 
     const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
     const drop_boxed = try store.addCFStmt(.{ .decref = .{
         .value = boxed,
-        .rc = .{ .op = .decref, .layout_idx = box_u64 },
+        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = ret,
     } });
     const drop_prepared = try store.addCFStmt(.{ .decref = .{
         .value = prepared,
-        .rc = .{ .op = .decref, .layout_idx = box_u64 },
+        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
         .next = drop_boxed,
     } });
     const add = try lowLevelStmt(&store, sum, .num_plus, &.{ old_value, new_value }, drop_prepared);
@@ -271,7 +272,7 @@ test "box_prepare_update copies a shared box and leaves the original unchanged" 
     const prepare = try lowLevelStmt(&store, prepared, .box_prepare_update, &.{boxed}, cast_old);
     const incref_boxed = try store.addCFStmt(.{ .incref = .{
         .value = boxed,
-        .rc = .{ .op = .incref, .layout_idx = box_u64 },
+        .rc = .{ .concrete = .{ .op = .incref, .layout_idx = box_u64 } },
         .count = 1,
         .next = prepare,
     } });
@@ -319,7 +320,7 @@ test "ptr ops round trip a multi-word payload through a heap cell" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
-        .rc = .{ .op = .decref, .layout_idx = box_pair },
+        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_pair } },
         .next = ret,
     } });
     const add = try lowLevelStmt(&store, sum, .num_plus, &.{ f0, f1 }, drop_cell);
@@ -363,7 +364,7 @@ test "ptr ops round trip a multi-word payload through a heap cell" {
 // solved_lir_lower shapes, run through Trmc.run + Arc.insert + interpreter)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// A "Peano list": U := [Nil, S(struct{ box(U) })] — the smallest recursive
+/// A "Peano list": U := [Nil, S(struct{ box(U) })]—the smallest recursive
 /// tag union, built reserve-then-fill like the shared layout commit does.
 const PeanoLayouts = struct {
     u: layout.Idx,
@@ -398,7 +399,7 @@ const PeanoLayouts = struct {
 
 /// The canonical lowered shape of
 ///   repeat = |n| match n { 0 => Nil, _ => S(repeat(n - 1)) }
-/// — done-join with the result local as its param, branches lowering into it,
+/// - done-join with the result local as its param, branches lowering into it,
 /// a box_box at the recursive field boundary, and a nominal alias hop.
 fn buildRepeatProc(
     allocator: Allocator,
@@ -498,7 +499,7 @@ fn buildRepeatProc(
 fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirProcSpecId) TrmcLirTestError!bool {
     var work = std.ArrayList(CFStmtId).empty;
     defer work.deinit(allocator);
-    var visited = std.AutoHashMap(CFStmtId, void).init(allocator);
+    var visited = collections.DenseMap(CFStmtId, void).init(allocator);
     defer visited.deinit();
 
     const body = store.getProcSpec(proc_id).body orelse return false;
@@ -541,7 +542,11 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.on_miss);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            .boxy_tag_match => |s| {
+                try work.append(allocator, s.on_match);
+                try work.append(allocator, s.on_miss);
+            },
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| {
                 try work.append(allocator, s.next);
             },
         }
@@ -707,7 +712,7 @@ test "trmc'd repeat is leak-free and allocation-exact when consumed" {
 
     const n: u64 = 50;
     try std.testing.expectEqual(@as(u64, 0), try runProcU64Args(allocator, &store, &layouts, root, &runtime_env, &.{n}));
-    // Exactly one heap cell per S node — TRMC must not change allocation counts.
+    // Exactly one heap cell per S node—TRMC must not change allocation counts.
     try std.testing.expectEqual(@as(u32, n), runtime_env.allocationCallCount());
     try runtime_env.checkForLeaks();
 }
@@ -906,7 +911,7 @@ test "mixed construct and plain-tail branches both become jumps" {
         .next = nil_jump,
     } });
 
-    // odd: res = weird(n - 1) — plain tail call targeting the done-join param
+    // odd: res = weird(n - 1)—plain tail call targeting the done-join param
     const tail_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
     const tail_call = try store.addCFStmt(.{ .assign_call = .{
         .target = res,
@@ -916,7 +921,7 @@ test "mixed construct and plain-tail branches both become jumps" {
     } });
     const mk_m_tail = try lowLevelStmt(&store, m_tail, .num_minus, &.{ a_n, one }, tail_call);
 
-    // even: res = S(weird(n - 1)) — the construct branch
+    // even: res = S(weird(n - 1))—the construct branch
     const cons_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = res,

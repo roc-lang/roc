@@ -33,7 +33,7 @@ fn pathToFileUri(allocator: std.mem.Allocator, path: []const u8) integration_spe
 fn publishContainsModuleNotFound(publish_sets: []const @import("lsp").diagnostics.PublishDiagnostics) bool {
     for (publish_sets) |set| {
         for (set.diagnostics) |diag| {
-            if (std.mem.find(u8, diag.message, "MODULE NOT FOUND") != null) return true;
+            if (std.mem.find(u8, diag.message, "module not found") != null) return true;
             if (std.mem.find(u8, diag.message, "does not exist") != null) return true;
         }
     }

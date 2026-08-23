@@ -2,17 +2,17 @@
 //!
 //! This module provides background cleanup functionality that:
 //! - Removes temporary runtime directories older than 5 minutes
-//! - Removes persistent cache files (mod/, exe/, and test/) older than 30 days
+//! - Removes persistent cache files (mod/, exe/, test/, and wasm-host/) older than 30 days
 //!
 //! The cleanup runs on a single background thread that is fire-and-forget:
 //! it exits automatically when done, and if the main process exits first,
 //! the OS will terminate the cleanup thread along with the process.
 //!
-//! This is strictly a native `roc` CLI operation — it is never reached on
+//! This is strictly a native `roc` CLI operation—it is never reached on
 //! wasm (`compile/mod.zig` substitutes a stub there). It therefore talks to
 //! the real OS directly through `std.Io.Dir` rather than going through the
 //! `CoreCtx` filesystem abstraction, whose only purpose is injecting a
-//! non-OS implementation (the playground's virtual FS or test mocks) — none
+//! non-OS implementation (the playground's virtual FS or test mocks)—none
 //! of which can apply here. The directory base paths are resolved once by the
 //! caller (see `startBackgroundCleanup`) and copied in by value, so this code
 //! depends on neither `CoreCtx` nor a caller-provided allocator. The walk uses
@@ -202,7 +202,7 @@ fn cleanupTempDirs(std_io: Io, temp_base: []const u8, now_ns: i128, maybe_stats:
 
 /// Clean up persistent cache files older than 30 days.
 ///
-/// Layout: `<cache_base>/<version>/{mod,exe,test}/...`.
+/// Layout: `<cache_base>/<version>/{mod,exe,test,wasm-host}/...`.
 fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, maybe_stats: ?*CleanupStats) void {
     var base_dir = Dir.cwd().openDir(std_io, cache_base, .{ .iterate = true }) catch return;
     defer base_dir.close(std_io);
@@ -215,6 +215,7 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
         .{ .name = "mod", .nested_directory_depth = 1 },
         .{ .name = "exe", .nested_directory_depth = 1 },
         .{ .name = "test", .nested_directory_depth = 1 },
+        .{ .name = "wasm-host", .nested_directory_depth = 1 },
         .{ .name = "glue-dylib", .nested_directory_depth = 2 },
     };
 
@@ -239,13 +240,17 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
 
 /// Clean up files in a cache subdirectory older than 30 days. The caller passes
 /// the exact nested directory depth for the cache family: one bucket level for
-/// mod/exe/test and target/opt levels for glue dylibs.
+/// mod/exe/test/wasm-host and target/opt levels for glue dylibs.
 fn cleanupCacheSubdir(std_io: Io, subdir: Dir, now_ns: i128, maybe_stats: ?*CleanupStats, nested_directory_depth: u8) void {
     var it = subdir.iterate();
     while (true) {
         const entry = (it.next(std_io) catch break) orelse break;
 
         if (entry.kind == .file) {
+            // A lock file names a stable cache identity. Removing it while a
+            // process holds the lock would let another process create a new
+            // inode and enter the same critical section concurrently.
+            if (std.mem.endsWith(u8, entry.name, ".lock")) continue;
             deleteCacheFileIfOld(std_io, subdir, entry.name, now_ns, maybe_stats);
         } else if (entry.kind == .directory and nested_directory_depth > 0) {
             var child = subdir.openDir(std_io, entry.name, .{ .iterate = true }) catch continue;
@@ -472,7 +477,7 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     };
 }
 
-test "cleanupPersistentCache deletes old glue dylib files at target opt depth" {
+test "cleanupPersistentCache deletes old cache files at each family depth" {
     const allocator = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -486,9 +491,12 @@ test "cleanupPersistentCache deletes old glue dylib files at target opt depth" {
 
     const mod_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" }) catch unreachable;
     defer allocator.free(mod_dir);
+    const wasm_host_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "wasm-host", "bb" }) catch unreachable;
+    defer allocator.free(wasm_host_dir);
 
     Dir.cwd().createDirPath(std.testing.io, glue_dir) catch unreachable;
     Dir.cwd().createDirPath(std.testing.io, mod_dir) catch unreachable;
+    Dir.cwd().createDirPath(std.testing.io, wasm_host_dir) catch unreachable;
 
     const glue_file = std.fs.path.join(allocator, &.{ glue_dir, "old.dylib" }) catch unreachable;
     defer allocator.free(glue_file);
@@ -496,17 +504,23 @@ test "cleanupPersistentCache deletes old glue dylib files at target opt depth" {
     defer allocator.free(glue_tmp);
     const mod_file = std.fs.path.join(allocator, &.{ mod_dir, "old.rcache" }) catch unreachable;
     defer allocator.free(mod_file);
+    const wasm_host_file = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host" }) catch unreachable;
+    defer allocator.free(wasm_host_file);
+    const wasm_host_lock = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host.lock" }) catch unreachable;
+    defer allocator.free(wasm_host_lock);
 
     (Dir.cwd().createFile(std.testing.io, glue_file, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, glue_tmp, .{}) catch unreachable).close(std.testing.io);
     (Dir.cwd().createFile(std.testing.io, mod_file, .{}) catch unreachable).close(std.testing.io);
+    (Dir.cwd().createFile(std.testing.io, wasm_host_file, .{}) catch unreachable).close(std.testing.io);
+    (Dir.cwd().createFile(std.testing.io, wasm_host_lock, .{}) catch unreachable).close(std.testing.io);
 
     const now_ns = nowNs(std.testing.io);
     const far_future_ns: i128 = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
     var stats = CleanupStats{};
     cleanupPersistentCache(std.testing.io, cache_base, far_future_ns, &stats);
 
-    try std.testing.expectEqual(@as(u32, 3), stats.cache_files_deleted);
+    try std.testing.expectEqual(@as(u32, 4), stats.cache_files_deleted);
 
     Dir.cwd().access(std.testing.io, glue_file, .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
@@ -517,4 +531,8 @@ test "cleanupPersistentCache deletes old glue dylib files at target opt depth" {
     Dir.cwd().access(std.testing.io, mod_file, .{}) catch |err| {
         try std.testing.expectEqual(error.FileNotFound, err);
     };
+    Dir.cwd().access(std.testing.io, wasm_host_file, .{}) catch |err| {
+        try std.testing.expectEqual(error.FileNotFound, err);
+    };
+    try Dir.cwd().access(std.testing.io, wasm_host_lock, .{});
 }

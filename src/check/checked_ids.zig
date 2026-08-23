@@ -23,6 +23,53 @@ pub const PatternBinderId = enum(u32) { _ };
 /// Stable identity of a generalized-local dispatch scope within a checked
 /// module artifact.
 pub const DispatchScopeId = enum(u32) { _ };
+/// Serial id into a `CheckedTypeStore`'s `var_names` interner (the text of a
+/// stored type-variable name).
+pub const CheckedVarNameId = enum(u32) { _ };
+
+/// The one inline optional-id encoding for checked-artifact data: an
+/// `enum(u32)` whose `0` value means "absent" and whose other values are the
+/// wrapped id biased by `+1`. Being a fixed-tag enum it is extern-compatible
+/// and exactly 4 bytes, so it can sit inline in serialized POD rows (unlike a
+/// native `?Id`, whose layout is not fixed, or `SerializedOptional`, which
+/// stores its payload out of line behind a relocation fixup). All bias
+/// arithmetic lives here so individual stores cannot drift into bespoke
+/// `_plus_one` / sentinel encodings.
+pub fn OptionalId(comptime Id: type) type {
+    comptime std.debug.assert(@typeInfo(Id).@"enum".tag_type == u32);
+    return enum(u32) {
+        none = 0,
+        _,
+
+        const Self = @This();
+
+        /// Wrap a present id. `maxInt(u32)` is unrepresentable (it would bias
+        /// to the `none` sentinel), which no checked-artifact id space reaches.
+        pub fn some(id: Id) Self {
+            const raw = @intFromEnum(id);
+            std.debug.assert(raw != std.math.maxInt(u32));
+            return @enumFromInt(raw + 1);
+        }
+
+        /// The wrapped id, or null for `none`.
+        pub fn get(self: Self) ?Id {
+            if (self == .none) return null;
+            return @enumFromInt(@intFromEnum(self) - 1);
+        }
+    };
+}
+
+test "OptionalId round-trips none and some" {
+    const Opt = OptionalId(CheckedVarNameId);
+    const absent: Opt = .none;
+    try std.testing.expectEqual(@as(?CheckedVarNameId, null), absent.get());
+    // The lowest id exercises the +1-bias boundary (raw 0 is reserved for none).
+    const id: CheckedVarNameId = @enumFromInt(std.math.minInt(u32));
+    try std.testing.expectEqual(id, Opt.some(id).get().?);
+    const high: CheckedVarNameId = @enumFromInt(std.math.maxInt(u32) - 1);
+    try std.testing.expectEqual(high, Opt.some(high).get().?);
+    comptime std.debug.assert(@sizeOf(Opt) == 4);
+}
 
 /// One explicit identity for a closure capture. Checked artifacts and active
 /// Monotype instantiation use the checked identities below; final Monotype
@@ -40,7 +87,7 @@ pub const DispatchScopeId = enum(u32) { _ };
 ///    mapping is the identity function, the originating binder is always
 ///    recoverable via `binder()`.
 ///  - **generated** (high bit set, `[2^31, 2^32)`): the identity of a
-///    compiler-synthesized capturable local that has no checked binder —
+///    compiler-synthesized capturable local that has no checked binder—
 ///    allocated deterministically by the pass that synthesizes it. The
 ///    generated range is split again by the next bit into two disjoint
 ///    sub-ranges so ids minted by different synthesizing passes can never
@@ -99,6 +146,13 @@ pub const CaptureId = enum(u32) {
         return !self.isCanonical();
     }
 
+    /// Whether this id was minted by Monotype publication, closure lifting,
+    /// or a later post-check transform.
+    pub fn isLiftGenerated(self: CaptureId) bool {
+        const raw = @intFromEnum(self);
+        return (raw & generated_bit) != 0 and (raw & lift_bit) != 0;
+    }
+
     /// Whether this id belongs to the lift-time generated sub-range.
     pub fn isGeneratedLift(self: CaptureId) bool {
         return (@intFromEnum(self) & (generated_bit | lift_bit)) == (generated_bit | lift_bit);
@@ -116,5 +170,29 @@ pub const CaptureId = enum(u32) {
     pub fn generatedIndex(self: CaptureId) u32 {
         std.debug.assert(self.isGenerated());
         return @intFromEnum(self) & ~generated_bit;
+    }
+
+    /// Direct-column index for this namespaced identity.
+    pub fn denseIndex(self: CaptureId) usize {
+        const raw = @intFromEnum(self);
+        const namespace: usize = if ((raw & generated_bit) == 0)
+            0
+        else if ((raw & lift_bit) == 0)
+            1
+        else
+            2;
+        const index = if (namespace == 0) raw else raw & (lift_bit - 1);
+        return @as(usize, index) * 3 + namespace;
+    }
+
+    /// Construct a namespaced identity from its direct-column index.
+    pub fn fromDenseIndex(dense_index: usize) CaptureId {
+        const index: u32 = @intCast(dense_index / 3);
+        return switch (dense_index % 3) {
+            0 => canonical(index),
+            1 => generatedCheck(index),
+            2 => generatedLift(index),
+            else => unreachable,
+        };
     }
 };

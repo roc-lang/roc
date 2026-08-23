@@ -16,7 +16,7 @@ Three gaps keep that invariant a doc-comment promise rather than a fact:
 1. **The pin skips the snapshot regime.** When a request type carries
    generated-opaque evidence, `stableSpecializationRequestType`
    (`lower.zig:2149`) replaces the live `mono_fn_ty` with a detached,
-   *sealed* snapshot — and `pinDeferredTemplateRequestToCheckedRoot`
+   *sealed* snapshot—and `pinDeferredTemplateRequestToCheckedRoot`
    early-returns exactly there (`monoViewNode(fn_ty) == null` means "a
    sealed snapshot, nothing to pin"). Rows sealed inside
    `stableSpecializationRequestType` take their defaults with no
@@ -36,7 +36,7 @@ Three gaps keep that invariant a doc-comment promise rather than a fact:
    sealing silently closes it to its `row_default`.
 3. **Nothing observes the invariant.** No counter, assert, or log
    anywhere reports "row defaulted at seal while its checked counterpart
-   was concrete" — the failure mode is a downstream panic
+   was concrete"—the failure mode is a downstream panic
    (`unifyRowWithEmpty`, `solve.zig:871`) or, worse, a silently wrong
    default.
 
@@ -53,14 +53,14 @@ Monotype lowering solves each specialization in a per-spec instantiation
 graph (`solve.zig`). Template body requests discovered while lowering a
 specialization are deferred and sealed at the end of the requesting
 specialization. Each `DeferredTemplate` (`solve.zig:~41`) now carries
-three formerly-conflated things as separate fields — the frozen
+three formerly-conflated things as separate fields—the frozen
 dedup/seal key (`fn_ty`, possibly a snapshot), the live requester cell
 for evidence flow-back (`requester_fn_node`, added by PR #10065), and
 checked-root delivery (the pin, added by PR #9997). The pin covers the
 live-graph regime; the snapshot regime seals through
 `GraphTypeFinals.sealType` inside `stableSpecializationRequestType`
 without it. A row node that no evidence has pinned by seal time takes
-its `row_default` — the correct treatment for genuinely unconstrained
+its `row_default`—the correct treatment for genuinely unconstrained
 rows only.
 
 ## Evidence
@@ -84,15 +84,15 @@ rows only.
 ## Solution design
 
 1. **Instrument seal-time defaulting (permanent, debug-only).** At every
-   site where a row node closes to its `row_default` during sealing —
+   site where a row node closes to its `row_default` during sealing—
    both `sealDeferredSpecRequestsFrom` and the seal inside
-   `stableSpecializationRequestType` — compare against the checked type
+   `stableSpecializationRequestType`—compare against the checked type
    behind the request (`source_fn_ty` is on the `DeferredTemplate`);
    assert when the defaulted row's checked counterpart is concrete. This
    converts the pin's invariant from prose to an enforced contract.
 2. **Pin the snapshot regime.** `stableSpecializationRequestType` pins
    the checked root before it seals, mirroring what
-   `pinDeferredTemplateRequestToCheckedRoot` does for the live regime —
+   `pinDeferredTemplateRequestToCheckedRoot` does for the live regime—
    so the two regimes cannot drift and "row took its default" means the
    same thing in both. Construct the snapshot+phantom repro first (a
    generated-opaque-evidence request whose type carries a phantom
@@ -114,7 +114,7 @@ rows only.
    directly implementable in this project's scope, prefer it and let the
    instrumentation become the proof it holds.
 5. **Enforcement stays.** The seal-time contradiction panic
-   (`unifyRowWithEmpty`) remains exactly as it is — the regression
+   (`unifyRowWithEmpty`) remains exactly as it is—the regression
    tripwire, not a condition to soften.
 
 ## What success looks like
@@ -131,7 +131,7 @@ Every criterion below must hold; the project is not done until all do:
   pinned: a repro test exists for snapshot+phantom and passes on all
   engines. There is no regime in which the pin is silently skipped.
 - The debug check fires nowhere across: the full snapshot corpus, the
-  CLI suite, `examples/`, and the roc-parser package suite — all run in
+  CLI suite, `examples/`, and the roc-parser package suite—all run in
   debug mode with the check live, and the runs are cited in the PR.
 - The `unifyThroughBacking` question is closed in one of exactly two
   ways: named-arg pairing implemented plus a repro test (a
@@ -148,7 +148,7 @@ Every criterion below must hold; the project is not done until all do:
 ### Correctness ideal
 
 A deferred request's sealed type is a function of `source_fn_ty` plus
-genuine defaults — never of which value-flow edges happened to exist and
+genuine defaults—never of which value-flow edges happened to exist and
 never of which regime (live vs snapshot) the request landed in. The
 debug check is the enforcement; the solver's conflict-over-rewrite
 doctrine is untouched.

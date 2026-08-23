@@ -26,24 +26,22 @@ type=expr
 # EXPECTED
 TYPE MISMATCH - binops.md:16:5:16:5
 # PROBLEMS
+── ✗ type mismatch ────────────────────────────────────────────── binops.md:16:5
 
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first pattern in this `match` is incompatible. ────────┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  None ?? 0,                                                                │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └──────────────────────────────────────────────────────────── binops.md:16:5 ┘
+The first pattern in this match is incompatible.
 
-    The first pattern is trying to match:
+None ?? 0,
+^^^^^^^^^
 
-        Try(ok, err)
+The first pattern is trying to match:
 
-    But the expression between the `match` parenthesis has the type:
+    Try(ok, err)
 
-        [None, ..]
+But the expression between the match parenthesis has the type:
 
-    These can never match! Either the pattern or expression has a problem.
+    [None, ..]
+
+These can never match! Either the pattern or expression has a problem.
 
 # TOKENS
 ~~~zig
@@ -139,47 +137,47 @@ EndOfFile,
 ~~~clojure
 (e-tuple
 	(elems
-		(e-dispatch-call (method "plus") (constraint-fn-var 271)
+		(e-dispatch-call (method "plus") (constraint-fn-var 281)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "minus") (constraint-fn-var 287)
+		(e-dispatch-call (method "minus") (constraint-fn-var 297)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "times") (constraint-fn-var 303)
+		(e-dispatch-call (method "times") (constraint-fn-var 313)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "div_by") (constraint-fn-var 319)
+		(e-dispatch-call (method "div_by") (constraint-fn-var 329)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "rem_by") (constraint-fn-var 335)
+		(e-dispatch-call (method "rem_by") (constraint-fn-var 345)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "is_lt") (constraint-fn-var 352)
+		(e-dispatch-call (method "is_lt") (constraint-fn-var 362)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "is_gt") (constraint-fn-var 369)
+		(e-dispatch-call (method "is_gt") (constraint-fn-var 379)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "is_lte") (constraint-fn-var 386)
+		(e-dispatch-call (method "is_lte") (constraint-fn-var 396)
 			(receiver
 				(e-num (value "4")))
 			(args
 				(e-num (value "2"))))
-		(e-dispatch-call (method "is_gte") (constraint-fn-var 403)
+		(e-dispatch-call (method "is_gte") (constraint-fn-var 413)
 			(receiver
 				(e-num (value "4")))
 			(args
@@ -194,7 +192,7 @@ EndOfFile,
 				(e-num (value "4")))
 			(rhs
 				(e-num (value "2"))))
-		(e-dispatch-call (method "div_trunc_by") (constraint-fn-var 459)
+		(e-dispatch-call (method "div_trunc_by") (constraint-fn-var 469)
 			(receiver
 				(e-num (value "4")))
 			(args

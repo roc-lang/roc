@@ -86,18 +86,12 @@ pub const RED_ZONE_SIZE: u8 = 0;
 
 /// Check if a general register is callee-saved
 pub fn isCalleeSaved(reg: GeneralReg) bool {
-    return switch (reg) {
-        .RBX, .RBP, .RSI, .RDI, .R12, .R13, .R14, .R15 => true,
-        else => false,
-    };
+    return reg == .RBX or reg == .RBP or reg == .RSI or reg == .RDI or reg == .R12 or reg == .R13 or reg == .R14 or reg == .R15;
 }
 
 /// Check if a float register is callee-saved
 pub fn isFloatCalleeSaved(reg: FloatReg) bool {
-    return switch (reg) {
-        .XMM6, .XMM7, .XMM8, .XMM9, .XMM10, .XMM11, .XMM12, .XMM13, .XMM14, .XMM15 => true,
-        else => false,
-    };
+    return reg == .XMM6 or reg == .XMM7 or reg == .XMM8 or reg == .XMM9 or reg == .XMM10 or reg == .XMM11 or reg == .XMM12 or reg == .XMM13 or reg == .XMM14 or reg == .XMM15;
 }
 
 /// Default free registers for allocation (ordered by preference)

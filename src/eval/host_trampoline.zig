@@ -2,7 +2,7 @@
 //!
 //! The interpreter knows a hosted function's signature only at runtime, and pure Zig cannot
 //! synthesize a call to a runtime-determined signature. Rather than JIT a per-signature stub
-//! (which would require mapping memory executable — forbidden in sandboxed embeddings and at
+//! (which would require mapping memory executable—forbidden in sandboxed embeddings and at
 //! odds with the interpreter's "no codegen" property), we use the libffi-style technique: a
 //! single fixed assembly stub, compiled into this binary ahead of time, that loads *all*
 //! argument registers from caller-prepared "register image" arrays and calls the target.
@@ -41,10 +41,9 @@ const Call = extern struct {
     res_sse: *[max_result_sse]u128,
 };
 
-const supported = switch (builtin.cpu.arch) {
-    .aarch64, .aarch64_be, .x86_64 => true,
-    else => false,
-};
+const supported = builtin.cpu.arch == .aarch64 or
+    builtin.cpu.arch == .aarch64_be or
+    builtin.cpu.arch == .x86_64;
 
 /// Whether the host trampoline supports the architecture this compiler is running on.
 pub const available = supported;
@@ -75,11 +74,12 @@ pub fn call(
 ) Error!void {
     if (!supported) return Error.UnsupportedArch;
 
-    const target_abi: layout.abi.Target = switch (builtin.cpu.arch) {
-        .aarch64, .aarch64_be => layout.abi.aarch64Target(builtin.os.tag),
-        .x86_64 => if (builtin.os.tag == .windows) .x86_64_windows else .x86_64_sysv,
-        else => return Error.UnsupportedArch,
-    };
+    const target_abi: layout.abi.Target = if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be)
+        layout.abi.aarch64Target(builtin.os.tag)
+    else if (builtin.cpu.arch == .x86_64)
+        if (builtin.os.tag == .windows) .x86_64_windows else .x86_64_sysv
+    else
+        return Error.UnsupportedArch;
 
     // Hosted functions take their natural C ABI under the symbol ABI: the host
     // reaches its own runtime operations directly, so no leading *RocOps.
@@ -118,6 +118,19 @@ pub fn call(
                 },
             },
             .stack_value => |stack_value| {
+                if (stack_value.extend != .none) {
+                    // The slot carries the promoted C scalar, not the Roc
+                    // value's own bytes.
+                    const end = @as(usize, stack_value.offset) + promoted_stack_size;
+                    if (end > max_stack_bytes) return Error.TooManyStackBytes;
+                    const promoted = promote(
+                        readUnaligned(u64, value, @intCast(stack_value.size)),
+                        @intCast(stack_value.size),
+                        stack_value.extend,
+                    );
+                    @memcpy(stack[stack_value.offset..end], std.mem.asBytes(&promoted)[0..promoted_stack_size]);
+                    continue;
+                }
                 const end = @as(usize, stack_value.offset) + stack_value.size;
                 if (end > max_stack_bytes) return Error.TooManyStackBytes;
                 @memcpy(stack[stack_value.offset..end], value[0..stack_value.size]);
@@ -126,7 +139,11 @@ pub fn call(
                 for (pieces) |assigned| {
                     const piece = assigned.piece;
                     switch (piece.class) {
-                        .integer => gp[assigned.register_index] = readUnaligned(u64, value + piece.offset, piece.size),
+                        .integer => gp[assigned.register_index] = promote(
+                            readUnaligned(u64, value + piece.offset, piece.size),
+                            piece.size,
+                            piece.extend,
+                        ),
                         .float, .vector => sse[assigned.register_index] = readUnaligned(u128, value + piece.offset, piece.size),
                     }
                 }
@@ -170,6 +187,21 @@ pub fn call(
     }
 }
 
+/// Bytes a promoted C scalar occupies in an overflow slot: C promotes to `int`.
+const promoted_stack_size: usize = 4;
+
+/// Apply the C promotion an argument owes its slot. `bits` already holds the
+/// value's own bytes zero-filled, which is what an unpromoted value and a
+/// zero-extended scalar both need.
+fn promote(bits: u64, size: u8, extend: layout.abi.RegExtension) u64 {
+    if (extend != .sign) return bits;
+    // C promotes to `int`, so the promotion fills exactly 32 bits, which is
+    // also what the compiled backends' sign-extending loads produce.
+    const shift: u5 = @intCast(32 - @as(u16, size) * 8);
+    const narrowed: i32 = @as(i32, @bitCast(@as(u32, @truncate(bits)) << shift)) >> shift;
+    return @as(u32, @bitCast(narrowed));
+}
+
 fn readUnaligned(comptime T: type, ptr: [*]const u8, size: u8) T {
     var buf: [@sizeOf(T)]u8 = @splat(0);
     @memcpy(buf[0..size], ptr[0..size]);
@@ -181,15 +213,14 @@ fn writeUnaligned(dst: [*]u8, bytes: []const u8) void {
 }
 
 fn invoke(ctl: *const Call) void {
-    switch (builtin.cpu.arch) {
-        .aarch64, .aarch64_be, .x86_64 => rocCallTrampoline(ctl),
-        else => unreachable,
-    }
+    if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be or builtin.cpu.arch == .x86_64) {
+        rocCallTrampoline(ctl);
+    } else unreachable;
 }
 
 // The fixed trampoline, defined in `host_trampoline.S`. It saves the control pointer in a
 // callee-saved register, copies any stack arguments, loads every argument register from the
-// images, calls the target, and captures the result registers. It never generates code — it
+// images, calls the target, and captures the result registers. It never generates code—it
 // is assembled into this binary's .text ahead of time.
 extern fn rocCallTrampoline(ctl: *const Call) callconv(.c) void;
 

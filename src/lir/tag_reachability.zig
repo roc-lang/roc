@@ -199,9 +199,9 @@ const Pass = struct {
     allocator: Allocator,
     local_info: []ValueInfo,
     proc_returns: []ValueInfo,
-    visited: std.AutoHashMap(LIR.CFStmtId, void),
+    visited: collections.DenseMap(LIR.CFStmtId, void),
     stack: std.ArrayList(LIR.CFStmtId),
-    redirects: std.AutoHashMap(LIR.CFStmtId, LIR.CFStmtId),
+    redirects: collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId),
     use_counts: []u32,
 
     fn init(result: *LirProgram.Result) Allocator.Error!Pass {
@@ -224,9 +224,9 @@ const Pass = struct {
             .allocator = allocator,
             .local_info = local_info,
             .proc_returns = proc_returns,
-            .visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator),
+            .visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
             .stack = .empty,
-            .redirects = std.AutoHashMap(LIR.CFStmtId, LIR.CFStmtId).init(allocator),
+            .redirects = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(allocator),
             .use_counts = use_counts,
         };
     }
@@ -317,15 +317,22 @@ const Pass = struct {
             },
             .assign_call_erased => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
+                if (s.out_desc) |out_desc| {
+                    if (self.localInfoMut(out_desc).markAll(self.allocator)) changed = true;
+                }
                 try self.pushStmt(s.next);
             },
             .assign_packed_erased_fn => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
             },
-            .assign_low_level => |s| {
+            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
                 try self.pushStmt(s.next);
+            },
+            .boxy_tag_match => |s| {
+                try self.pushStmt(s.on_match);
+                try self.pushStmt(s.on_miss);
             },
             .assign_list => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
@@ -465,17 +472,79 @@ const Pass = struct {
                 }
             },
             .assign_call => |s| {
+                if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
                 const args = self.store.getLocalSpan(s.args);
                 for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
             },
             .assign_call_erased => |s| {
                 self.noteUse(s.closure);
+                if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+                if (s.reuse_source) |reuse_source| self.noteUse(reuse_source);
                 const args = self.store.getLocalSpan(s.args);
                 for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
             },
             .assign_packed_erased_fn => |s| {
                 if (s.capture) |capture| self.noteUse(capture);
+                if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
                 if (s.reuse) |reuse| self.noteUse(reuse);
+            },
+            .assign_boxy_desc_ref => |s| {
+                if (s.desc.localOrNull()) |local| self.noteUse(local);
+                if (s.tag_residual_for) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+                const captures = self.store.getLocalSpan(s.captures);
+                for (0..captures.len) |index| self.noteUse(GuardedList.at(captures, index));
+            },
+            .assign_boxy_dict_ref => |s| {
+                if (s.dict.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_box => |s| {
+                self.noteUse(s.payload);
+                if (s.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_reuse_box => |s| {
+                self.noteUse(s.source);
+                if (s.desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_unbox => |s| {
+                self.noteUse(s.source);
+                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+                if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_adapt => |s| {
+                self.noteUse(s.source);
+                if (s.source_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+                if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_inspect => |s| {
+                self.noteUse(s.source);
+                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_eq => |s| {
+                self.noteUse(s.lhs);
+                self.noteUse(s.rhs);
+                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_tag => |s| {
+                if (s.target_desc.localOrNull()) |local| self.noteUse(local);
+                if (s.payload) |payload| self.noteUse(payload);
+                if (s.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_boxy_tag_payload => |s| {
+                self.noteUse(s.source);
+                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .boxy_tag_match => |s| {
+                self.noteUse(s.source);
+                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
+            },
+            .assign_call_dict => |s| {
+                if (s.dict.localOrNull()) |local| self.noteUse(local);
+                const args = self.store.getLocalSpan(s.args);
+                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
+                const arg_descs = self.store.getLocalSpan(s.arg_descs);
+                for (0..arg_descs.len) |index| self.noteUse(GuardedList.at(arg_descs, index));
+                const hidden_args = self.store.getLocalSpan(s.hidden_args);
+                for (0..hidden_args.len) |index| self.noteUse(GuardedList.at(hidden_args, index));
             },
             .assign_low_level => |s| {
                 const args = self.store.getLocalSpan(s.args);
@@ -489,7 +558,10 @@ const Pass = struct {
                 const fields = self.store.getLocalSpan(s.fields);
                 for (0..fields.len) |index| self.noteUse(GuardedList.at(fields, index));
             },
-            .assign_tag => |s| if (s.payload) |payload| self.noteUse(payload),
+            .assign_tag => |s| {
+                if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+                if (s.payload) |payload| self.noteUse(payload);
+            },
             .store_struct => |s| {
                 self.noteUse(s.dest);
                 const fields = self.store.getLocalSpan(s.fields);
@@ -511,6 +583,7 @@ const Pass = struct {
             .str_match => |s| self.noteUse(s.source),
             .str_match_set => |s| self.noteUse(s.source),
             .ret => |s| self.noteUse(s.value),
+            .crash => |s| if (s.msg.localId()) |message| self.noteUse(message),
             .incref => |s| self.noteUse(s.value),
             .decref => |s| self.noteUse(s.value),
             .decref_if_initialized => |s| {
@@ -523,7 +596,6 @@ const Pass = struct {
             .comptime_branch_taken,
             .join,
             .jump,
-            .crash,
             .runtime_error,
             .comptime_exhaustiveness_failed,
             .loop_continue,
@@ -537,10 +609,8 @@ const Pass = struct {
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmt(stmt_id);
-            const switch_stmt = switch (stmt) {
-                .switch_stmt => |s| s,
-                else => continue,
-            };
+            if (stmt != .switch_stmt) continue;
+            const switch_stmt = stmt.switch_stmt;
             const tags = &self.localInfo(switch_stmt.cond).tags;
             if (!tags.hasKnownValues()) continue;
 
@@ -587,18 +657,12 @@ const Pass = struct {
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmt(stmt_id);
-            const assign = switch (stmt) {
-                .assign_ref => |a| a,
-                else => continue,
-            };
-            switch (assign.op) {
-                .discriminant => {},
-                else => continue,
-            }
-            const switch_stmt = switch (self.store.getCFStmt(assign.next)) {
-                .switch_stmt => |s| s,
-                else => continue,
-            };
+            if (stmt != .assign_ref) continue;
+            const assign = stmt.assign_ref;
+            if (assign.op != .discriminant) continue;
+            const next_stmt = self.store.getCFStmt(assign.next);
+            if (next_stmt != .switch_stmt) continue;
+            const switch_stmt = next_stmt.switch_stmt;
             if (switch_stmt.cond != assign.target) continue;
             if (self.useCount(assign.target) != 1) continue;
             const next = self.resolveRedirect(assign.next);
@@ -630,6 +694,21 @@ const Pass = struct {
                 .assign_call => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_call_erased => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_packed_erased_fn => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_desc_ref => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_dict_ref => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_box => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_reuse_box => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_unbox => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_adapt => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_inspect => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_eq => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_tag => |*s| s.next = self.resolveRedirect(s.next),
+                .assign_boxy_tag_payload => |*s| s.next = self.resolveRedirect(s.next),
+                .boxy_tag_match => |*s| {
+                    s.on_match = self.resolveRedirect(s.on_match);
+                    s.on_miss = self.resolveRedirect(s.on_miss);
+                },
+                .assign_call_dict => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_low_level => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_list => |*s| s.next = self.resolveRedirect(s.next),
                 .assign_struct => |*s| s.next = self.resolveRedirect(s.next),
@@ -1288,6 +1367,7 @@ test "tag reachability retains branches for erased call results" {
     const closure = try f.local(f.outer_layout);
     const result = try f.local(f.outer_layout);
     const disc = try f.local(.u16);
+    const arg_plan = try store.internErasedCallArgsPlan(&f.result.layouts, &.{});
 
     const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result } });
     const bad = try store.addCFStmt(.{ .runtime_error = {} });
@@ -1305,6 +1385,7 @@ test "tag reachability retains branches for erased call results" {
         .target = result,
         .closure = closure,
         .args = LIR.LocalSpan.empty(),
+        .arg_plan = arg_plan,
         .next = disc_read,
     } });
     const proc = try store.addProcSpec(.{

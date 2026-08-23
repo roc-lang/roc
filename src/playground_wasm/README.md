@@ -4,6 +4,10 @@
 
 The Roc Playground provides a WebAssembly interface to the compiler, providing analysis of `.roc` code in web browsers and JavaScript environments. It implements a state machine architecture to support both single-file compilation analysis and interactive REPL (Read-Eval-Print Loop) sessions.
 
+This playground protocol remains available for compiler exploration. Embedders
+that only need a REPL should use the smaller-scope interface documented in
+`src/repl_wasm/README.md`; that module has no compiler-introspection modes.
+
 The playground supports:
 - **Single-file compilation**: Load and analyze complete Roc source files
 - **Interactive REPL**: Evaluate expressions and definitions incrementally
@@ -574,3 +578,9 @@ zig build build-playground
 ```
 
 Output: `zig-out/bin/playground.wasm`
+
+This module bundles the whole compiler, so a plain `zig build` builds it at
+ReleaseSmall rather than Debug: a Debug build is ~85 MB and needs roughly
+12 GiB of RAM to link. Any explicitly requested mode is still honored, so
+`-Doptimize=Debug` does give you a Debug module. The playground integration
+tests (`zig build run-test-playground`) run against this same artifact.

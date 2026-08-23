@@ -77,6 +77,13 @@ pub const StringLiteral = struct {
     }
 };
 
+/// Readonly packed scalar-list data carried without one expression per item.
+pub const PackedListLiteral = struct {
+    literal: StringLiteralId,
+    len: u32,
+    element: check.ConstStore.ConstPackedScalar,
+};
+
 /// Slice descriptor over one of the program side arrays.
 pub fn Span(comptime _: type) type {
     return extern struct {
@@ -200,7 +207,7 @@ pub const CallableIdentity = union(enum(u8)) {
 /// The identity is immutable: it is written once when the record is reserved
 /// and never rewritten. Body evidence that refines the requested type is data
 /// on the `SpecRecord` (`request_fn_ty`/`solved_fn_ty` views), reachable
-/// through additional lookup aliases — never a rekey of this identity.
+/// through additional lookup aliases—never a rekey of this identity.
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: names.CheckedModuleDigest,
@@ -221,7 +228,7 @@ pub const SpecStatus = enum(u8) {
 ///
 /// `identity` is the immutable creation-time key. The type views are data:
 /// `request_fn_ty` starts as the identity's requested type and may be refined
-/// while the record is still `.reserved` — once per deferring graph that
+/// while the record is still `.reserved`—once per deferring graph that
 /// seals its view of the request; `solved_fn_ty` mirrors the request view
 /// until `.ready` records the body's solved type. Both views only ever become
 /// more specific; a finished record is never widened (one-way snapshot rule).
@@ -243,8 +250,9 @@ pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
         lhs.mono_fn_ty == rhs.mono_fn_ty;
 }
 
-/// Compute a digest for a Monotype function template.
-pub fn fnTemplateDigest(template: FnTemplate, types: *const Type.Store, name_store: *const names.NameStore) names.TypeDigest {
+/// Compute a digest for a Monotype function template. Takes the type store
+/// mutable because type digests are computed through the store's cache.
+pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeFnDef(&hasher, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);
@@ -447,6 +455,16 @@ pub const FieldExpr = struct {
     value: ExprId,
 };
 
+/// A record update whose base supplies every field not present in `fields`.
+pub const RecordUpdate = struct {
+    base: ExprId,
+    fields: Span(FieldExpr),
+};
+/// One source-ordered segment in a flattened record-field access path.
+pub const FieldAccessSegment = struct {
+    field: names.RecordFieldNameId,
+};
+
 /// Tag expression entry.
 pub const TagExpr = struct {
     name: names.TagNameId,
@@ -471,7 +489,8 @@ pub const CallValue = struct {
 /// slot this operand fills; `value` is the expression that supplies it. Operand
 /// spans are stored sorted by `id`, parallel to the target's canonically-sorted
 /// capture slots, so every operand↔slot join is an exact keyed lookup with no
-/// load-bearing order.
+/// load-bearing order. At the lift boundary, the id's namespace explicitly
+/// distinguishes a provisional checked key from an already-lifted key.
 pub const CaptureOperand = struct {
     id: checked.CaptureId,
     value: ExprId,
@@ -487,10 +506,10 @@ pub const LiftedFunctionValue = struct {
 
 /// Explicit operand for one checked closure capture before lifting. The `local`
 /// identifies the checked capture in the closure creation context; `value` is
-/// the expression that supplies it there. Lifting matches it to the target
-/// function's solved captures by local id when possible, and by preserved
-/// checked binder identity when copied/specialized contexts use different
-/// Monotype local ids for the same checked capture.
+/// the expression that supplies it there. At the lift boundary, both this local
+/// and the target slot use their checked capture identity when present and their
+/// generated capture identity otherwise. Lifting joins only on that explicit
+/// provisional key, then records the operand with the target's lifted key.
 pub const FnDefCapture = struct {
     local: LocalId,
     value: ExprId,
@@ -691,11 +710,12 @@ pub const ExprData = union(enum(u8)) {
     frac_f64_lit: f64,
     dec_lit: builtins.dec.RocDec,
     str_lit: StringLiteralId,
-    bytes_lit: StringLiteralId,
+    bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
     list: Span(ExprId),
     tuple: Span(ExprId),
     record: Span(FieldExpr),
+    record_update: RecordUpdate,
     tag: TagExpr,
     nominal: ExprId,
     let_: struct {
@@ -713,7 +733,7 @@ pub const ExprData = union(enum(u8)) {
     low_level: LowLevelCall,
     field_access: struct {
         receiver: ExprId,
-        field: names.RecordFieldNameId,
+        segments: Span(FieldAccessSegment),
     },
     tuple_access: struct {
         tuple: ExprId,
@@ -845,6 +865,9 @@ pub const ListRestPattern = struct {
 /// Match branch.
 pub const Branch = struct {
     pat: PatId,
+    /// Irrefutable compiler-generated bindings evaluated after `pat` succeeds
+    /// and before the user guard. Their locals remain in scope for the body.
+    bindings: Span(StmtId) = Span(StmtId).empty(),
     guard: ?ExprId = null,
     body: ExprId,
 };
@@ -1025,6 +1048,7 @@ pub const ProgramView = struct {
     typed_locals: []const TypedLocal,
     stmt_ids: []const StmtId,
     field_exprs: []const FieldExpr,
+    field_access_segments: []const FieldAccessSegment,
     fn_def_captures: []const FnDefCapture,
     capture_operands: []const CaptureOperand,
     record_destructs: []const RecordDestruct,
@@ -1068,6 +1092,15 @@ pub const ProgramView = struct {
 
     pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
         return procDebugNameInSlice(self.proc_debug_names, symbol);
+    }
+
+    pub fn fieldAccessSegmentSpan(self: ProgramView, span_: Span(FieldAccessSegment)) []const FieldAccessSegment {
+        return self.field_access_segments[span_.start..][0..span_.len];
+    }
+
+    pub fn fieldAccessSegmentAt(self: ProgramView, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
+        if (index >= span_.len) Common.invariant("field access segment index was outside span");
+        return self.field_access_segments[span_.start + index];
     }
 
     /// Verify that a completed program view refers only to durable type-store
@@ -1134,28 +1167,24 @@ pub const ProgramView = struct {
         }
 
         for (self.exprs) |expr| {
-            switch (expr.data) {
-                .call_proc => |call| switch (call.callee) {
-                    .func => |slot| switch (slot) {
-                        .local => |fn_id| {
-                            const raw_fn = @intFromEnum(fn_id);
-                            if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
-                            const raw_ty = @intFromEnum(self.fns[raw_fn].source.mono_fn_ty);
-                            if (raw_ty >= self.types.types.len) return .local_fn_type_out_of_bounds;
-                            switch (self.types.get(self.fns[raw_fn].source.mono_fn_ty)) {
-                                .func => |func| {
-                                    if (func.args.len != call.args.len) return .local_call_arity_mismatch;
-                                },
-                                else => return .local_fn_type_not_function,
-                            }
-                        },
-                        .imported => |imported| {
-                            if (@intFromEnum(imported) >= self.imported_fns.len) return .imported_fn_out_of_bounds;
-                        },
+            if (std.meta.activeTag(expr.data) != .call_proc) continue;
+            const call = expr.data.call_proc;
+            switch (call.callee) {
+                .func => |slot| switch (slot) {
+                    .local => |fn_id| {
+                        const raw_fn = @intFromEnum(fn_id);
+                        if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
+                        const raw_ty = @intFromEnum(self.fns[raw_fn].source.mono_fn_ty);
+                        if (raw_ty >= self.types.types.len) return .local_fn_type_out_of_bounds;
+                        const fn_ty = self.types.get(self.fns[raw_fn].source.mono_fn_ty);
+                        if (std.meta.activeTag(fn_ty) != .func) return .local_fn_type_not_function;
+                        if (fn_ty.func.args.len != call.args.len) return .local_call_arity_mismatch;
                     },
-                    .lifted => return .lifted_fn_before_lifting,
+                    .imported => |imported| {
+                        if (@intFromEnum(imported) >= self.imported_fns.len) return .imported_fn_out_of_bounds;
+                    },
                 },
-                else => {},
+                .lifted => return .lifted_fn_before_lifting,
             }
         }
         return null;
@@ -1170,13 +1199,10 @@ pub const ProgramView = struct {
         if (raw_fn >= self.fns.len) return .local_fn_out_of_bounds;
         const raw_ty = @intFromEnum(self.fns[raw_fn].source.mono_fn_ty);
         if (raw_ty >= self.types.types.len) return .local_fn_type_out_of_bounds;
-        return switch (self.types.get(self.fns[raw_fn].source.mono_fn_ty)) {
-            .func => |func| {
-                if (func.args.len != args.len) return .local_fn_definition_arity_mismatch;
-                return null;
-            },
-            else => .local_fn_type_not_function,
-        };
+        const fn_ty = self.types.get(self.fns[raw_fn].source.mono_fn_ty);
+        if (std.meta.activeTag(fn_ty) != .func) return .local_fn_type_not_function;
+        if (fn_ty.func.args.len != args.len) return .local_fn_definition_arity_mismatch;
+        return null;
     }
 };
 
@@ -1202,6 +1228,7 @@ pub const ProgramBuilder = struct {
     typed_locals: ProgramList(TypedLocal, "typed_locals"),
     stmt_ids: ProgramList(StmtId, "stmt_ids"),
     field_exprs: ProgramList(FieldExpr, "field_exprs"),
+    field_access_segments: ProgramList(FieldAccessSegment, "field_access_segments"),
     fn_def_captures: ProgramList(FnDefCapture, "fn_def_captures"),
     /// Backing pool for `Span(CaptureOperand)` direct-call operands. Pre-lift
     /// Monotype stores producer-authored local-proc operands here; closure
@@ -1261,6 +1288,7 @@ pub const ProgramBuilder = struct {
             .typed_locals = .empty,
             .stmt_ids = .empty,
             .field_exprs = .empty,
+            .field_access_segments = .empty,
             .fn_def_captures = .empty,
             .capture_operands = .empty,
             .record_destructs = .empty,
@@ -1313,6 +1341,7 @@ pub const ProgramBuilder = struct {
         self.record_destructs.deinit(self.allocator);
         self.fn_def_captures.deinit(self.allocator);
         self.capture_operands.deinit(self.allocator);
+        self.field_access_segments.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
         self.typed_locals.deinit(self.allocator);
@@ -1483,6 +1512,7 @@ pub const ProgramBuilder = struct {
             .typed_locals = self.typed_locals.unsafeRawItemsForView(),
             .stmt_ids = self.stmt_ids.unsafeRawItemsForView(),
             .field_exprs = self.field_exprs.unsafeRawItemsForView(),
+            .field_access_segments = self.field_access_segments.unsafeRawItemsForView(),
             .fn_def_captures = self.fn_def_captures.unsafeRawItemsForView(),
             .capture_operands = self.capture_operands.unsafeRawItemsForView(),
             .record_destructs = self.record_destructs.unsafeRawItemsForView(),
@@ -1799,6 +1829,10 @@ pub const ProgramBuilder = struct {
         return self.field_exprs.len();
     }
 
+    pub fn fieldAccessSegmentCount(self: *const ProgramBuilder) usize {
+        return self.field_access_segments.len();
+    }
+
     pub fn recordDestructCount(self: *const ProgramBuilder) usize {
         return self.record_destructs.len();
     }
@@ -1833,6 +1867,10 @@ pub const ProgramBuilder = struct {
 
     pub fn getFieldExprAt(self: *const ProgramBuilder, index: usize) FieldExpr {
         return self.field_exprs.get(index);
+    }
+
+    pub fn getFieldAccessSegmentAt(self: *const ProgramBuilder, index: usize) FieldAccessSegment {
+        return self.field_access_segments.get(index);
     }
 
     pub fn getRecordDestructAt(self: *const ProgramBuilder, index: usize) RecordDestruct {
@@ -1876,6 +1914,13 @@ pub const ProgramBuilder = struct {
     pub fn addFieldExprSpan(self: *ProgramBuilder, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
         const start: u32 = @intCast(self.field_exprs.len());
         try self.field_exprs.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addFieldAccessSegmentSpan(self: *ProgramBuilder, values: []const FieldAccessSegment) std.mem.Allocator.Error!Span(FieldAccessSegment) {
+        if (values.len == 0) Common.invariant("field access segment span must be nonempty");
+        const start: u32 = @intCast(self.field_access_segments.len());
+        try self.field_access_segments.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
@@ -1935,6 +1980,15 @@ pub const ProgramBuilder = struct {
         return self.field_exprs.borrowSpan(span_.start, span_.len);
     }
 
+    pub fn fieldAccessSegmentSpan(self: *const ProgramBuilder, span_: Span(FieldAccessSegment)) ProgramSpanBorrow(FieldAccessSegment, "field_access_segments") {
+        return self.field_access_segments.borrowSpan(span_.start, span_.len);
+    }
+
+    pub fn fieldAccessSegmentAt(self: *const ProgramBuilder, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
+        if (index >= span_.len) Common.invariant("field access segment index was outside span");
+        return self.field_access_segments.get(span_.start + index);
+    }
+
     pub fn fnDefCaptureSpan(self: *const ProgramBuilder, span_: Span(FnDefCapture)) ProgramSpanBorrow(FnDefCapture, "fn_def_captures") {
         return self.fn_def_captures.borrowSpan(span_.start, span_.len);
     }
@@ -1960,7 +2014,7 @@ pub const ProgramBuilder = struct {
     /// materialization. Body drafts seal their own identity equivalence classes
     /// when committed; this final sweep handles direct generated definitions.
     pub fn sealRemainingCaptureIdentities(self: *ProgramBuilder) std.mem.Allocator.Error!void {
-        var durable_by_checked = std.AutoHashMap(checked.CaptureId, checked.CaptureId).init(self.allocator);
+        var durable_by_checked = collections.DenseMap(checked.CaptureId, checked.CaptureId).init(self.allocator);
         defer durable_by_checked.deinit();
         for (0..self.locals.len()) |index| {
             const local = self.locals.getPtrImmediate(index);
@@ -2288,15 +2342,13 @@ fn collectSingleShardLocalCallTargets(
     out: *std.ArrayList(FnId),
 ) (std.mem.Allocator.Error || error{TestUnexpectedResult})!void {
     for (exprs) |expr| {
-        switch (expr.data) {
-            .call_proc => |call| switch (call.callee) {
-                .func => |slot| switch (slot) {
-                    .local => |fn_id| try out.append(allocator, fn_id),
-                    .imported => return error.TestUnexpectedResult,
-                },
-                .lifted => return error.TestUnexpectedResult,
+        if (std.meta.activeTag(expr.data) != .call_proc) continue;
+        switch (expr.data.call_proc.callee) {
+            .func => |slot| switch (slot) {
+                .local => |fn_id| try out.append(allocator, fn_id),
+                .imported => return error.TestUnexpectedResult,
             },
-            else => {},
+            .lifted => return error.TestUnexpectedResult,
         }
     }
 }

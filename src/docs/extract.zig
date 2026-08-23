@@ -8,6 +8,7 @@ const base = @import("base");
 const CIR = @import("can").CIR;
 const ModuleEnv = @import("can").ModuleEnv;
 const types_mod = @import("types").types;
+const CheckedArtifact = @import("check").CheckedArtifact;
 
 const DocModel = @import("DocModel.zig");
 const render_type = @import("render_type.zig");
@@ -101,7 +102,7 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8, line_index: L
                 pos += 1;
             }
         } else if (pos == source.len or source[pos] == '\n') {
-            // Empty line — skip but keep looking
+            // Empty line—skip but keep looking
             if (pos < source.len) pos += 1;
             // If we already collected some doc comment lines, an empty line
             // that's purely whitespace can be part of the gap before the header.
@@ -170,11 +171,11 @@ pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u
             const content = base.doc_comment.stripPrefix(trimmed);
             try lines.append(gpa, content);
         } else if (trimmed.len == 0) {
-            // Empty/whitespace line — stop looking if we already have doc lines
+            // Empty/whitespace line—stop looking if we already have doc lines
             if (lines.items.len > 0) break;
             // Skip empty lines between def and potential doc comment
         } else {
-            // Non-comment content — stop
+            // Non-comment content—stop
             break;
         }
 
@@ -216,12 +217,85 @@ pub fn extractModuleDocs(
     package_name: []const u8,
     source_path: ?[]const u8,
 ) Allocator.Error!DocModel.ModuleDocs {
+    return extractModuleDocsWithOptions(gpa, module_env, package_name, source_path, .{});
+}
+
+/// Controls which source-level entries are included in one module's docs.
+pub const ExtractOptions = struct {
+    /// When set, retain only these top-level entries and their children.
+    exposed_names: ?[]const []const u8 = null,
+    /// Exact source type represented by a public package/platform module name.
+    public_type: ?PublicTypeProjection = null,
+    /// Every exact public type projection in the generated package docs,
+    /// sorted once with `sortPublicTypeProjections` before extraction.
+    public_types: []const PublicTypeProjection = &.{},
+    /// Checked import identities for resolving external annotation references.
+    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact = null,
+};
+
+/// A borrowed mapping from one exact source type to its public docs namespace.
+pub const PublicTypeProjection = struct {
+    public_name: []const u8,
+    package_name: []const u8,
+    source_env: *const ModuleEnv,
+    source_identity: *const [32]u8,
+    source_decl: CIR.Statement.Idx,
+    /// Declaration order in the owning package's public surface.
+    public_order: u32,
+};
+
+/// Sort projections for binary-search routing by exact source identity.
+pub fn sortPublicTypeProjections(projections: []PublicTypeProjection) void {
+    std.mem.sort(PublicTypeProjection, projections, {}, publicTypeProjectionLessThan);
+}
+
+fn publicTypeProjectionLessThan(_: void, a: PublicTypeProjection, b: PublicTypeProjection) bool {
+    const identity_order = std.mem.order(u8, a.source_identity, b.source_identity);
+    if (identity_order != .eq) return identity_order == .lt;
+    if (a.public_order != b.public_order) return a.public_order < b.public_order;
+    return std.mem.order(u8, a.public_name, b.public_name) == .lt;
+}
+
+const PublicReferenceRouting = struct {
+    current: ?PublicTypeProjection,
+    all: []const PublicTypeProjection,
+    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
+};
+
+/// Extract documentation, optionally restricted to explicit top-level names.
+pub fn extractModuleDocsWithOptions(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    package_name: []const u8,
+    source_path: ?[]const u8,
+    options: ExtractOptions,
+) Allocator.Error!DocModel.ModuleDocs {
+    std.debug.assert(options.exposed_names == null or options.public_type == null);
+    std.debug.assert(std.sort.isSorted(
+        PublicTypeProjection,
+        options.public_types,
+        {},
+        publicTypeProjectionLessThan,
+    ));
+
     const source = module_env.getSourceAll();
     const line_index = try LineIndex.build(gpa, source);
     defer line_index.deinit(gpa);
 
-    // Extract module-level doc comment
-    const module_doc_extract = try extractModuleDocComment(gpa, source, line_index);
+    // A projected public type owns its public page, so its declaration comment
+    // is the page comment. The source module's comment belongs to the private
+    // parent namespace and must not leak into the projection.
+    const module_doc_extract = if (options.public_type) |projection| blk: {
+        std.debug.assert(projection.source_env == module_env);
+        const source_root = projectionRootName(module_env, projection);
+        if (std.mem.eql(u8, projection.public_name, module_env.module_name) and
+            std.mem.eql(u8, source_root, module_env.module_name))
+        {
+            break :blk try extractModuleDocComment(gpa, source, line_index);
+        }
+        const region = module_env.store.getStatementRegion(projection.source_decl);
+        break :blk try extractDocComment(gpa, source, region.start.offset, line_index);
+    } else try extractModuleDocComment(gpa, source, line_index);
     errdefer if (module_doc_extract) |d| gpa.free(d.text);
     const module_doc: ?[]const u8 = if (module_doc_extract) |d| d.text else null;
     const module_doc_start_line: u32 = if (module_doc_extract) |d| d.start_line else 0;
@@ -230,7 +304,10 @@ pub fn extractModuleDocs(
     const kind = convertModuleKind(module_env.module_kind);
 
     // Get module name
-    const name = try gpa.dupe(u8, module_env.module_name);
+    const name = try gpa.dupe(u8, if (options.public_type) |projection|
+        projection.public_name
+    else
+        module_env.module_name);
     errdefer gpa.free(name);
 
     // Dupe package name
@@ -239,8 +316,14 @@ pub fn extractModuleDocs(
 
     // Display-qualified path for local type refs ("app.Geometry"): docs must
     // never render identity keys (URLs, canonical paths) as module paths.
-    const local_module_path = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ package_name, module_env.module_name });
+    const local_module_name = if (options.public_type) |projection| projection.public_name else module_env.module_name;
+    const local_module_path = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ package_name, local_module_name });
     defer gpa.free(local_module_path);
+    const reference_routing = PublicReferenceRouting{
+        .current = options.public_type,
+        .all = options.public_types,
+        .checked_artifact = options.checked_artifact,
+    };
 
     // Collect entries from exported defs
     var entries_list = std.ArrayList(DocModel.DocEntry).empty;
@@ -249,10 +332,19 @@ pub fn extractModuleDocs(
         entries_list.deinit(gpa);
     }
 
+    var exposed_names: std.StringHashMapUnmanaged(void) = .empty;
+    defer exposed_names.deinit(gpa);
+    if (options.exposed_names) |names_to_expose| {
+        try exposed_names.ensureTotalCapacity(gpa, @intCast(names_to_expose.len));
+        for (names_to_expose) |exposed_name| exposed_names.putAssumeCapacity(exposed_name, {});
+    }
+
     // For documentation purposes, show all accessible definitions, not just
     // what's explicitly exported. Exports control compilation/linking (what
     // other modules can import), but docs should be comprehensive.
-    const defs_slice = switch (module_env.module_kind) {
+    const defs_slice = if (options.exposed_names != null)
+        module_env.store.sliceDefs(module_env.all_defs)
+    else switch (module_env.module_kind) {
         .platform, .hosted => blk: {
             // Platforms and hosted modules: only document explicitly provided items
             const exports_slice = module_env.store.sliceDefs(module_env.exports);
@@ -261,17 +353,32 @@ pub fn extractModuleDocs(
             else
                 module_env.store.sliceDefs(module_env.all_defs);
         },
-        else => module_env.store.sliceDefs(module_env.all_defs),
+        .type_module, .default_app, .app, .package, .module, .malformed => module_env.store.sliceDefs(module_env.all_defs),
     };
 
     for (defs_slice) |def_idx| {
-        if (try extractDefEntry(gpa, module_env, local_module_path, def_idx, source, line_index)) |entry| {
+        if (options.exposed_names != null) {
+            const entry_name = defEntryName(module_env, def_idx) orelse continue;
+            if (!isUnderExposedName(&exposed_names, entry_name)) continue;
+        }
+        if (options.public_type) |projection| {
+            const entry_name = defEntryName(module_env, def_idx) orelse continue;
+            if (!nameBelongsToProjection(module_env, projection, entry_name)) continue;
+        }
+        if (try extractDefEntry(gpa, module_env, local_module_path, reference_routing, def_idx, source, line_index)) |entry| {
+            var public_entry = entry;
+            var public_entry_moved = false;
+            errdefer if (!public_entry_moved) public_entry.deinit(gpa);
+            if (options.public_type) |projection| {
+                try rebaseEntryForProjection(gpa, module_env, projection, &public_entry);
+            }
             // Skip internal Builtin functions
-            if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry.name)) {
-                var mutable_entry = entry;
-                mutable_entry.deinit(gpa);
+            if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(public_entry.name)) {
+                public_entry.deinit(gpa);
+                public_entry_moved = true;
             } else {
-                try entries_list.append(gpa, entry);
+                try entries_list.append(gpa, public_entry);
+                public_entry_moved = true;
             }
         }
     }
@@ -285,8 +392,12 @@ pub fn extractModuleDocs(
             .s_alias_decl => |decl| {
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
+                if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
+                if (options.public_type) |projection| {
+                    if (!statementBelongsToProjection(module_env, projection, stmt_idx, entry_name)) continue;
+                }
                 // Skip if already in entries
-                if (findEntryByName(entries_list.items, entry_name)) continue;
+                if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
                 // Skip internal Builtin types
                 if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
 
@@ -294,13 +405,13 @@ pub fn extractModuleDocs(
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
                 errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, decl.anno);
+                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, reference_routing, decl.anno);
                 errdefer if (type_sig) |s| {
                     s.deinit(gpa);
                     gpa.destroy(s);
                 };
 
-                const duped_name = try gpa.dupe(u8, entry_name);
+                const duped_name = try projectedEntryName(gpa, module_env, options.public_type, entry_name);
                 errdefer gpa.free(duped_name);
 
                 const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
@@ -318,7 +429,11 @@ pub fn extractModuleDocs(
             .s_nominal_decl => |decl| {
                 const header = module_env.store.getTypeHeader(decl.header);
                 const entry_name = module_env.getIdentText(header.relative_name);
-                if (findEntryByName(entries_list.items, entry_name)) continue;
+                if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
+                if (options.public_type) |projection| {
+                    if (!statementBelongsToProjection(module_env, projection, stmt_idx, entry_name)) continue;
+                }
+                if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
                 // Skip internal Builtin types
                 if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
 
@@ -326,13 +441,13 @@ pub fn extractModuleDocs(
                 const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
                 errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, decl.anno);
+                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, reference_routing, decl.anno);
                 errdefer if (type_sig) |s| {
                     s.deinit(gpa);
                     gpa.destroy(s);
                 };
 
-                const duped_name = try gpa.dupe(u8, entry_name);
+                const duped_name = try projectedEntryName(gpa, module_env, options.public_type, entry_name);
                 errdefer gpa.free(duped_name);
 
                 const type_header = try render_type.renderTypeHeaderToString(gpa, module_env, decl.header);
@@ -351,7 +466,80 @@ pub fn extractModuleDocs(
                     .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                 });
             },
-            else => {},
+            .s_where_alias_decl => |decl| {
+                const header = module_env.store.getTypeHeader(decl.header);
+                const entry_name = module_env.getIdentText(header.relative_name);
+                if (options.exposed_names != null and !isUnderExposedName(&exposed_names, entry_name)) continue;
+                if (options.public_type) |projection| {
+                    if (!statementBelongsToProjection(module_env, projection, stmt_idx, entry_name)) continue;
+                }
+                if (findProjectedEntryByName(entries_list.items, module_env, options.public_type, entry_name)) continue;
+                if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
+
+                const region = module_env.store.getStatementRegion(stmt_idx);
+                const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
+                errdefer if (doc_extract) |d| gpa.free(d.text);
+
+                // The signature is the receiver together with every constraint
+                // the alias names, so the docs list what an implementor must
+                // provide.
+                const receiver = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, decl.receiver);
+                var receiver_moved = false;
+                errdefer if (receiver) |r| if (!receiver_moved) {
+                    r.deinit(gpa);
+                    gpa.destroy(r);
+                };
+                const type_sig: ?*const DocType = if (receiver) |r| wrap: {
+                    // A where alias with no renderable constraints still has a
+                    // receiver to show, and `wrapInWhereClause` leaves it owned
+                    // by this caller.
+                    const wrapped = try wrapInWhereClause(gpa, module_env, local_module_path, reference_routing, r, decl.where);
+                    receiver_moved = true;
+                    break :wrap wrapped orelse r;
+                } else null;
+                errdefer if (type_sig) |sig| {
+                    sig.deinit(gpa);
+                    gpa.destroy(sig);
+                };
+
+                const duped_name = try projectedEntryName(gpa, module_env, options.public_type, entry_name);
+                errdefer gpa.free(duped_name);
+
+                const type_header = try render_type.renderTypeHeaderToString(gpa, module_env, decl.header);
+                errdefer gpa.free(type_header);
+
+                const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
+                errdefer gpa.free(empty_children);
+
+                try entries_list.append(gpa, DocModel.DocEntry{
+                    .name = duped_name,
+                    .type_header = type_header,
+                    .kind = .where_alias,
+                    .type_signature = type_sig,
+                    .doc_comment = if (doc_extract) |d| d.text else null,
+                    .children = empty_children,
+                    .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
+                });
+            },
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
         }
     }
 
@@ -397,12 +585,12 @@ pub fn extractModuleDocs(
     // For example, in Color.roc only `Color := ...` and its methods are visible;
     // helper functions or types defined outside `Color` are not documented.
     //
-    // The Builtin module is a special case — it contains many top-level types
+    // The Builtin module is a special case—it contains many top-level types
     // (Str, List, Bool, etc.) that need complex re-parenting rather than simple
     // filtering, so it is handled separately below.
     const is_builtin = std.mem.eql(u8, module_env.module_name, "Builtin");
     if (module_env.module_kind == .type_module and !is_builtin) {
-        try filterTypeModuleEntries(gpa, &entries_list, module_env.module_name);
+        try filterTypeModuleEntries(gpa, &entries_list, local_module_name);
     }
 
     // Re-parent Builtin opaque type's children to their proper parent types.
@@ -429,11 +617,231 @@ pub fn extractModuleDocs(
     };
 }
 
+fn projectionRootName(module_env: *const ModuleEnv, projection: PublicTypeProjection) []const u8 {
+    std.debug.assert(module_env == projection.source_env);
+    return typeDeclName(projection.source_env, projection.source_decl) orelse unreachable;
+}
+
+fn typeDeclName(module_env: *const ModuleEnv, statement_idx: CIR.Statement.Idx) ?[]const u8 {
+    const statement = module_env.store.getStatement(statement_idx);
+    const header_idx = switch (statement) {
+        .s_alias_decl => |decl| decl.header,
+        .s_nominal_decl => |decl| decl.header,
+        .s_where_alias_decl => |decl| decl.header,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => return null,
+    };
+    return module_env.getIdentText(module_env.store.getTypeHeader(header_idx).relative_name);
+}
+
+fn nameIsAtOrUnder(root: []const u8, name: []const u8) bool {
+    return std.mem.eql(u8, name, root) or
+        (std.mem.startsWith(u8, name, root) and name.len > root.len and name[root.len] == '.');
+}
+
+fn nameBelongsToProjection(
+    module_env: *const ModuleEnv,
+    projection: PublicTypeProjection,
+    name: []const u8,
+) bool {
+    return nameIsAtOrUnder(projectionRootName(module_env, projection), name);
+}
+
+fn statementBelongsToProjection(
+    module_env: *const ModuleEnv,
+    projection: PublicTypeProjection,
+    statement: CIR.Statement.Idx,
+    name: []const u8,
+) bool {
+    return statement == projection.source_decl or nameBelongsToProjection(module_env, projection, name);
+}
+
+fn projectedEntryName(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    projection: ?PublicTypeProjection,
+    source_name: []const u8,
+) Allocator.Error![]const u8 {
+    const selected = projection orelse return try gpa.dupe(u8, source_name);
+    const root = projectionRootName(module_env, selected);
+    std.debug.assert(nameIsAtOrUnder(root, source_name));
+    return if (source_name.len == root.len)
+        try gpa.dupe(u8, selected.public_name)
+    else
+        try std.fmt.allocPrint(gpa, "{s}{s}", .{ selected.public_name, source_name[root.len..] });
+}
+
+fn rebaseEntryForProjection(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    projection: PublicTypeProjection,
+    entry: *DocModel.DocEntry,
+) Allocator.Error!void {
+    const rebased = try projectedEntryName(gpa, module_env, projection, entry.name);
+    gpa.free(entry.name);
+    entry.name = rebased;
+}
+
+fn findProjectedEntryByName(
+    entries: []const DocModel.DocEntry,
+    module_env: *const ModuleEnv,
+    projection: ?PublicTypeProjection,
+    source_name: []const u8,
+) bool {
+    const selected = projection orelse return findEntryByName(entries, source_name);
+    const root = projectionRootName(module_env, selected);
+    if (!nameIsAtOrUnder(root, source_name)) return false;
+    const suffix = source_name[root.len..];
+    for (entries) |entry| {
+        if (entry.name.len != selected.public_name.len + suffix.len) continue;
+        if (!std.mem.startsWith(u8, entry.name, selected.public_name)) continue;
+        if (std.mem.eql(u8, entry.name[selected.public_name.len..], suffix)) return true;
+    }
+    return false;
+}
+
+fn projectedTypeReference(
+    module_env: *const ModuleEnv,
+    current_projection: ?PublicTypeProjection,
+    public_types: []const PublicTypeProjection,
+    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
+    base_ref: TypeAnno.LocalOrExternal,
+) ?PublicTypeProjection {
+    if (current_projection == null and public_types.len == 0) return null;
+
+    const identity, const target_statement = switch (base_ref) {
+        .local => |local| .{
+            (module_env.contentIdentityHash() orelse unreachable).*,
+            local.decl_idx,
+        },
+        .external => |external| external_blk: {
+            const artifact = checked_artifact orelse unreachable;
+            const import_index = @intFromEnum(external.module_idx);
+            if (import_index >= artifact.checking_context_identity.imports.len) unreachable;
+            const import_key = artifact.checking_context_identity.imports[import_index].artifact_key orelse unreachable;
+            break :external_blk .{ import_key.module_identity_hash, @as(CIR.Statement.Idx, @enumFromInt(external.target_node_idx)) };
+        },
+        .builtin => return null,
+        .pending => unreachable,
+    };
+
+    return selectPublicProjection(current_projection, public_types, &identity, target_statement);
+}
+
+fn selectPublicProjection(
+    current_projection: ?PublicTypeProjection,
+    public_types: []const PublicTypeProjection,
+    identity: *const [32]u8,
+    target_statement: CIR.Statement.Idx,
+) ?PublicTypeProjection {
+    if (current_projection) |current| {
+        if (projectionContainsIdentityAndStatement(current, identity, target_statement)) return current;
+    }
+
+    var low: usize = 0;
+    var high = public_types.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (std.mem.order(u8, public_types[mid].source_identity, identity) == .lt)
+            low = mid + 1
+        else
+            high = mid;
+    }
+
+    var selected: ?PublicTypeProjection = null;
+    var selected_root_len: usize = 0;
+    for (public_types[low..]) |candidate| {
+        if (!std.mem.eql(u8, candidate.source_identity, identity)) break;
+        if (!projectionContainsIdentityAndStatement(candidate, identity, target_statement)) continue;
+        const root_len = projectionRootName(candidate.source_env, candidate).len;
+        // The nearest public root is the exact namespace owner. Equal roots
+        // retain source public-surface order, already established by sorting.
+        if (selected == null or root_len > selected_root_len) {
+            selected = candidate;
+            selected_root_len = root_len;
+        }
+    }
+    return selected;
+}
+
+fn typeReferenceStatement(base_ref: TypeAnno.LocalOrExternal) ?CIR.Statement.Idx {
+    return switch (base_ref) {
+        .local => |local| local.decl_idx,
+        .external => |external| @enumFromInt(external.target_node_idx),
+        .builtin, .pending => null,
+    };
+}
+
+fn annotatedTypeReferenceDisplay(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    local_module_path: []const u8,
+    routing: PublicReferenceRouting,
+    base_ref: TypeAnno.LocalOrExternal,
+    source_name: []const u8,
+) Allocator.Error!TypeReferenceDisplay {
+    if (projectedTypeReference(
+        module_env,
+        routing.current,
+        routing.all,
+        routing.checked_artifact,
+        base_ref,
+    )) |projection| {
+        const statement = typeReferenceStatement(base_ref) orelse unreachable;
+        const target_name = typeDeclName(projection.source_env, statement) orelse unreachable;
+        const module_path = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ projection.package_name, projection.public_name });
+        errdefer gpa.free(module_path);
+        return .{
+            .module_path = module_path,
+            .type_name = try projectedEntryName(gpa, projection.source_env, projection, target_name),
+        };
+    }
+
+    const module_path = try gpa.dupe(u8, resolveModulePathFromBase(module_env, local_module_path, base_ref));
+    errdefer gpa.free(module_path);
+    return .{
+        .module_path = module_path,
+        .type_name = try gpa.dupe(u8, source_name),
+    };
+}
+
+fn projectionContainsIdentityAndStatement(
+    projection: PublicTypeProjection,
+    identity: *const [32]u8,
+    statement: CIR.Statement.Idx,
+) bool {
+    if (!std.mem.eql(u8, projection.source_identity, identity)) return false;
+    const type_name = typeDeclName(projection.source_env, statement) orelse return false;
+    return statementBelongsToProjection(projection.source_env, projection, statement, type_name);
+}
+
+fn isUnderExposedName(exposed_names: *const std.StringHashMapUnmanaged(void), name: []const u8) bool {
+    const root_name = if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
+    return exposed_names.contains(root_name);
+}
+
 /// Filter entries in a type module to only include the main type and its children.
 ///
 /// In a type module (e.g. `Color.roc`), only the entry whose name matches the
-/// module name is public. All other top-level entries — helper functions, internal
-/// types, etc. — are private to the module and excluded from documentation.
+/// module name is public. All other top-level entries—helper functions, internal
+/// types, etc.—are private to the module and excluded from documentation.
 /// The main type entry's children (methods defined inside `Color := [...].{...}`)
 /// are preserved as nested entries.
 fn filterTypeModuleEntries(
@@ -468,7 +876,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
     const bi = builtin_idx orelse return;
     const builtin_children = entries_list.items[bi].children;
 
-    // Process each child — move it under its proper parent
+    // Process each child—move it under its proper parent
     for (builtin_children) |child| {
         try reparentDottedChild(gpa, entries_list, child);
     }
@@ -664,10 +1072,59 @@ fn reparentDottedChildInto(
 
 // --- Internal helpers ---
 
+fn defEntryName(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?[]const u8 {
+    const def = module_env.store.getDef(def_idx);
+    return switch (module_env.store.getPattern(def.pattern)) {
+        .assign => |assign| module_env.getIdentText(assign.ident),
+        .nominal => |nominal| switch (module_env.store.getStatement(nominal.nominal_type_decl)) {
+            .s_nominal_decl => |decl| module_env.getIdentText(module_env.store.getTypeHeader(decl.header).relative_name),
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_alias_decl,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => null,
+        },
+        .as,
+        .applied_tag,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => null,
+    };
+}
+
 fn extractDefEntry(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     local_module_path: []const u8,
+    reference_routing: PublicReferenceRouting,
     def_idx: CIR.Def.Idx,
     source: []const u8,
     line_index: LineIndex,
@@ -692,7 +1149,7 @@ fn extractDefEntry(
             // is already available in CIR.
             const type_sig: ?*const DocType = blk: {
                 if (def.annotation) |anno_idx| {
-                    break :blk try extractAnnotationAsDocType(gpa, module_env, local_module_path, anno_idx);
+                    break :blk try extractAnnotationAsDocType(gpa, module_env, local_module_path, reference_routing, anno_idx);
                 }
 
                 const def_var = ModuleEnv.varFrom(def_idx);
@@ -701,6 +1158,8 @@ fn extractDefEntry(
                     gpa,
                     &module_env.types,
                     module_env,
+                    local_module_path,
+                    reference_routing,
                     def_var,
                 );
             };
@@ -738,7 +1197,7 @@ fn extractDefEntry(
                     const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
                     errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                    const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, decl.anno);
+                    const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, reference_routing, decl.anno);
                     errdefer if (type_sig) |s| {
                         s.deinit(gpa);
                         gpa.destroy(s);
@@ -761,10 +1220,46 @@ fn extractDefEntry(
                         .doc_comment_start_line = if (doc_extract) |d| d.start_line else 0,
                     };
                 },
-                else => return null,
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_alias_decl,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => return null,
             }
         },
-        else => return null,
+        .as,
+        .applied_tag,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => return null,
     }
 }
 
@@ -795,17 +1290,11 @@ fn extractNominalChildren(
     def: CIR.Def,
 ) Allocator.Error![]DocModel.DocEntry {
     const expr = module_env.store.getExpr(def.expr);
-    switch (expr) {
-        .e_nominal => |nom| {
-            const backing = module_env.store.getExpr(nom.backing_expr);
-            switch (backing) {
-                .e_record => |rec| {
-                    return try extractRecordChildren(gpa, module_env, rec.fields);
-                },
-                else => {},
-            }
-        },
-        else => {},
+    if (std.meta.activeTag(expr) == .e_nominal) {
+        const backing = module_env.store.getExpr(expr.e_nominal.backing_expr);
+        if (std.meta.activeTag(backing) == .e_record) {
+            return try extractRecordChildren(gpa, module_env, backing.e_record.fields);
+        }
     }
     return try gpa.alloc(DocModel.DocEntry, 0);
 }
@@ -849,22 +1338,24 @@ fn extractDeclTypeSig(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     local_module_path: []const u8,
+    reference_routing: PublicReferenceRouting,
     anno_idx: CIR.TypeAnno.Idx,
 ) Allocator.Error!?*const DocType {
     // Extract the backing type from the CIR annotation. The inferred type for a
     // nominal resolves to the nominal itself, so we use the annotation instead.
     // DocEntry.writeToSExpr generates the declaration prefix from kind + name.
-    return try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, anno_idx);
+    return try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, anno_idx);
 }
 
 fn extractAnnotationAsDocType(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     local_module_path: []const u8,
+    reference_routing: PublicReferenceRouting,
     annotation_idx: CIR.Annotation.Idx,
 ) Allocator.Error!?*const DocType {
     const annotation = module_env.store.getAnnotation(annotation_idx);
-    const base_type = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, annotation.anno) orelse return null;
+    const base_type = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, annotation.anno) orelse return null;
     var base_type_moved = false;
     errdefer if (!base_type_moved) {
         base_type.deinit(gpa);
@@ -872,14 +1363,25 @@ fn extractAnnotationAsDocType(
     };
 
     const where_span = annotation.where orelse return base_type;
+    const wrapped = try wrapInWhereClause(gpa, module_env, local_module_path, reference_routing, base_type, where_span) orelse return base_type;
+    base_type_moved = true;
+    return wrapped;
+}
+
+/// Wrap a type in the constraints of a where clause. Returns null when the
+/// clause contributes nothing renderable, leaving ownership of `base_type` with
+/// the caller.
+fn wrapInWhereClause(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    local_module_path: []const u8,
+    reference_routing: PublicReferenceRouting,
+    base_type: *const DocType,
+    where_span: CIR.WhereClause.Span,
+) Allocator.Error!?*const DocType {
     var constraints = std.ArrayList(DocType.Constraint).empty;
     defer {
-        for (constraints.items) |*constraint| {
-            constraint.signature.deinit(gpa);
-            gpa.destroy(constraint.signature);
-            gpa.free(constraint.type_var);
-            gpa.free(constraint.method_name);
-        }
+        for (constraints.items) |constraint| constraint.deinit(gpa);
         constraints.deinit(gpa);
     }
 
@@ -887,30 +1389,25 @@ fn extractAnnotationAsDocType(
         const where_clause = module_env.store.getWhereClause(where_idx);
         switch (where_clause) {
             .w_method => |method| {
-                const constraint = try extractWhereMethodConstraint(gpa, module_env, local_module_path, method);
-                errdefer {
-                    constraint.signature.deinit(gpa);
-                    gpa.destroy(constraint.signature);
-                    gpa.free(constraint.type_var);
-                    gpa.free(constraint.method_name);
-                }
+                const constraint = try extractWhereMethodConstraint(gpa, module_env, local_module_path, reference_routing, method);
+                errdefer constraint.deinit(gpa);
                 try constraints.append(gpa, constraint);
             },
-            .w_alias, .w_malformed => {},
+            .w_alias => |alias| {
+                const constraint = try extractWhereAliasConstraint(gpa, module_env, local_module_path, reference_routing, alias) orelse continue;
+                errdefer constraint.deinit(gpa);
+                try constraints.append(gpa, constraint);
+            },
+            .w_malformed => {},
         }
     }
 
-    if (constraints.items.len == 0) return base_type;
+    if (constraints.items.len == 0) return null;
 
     const owned_constraints = try gpa.alloc(DocType.Constraint, constraints.items.len);
     var constraints_moved = false;
     errdefer if (!constraints_moved) {
-        for (owned_constraints) |*constraint| {
-            constraint.signature.deinit(gpa);
-            gpa.destroy(constraint.signature);
-            gpa.free(constraint.type_var);
-            gpa.free(constraint.method_name);
-        }
+        for (owned_constraints) |constraint| constraint.deinit(gpa);
         gpa.free(owned_constraints);
     };
     @memcpy(owned_constraints, constraints.items);
@@ -921,15 +1418,33 @@ fn extractAnnotationAsDocType(
         .constraints = owned_constraints,
         .layout = sourceWhereClauseLayout(module_env, where_span),
     } });
-    base_type_moved = true;
     constraints_moved = true;
     return wrapped;
+}
+
+fn extractWhereAliasConstraint(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    local_module_path: []const u8,
+    reference_routing: PublicReferenceRouting,
+    alias: @TypeOf(@as(CIR.WhereClause, undefined).w_alias),
+) Allocator.Error!?DocType.Constraint {
+    const type_var = try extractWhereTypeVarName(gpa, module_env, alias.var_);
+    errdefer gpa.free(type_var);
+
+    const reference = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, alias.alias) orelse {
+        gpa.free(type_var);
+        return null;
+    };
+
+    return .{ .where_alias = .{ .type_var = type_var, .alias = reference } };
 }
 
 fn extractWhereMethodConstraint(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     local_module_path: []const u8,
+    reference_routing: PublicReferenceRouting,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
 ) Allocator.Error!DocType.Constraint {
     const type_var = try extractWhereTypeVarName(gpa, module_env, method.var_);
@@ -938,23 +1453,24 @@ fn extractWhereMethodConstraint(
     const method_name = try gpa.dupe(u8, module_env.getIdentText(method.method_name));
     errdefer gpa.free(method_name);
 
-    const signature = try extractWhereMethodSignature(gpa, module_env, local_module_path, method);
+    const signature = try extractWhereMethodSignature(gpa, module_env, local_module_path, reference_routing, method);
     errdefer {
         signature.deinit(gpa);
         gpa.destroy(signature);
     }
 
-    return .{
+    return .{ .method = .{
         .type_var = type_var,
         .method_name = method_name,
         .signature = signature,
-    };
+    } };
 }
 
 fn extractWhereMethodSignature(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     local_module_path: []const u8,
+    reference_routing: PublicReferenceRouting,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
 ) Allocator.Error!*const DocType {
     const args_slice = module_env.store.sliceTypeAnnos(method.args);
@@ -970,12 +1486,12 @@ fn extractWhereMethodSignature(
     };
 
     for (args_slice) |arg_idx| {
-        args[args_len] = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, arg_idx) orelse
+        args[args_len] = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, arg_idx) orelse
             try allocDocType(gpa, .@"error");
         args_len += 1;
     }
 
-    const ret = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, method.ret) orelse
+    const ret = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, reference_routing, method.ret) orelse
         try allocDocType(gpa, .@"error");
     var ret_moved = false;
     errdefer if (!ret_moved) {
@@ -1003,7 +1519,17 @@ fn extractWhereTypeVarName(
         switch (module_env.store.getTypeAnno(current)) {
             .rigid_var => |rv| return try gpa.dupe(u8, module_env.getIdentText(rv.name)),
             .rigid_var_lookup => |rv_lookup| current = rv_lookup.ref,
-            else => return try gpa.dupe(u8, "?"),
+            .apply,
+            .underscore,
+            .lookup,
+            .tag_union,
+            .tag,
+            .@"fn",
+            .tuple,
+            .record,
+            .parens,
+            .malformed,
+            => return try gpa.dupe(u8, "?"),
         }
     }
 }
@@ -1123,18 +1649,39 @@ fn sourceTypeLayout(module_env: *const ModuleEnv, anno_idx: CIR.TypeAnno.Idx) Do
     return sourceCollectionLayout(module_env, module_env.store.getTypeAnnoRegion(anno_idx));
 }
 
+/// The trimmed source snippet of a defaulted field's default expression
+/// (`?? <here>`), duped into an owned slice, or null when the region yields no
+/// text—in which case docs render `?? …` (mirroring TypeWriter's fallback).
+fn defaultSourceSnippet(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    default_idx: CIR.Expr.Idx,
+) Allocator.Error!?[]const u8 {
+    const source = module_env.getSourceAll();
+    const region = module_env.store.getExprRegion(default_idx);
+    const start: usize = @min(region.start.offset, source.len);
+    const end: usize = @min(region.end.offset, source.len);
+    if (start >= end) return null;
+    const snippet = std.mem.trim(u8, source[start..end], &std.ascii.whitespace);
+    if (snippet.len == 0) return null;
+    return try gpa.dupe(u8, snippet);
+}
+
 /// Extract a CIR TypeAnno as a structured DocType.
 fn extractTypeAnnoAsDocType(
     gpa: Allocator,
     module_env: *const ModuleEnv,
     local_module_path: []const u8,
+    reference_routing: PublicReferenceRouting,
     type_anno_idx: CIR.TypeAnno.Idx,
 ) Allocator.Error!?*const DocType {
     const BuildFrame = union(enum) {
         visit: CIR.TypeAnno.Idx,
         malformed_tag,
         finish_apply: struct {
+            /// Owned until transferred to the resulting DocType.
             name: []const u8,
+            /// Owned until transferred to the resulting DocType.
             module_path: []const u8,
             arg_count: usize,
             layout: DocType.Layout,
@@ -1191,6 +1738,9 @@ fn extractTypeAnnoAsDocType(
         fn cleanupFields(allocator: Allocator, fields: []const DocType.Field) void {
             for (fields) |field| {
                 allocator.free(field.name);
+                if (field.kind == .defaulted) {
+                    if (field.kind.defaulted) |snippet| allocator.free(snippet);
+                }
                 field.type.deinit(allocator);
                 allocator.destroy(field.type);
             }
@@ -1211,6 +1761,20 @@ fn extractTypeAnnoAsDocType(
 
     var frames = std.ArrayList(BuildFrame).empty;
     defer frames.deinit(gpa);
+    errdefer for (frames.items) |pending| switch (pending) {
+        .finish_apply => |finish| {
+            gpa.free(finish.name);
+            gpa.free(finish.module_path);
+        },
+        .visit,
+        .malformed_tag,
+        .finish_tag,
+        .finish_tag_union,
+        .finish_tuple,
+        .finish_record,
+        .finish_fn,
+        => {},
+    };
 
     var results = std.ArrayList(*const DocType).empty;
     defer results.deinit(gpa);
@@ -1224,20 +1788,34 @@ fn extractTypeAnnoAsDocType(
                 switch (anno) {
                     .apply => |a| {
                         const args_slice = module_env.store.sliceTypeAnnos(a.args);
-                        const name = module_env.getIdentText(a.name);
-                        const module_path = resolveModulePathFromBase(module_env, local_module_path, a.base);
+                        const display = try annotatedTypeReferenceDisplay(
+                            gpa,
+                            module_env,
+                            local_module_path,
+                            reference_routing,
+                            a.base,
+                            module_env.getIdentText(a.name),
+                        );
+                        var display_moved = false;
+                        errdefer if (!display_moved) {
+                            gpa.free(display.module_path);
+                            gpa.free(display.type_name);
+                        };
                         if (args_slice.len == 0) {
-                            try Builder.pushResult(&results, gpa, try allocDocType(gpa, .{ .type_ref = .{
-                                .module_path = try gpa.dupe(u8, module_path),
-                                .type_name = try gpa.dupe(u8, name),
-                            } }));
+                            const reference = try allocDocType(gpa, .{ .type_ref = .{
+                                .module_path = display.module_path,
+                                .type_name = display.type_name,
+                            } });
+                            display_moved = true;
+                            try Builder.pushResult(&results, gpa, reference);
                         } else {
                             try frames.append(gpa, .{ .finish_apply = .{
-                                .name = name,
-                                .module_path = module_path,
+                                .name = display.type_name,
+                                .module_path = display.module_path,
                                 .arg_count = args_slice.len,
                                 .layout = sourceTypeLayout(module_env, idx),
                             } });
+                            display_moved = true;
                             try Builder.pushVisitsReversed(&frames, gpa, args_slice);
                         }
                     },
@@ -1253,12 +1831,25 @@ fn extractTypeAnnoAsDocType(
                         try Builder.pushResult(&results, gpa, try allocDocType(gpa, .wildcard));
                     },
                     .lookup => |t| {
-                        const name = module_env.getIdentText(t.name);
-                        const module_path = resolveModulePathFromBase(module_env, local_module_path, t.base);
-                        try Builder.pushResult(&results, gpa, try allocDocType(gpa, .{ .type_ref = .{
-                            .module_path = try gpa.dupe(u8, module_path),
-                            .type_name = try gpa.dupe(u8, name),
-                        } }));
+                        const display = try annotatedTypeReferenceDisplay(
+                            gpa,
+                            module_env,
+                            local_module_path,
+                            reference_routing,
+                            t.base,
+                            module_env.getIdentText(t.name),
+                        );
+                        var display_moved = false;
+                        errdefer if (!display_moved) {
+                            gpa.free(display.module_path);
+                            gpa.free(display.type_name);
+                        };
+                        const reference = try allocDocType(gpa, .{ .type_ref = .{
+                            .module_path = display.module_path,
+                            .type_name = display.type_name,
+                        } });
+                        display_moved = true;
+                        try Builder.pushResult(&results, gpa, reference);
                     },
                     .tag_union => |tu| {
                         const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
@@ -1286,7 +1877,18 @@ fn extractTypeAnnoAsDocType(
                                     } });
                                     try Builder.pushVisitsReversed(&frames, gpa, tag_args_slice);
                                 },
-                                else => {
+                                .apply,
+                                .rigid_var,
+                                .rigid_var_lookup,
+                                .underscore,
+                                .lookup,
+                                .tag_union,
+                                .@"fn",
+                                .tuple,
+                                .record,
+                                .parens,
+                                .malformed,
+                                => {
                                     try frames.append(gpa, .malformed_tag);
                                 },
                             }
@@ -1325,6 +1927,11 @@ fn extractTypeAnnoAsDocType(
                         while (i > 0) {
                             i -= 1;
                             const field = module_env.store.getAnnoRecordField(fields_slice[i]);
+                            // Optional (`name ?: Type`) and defaulted
+                            // (`name : Type ?? default`) fields both carry a
+                            // value type; the declared kind is threaded through
+                            // `finish_record` below. Every field contributes
+                            // exactly one type visit so results stay aligned.
                             try frames.append(gpa, .{ .visit = field.ty });
                         }
                     },
@@ -1377,6 +1984,11 @@ fn extractTypeAnnoAsDocType(
                 try Builder.pushResult(&results, gpa, single_tag);
             },
             .finish_apply => |finish| {
+                var display_moved = false;
+                errdefer if (!display_moved) {
+                    gpa.free(finish.name);
+                    gpa.free(finish.module_path);
+                };
                 std.debug.assert(results.items.len >= finish.arg_count);
                 const start = results.items.len - finish.arg_count;
                 const args = try gpa.alloc(*const DocType, finish.arg_count);
@@ -1389,9 +2001,10 @@ fn extractTypeAnnoAsDocType(
                 results.shrinkRetainingCapacity(start);
 
                 const constructor = try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = try gpa.dupe(u8, finish.module_path),
-                    .type_name = try gpa.dupe(u8, finish.name),
+                    .module_path = finish.module_path,
+                    .type_name = finish.name,
                 } });
+                display_moved = true;
                 var constructor_moved = false;
                 errdefer if (!constructor_moved) {
                     constructor.deinit(gpa);
@@ -1478,7 +2091,16 @@ fn extractTypeAnnoAsDocType(
                             tags_len += 1;
                             gpa.free(tu.tags);
                         },
-                        else => unreachable,
+                        .type_ref,
+                        .type_var,
+                        .function,
+                        .record,
+                        .tuple,
+                        .apply,
+                        .where_clause,
+                        .wildcard,
+                        .@"error",
+                        => unreachable,
                     }
                     gpa.destroy(single_tag);
                 }
@@ -1530,16 +2152,35 @@ fn extractTypeAnnoAsDocType(
                 const start = results.items.len - finish.fields.len;
                 var field_names = try gpa.alloc([]const u8, finish.fields.len);
                 defer gpa.free(field_names);
+                var field_kinds = try gpa.alloc(DocType.Field.Kind, finish.fields.len);
+                defer gpa.free(field_kinds);
                 var field_names_len: usize = 0;
                 var field_names_moved = false;
                 errdefer if (!field_names_moved) {
                     for (field_names[0..field_names_len]) |name| {
                         gpa.free(name);
                     }
+                    for (field_kinds[0..field_names_len]) |kind| {
+                        if (kind == .defaulted) {
+                            if (kind.defaulted) |snippet| gpa.free(snippet);
+                        }
+                    }
                 };
                 for (finish.fields) |field_idx| {
                     const field = module_env.store.getAnnoRecordField(field_idx);
+                    // A field is optional (`?:`), defaulted (`?? default`), or a
+                    // plain required field (mutually exclusive at can time).
+                    const kind: DocType.Field.Kind = if (field.is_optional)
+                        .optional
+                    else if (field.default_value) |default_idx|
+                        .{ .defaulted = try defaultSourceSnippet(gpa, module_env, default_idx) }
+                    else
+                        .required;
+                    errdefer if (kind == .defaulted) {
+                        if (kind.defaulted) |snippet| gpa.free(snippet);
+                    };
                     field_names[field_names_len] = try gpa.dupe(u8, module_env.getIdentText(field.name));
+                    field_kinds[field_names_len] = kind;
                     field_names_len += 1;
                 }
 
@@ -1551,10 +2192,11 @@ fn extractTypeAnnoAsDocType(
                     gpa.free(fields);
                 };
 
-                for (field_names, 0..) |field_name, i| {
+                for (field_names, field_kinds, 0..) |field_name, field_kind, i| {
                     fields[i] = .{
                         .name = field_name,
                         .type = results.items[start + i],
+                        .kind = field_kind,
                     };
                     fields_len += 1;
                 }
@@ -1621,17 +2263,27 @@ const ExtractContext = struct {
     gpa: Allocator,
     types: *const TypeStore,
     env: *const ModuleEnv,
+    local_module_path: []const u8,
+    reference_routing: PublicReferenceRouting,
     idents: *const Ident.Store,
     seen: std.ArrayList(Var),
     constraints_list: std.ArrayList(ConstraintInfo),
     flex_names: std.AutoHashMap(Var, []const u8),
     next_name_idx: u32,
 
-    fn init(gpa: Allocator, types: *const TypeStore, env: *const ModuleEnv) ExtractContext {
+    fn init(
+        gpa: Allocator,
+        types: *const TypeStore,
+        env: *const ModuleEnv,
+        local_module_path: []const u8,
+        reference_routing: PublicReferenceRouting,
+    ) ExtractContext {
         return .{
             .gpa = gpa,
             .types = types,
             .env = env,
+            .local_module_path = local_module_path,
+            .reference_routing = reference_routing,
             .idents = env.getIdentStoreConst(),
             .seen = std.ArrayList(Var).empty,
             .constraints_list = std.ArrayList(ConstraintInfo).empty,
@@ -1688,9 +2340,11 @@ fn extractDocType(
     gpa: Allocator,
     types: *const TypeStore,
     env: *const ModuleEnv,
+    local_module_path: []const u8,
+    reference_routing: PublicReferenceRouting,
     var_: Var,
 ) ExtractError!?*const DocType {
-    var ctx = ExtractContext.init(gpa, types, env);
+    var ctx = ExtractContext.init(gpa, types, env, local_module_path, reference_routing);
     defer ctx.deinit();
 
     const base_type = try extractDocTypeInner(&ctx, var_);
@@ -1699,14 +2353,11 @@ fn extractDocType(
     // If there are constraints, wrap in a where clause
     if (ctx.constraints_list.items.len > 0) {
         // Deduplicate constraints by (dispatcher_var_name, fn_name)
+        // A solved type's constraints are always method constraints: where
+        // aliases are expanded during checking.
         var unique_constraints = std.ArrayList(DocType.Constraint).empty;
         defer {
-            for (unique_constraints.items) |*c| {
-                gpa.free(c.type_var);
-                gpa.free(c.method_name);
-                c.signature.deinit(gpa);
-                gpa.destroy(c.signature);
-            }
+            for (unique_constraints.items) |c| c.deinit(gpa);
             unique_constraints.deinit(gpa);
         }
 
@@ -1714,8 +2365,8 @@ fn extractDocType(
             // Check for duplicate
             var is_dup = false;
             for (unique_constraints.items) |existing| {
-                if (std.mem.eql(u8, existing.type_var, info.dispatcher_name) and
-                    std.mem.eql(u8, existing.method_name, info.fn_name_text))
+                if (std.mem.eql(u8, existing.method.type_var, info.dispatcher_name) and
+                    std.mem.eql(u8, existing.method.method_name, info.fn_name_text))
                 {
                     is_dup = true;
                     break;
@@ -1725,25 +2376,25 @@ fn extractDocType(
 
             // Extract the constraint function's type using a fresh context
             // to avoid cycles with the main type's seen list.
-            var fn_ctx = ExtractContext.init(gpa, types, env);
+            var fn_ctx = ExtractContext.init(gpa, types, env, local_module_path, reference_routing);
             defer fn_ctx.deinit();
 
             const fn_type = try extractDocTypeInner(&fn_ctx, info.fn_var) orelse
                 try allocDocType(gpa, .@"error");
 
-            try unique_constraints.append(gpa, .{
+            try unique_constraints.append(gpa, .{ .method = .{
                 .type_var = try gpa.dupe(u8, info.dispatcher_name),
                 .method_name = try gpa.dupe(u8, info.fn_name_text),
                 .signature = fn_type,
-            });
+            } });
         }
 
         // Sort constraints alphabetically by (type_var, method_name)
         std.mem.sort(DocType.Constraint, unique_constraints.items, {}, struct {
             fn lessThan(_: void, a: DocType.Constraint, b: DocType.Constraint) bool {
-                const type_cmp = std.mem.order(u8, a.type_var, b.type_var);
+                const type_cmp = std.mem.order(u8, a.method.type_var, b.method.type_var);
                 if (type_cmp != .eq) return type_cmp == .lt;
-                return std.mem.order(u8, a.method_name, b.method_name) == .lt;
+                return std.mem.order(u8, a.method.method_name, b.method.method_name) == .lt;
             }
         }.lessThan);
 
@@ -1769,6 +2420,51 @@ const ConstraintInfo = struct {
     fn_name_text: []const u8, // borrowed from idents store
     fn_var: Var,
 };
+
+const TypeReferenceDisplay = struct {
+    /// Owned by the resulting DocType.
+    module_path: []const u8,
+    /// Owned by the resulting DocType.
+    type_name: []const u8,
+};
+
+fn inferredTypeReferenceDisplay(
+    ctx: *const ExtractContext,
+    origin_module: base.ModuleIdentity.Idx,
+    source_decl: ?u32,
+    origin_text: []const u8,
+    ident_text: []const u8,
+) ExtractError!TypeReferenceDisplay {
+    if (source_decl) |raw_statement| {
+        const origin_identity = ctx.env.moduleIdentityHash(origin_module);
+        const statement: CIR.Statement.Idx = @enumFromInt(raw_statement);
+        if (selectPublicProjection(
+            ctx.reference_routing.current,
+            ctx.reference_routing.all,
+            origin_identity,
+            statement,
+        )) |projection| {
+            const source_name = typeDeclName(projection.source_env, statement) orelse unreachable;
+            const module_path = try std.fmt.allocPrint(
+                ctx.gpa,
+                "{s}.{s}",
+                .{ projection.package_name, projection.public_name },
+            );
+            errdefer ctx.gpa.free(module_path);
+            return .{
+                .module_path = module_path,
+                .type_name = try projectedEntryName(ctx.gpa, projection.source_env, projection, source_name),
+            };
+        }
+    }
+
+    const module_path = try ctx.gpa.dupe(u8, getModulePath(origin_text));
+    errdefer ctx.gpa.free(module_path);
+    return .{
+        .module_path = module_path,
+        .type_name = try ctx.gpa.dupe(u8, getDisplayName(origin_text, ident_text)),
+    };
+}
 
 fn extractDocTypeInner(
     ctx: *ExtractContext,
@@ -1866,18 +2562,27 @@ fn extractDocTypeInner(
         .alias => |alias| {
             const origin_text = ctx.env.moduleIdentityDisplayText(alias.origin_module);
             const ident_text = idents.getText(alias.ident.ident_idx);
-            const display_name = getDisplayName(origin_text, ident_text);
-
-            // Get module path for the type reference
-            const module_path = getModulePath(origin_text);
+            const display = try inferredTypeReferenceDisplay(
+                ctx,
+                alias.origin_module,
+                alias.source_decl.toOptional(),
+                origin_text,
+                ident_text,
+            );
+            var display_moved = false;
+            errdefer if (!display_moved) {
+                gpa.free(display.module_path);
+                gpa.free(display.type_name);
+            };
 
             var args_iter = types.iterAliasArgs(alias);
             if (args_iter.count() > 0) {
                 // Type application
                 const constructor = try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = try gpa.dupe(u8, module_path),
-                    .type_name = try gpa.dupe(u8, display_name),
+                    .module_path = display.module_path,
+                    .type_name = display.type_name,
                 } });
+                display_moved = true;
                 errdefer {
                     constructor.deinit(gpa);
                     gpa.destroy(constructor);
@@ -1901,13 +2606,19 @@ fn extractDocTypeInner(
             } else {
                 // Simple type reference
                 return try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = try gpa.dupe(u8, module_path),
-                    .type_name = try gpa.dupe(u8, display_name),
+                    .module_path = display.module_path,
+                    .type_name = display.type_name,
                 } });
             }
         },
         .structure => |flat_type| {
             return try extractFlatType(ctx, flat_type);
+        },
+        .field_presence => {
+            // A presence variable is never a documentable type in its own
+            // right; it only appears on a record field's presence axis. Render
+            // as the error type, consistent with `.err`.
+            return try allocDocType(gpa, .@"error");
         },
         .err => {
             return try allocDocType(gpa, .@"error");
@@ -1998,15 +2709,26 @@ fn extractNominalType(
     const idents = ctx.idents;
     const origin_text = ctx.env.moduleIdentityDisplayText(nominal.origin_module);
     const ident_text = idents.getText(nominal.ident.ident_idx);
-    const display_name = getDisplayName(origin_text, ident_text);
-    const module_path = getModulePath(origin_text);
+    const display = try inferredTypeReferenceDisplay(
+        ctx,
+        nominal.origin_module,
+        nominal.sourceDeclOptional(),
+        origin_text,
+        ident_text,
+    );
+    var display_moved = false;
+    errdefer if (!display_moved) {
+        gpa.free(display.module_path);
+        gpa.free(display.type_name);
+    };
 
     var args_iter = ctx.types.iterNominalArgs(nominal);
     if (args_iter.count() > 0) {
         const constructor = try allocDocType(gpa, .{ .type_ref = .{
-            .module_path = try gpa.dupe(u8, module_path),
-            .type_name = try gpa.dupe(u8, display_name),
+            .module_path = display.module_path,
+            .type_name = display.type_name,
         } });
+        display_moved = true;
         errdefer {
             constructor.deinit(gpa);
             gpa.destroy(constructor);
@@ -2029,10 +2751,33 @@ fn extractNominalType(
         } });
     } else {
         return try allocDocType(gpa, .{ .type_ref = .{
-            .module_path = try gpa.dupe(u8, module_path),
-            .type_name = try gpa.dupe(u8, display_name),
+            .module_path = display.module_path,
+            .type_name = display.type_name,
         } });
     }
+}
+
+/// The documentation kind of a solved record field. A field whose kind solved
+/// `optional` documents as `name ?: Type`. A required field, a defaulted field
+/// (a required slot at runtime—rendering its default value from the solved
+/// type is deferred, design.md "Defaulted Fields"), or a still-flex kind (flex
+/// defaults to required, design.md "Field Kinds (All-Dynamic Optional Fields)")
+/// all document as plain required fields. Mirrors TypeWriter's
+/// `writeRecordFieldSeparator`.
+fn docFieldKind(
+    types: *const TypeStore,
+    presence: types_mod.RecordField.Presence,
+) DocType.Field.Kind {
+    return switch (presence.decode()) {
+        .required => .required,
+        .unknown => |unknown| switch (types.resolveVar(unknown.presence).desc.content) {
+            .field_presence => |fp| switch (fp) {
+                .required, .defaulted => .required,
+                .optional => .optional,
+            },
+            .flex, .rigid, .alias, .structure, .err => .required,
+        },
+    };
 }
 
 fn extractRecord(
@@ -2049,8 +2794,8 @@ fn extractRecord(
 
     // Get fields from the initial record
     const initial_slice = types.getRecordFieldsSlice(record.fields);
-    for (initial_slice.items(.name), initial_slice.items(.var_)) |name, field_var| {
-        try all_fields.append(gpa, .{ .name = name, .var_ = field_var });
+    for (initial_slice.items(.name), initial_slice.items(.presence)) |name, presence| {
+        try all_fields.append(gpa, .{ .name = name, .presence = presence });
     }
 
     // Follow the extension chain
@@ -2085,7 +2830,7 @@ fn extractRecord(
                 is_open = true;
                 if (ident_text) |t| {
                     if (t.len == 0 or t[0] == '#') {
-                        // Synthetic anonymous-open name — render as `..` with no name.
+                        // Synthetic anonymous-open name—render as `..` with no name.
                     } else {
                         ext_doc_type = try allocDocType(gpa, .{ .type_var = try gpa.dupe(u8, t) });
                     }
@@ -2119,23 +2864,32 @@ fn extractRecord(
                 switch (ft) {
                     .record => |ext_record| {
                         const ext_slice = types.getRecordFieldsSlice(ext_record.fields);
-                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, field_var| {
-                            try all_fields.append(gpa, .{ .name = name, .var_ = field_var });
+                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
+                            try all_fields.append(gpa, .{ .name = name, .presence = presence });
                         }
                         ext = ext_record.ext;
                     },
                     .record_unbound => |ext_fields| {
                         const ext_slice = types.getRecordFieldsSlice(ext_fields);
-                        for (ext_slice.items(.name), ext_slice.items(.var_)) |name, field_var| {
-                            try all_fields.append(gpa, .{ .name = name, .var_ = field_var });
+                        for (ext_slice.items(.name), ext_slice.items(.presence)) |name, presence| {
+                            try all_fields.append(gpa, .{ .name = name, .presence = presence });
                         }
                         break;
                     },
                     .empty_record => break,
-                    else => break,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .tag_union,
+                    .empty_tag_union,
+                    => break,
                 }
             },
-            else => break,
+            // A presence variable can never be a record extension tail.
+            .field_presence => break,
+            .err => break,
         }
     }
 
@@ -2147,8 +2901,12 @@ fn extractRecord(
     for (all_fields.items, 0..) |field, i| {
         doc_fields[i] = .{
             .name = try gpa.dupe(u8, idents.getText(field.name)),
-            .type = try extractDocTypeInner(ctx, field.var_) orelse
+            // Every field carries a value type on the type axis, independent of
+            // the solved kind (design.md "Field Kinds"); the kind only selects
+            // the `:` / `?:` separator.
+            .type = try extractDocTypeInner(ctx, field.presence.typeVar()) orelse
                 try allocDocType(gpa, .@"error"),
+            .kind = docFieldKind(types, field.presence),
         };
     }
 
@@ -2177,13 +2935,17 @@ fn extractRecordUnbound(
 
     const slice = ctx.types.getRecordFieldsSlice(fields_range);
     const names = slice.items(.name);
-    const vars = slice.items(.var_);
+    const presences = slice.items(.presence);
     var fields = try gpa.alloc(DocType.Field, names.len);
-    for (names, vars, 0..) |name, field_var, i| {
+    for (names, presences, 0..) |name, presence, i| {
         fields[i] = .{
             .name = try gpa.dupe(u8, ctx.idents.getText(name)),
-            .type = try extractDocTypeInner(ctx, field_var) orelse
+            // Every field carries a value type on the type axis; the solved
+            // kind only selects the `:` / `?:` separator (design.md
+            // "Field Kinds").
+            .type = try extractDocTypeInner(ctx, presence.typeVar()) orelse
                 try allocDocType(gpa, .@"error"),
+            .kind = docFieldKind(ctx.types, presence),
         };
     }
 
@@ -2299,7 +3061,16 @@ fn extractTagUnion(
         },
         .structure => |ft| switch (ft) {
             .empty_tag_union => {}, // closed union
-            else => {
+            .record,
+            .record_unbound,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            => {
                 is_open = true;
                 ext_type = try extractDocTypeInner(ctx, tag_union.ext);
             },
@@ -2308,6 +3079,9 @@ fn extractTagUnion(
             is_open = true;
             ext_type = try extractDocTypeInner(ctx, tag_union.ext);
         },
+        // A presence variable is never a tag-union tail; treat it as a closed
+        // union like `.err`.
+        .field_presence => {},
         .err => {},
     }
 
@@ -2383,7 +3157,7 @@ fn convertModuleKind(kind: ModuleEnv.ModuleKind) DocModel.ModuleKind {
         .package => .package,
         .platform => .platform,
         .type_module => .type_module,
-        else => .app, // hosted and malformed modules are not documented as package modules
+        .hosted, .malformed => .app, // hosted and malformed modules are not documented as package modules
     };
 }
 

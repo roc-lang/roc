@@ -13,6 +13,56 @@ const CoreCtx = @import("ctx").CoreCtx;
 const unbundle = @import("unbundle");
 const Allocator = std.mem.Allocator;
 
+const InstallOs = enum { windows, macos, other };
+
+fn classifyInstallOs(os: std.Target.Os.Tag) InstallOs {
+    return switch (os) {
+        .windows => .windows,
+        .macos => .macos,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .linux,
+        .freebsd,
+        .openbsd,
+        .netbsd,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .other,
+    };
+}
+
 /// Manifest file recorded at the root of every install entry.
 pub const manifest_filename = "install.json";
 /// Directory holding the extracted bundle source within an entry.
@@ -23,7 +73,7 @@ pub const bin_dir_name = "bin";
 pub const manifest_format_version: u32 = 1;
 
 /// How a CLI source argument is interpreted. Classification is purely
-/// syntactic — no filesystem probing, and never a fallback from one
+/// syntactic—no filesystem probing, and never a fallback from one
 /// category to another.
 pub const SourceRefKind = enum {
     /// A filesystem path (anything that is neither a URL nor a valid shorthand).
@@ -124,9 +174,9 @@ pub fn installRootDir(roc_ctx: CoreCtx, allocator: Allocator) (Allocator.Error |
         }
     }
 
-    const home_env = switch (builtin.target.os.tag) {
+    const home_env = switch (classifyInstallOs(builtin.target.os.tag)) {
         .windows => "APPDATA",
-        else => "HOME",
+        .macos, .other => "HOME",
     };
     const home_dir = roc_ctx.getEnvVar(home_env, allocator) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -135,10 +185,10 @@ pub fn installRootDir(roc_ctx: CoreCtx, allocator: Allocator) (Allocator.Error |
     defer allocator.free(home_dir);
     if (home_dir.len == 0) return error.NoHomeDirectory;
 
-    return switch (builtin.target.os.tag) {
+    return switch (classifyInstallOs(builtin.target.os.tag)) {
         .windows => std.fs.path.join(allocator, &.{ home_dir, "Roc" }),
         .macos => std.fs.path.join(allocator, &.{ home_dir, "Library", "Application Support", "roc" }),
-        else => std.fs.path.join(allocator, &.{ home_dir, ".local", "share", "roc" }),
+        .other => std.fs.path.join(allocator, &.{ home_dir, ".local", "share", "roc" }),
     };
 }
 
@@ -186,10 +236,10 @@ pub fn entryPathsIn(allocator: Allocator, entry_dir: []const u8, shorthand: []co
         try std.fmt.allocPrint(allocator, "{s}.exe", .{shorthand})
     else
         shorthand;
-    const dylib_ext = switch (builtin.target.os.tag) {
+    const dylib_ext = switch (classifyInstallOs(builtin.target.os.tag)) {
         .windows => ".dll",
         .macos => ".dylib",
-        else => ".so",
+        .other => ".so",
     };
     const dylib_filename = try std.fmt.allocPrint(allocator, "{s}{s}", .{ shorthand, dylib_ext });
     return .{
@@ -225,12 +275,25 @@ pub const ParsedManifest = struct {
 };
 
 /// Parse and validate manifest JSON. Returns null when the bytes are not a
-/// valid manifest of the current format version — callers must treat that as
+/// valid manifest of the current format version—callers must treat that as
 /// a corrupt entry, never fall back to guessing.
 pub fn parseManifest(allocator: Allocator, bytes: []const u8) Allocator.Error!?ParsedManifest {
     const parsed = std.json.parseFromSlice(Manifest, allocator, bytes, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return null,
+        error.BufferUnderrun,
+        error.DuplicateField,
+        error.InvalidCharacter,
+        error.InvalidEnumTag,
+        error.InvalidNumber,
+        error.LengthMismatch,
+        error.MissingField,
+        error.Overflow,
+        error.SyntaxError,
+        error.UnexpectedEndOfInput,
+        error.UnexpectedToken,
+        error.UnknownField,
+        error.ValueTooLong,
+        => return null,
     };
     if (parsed.value.format_version != manifest_format_version or manifestKind(parsed.value) == null) {
         var owned = parsed;

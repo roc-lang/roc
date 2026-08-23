@@ -10,19 +10,16 @@ type=expr
 # EXPECTED
 MISSING METHOD - not_tag.md:1:1:1:8
 # PROBLEMS
+── ✗ missing method ───────────────────────────────────────────── not_tag.md:1:1
 
-┌────────────────┐
-│ MISSING METHOD ├─ This `not` method is being called on a value whose type ──┐
-└┬───────────────┘  doesn't have that method.                                 │
- │                                                                            │
- │  !(C(2))                                                                   │
- │  ‾‾‾‾‾‾‾                                                                   │
- └──────────────────────────────────────────────────────────── not_tag.md:1:1 ┘
+This not method is being called on a value whose type doesn't have that method.
 
-    The value's type, which does not have a method named `not`, is:
+!(C(2))
+^^^^^^^
 
-        [C(a), ..] where [a.from_numeral : Numeral -> Try(a,
-        [InvalidNumeral(Str)])]
+The value's type, which does not have a method named not, is:
+
+    [C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 # TOKENS
 ~~~zig

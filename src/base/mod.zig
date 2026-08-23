@@ -8,12 +8,22 @@ pub const Region = @import("Region.zig");
 pub const StringLiteral = @import("StringLiteral.zig");
 pub const LowLevel = @import("LowLevel.zig").LowLevel;
 pub const LowLevelBuiltins = @import("LowLevelBuiltins.zig");
+/// Structural rules for `LowLevel.rcEffect()` rows, enforced over the whole
+/// table by the comptime block below.
+pub const rc_effect_rules = @import("rc_effect_rules.zig");
+
+comptime {
+    rc_effect_rules.assertTableConforms();
+}
+
 pub const RegionInfo = @import("RegionInfo.zig");
 pub const SourceLoc = @import("source_loc.zig").SourceLoc;
 pub const Scratch = @import("Scratch.zig").Scratch;
 pub const parallel = @import("parallel.zig");
+pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
+pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
 pub const ModuleIdentity = @import("module_identity.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
@@ -36,11 +46,14 @@ pub const CommonEnv = @import("CommonEnv.zig");
 pub const source_utils = @import("source_utils.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
+pub const roc_version = @import("roc_version.zig");
 pub const doc_comment = @import("doc_comment.zig");
+/// Canonical byte encodings shared across compiler stages.
+pub const byte_encoding = @import("byte_encoding.zig");
 
 /// The default general-purpose allocator for the current target (fast, not leak-checking).
 /// Prefers libc's malloc (its ASan/Valgrind/LD_PRELOAD tooling, and on LLVM paths
-/// it's the allocator LLVM already uses) — except on musl, whose malloc is slow,
+/// it's the allocator LLVM already uses)—except on musl, whose malloc is slow,
 /// where smp_allocator wins. Falls back to smp_allocator without libc, and to
 /// wasm_allocator on freestanding.
 pub fn defaultGpa() std.mem.Allocator {
@@ -54,6 +67,7 @@ test {
     const module_path_mod = @import("module_path.zig");
     std.testing.refAllDecls(ident);
     std.testing.refAllDecls(module_path_mod);
+    std.testing.refAllDecls(@import("roc_version.zig"));
 }
 
 /// Whether a function calls itself.
@@ -130,7 +144,9 @@ pub const Numeral = union(enum) {
 };
 
 test "base tests" {
+    std.testing.refAllDecls(@import("byte_encoding.zig"));
     std.testing.refAllDecls(@import("CommonEnv.zig"));
+    std.testing.refAllDecls(@import("ConcurrentU64.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
@@ -139,12 +155,14 @@ test "base tests" {
     std.testing.refAllDecls(@import("parallel.zig"));
     std.testing.refAllDecls(@import("Region.zig"));
     std.testing.refAllDecls(@import("RegionInfo.zig"));
+    std.testing.refAllDecls(@import("rc_effect_rules.zig"));
     std.testing.refAllDecls(@import("safe_memory.zig"));
     std.testing.refAllDecls(@import("signal_handler.zig"));
     std.testing.refAllDecls(@import("Scratch.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));
     std.testing.refAllDecls(@import("SerialStringInterner.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));
+    std.testing.refAllDecls(@import("SpecializationStrategy.zig"));
     std.testing.refAllDecls(@import("elf_self_relocate.zig"));
     std.testing.refAllDecls(@import("source_utils.zig"));
     std.testing.refAllDecls(@import("stack_overflow.zig"));

@@ -10,6 +10,56 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
 
+const CacheOs = enum { windows, macos, other };
+
+fn cacheOs(os: std.Target.Os.Tag) CacheOs {
+    return switch (os) {
+        .windows => .windows,
+        .macos => .macos,
+        .freestanding,
+        .other,
+        .contiki,
+        .fuchsia,
+        .hermit,
+        .managarm,
+        .haiku,
+        .hurd,
+        .illumos,
+        .linux,
+        .plan9,
+        .rtems,
+        .serenity,
+        .dragonfly,
+        .freebsd,
+        .netbsd,
+        .openbsd,
+        .driverkit,
+        .ios,
+        .maccatalyst,
+        .tvos,
+        .visionos,
+        .watchos,
+        .uefi,
+        .@"3ds",
+        .ps3,
+        .ps4,
+        .ps5,
+        .psp,
+        .vita,
+        .emscripten,
+        .wasi,
+        .amdhsa,
+        .amdpal,
+        .cuda,
+        .mesa3d,
+        .nvcl,
+        .opencl,
+        .opengl,
+        .vulkan,
+        => .other,
+    };
+}
+
 /// Cache configuration constants
 pub const Constants = struct {
     /// Default cache directory name
@@ -66,7 +116,42 @@ pub const Constants = struct {
     /// 41: Encoding protocol names containers by Roc shape: list, tuple, record, dict.
     /// 42: Checked modules store explicitly rejected static-dispatch obligations.
     /// 43: Checked type stores persist representatives and structural union ranks.
-    pub const CACHE_VERSION = 43;
+    /// 45: Where-clause owners persist rooted annotation ownership semantics.
+    /// 46: Where alias declarations are their own statement kind.
+    /// 47: Type descriptors carry the static-dispatch rejection marker.
+    /// 48: Source imports retain parser-owned bindings and type-module owners
+    ///     instead of reconstructing them from normalized module identities.
+    /// 49: Associated lookups retain exact alias-resolution targets in CIR.
+    /// 50: Interned literal entries record maximum runtime backing alignment.
+    /// 51: Checked dispatch evidence and Boxy runtime metadata changed serialized compiler state.
+    /// 52: Optional + defaulted record fields: canonical record annotations
+    ///     carry field presence and default expressions, field-access paths
+    ///     keep source-ordered required/optional segments, type-store fields
+    ///     carry the static kind axis (required/optional/defaulted with a
+    ///     default identity; no `absent` state, `present` renamed
+    ///     `required`), and checked layouts include field kinds and archived
+    ///     defaults (design.md "Field Kinds", "Defaulted Fields").
+    /// 53: Generalized checked record fields retain presence-variable identity,
+    ///     and const record evidence retains optional source-value types.
+    /// 54: Compile-time root requests retain exact checked-root identity.
+    /// 55: Record constructors retain exact checker-selected omitted defaults.
+    /// 56: Record field presence uses an explicit sentinel representation.
+    /// 57: Field-default roots can own their literal-conversion evaluation.
+    /// 58: Checked iterator procedure identity includes List.iter_rev, the
+    ///     numeric to/until ranges, and the F32/F64 range helpers, with
+    ///     to/until carrying producer-specific representations distinct from
+    ///     the range helpers they do not delegate to.
+    /// 59: Range syntax produces Builtin.Num.Range values, range dispatch uses
+    ///     `_to` methods, and stored ranges mint iterator representations while
+    ///     numeric range hooks explicitly delegate to that representation.
+    /// 60: Checked modules retain explicit rank-1 binding-scheme identities.
+    /// 61: Static dispatch constraints no longer serialize checker-local expect regions.
+    /// 62: For-loop dispatch plans retain explicit iterator and step type variables.
+    /// 63: ModuleEnv retains canonicalization-selected top-level and value-binding definitions.
+    /// 64: Compile-time root selection rejects values containing callables.
+    /// 65: A hosted entry written without a module resolves to the platform
+    ///     module's own declaration.
+    pub const CACHE_VERSION = 65;
 };
 
 /// Configuration for the Roc cache system.
@@ -108,9 +193,9 @@ pub const CacheConfig = struct {
                 error.EnvironmentVariableMissing => {},
             }
             // Fall back to platform defaults
-            const home_env = switch (builtin.target.os.tag) {
+            const home_env = switch (cacheOs(builtin.target.os.tag)) {
                 .windows => "APPDATA",
-                else => "HOME",
+                .macos, .other => "HOME",
             };
 
             const home_dir = self.roc_ctx.getEnvVar(home_env, allocator) catch |home_err| switch (home_err) {
@@ -119,11 +204,10 @@ pub const CacheConfig = struct {
             };
             defer allocator.free(home_dir);
 
-            const cache_path = switch (builtin.target.os.tag) {
-                .linux => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
+            const cache_path = switch (cacheOs(builtin.target.os.tag)) {
                 .macos => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, "Library", "Caches", getCacheDirName() }),
                 .windows => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, getCacheDirName() }),
-                else => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
+                .other => try std.fs.path.join(allocator, &[_][]const u8{ home_dir, ".cache", getCacheDirName() }),
             };
 
             return cache_path;
@@ -183,6 +267,14 @@ pub const CacheConfig = struct {
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
+    }
+
+    /// Get the prepared Wasm host cache directory.
+    pub fn getWasmHostCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "wasm-host" });
     }
 
     /// Get the cache entries directory (alias for module cache dir).
@@ -259,20 +351,20 @@ pub const CacheStats = struct {
 /// Get the platform-specific cache directory name.
 /// Returns "roc" on Unix and "Roc" on Windows (matches Rust implementation).
 pub fn getCacheDirName() []const u8 {
-    return switch (builtin.target.os.tag) {
+    return switch (cacheOs(builtin.target.os.tag)) {
         .windows => "Roc",
-        else => "roc",
+        .macos, .other => "roc",
     };
 }
 
 /// Get the temporary directory for runtime executables.
 /// This is in the system temp dir, not the persistent cache.
 pub fn getTempDir(roc_ctx: CoreCtx, allocator: Allocator) Allocator.Error![]u8 {
-    const temp_base = switch (builtin.target.os.tag) {
+    const temp_base = switch (cacheOs(builtin.target.os.tag)) {
         .windows => roc_ctx.getEnvVar("TEMP", allocator) catch
             roc_ctx.getEnvVar("TMP", allocator) catch
             try allocator.dupe(u8, "C:\\Windows\\Temp"),
-        else => roc_ctx.getEnvVar("TMPDIR", allocator) catch
+        .macos, .other => roc_ctx.getEnvVar("TMPDIR", allocator) catch
             try allocator.dupe(u8, "/tmp"),
     };
     defer allocator.free(temp_base);

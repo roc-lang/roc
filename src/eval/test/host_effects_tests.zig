@@ -85,6 +85,28 @@ pub const tests = [_]TestCase{
         .crashed,
     ),
     exprTest(
+        "issue 9856: crash accepts multiline strings",
+        \\{
+        \\    crash
+        \\        \\This does not
+        \\        \\work.
+        \\}
+    ,
+        &.{crashed("This does not\nwork.")},
+        .crashed,
+    ),
+    exprTest(
+        "issue 9856: crash evaluates string interpolation",
+        \\{
+        \\    n : I64
+        \\    n = 42
+        \\    crash "runtime-built crash message long enough for heap storage: ${n.to_str()}"
+        \\}
+    ,
+        &.{crashed("runtime-built crash message long enough for heap storage: 42")},
+        .crashed,
+    ),
+    exprTest(
         "host effects: crash at end of block in if branch does not fire on untaken path",
         \\{
         \\    f : Dec -> Dec
@@ -971,6 +993,47 @@ pub const tests = [_]TestCase{
         \\    record = { left: items, right: items }
         \\    expect List.len(record.left) == 2
         \\    expect List.len(record.right) == 2
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    exprTestWithLiveAllocations(
+        "rc balance: List.set releases the displaced refcounted element",
+        \\{
+        \\    entries = [{ words: [1.U64, 2.U64, 3.U64] }]
+        \\    updated = List.set(entries, 0, { words: [] }) ?? []
+        \\    expect List.len(updated) == 1
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    exprTestWithLiveAllocations(
+        "rc balance: Dict update and escaped refcounted field are fully released",
+        \\{
+        \\    step = |model| {
+        \\        key = "hello"
+        \\        (entries, used_words) = match model.entries.get(key) {
+        \\            Ok(entry) => {
+        \\                refreshed = { ..entry, generation: model.generation }
+        \\                (model.entries.insert(key, refreshed), refreshed.words)
+        \\            }
+        \\            Err(_) => {
+        \\                entry = { words: [1.U64, 2.U64, 3.U64], generation: model.generation }
+        \\                (model.entries.insert(key, entry), entry.words)
+        \\            }
+        \\        }
+        \\        { entries, generation: model.generation + 1, used_words }
+        \\    }
+        \\    initial = { entries: Dict.empty(), generation: 0.U64, used_words: [] }
+        \\    first = step(initial)
+        \\    second = step(first)
+        \\    expect List.len(second.used_words) == 3
         \\    {}
         \\}
     ,

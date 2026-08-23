@@ -40,50 +40,44 @@ AMBIGUOUS FUNCTION TYPE - underscore_in_regular_annotations.md:28:22:28:24
 UNEXPECTED STATEMENT - underscore_in_regular_annotations.md:28:25:28:27
 UNUSED VARIABLE - underscore_in_regular_annotations.md:9:12:9:16
 # PROBLEMS
+── ✗ ambiguous function type ──────── underscore_in_regular_annotations.md:28:22
 
-┌─────────────────────────┐
-│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
-└┬────────────────────────┘  arrows need parentheses.                         │
- │                                                                            │
- │  transform : _a -> _b -> _b                                                │
- │                       ‾‾                                                   │
- └──────────────────────────────── underscore_in_regular_annotations.md:28:22 ┘
+I was parsing a function type, and multiple arrows need parentheses.
 
-    Use parentheses to say whether the function returns another function or
-    takes a function as an argument.
+transform : _a -> _b -> _b
+                     ^^
 
-    For example:
-        a -> (b -> c)
-        (a -> b) -> c
+Use parentheses to say whether the function returns another function or takes a
+function as an argument.
 
+For example:
+    a -> (b -> c)
+    (a -> b) -> c
 
-┌──────────────────────┐
-│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
-└┬─────────────────────┘  start a statement here.                             │
- │                                                                            │
- │  transform : _a -> _b -> _b                                                │
- │                          ‾‾                                                │
- └──────────────────────────────── underscore_in_regular_annotations.md:28:25 ┘
+── ✗ unexpected statement ─────────── underscore_in_regular_annotations.md:28:25
 
-    Statements can be declarations, type annotations, imports, expectations,
-    returns, crashes, loops, or expression statements inside a block.
+I was parsing a statement, and this token cannot start a statement here.
 
-    For example:
-        answer = 42
+transform : _a -> _b -> _b
+                        ^^
 
-    I found `_b` here.
+Statements can be declarations, type annotations, imports, expectations,
+returns, crashes, loops, or expression statements inside a block.
 
+For example:
+    answer = 42
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `list` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  process = |list| "processed"                                              │
- │             ‾‾‾‾                                                           │
- └───────────────────────────────── underscore_in_regular_annotations.md:9:12 ┘
+I found _b here.
 
-    If you don't need this variable, prefix it with an underscore like `_list`
-    to suppress this warning.
+── ● unused variable ───────────────── underscore_in_regular_annotations.md:9:12
+
+Variable list is defined here and then never used:
+
+process = |list| "processed"
+           ^^^^
+
+If you don't need this variable, prefix it with an underscore like _list to
+suppress this warning.
 
 # TOKENS
 ~~~zig
@@ -159,8 +153,9 @@ EndOfFile,
 				(args
 					(p-ident (raw "record")))
 				(e-field-access
-					(e-ident (raw "record"))
-					(e-ident (raw "other")))))
+					(receiver
+						(e-ident (raw "record")))
+					(segment (mode "required") (field "other")))))
 		(s-type-anno (name "handle_result")
 			(ty-fn
 				(ty-apply
@@ -292,10 +287,12 @@ transform = |_, b| b
 		(e-lambda
 			(args
 				(p-assign (ident "record")))
-			(e-field-access (field "other")
+			(e-field-access
 				(receiver
 					(e-lookup-local
-						(p-assign (ident "record"))))))
+						(p-assign (ident "record"))))
+				(segments
+					(segment (name "other") (mode "required")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record

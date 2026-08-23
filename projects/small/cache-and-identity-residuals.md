@@ -5,14 +5,14 @@
 The identity and cache-hardening work of July 2026 (centralized package
 identity, `owner_module` carried on checked named types, comptime
 serialization contracts) retired the large generators in this area. A
-July 11 audit of what survived found four small seams — each individually
+July 11 audit of what survived found four small seams—each individually
 minor, each the exact pattern that produced the last round of bugs, and
 each cheap to close while the context is fresh.
 
 1. **A name-text fallback in auto-import synthesis.**
    `getOrCreateAutoImportedTypeImport` (`src/canonicalize/Can.zig:787`)
    resolves a package-qualified type's source module through the
-   authoritative scope binding (`scopeLookupModule`) — PR #9902's fix —
+   authoritative scope binding (`scopeLookupModule`)—PR #9902's fix—
    but keeps an `else` arm that falls back to the raw alias text
    (`source_module_ident`) when the scope lookup misses. A scope miss
    means the binding does not exist; synthesizing an import from the
@@ -20,7 +20,7 @@ each cheap to close while the context is fresh.
    resolution the fix was removing, one branch over.
 2. **Serialization contracts enroll by hand.**
    `assertBidirectionalFieldSet` (`src/collections/serde_validation.zig:40`)
-   makes owner/`Serialized` drift a compile error — but only for structs
+   makes owner/`Serialized` drift a compile error—but only for structs
    that remember to invoke it with a hand-maintained allowlist. Two
    top-level structs are enrolled today (`CheckedModuleArtifact`,
    `ModuleEnv.Serialized`); a third hand-written serialization root added
@@ -54,24 +54,24 @@ comptime cache contracts as airtight as #9951/#9978 intended.
 
 ## Evidence
 
-- `src/canonicalize/Can.zig:787` — the `orelse`/`else source_module_ident`
+- `src/canonicalize/Can.zig:787`—the `orelse`/`else source_module_ident`
   arm (PR #9902 diff retained it).
-- `src/collections/serde_validation.zig:40` — enrollment is a manual
+- `src/collections/serde_validation.zig:40`—enrollment is a manual
   comptime call per struct; nothing enumerates serialization roots.
 - The three version-hash helpers cited above; the admission fold lives in
   `computeCheckedModuleEntryVersionHash` alone.
-- `src/check/checked_artifact.zig:2916, 5785-5792` — `type_name`
+- `src/check/checked_artifact.zig:2916, 5785-5792`—`type_name`
   constructed into and read out of the key payloads.
 
 ## Solution design
 
 1. Make the scope-miss arm a diagnostic (or an invariant, if
-   canonicalization order provably guarantees the binding exists —
+   canonicalization order provably guarantees the binding exists—
    determine which, and write the proof as the comment). DELETE the text
    fallback either way.
 2. Auto-enroll serialization roots: a comptime registry (one list of
    every hand-written `Serialized` pair) that `serde_validation` iterates,
-   so adding a serialization root means adding it to the registry — and a
+   so adding a serialization root means adding it to the registry—and a
    root that serializes without registering is itself detectable (the
    cache write path accepts only registered types).
 3. One `cache_versioning` module owning the composition: the three
@@ -91,7 +91,7 @@ comptime cache contracts as airtight as #9951/#9978 intended.
 Every criterion below must hold; the project is not done until all do:
 
 - `grep -n "source_module_ident" src/canonicalize/Can.zig` shows no
-  fallback arm — the scope-miss path is a diagnostic or a documented
+  fallback arm—the scope-miss path is a diagnostic or a documented
   invariant, with a test for whichever it is.
 - A new hand-written `Serialized` struct cannot ship unguarded:
   demonstrated by adding a dummy unregistered root in a test build and
@@ -125,10 +125,10 @@ unchanged (assert via the existing cache CLI tests).
 
 ## Related projects
 
-- Carry the platform-app relation from checking — landed: checking records
+- Carry the platform-app relation from checking—landed: checking records
   requirement solutions in the app's checked artifact and finalization
   consumes them, so the one *large* name-keyed resolution this doc's item 1
   is the small sibling of no longer exists.
-- [../small/silent-drift-guards.md](../small/silent-drift-guards.md) —
+- [../small/silent-drift-guards.md](../small/silent-drift-guards.md)—
   same philosophy: every mirrored or composed fact gets a structural
   guard.

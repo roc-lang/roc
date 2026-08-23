@@ -59,8 +59,10 @@ zig-pkg
 # `git add -f`. The build copies these from test/fx into other test
 # platforms (e.g. test/static-data-host), so they need to exist in any
 # filtered source view (e.g. nix's gitignoreSource).
-!test/fx/platform/targets/*musl/crt1.o
-!test/fx/platform/targets/*musl/libc.a
+!test/fx/platform/targets/x64musl/crt1.o
+!test/fx/platform/targets/x64musl/libc.a
+!test/fx/platform/targets/arm64musl/crt1.o
+!test/fx/platform/targets/arm64musl/libc.a
 
 # valgrind
 vgcore.*
@@ -159,3 +161,6 @@ tmp/
 
 # Local implementation planning notes / scratch planning docs (CI forbids tracking these)
 plan.md
+
+# Boxy status report—local planning doc, not committed
+report.md

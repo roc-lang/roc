@@ -9,6 +9,7 @@
 //! prove rewrite soundness, and the frame-local deduplication helpers.
 
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -58,18 +59,17 @@ fn forwardLocalAliasChainImpl(
     var value = source;
     var current = first_stmt;
     while (true) {
-        const stmt = switch (store.getCFStmt(current)) {
-            .assign_ref => |s| s,
-            else => return .{ .value = value, .next = current },
-        };
-        switch (stmt.op) {
-            .local => |local| if (local == value and store.getLocal(stmt.target).layout_idx == store.getLocal(value).layout_idx) {
+        const stmt_node = store.getCFStmt(current);
+        if (stmt_node != .assign_ref) return .{ .value = value, .next = current };
+        const stmt = stmt_node.assign_ref;
+        if (stmt.op == .local) {
+            const local = stmt.op.local;
+            if (local == value and store.getLocal(stmt.target).layout_idx == store.getLocal(value).layout_idx) {
                 if (chain) |list| try list.append(allocator, stmt.target);
                 value = stmt.target;
                 current = stmt.next;
                 continue;
-            },
-            else => {},
+            }
         }
         return .{ .value = value, .next = current };
     }
@@ -91,6 +91,17 @@ pub fn appendSuccessors(
         .assign_call,
         .assign_call_erased,
         .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .assign_call_dict,
         .assign_low_level,
         .assign_list,
         .assign_struct,
@@ -120,6 +131,10 @@ pub fn appendSuccessors(
             try work.append(store.allocator, s.uninitialized_branch);
         },
         .str_match => |s| {
+            try work.append(store.allocator, s.on_match);
+            try work.append(store.allocator, s.on_miss);
+        },
+        .boxy_tag_match => |s| {
             try work.append(store.allocator, s.on_match);
             try work.append(store.allocator, s.on_miss);
         },
@@ -175,7 +190,7 @@ pub fn countReachableReads(store: *LirStore, body: CFStmtId) Allocator.Error!Rea
 
     var work = std.ArrayList(CFStmtId).empty;
     defer work.deinit(store.allocator);
-    var visited = std.AutoHashMap(CFStmtId, void).init(store.allocator);
+    var visited = collections.DenseMap(CFStmtId, void).init(store.allocator);
     defer visited.deinit();
 
     try work.append(store.allocator, body);
@@ -190,7 +205,9 @@ pub fn countReachableReads(store: *LirStore, body: CFStmtId) Allocator.Error!Rea
     return .{ .allocator = store.allocator, .counts = counts };
 }
 
-fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
+/// Add this statement's operand reads to an existing per-local count row.
+/// Definitions are deliberately excluded, matching `countReachableReads`.
+pub fn countStmtReads(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) void {
     switch (stmt) {
         .assign_ref => |s| switch (s.op) {
             .local => |source| noteRead(counts, source),
@@ -202,17 +219,75 @@ fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
             .nominal => |ref| noteRead(counts, ref.backing_ref),
         },
         .assign_call => |s| {
+            if (s.result_desc) |desc| noteDescRead(counts, desc);
             const args = store.getLocalSpan(s.args);
             for (0..args.len) |index| noteRead(counts, GuardedList.at(args, index));
         },
         .assign_call_erased => |s| {
             noteRead(counts, s.closure);
-            const args = store.getLocalSpan(s.args);
-            for (0..args.len) |index| noteRead(counts, GuardedList.at(args, index));
+            noteSpanReads(store, counts, s.args);
+            noteSpanReads(store, counts, s.arg_descs);
+            if (s.result_desc) |desc| noteDescRead(counts, desc);
+            if (s.reuse_source) |reuse_source| noteRead(counts, reuse_source);
         },
         .assign_packed_erased_fn => |s| {
             if (s.capture) |capture| noteRead(counts, capture);
+            if (s.result_desc) |desc| noteDescRead(counts, desc);
             if (s.reuse) |reuse| noteRead(counts, reuse);
+        },
+        .assign_boxy_desc_ref => |s| {
+            noteDescRead(counts, s.desc);
+            if (s.tag_residual_for) |desc| noteDescRead(counts, desc);
+            noteSpanReads(store, counts, s.captures);
+        },
+        .assign_boxy_dict_ref => |s| noteDictRead(counts, s.dict),
+        .assign_boxy_box => |s| {
+            noteRead(counts, s.payload);
+            if (s.source_desc) |desc| noteDescRead(counts, desc);
+            if (s.payload_desc) |desc| noteDescRead(counts, desc);
+        },
+        .assign_boxy_reuse_box => |s| {
+            noteRead(counts, s.source);
+            noteDescRead(counts, s.desc);
+        },
+        .assign_boxy_unbox => |s| {
+            noteRead(counts, s.source);
+            noteDescRead(counts, s.source_desc);
+            if (s.target_desc) |desc| noteDescRead(counts, desc);
+        },
+        .assign_boxy_adapt => |s| {
+            noteRead(counts, s.source);
+            if (s.source_desc) |desc| noteDescRead(counts, desc);
+            if (s.target_desc) |desc| noteDescRead(counts, desc);
+        },
+        .assign_boxy_inspect => |s| {
+            noteRead(counts, s.source);
+            noteDescRead(counts, s.source_desc);
+        },
+        .assign_boxy_eq => |s| {
+            noteRead(counts, s.lhs);
+            noteRead(counts, s.rhs);
+            noteDescRead(counts, s.source_desc);
+        },
+        .assign_boxy_tag => |s| {
+            noteDescRead(counts, s.target_desc);
+            if (s.payload) |payload| noteRead(counts, payload);
+            if (s.payload_desc) |desc| noteDescRead(counts, desc);
+        },
+        .assign_boxy_tag_payload => |s| {
+            noteRead(counts, s.source);
+            noteDescRead(counts, s.source_desc);
+        },
+        .boxy_tag_match => |s| {
+            noteRead(counts, s.source);
+            noteDescRead(counts, s.source_desc);
+        },
+        .assign_call_dict => |s| {
+            noteDictRead(counts, s.dict);
+            noteSpanReads(store, counts, s.args);
+            noteSpanReads(store, counts, s.arg_descs);
+            noteSpanReads(store, counts, s.hidden_args);
+            if (s.result_desc) |desc| noteDescRead(counts, desc);
         },
         .assign_low_level => |s| {
             const args = store.getLocalSpan(s.args);
@@ -248,6 +323,7 @@ fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
         .str_match => |s| noteRead(counts, s.source),
         .str_match_set => |s| noteRead(counts, s.source),
         .ret => |s| noteRead(counts, s.value),
+        .crash => |s| if (s.msg.localId()) |message| noteRead(counts, message),
         .incref => |s| noteRead(counts, s.value),
         .decref => |s| noteRead(counts, s.value),
         .decref_if_initialized => |s| {
@@ -260,7 +336,6 @@ fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
         .comptime_branch_taken,
         .join,
         .jump,
-        .crash,
         .runtime_error,
         .comptime_exhaustiveness_failed,
         .loop_continue,
@@ -271,6 +346,19 @@ fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
 
 fn noteRead(counts: []u32, local: LocalId) void {
     counts[@intFromEnum(local)] += 1;
+}
+
+fn noteSpanReads(store: *const LirStore, counts: []u32, span: LIR.LocalSpan) void {
+    const locals = store.getLocalSpan(span);
+    for (0..locals.len) |index| noteRead(counts, GuardedList.at(locals, index));
+}
+
+fn noteDescRead(counts: []u32, desc: LIR.BoxyDescRef) void {
+    if (desc.localOrNull()) |local| noteRead(counts, local);
+}
+
+fn noteDictRead(counts: []u32, dict: LIR.BoxyDictRef) void {
+    if (dict.localOrNull()) |local| noteRead(counts, local);
 }
 
 /// Compact a sorted slice of local ids in place, returning the length of the
@@ -296,9 +384,9 @@ pub fn localIdLessThan(_: void, a: LocalId, b: LocalId) bool {
 /// `Rewriter` carries the pass-specific destination state and supplies the
 /// hooks that diverge between passes:
 ///
-///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId)` — required.
+///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId)`—required.
 ///     Produces the cloned tail for a source `ret value`.
-///   * `interceptStmt(self: *Rewriter, cloner: anytype, stmt: LIR.CFStmt)` —
+///   * `interceptStmt(self: *Rewriter, cloner: anytype, stmt: LIR.CFStmt)`—
 ///     optional. Returns a cloned statement id to short-circuit the default
 ///     clone, letting the pass fuse a direct constructor/concat return into
 ///     the tail, or `null` to fall through to the ordinary clone.
@@ -315,7 +403,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         rewriter: Rewriter,
         /// Old-local index to cloned-local, `null` until first mapped.
         local_map: []?LocalId,
-        stmt_map: std.AutoHashMap(CFStmtId, CFStmtId),
+        stmt_map: collections.DenseMap(CFStmtId, CFStmtId),
         /// Every local created by this clone, in creation order.
         new_locals: std.ArrayList(LocalId),
 
@@ -327,7 +415,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .store = store,
                 .rewriter = rewriter,
                 .local_map = local_map,
-                .stmt_map = std.AutoHashMap(CFStmtId, CFStmtId).init(store.allocator),
+                .stmt_map = collections.DenseMap(CFStmtId, CFStmtId).init(store.allocator),
                 .new_locals = .empty,
             };
         }
@@ -370,6 +458,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .assign_ref => |s| try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = try self.mapLocal(s.target),
                     .op = try self.mapRefOp(s.op),
+                    .residual_shell_absent_fields = s.residual_shell_absent_fields,
                     .next = try self.cloneStmt(s.next),
                 } }),
                 .assign_literal => |s| try self.store.addCFStmt(.{ .assign_literal = .{
@@ -381,6 +470,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .proc = s.proc,
                     .args = try self.mapLocalSpan(s.args),
+                    .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
+                    .out_desc = try self.mapMaybeLocal(s.out_desc),
                     .is_cold = s.is_cold,
                     .next = try self.cloneStmt(s.next),
                 } }),
@@ -388,6 +479,14 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .closure = try self.mapLocal(s.closure),
                     .args = try self.mapLocalSpan(s.args),
+                    .arg_layouts = s.arg_layouts,
+                    .arg_descs = try self.mapLocalSpan(s.arg_descs),
+                    .arg_desc_keys = s.arg_desc_keys,
+                    .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
+                    .out_desc = try self.mapMaybeLocal(s.out_desc),
+                    .arg_plan = s.arg_plan,
+                    .reuse_closure = s.reuse_closure,
+                    .reuse_source = try self.mapMaybeLocal(s.reuse_source),
                     .next = try self.cloneStmt(s.next),
                 } }),
                 .assign_packed_erased_fn => |s| try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
@@ -396,8 +495,112 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .capture = try self.mapMaybeLocal(s.capture),
                     .capture_layout = s.capture_layout,
                     .on_drop = s.on_drop,
+                    .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
                     .reuse = try self.mapMaybeLocal(s.reuse),
                     .reuse_unique = s.reuse_unique,
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .assign_boxy_desc_ref => |s| try self.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                    .target = try self.mapLocal(s.target),
+                    .desc = try self.mapBoxyDescRef(s.desc),
+                    .nested_index = s.nested_index,
+                    .box_payload_layout = s.box_payload_layout,
+                    .tag_payload = s.tag_payload,
+                    .tag_ext = s.tag_ext,
+                    .tag_residual_for = try self.mapMaybeBoxyDescRef(s.tag_residual_for),
+                    .captures = try self.mapLocalSpan(s.captures),
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .assign_boxy_dict_ref => |s| try self.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
+                    .target = try self.mapLocal(s.target),
+                    .dict = try self.mapBoxyDictRef(s.dict),
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .assign_boxy_box => |s| try self.store.addCFStmt(.{ .assign_boxy_box = .{
+                    .target = try self.mapLocal(s.target),
+                    .payload = try self.mapLocal(s.payload),
+                    .payload_layout = s.payload_layout,
+                    .source_desc = try self.mapMaybeBoxyDescRef(s.source_desc),
+                    .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
+                    .payload_mode = s.payload_mode,
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .assign_boxy_reuse_box => |s| try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{
+                    .target = try self.mapLocal(s.target),
+                    .source = try self.mapLocal(s.source),
+                    .desc = try self.mapBoxyDescRef(s.desc),
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .assign_boxy_unbox => |s| try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
+                    .target = try self.mapLocal(s.target),
+                    .source = try self.mapLocal(s.source),
+                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                    .target_desc = try self.mapMaybeBoxyDescRef(s.target_desc),
+                    .target_layout = s.target_layout,
+                    .source_mode = s.source_mode,
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .assign_boxy_adapt => |s| try self.store.addCFStmt(.{ .assign_boxy_adapt = .{
+                    .target = try self.mapLocal(s.target),
+                    .source = try self.mapLocal(s.source),
+                    .adapter = s.adapter,
+                    .source_desc = try self.mapMaybeBoxyDescRef(s.source_desc),
+                    .target_desc = try self.mapMaybeBoxyDescRef(s.target_desc),
+                    .source_mode = s.source_mode,
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .assign_boxy_inspect => |s| try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
+                    .target = try self.mapLocal(s.target),
+                    .source = try self.mapLocal(s.source),
+                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                    .source_mode = s.source_mode,
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .assign_boxy_eq => |s| try self.store.addCFStmt(.{ .assign_boxy_eq = .{
+                    .target = try self.mapLocal(s.target),
+                    .lhs = try self.mapLocal(s.lhs),
+                    .rhs = try self.mapLocal(s.rhs),
+                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                    .source_mode = s.source_mode,
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .assign_boxy_tag => |s| try self.store.addCFStmt(.{ .assign_boxy_tag = .{
+                    .target = try self.mapLocal(s.target),
+                    .target_desc = try self.mapBoxyDescRef(s.target_desc),
+                    .tag_name = s.tag_name,
+                    .payload = try self.mapMaybeLocal(s.payload),
+                    .payload_layout = s.payload_layout,
+                    .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
+                    .payload_mode = s.payload_mode,
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .assign_boxy_tag_payload => |s| try self.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
+                    .target = try self.mapLocal(s.target),
+                    .target_desc = try self.mapMaybeLocal(s.target_desc),
+                    .source = try self.mapLocal(s.source),
+                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                    .tag_name = s.tag_name,
+                    .payload_index = s.payload_index,
+                    .source_mode = s.source_mode,
+                    .next = try self.cloneStmt(s.next),
+                } }),
+                .boxy_tag_match => |s| try self.store.addCFStmt(.{ .boxy_tag_match = .{
+                    .source = try self.mapLocal(s.source),
+                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                    .tag_name = s.tag_name,
+                    .on_match = try self.cloneStmt(s.on_match),
+                    .on_miss = try self.cloneStmt(s.on_miss),
+                } }),
+                .assign_call_dict => |s| try self.store.addCFStmt(.{ .assign_call_dict = .{
+                    .target = try self.mapLocal(s.target),
+                    .dict = try self.mapBoxyDictRef(s.dict),
+                    .method = s.method,
+                    .method_slot = s.method_slot,
+                    .args = try self.mapLocalSpan(s.args),
+                    .arg_descs = try self.mapLocalSpan(s.arg_descs),
+                    .hidden_args = try self.mapLocalSpan(s.hidden_args),
+                    .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
+                    .is_cold = s.is_cold,
                     .next = try self.cloneStmt(s.next),
                 } }),
                 .assign_low_level => |s| try self.store.addCFStmt(.{ .assign_low_level = .{
@@ -525,7 +728,10 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 } }),
                 .jump => |s| try self.store.addCFStmt(.{ .jump = .{ .target = s.target } }),
                 .ret => |s| try self.rewriter.cloneRet(self, s.value),
-                .crash => |s| try self.store.addCFStmt(.{ .crash = .{ .msg = s.msg } }),
+                .crash => |s| try self.store.addCFStmt(.{ .crash = .{ .msg = switch (s.msg) {
+                    .literal => |literal| .{ .literal = literal },
+                    .local => |local| .{ .local = try self.mapLocal(local) },
+                } } }),
             };
 
             try self.stmt_map.put(old_id, cloned);
@@ -535,10 +741,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         /// True when `next` is a `ret` of exactly `value`, marking a direct
         /// constructor/concat return the rewriter may fuse into its tail.
         pub fn directReturnOf(self: *const Self, next: CFStmtId, value: LocalId) bool {
-            return switch (self.store.getCFStmt(next)) {
-                .ret => |ret_stmt| ret_stmt.value == value,
-                else => false,
-            };
+            const stmt = self.store.getCFStmt(next);
+            return stmt == .ret and stmt.ret.value == value;
         }
 
         fn cloneSwitch(self: *Self, s: anytype) Allocator.Error!CFStmtId {
@@ -639,6 +843,27 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return if (maybe) |local| try self.mapLocal(local) else null;
         }
 
+        fn mapBoxyDescRef(self: *Self, desc: LIR.BoxyDescRef) Allocator.Error!LIR.BoxyDescRef {
+            return switch (desc) {
+                .static => |id| .{ .static = id },
+                .local => |local| .{ .local = try self.mapLocal(local) },
+                .runtime => |index| .{ .runtime = index },
+                .dict_method_arg => |arg| .{ .dict_method_arg = arg },
+                .dict_method_hidden => |hidden| .{ .dict_method_hidden = hidden },
+            };
+        }
+
+        fn mapMaybeBoxyDescRef(self: *Self, maybe: ?LIR.BoxyDescRef) Allocator.Error!?LIR.BoxyDescRef {
+            return if (maybe) |desc| try self.mapBoxyDescRef(desc) else null;
+        }
+
+        fn mapBoxyDictRef(self: *Self, dict: LIR.BoxyDictRef) Allocator.Error!LIR.BoxyDictRef {
+            return switch (dict) {
+                .static => |id| .{ .static = id },
+                .local => |local| .{ .local = try self.mapLocal(local) },
+            };
+        }
+
         /// Map an old local to its clone, allocating a fresh same-layout local
         /// on first encounter.
         pub fn mapLocal(self: *Self, old: LocalId) Allocator.Error!LocalId {
@@ -646,8 +871,11 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             if (index >= self.local_map.len) unreachable;
             if (self.local_map[index]) |existing| return existing;
 
-            const fresh = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(old).layout_idx });
+            const old_local = self.store.getLocal(old);
+            const fresh = try self.store.addLocal(.{ .layout_idx = old_local.layout_idx });
             self.local_map[index] = fresh;
+            const boxy_desc = try self.mapMaybeBoxyDescRef(old_local.boxy_desc);
+            if (boxy_desc) |desc| self.store.setLocalBoxyDesc(fresh, desc);
             try self.new_locals.append(self.store.allocator, fresh);
             return fresh;
         }

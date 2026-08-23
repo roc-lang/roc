@@ -14,36 +14,28 @@ decode_things # After member name
 				[a.Decode]
 ~~~
 # EXPECTED
-UNSUPPORTED WHERE CLAUSE - where_clauses_10.md:7:6:7:14
+UNDECLARED TYPE - where_clauses_10.md:7:7:7:14
 DECLARATION HAS NO VALUE - where_clauses_10.md:3:1:7:15
 # PROBLEMS
+── ✗ undeclared type ─────────────────────────────────── where_clauses_10.md:7:7
 
-┌──────────────────────────┐
-│ UNSUPPORTED WHERE CLAUSE ├─ The where clause syntax Decode is not ──────────┐
-└┬─────────────────────────┘  supported.                                      │
- │                                                                            │
- │  [a.Decode]                                                                │
- │   ‾‾‾‾‾‾‾‾                                                                 │
- └─────────────────────────────────────────────────── where_clauses_10.md:7:6 ┘
+The type Decode is not declared in this scope.
 
-    This syntax was used for abilities, which have been removed from Roc. Use
-    method constraints like `where [a.methodName(args) -> ret]` instead.
+[a.Decode]
+  ^^^^^^^
 
+── ● declaration has no value ────────────────────────── where_clauses_10.md:3:1
 
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  decode_things # After member name                                         │
- │      : # After colon                                                       │
- │          List(List(U8)) -> List(a) # After anno                            │
- │              where # after where                                           │
- │                  [a.Decode]                                                │
- │                                                                            │
- └─────────────────────────────────────────────────── where_clauses_10.md:3:1 ┘
+This declaration has a type annotation but no implementation.
 
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
+decode_things # After member name
+    : # After colon
+        List(List(U8)) -> List(a) # After anno
+            where # after where
+                [a.Decode]
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
 
 # TOKENS
 ~~~zig
@@ -74,7 +66,8 @@ EndOfFile,
 					(ty (name "List"))
 					(ty-var (raw "a"))))
 			(where
-				(alias (mod-of "a") (name "Decode"))))))
+				(alias (mod-of "a")
+					(ty (name "Decode")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -92,7 +85,7 @@ decode_things # After member name
 (can-ir
 	(d-let
 		(p-assign (ident "decode_things"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -101,7 +94,9 @@ decode_things # After member name
 				(ty-apply (name "List") (builtin)
 					(ty-rigid-var (name "a"))))
 			(where
-				(alias (ty-rigid-var-lookup (ty-rigid-var (name "a"))) (name "Decode")))))
+				(alias
+					(ty-rigid-var-lookup (ty-rigid-var (name "a")))
+					(ty-malformed)))))
 	(s-import (mod "Decode")
 		(exposes
 			(exposed (name "Decode") (wildcard false)))))
@@ -110,7 +105,7 @@ decode_things # After member name
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "List(List(U8)) -> List(a)")))
+		(patt (type "List(List(U8)) -> List(Error)")))
 	(expressions
-		(expr (type "List(List(U8)) -> List(a)"))))
+		(expr (type "List(List(U8)) -> List(Error)"))))
 ~~~

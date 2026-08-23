@@ -74,7 +74,7 @@ pub const Tag = enum {
     /// * lhs - node index to actual expr node
     /// * rhs - ignored
     expr,
-    /// A crash statement
+    /// A crash statement or expression
     /// Example: `crash "A message"`
     /// * lhs - node index to message(Should be a str_lit)
     /// * rhs - ignored
@@ -109,10 +109,9 @@ pub const Tag = enum {
     /// An import statement
     /// Example: `import pf.Stdout`
     /// * main_token - first token in module ident
-    /// * lhs - extra_data description - struct(packed){ aliased: u1, num_exposes: u31 }
-    /// * rhs - extra_data index or 0 if lhs is 0
-    /// * extra_data format(if aliased == 1): [alias upper_ident node index, [exposed node index]{num_exposes}]
-    /// * extra_data format(if aliased == 0): [[exposed node index]{num_exposes}]
+    /// * lhs - extra_data index
+    /// * rhs - packed alias, qualifier, and nested-import flags
+    /// * extra_data - [exposes start, exposes len, qualifier token?, alias token?]
     import,
     /// A file import statement
     /// Example: `import "README.md" as readme : Str`
@@ -147,6 +146,12 @@ pub const Tag = enum {
     /// * extra_data format (if has_where == 1): [where node index, [type_arg node index]{num_type_args}, type_term node_index]
     /// * extra_data format (if has_where == 0): [[type_arg node index]{num_type_args}, type_term node_index]
     type_decl_opaque,
+    /// A where alias declaration, naming a reusable set of method constraints
+    /// Example: `a.Sortable : where [a.compare : a -> [LT, EQ, GT]]`
+    /// * main_token - extra_data token (0 when there is neither a where clause nor an associated block)
+    /// * lhs - type header node index (its name token is the dotted upper ident)
+    /// * rhs - receiver type variable node index
+    type_decl_where_alias,
     /// A Type annotation
     /// Example: `main! : List Str => Try {} _`
     /// Example: `colors : List Color`
@@ -220,20 +225,24 @@ pub const Tag = enum {
     /// * rhs - RHS DESCRIPTION
     ty_parens,
 
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
+    /// A field in a record type annotation.
+    /// * main_token - packed optional `?` token (`0` means required, otherwise token index + 1)
+    /// * lhs - field name token
+    /// * rhs - field type annotation
     ty_record_field,
+
+    /// A DEFAULTED field in a record type annotation (`a : U8 ?? 10`).
+    /// * main_token - packed optional `?` token (as `ty_record_field`)
+    /// * lhs - field name token
+    /// * rhs - extra_data start: [field type annotation, default value expr]
+    ty_record_field_defaulted,
 
     // Where Clauses
 
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
+    /// A where clause naming a where alias
+    /// Example: `where [a.Sortable]`
+    /// * main_token - the receiving type variable's token
+    /// * lhs - type anno node index naming the where alias
     where_mod_alias,
     /// DESCRIPTION
     /// Example: EXAMPLE
@@ -429,9 +438,10 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     record_update,
-    /// Record field access.
+    /// Maximal contiguous record-field access path.
+    /// * main_token - number of field-access segments
     /// * lhs - receiver expr
-    /// * rhs - field ident expr
+    /// * rhs - first index in the field-access segment store
     field_access,
     /// Attached method call syntax `a.foo(...)`.
     /// * main_token - dotted method token

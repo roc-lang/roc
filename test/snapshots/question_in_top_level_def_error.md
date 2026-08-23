@@ -15,16 +15,13 @@ result = f(3)?
 # EXPECTED
 TRY OPERATOR OUTSIDE FUNCTION - question_in_top_level_def_error.md:6:10:6:15
 # PROBLEMS
+── ✗ try operator outside function ───── question_in_top_level_def_error.md:6:10
 
-┌───────────────────────────────┐
-│ TRY OPERATOR OUTSIDE FUNCTION ├─ The `?` operator can only be used inside ──┐
-└┬──────────────────────────────┘  function bodies because it can cause an    │
- │                                 early return.                              │
- │                                                                            │
- │  result = f(3)?                                                            │
- │           ‾‾‾‾‾                                                            │
- └─────────────────────────────────── question_in_top_level_def_error.md:6:10 ┘
+The ? operator can only be used inside function bodies because it can cause an
+early return.
 
+result = f(3)?
+         ^^^^^
 
 # TOKENS
 ~~~zig
@@ -102,9 +99,10 @@ result = f(3)?
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 265)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 278)
 								(receiver
-									(e-runtime-error (tag "erroneous_value_use")))
+									(e-lookup-local
+										(p-assign (ident "x"))))
 								(args
 									(e-num (value "0"))))
 							(e-block
@@ -115,7 +113,8 @@ result = f(3)?
 						(e-block
 							(e-tag (name "Ok")
 								(args
-									(e-runtime-error (tag "erroneous_value_use")))))))))
+									(e-lookup-local
+										(p-assign (ident "x"))))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "I64") (builtin))
@@ -125,15 +124,37 @@ result = f(3)?
 						(ty-tag-name (name "IsNegative")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-match
+			(match
+				(cond
+					(e-call (constraint-fn-var 305)
+						(e-lookup-local
+							(p-assign (ident "f")))
+						(e-num (value "3"))))
+				(branches
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-nominal-external (builtin)
+									(p-applied-tag))))
+						(value
+							(e-lookup-local
+								(p-assign (ident "#ok")))))
+					(branch
+						(patterns
+							(pattern (degenerate false)
+								(p-nominal-external (builtin)
+									(p-applied-tag))))
+						(value
+							(e-runtime-error (tag "return_outside_fn")))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Try(Error, [IsNegative])"))
-		(patt (type "Error")))
+		(patt (type "I64 -> Try(I64, [IsNegative])"))
+		(patt (type "I64")))
 	(expressions
-		(expr (type "Error -> Try(Error, [IsNegative])"))
-		(expr (type "Error"))))
+		(expr (type "I64 -> Try(I64, [IsNegative])"))
+		(expr (type "I64"))))
 ~~~

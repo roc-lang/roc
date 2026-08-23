@@ -3,8 +3,8 @@ app [Model, program] { pf: platform "./platform/main.roc" }
 # Regression for https://github.com/roc-lang/roc/issues/9750
 #
 # `Player` is an app-defined opaque nominal whose implements block declares a
-# method returning `Player`, and whose backing record references `Types.Animation`
-# — a nested alias imported from the exposed platform module `Types`. `roc check`
+# method returning `Player`, and whose backing record references `Types.Animation`—
+# a nested alias imported from the exposed platform module `Types`. `roc check`
 # accepted this, but `roc build` panicked in postcheck monotype lowering with
 # "imported nominal declaration formal was not projected into the current checked
 # type store" because the opaque's box-payload-capability backing (and its nested

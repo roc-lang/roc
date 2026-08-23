@@ -28,6 +28,9 @@ pub const StrAppend = @import("str_append.zig");
 pub const BodyClone = @import("body_clone.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
+pub const LoopAppendPromote = @import("loop_append_promote.zig");
+/// Always-safe check elision from proven unsigned value-range facts.
+pub const RangeProve = @import("range_prove.zig");
 /// Switch branch pruning from explicit possible-tag analysis.
 pub const TagReachability = @import("tag_reachability.zig");
 /// Demand-driven proc compaction before ARC and backend emission.
@@ -101,25 +104,23 @@ pub const LirPatternSpan = LIR.LirPatternSpan;
 /// the hashing ops (bool, the fixed-width ints, f32, f64, Dec, bytes, and str);
 /// callers only pass `hasher_write_*` ops.
 pub fn hasherDomain(op: LowLevel) builtins.hash.HasherDomain {
-    return switch (op) {
-        .hasher_write_bool => .bool,
-        .hasher_write_u8 => .u8,
-        .hasher_write_u16 => .u16,
-        .hasher_write_u32 => .u32,
-        .hasher_write_u64 => .u64,
-        .hasher_write_u128 => .u128,
-        .hasher_write_i8 => .i8,
-        .hasher_write_i16 => .i16,
-        .hasher_write_i32 => .i32,
-        .hasher_write_i64 => .i64,
-        .hasher_write_i128 => .i128,
-        .hasher_write_f32 => .f32,
-        .hasher_write_f64 => .f64,
-        .hasher_write_dec => .dec,
-        .hasher_write_bytes => .bytes,
-        .hasher_write_str => .str,
-        else => unreachable,
-    };
+    if (op == .hasher_write_bool) return .bool;
+    if (op == .hasher_write_u8) return .u8;
+    if (op == .hasher_write_u16) return .u16;
+    if (op == .hasher_write_u32) return .u32;
+    if (op == .hasher_write_u64) return .u64;
+    if (op == .hasher_write_u128) return .u128;
+    if (op == .hasher_write_i8) return .i8;
+    if (op == .hasher_write_i16) return .i16;
+    if (op == .hasher_write_i32) return .i32;
+    if (op == .hasher_write_i64) return .i64;
+    if (op == .hasher_write_i128) return .i128;
+    if (op == .hasher_write_f32) return .f32;
+    if (op == .hasher_write_f64) return .f64;
+    if (op == .hasher_write_dec) return .dec;
+    if (op == .hasher_write_bytes) return .bytes;
+    if (op == .hasher_write_str) return .str;
+    unreachable;
 }
 
 /// Byte width of the scalar handed to `hasher_write_u64` for a fixed-width
@@ -127,24 +128,11 @@ pub fn hasherDomain(op: LowLevel) builtins.hash.HasherDomain {
 /// and f64; the u128, Dec, bytes, and str ops travel their own wider paths and
 /// never call this.
 pub fn hasherU64Width(op: LowLevel) u8 {
-    return switch (op) {
-        .hasher_write_bool,
-        .hasher_write_u8,
-        .hasher_write_i8,
-        => 1,
-        .hasher_write_u16,
-        .hasher_write_i16,
-        => 2,
-        .hasher_write_u32,
-        .hasher_write_i32,
-        .hasher_write_f32,
-        => 4,
-        .hasher_write_u64,
-        .hasher_write_i64,
-        .hasher_write_f64,
-        => 8,
-        else => unreachable,
-    };
+    if (op == .hasher_write_bool or op == .hasher_write_u8 or op == .hasher_write_i8) return 1;
+    if (op == .hasher_write_u16 or op == .hasher_write_i16) return 2;
+    if (op == .hasher_write_u32 or op == .hasher_write_i32 or op == .hasher_write_f32) return 4;
+    if (op == .hasher_write_u64 or op == .hasher_write_i64 or op == .hasher_write_f64) return 8;
+    unreachable;
 }
 
 test "lir tests" {
@@ -161,6 +149,7 @@ test "lir tests" {
     std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(BodyClone);
     std.testing.refAllDecls(ScalarizeJoins);
+    std.testing.refAllDecls(RangeProve);
     std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(CheckedArithmetic);
     std.testing.refAllDecls(Arc);

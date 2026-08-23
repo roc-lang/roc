@@ -65,7 +65,7 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
 }
 
 /// Returns whether this AST has any diagnostic errors.
-pub fn hasErrors(self: *AST) bool {
+pub fn hasErrors(self: *const AST) bool {
     return self.tokenize_diagnostics.items.len > 0 or self.parse_diagnostics.items.len > 0;
 }
 
@@ -296,80 +296,64 @@ fn addFoundSyntaxNote(ctx: ParseReportContext, report: *reporting.Report) Alloca
         return;
     }
 
-    switch (ctx.tokenTag()) {
-        .UpperIdent,
-        .DotUpperIdent,
-        .NoSpaceDotUpperIdent,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Names that start with uppercase letters are used for tags, type names, and module names in Roc.");
-        },
-        .LowerIdent,
-        .DotLowerIdent,
-        .NoSpaceDotLowerIdent,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.");
-        },
-        .KwApp,
-        .KwAs,
-        .KwCrash,
-        .KwDbg,
-        .KwElse,
-        .KwExpect,
-        .KwExposes,
-        .KwExposing,
-        .KwFor,
-        .KwGenerates,
-        .KwHas,
-        .KwHosted,
-        .KwIf,
-        .KwImplements,
-        .KwImport,
-        .KwImports,
-        .KwIn,
-        .KwInterface,
-        .KwMatch,
-        .KwModule,
-        .KwPackage,
-        .KwPackages,
-        .KwPlatform,
-        .KwProvides,
-        .KwRequires,
-        .KwReturn,
-        .KwTargets,
-        .KwVar,
-        .KwWhere,
-        .KwWhile,
-        .KwWith,
-        .KwBreak,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("That word is reserved by Roc, so it cannot be used as a name in this position.");
-        },
-        .Comma => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("A comma separates items, but there must be a valid item on both sides of it.");
-        },
-        .CloseCurly,
-        .CloseRound,
-        .CloseSquare,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("This closes the current construct, so the parser was looking for the missing item before it.");
-        },
-        .MalformedUnicodeIdent,
-        .MalformedDotUnicodeIdent,
-        .MalformedNoSpaceDotUnicodeIdent,
-        .MalformedNamedUnderscoreUnicode,
-        .MalformedOpaqueNameUnicode,
-        .MalformedOpaqueNameWithoutName,
-        .MalformedUnknownToken,
-        => {
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("This token is malformed, so it cannot be used as ordinary Roc syntax.");
-        },
-        else => {},
+    const token_tag = ctx.tokenTag();
+    if (token_tag == .UpperIdent or token_tag == .DotUpperIdent or token_tag == .NoSpaceDotUpperIdent) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Names that start with uppercase letters are used for tags, type names, and module names in Roc.");
+    } else if (token_tag == .LowerIdent or token_tag == .DotLowerIdent or token_tag == .NoSpaceDotLowerIdent) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Names that start with lowercase letters are value names or record field names, depending on the surrounding syntax.");
+    } else if (token_tag == .KwApp or
+        token_tag == .KwAs or
+        token_tag == .KwCrash or
+        token_tag == .KwDbg or
+        token_tag == .KwElse or
+        token_tag == .KwExpect or
+        token_tag == .KwExposes or
+        token_tag == .KwExposing or
+        token_tag == .KwFor or
+        token_tag == .KwGenerates or
+        token_tag == .KwHas or
+        token_tag == .KwHosted or
+        token_tag == .KwIf or
+        token_tag == .KwImplements or
+        token_tag == .KwImport or
+        token_tag == .KwImports or
+        token_tag == .KwIn or
+        token_tag == .KwInterface or
+        token_tag == .KwMatch or
+        token_tag == .KwModule or
+        token_tag == .KwPackage or
+        token_tag == .KwPackages or
+        token_tag == .KwPlatform or
+        token_tag == .KwProvides or
+        token_tag == .KwRequires or
+        token_tag == .KwReturn or
+        token_tag == .KwTargets or
+        token_tag == .KwVar or
+        token_tag == .KwWhere or
+        token_tag == .KwWhile or
+        token_tag == .KwWith or
+        token_tag == .KwBreak)
+    {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("That word is reserved by Roc, so it cannot be used as a name in this position.");
+    } else if (token_tag == .Comma) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("A comma separates items, but there must be a valid item on both sides of it.");
+    } else if (token_tag == .CloseCurly or token_tag == .CloseRound or token_tag == .CloseSquare) {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("This closes the current construct, so the parser was looking for the missing item before it.");
+    } else if (token_tag == .MalformedUnicodeIdent or
+        token_tag == .MalformedDotUnicodeIdent or
+        token_tag == .MalformedNoSpaceDotUnicodeIdent or
+        token_tag == .MalformedNamedUnderscoreUnicode or
+        token_tag == .MalformedOpaqueNameUnicode or
+        token_tag == .MalformedOpaqueNameWithoutName or
+        token_tag == .MalformedUnknownToken)
+    {
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("This token is malformed, so it cannot be used as ordinary Roc syntax.");
     }
 
     if (reporting.CommonMisspellings.getTokenTip(token_text)) |tip| {
@@ -437,6 +421,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
     return switch (diagnostic.tag) {
         .multiple_platforms => reportParseProblem(ctx, "Multiple Platforms", "I was parsing an app header, and it names more than one platform.", "An app can use exactly one `platform` entry. Keep the platform entry you want to run with, and make every other dependency a normal package string.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }" }),
         .no_platform => reportParseProblem(ctx, "Missing Platform", "I was parsing an app header, and I could not find a platform entry.", "App headers must include one field whose value starts with `platform`. That platform tells Roc how to run the app.", .{ .example = "app [main] { pf: platform \"../basic-cli/platform.roc\" }" }),
+        .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
+        .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
+        .roc_version_key_is_reserved => reportParseProblem(ctx, "Reserved Dependency Name", "I was parsing a dependency record, and `roc` is used as the name of a platform or package.", "The `roc` name is reserved for pinning the compiler version, so it cannot name a dependency. Pick a different name for this one.", .{ .example = "pf: platform \"../platform/main.roc\"", .show_found = false }),
         .missing_arrow => reportParseProblem(ctx, "Missing Arrow", "I was parsing a function type, and I expected an arrow here.", "Function types use `->` between arguments and return values. Add the missing arrow or wrap the surrounding type in parentheses if a different grouping was intended.", .{ .example = "Str -> U64" }),
         .expected_exposes => reportParseProblem(ctx, "Expected Exposes", "I was parsing a platform header, and I expected the `exposes` section.", "A platform header must list the values it exposes before the package and provides sections.", .{ .example = "exposes [main]" }),
         .expected_exposes_close_square => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing an `exposes` list, and I expected a closing `]`.", "Every exposes list starts with `[` and ends with `]`. Add the closing bracket after the last exposed name.", .{ .example = "exposes [main, helper]" }),
@@ -445,7 +432,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_package_or_platform_colon => reportParseProblem(ctx, "Expected Dependency Colon", "I was parsing an app dependency entry, and I expected `:` after the field name.", "A dependency entry uses a colon between the local package name and the package path.", .{ .example = "json: \"../json/main.roc\"" }),
         .expected_package_or_platform_string => reportParseProblem(ctx, "Expected Package Path", "I was parsing an app dependency entry, and I expected a string path.", "Normal package dependencies use a string path after the colon. Use `platform \"...\"` only for the single platform entry.", .{ .example = "json: \"../json/main.roc\"" }),
         .expected_package_platform_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing an app or package dependency record, and I expected a closing `}`.", "Dependency records must be closed with `}` after the final entry.", .{ .example = "{ pf: platform \"../platform/main.roc\" }" }),
-        .expected_package_platform_open_curly => reportParseProblem(ctx, "Expected Opening Brace", "I was parsing an app or package header, and I expected an opening `{` for dependencies.", "App and package headers write dependencies in a record after the exposes list.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\" }" }),
+        .expected_app_open_curly => reportParseProblem(ctx, "Expected Opening Brace", "I was parsing an app header, and I expected an opening `{` for dependencies.", "App headers write the platform and package dependencies in a record after the provided names list.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\" }" }),
         .expected_packages => reportParseProblem(ctx, "Expected Packages", "I was parsing a platform header, and I expected the `packages` section.", "A platform header must include a packages record that names package dependencies.", .{ .example = "packages { base: \"../base/main.roc\" }" }),
         .expected_packages_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a `packages` record, and I expected a closing `}`.", "Close the packages record after the last package entry.", .{ .example = "packages { base: \"../base/main.roc\" }" }),
         .expected_packages_open_curly => reportParseProblem(ctx, "Expected Opening Brace", "I was parsing a `packages` section, and I expected an opening `{`.", "Package dependencies are written as record fields inside braces.", .{ .example = "packages { base: \"../base/main.roc\" }" }),
@@ -487,6 +474,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .import_exposing_no_open => reportParseProblem(ctx, "Expected Exposing List", "I was parsing an import exposing clause, and I expected `[` after `exposing`.", "The imported names go in square brackets after `exposing`.", .{ .example = "import Json exposing [decode, encode]" }),
         .import_exposing_no_close => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing an import exposing clause, and I expected a closing `]`.", "Close the exposing list after the final imported name.", .{ .example = "import Json exposing [decode, encode]" }),
         .expected_type_field_name => reportParseProblem(ctx, "Expected Type Field", "I was parsing a record type, and I expected a field name.", "Record type fields start with lowercase names, `_`, or named underscores, followed by `:` and the field type.", .{ .example = "{ name : Str, age : U64 }" }),
+        .optional_unnamed_record_field => reportParseProblem(ctx, "Optional Padding Field", "I found an optional marker on an unnamed record field.", "Unnamed record fields are fixed layout padding and cannot be accessed, so their presence cannot be optional. Give the field a lowercase name or remove the `?` marker.", .{ .example = "{ value ?: U64, _padding : U32 }" }),
         .expected_colon_after_type_field_name => reportParseProblem(ctx, "Expected Field Type", "I was parsing a record type field, and I expected `:` after the field name.", "Record type fields use a colon between the field name and its type.", .{ .example = "{ name : Str }" }),
         .expected_arrow => reportParseProblem(ctx, "Expected Function Arrow", "I was parsing a function type, and I expected `->` or `=>` before the return type.", "Function types list argument types first, then an arrow, then the return type.", .{ .example = "Str, U64 -> Bool" }),
         .multi_arrow_needs_parens => reportParseProblem(ctx, "Ambiguous Function Type", "I was parsing a function type, and multiple arrows need parentheses.", "Use parentheses to say whether the function returns another function or takes a function as an argument.", .{ .example = "a -> (b -> c)\n(a -> b) -> c", .show_found = false }),
@@ -495,7 +483,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_lower_name_after_exposed_item_as => reportParseProblem(ctx, "Expected Lowercase Alias", "I was parsing an exposed value alias, and I expected a lowercase name after `as`.", "Aliases for exposed lowercase values must also be lowercase value names.", .{ .example = "package [oldName as newName]" }),
         .expected_upper_name_after_exposed_item_as => reportParseProblem(ctx, "Expected Uppercase Alias", "I was parsing an exposed type or tag alias, and I expected an uppercase name after `as`.", "Aliases for exposed uppercase names must also start with an uppercase letter.", .{ .example = "package [Result as Outcome]" }),
         .exposed_item_unexpected_token => reportParseProblem(ctx, "Expected Exposed Name", "I was parsing an exposing list, and I expected an exposed name.", "Exposing lists contain lowercase values, uppercase types or tags, and `Type.*` entries.", .{ .example = "package [main, Result, Result.*]" }),
-        .expected_upper_name_after_import_as => reportParseProblem(ctx, "Expected Import Alias", "I was parsing an import alias, and I expected an uppercase module name after `as`.", "Import aliases rename modules, so they must start with an uppercase letter.", .{ .example = "import Json.Decode as Decode" }),
+        .expected_upper_name_after_import_as => reportParseProblem(ctx, "Expected Import Alias", "I was parsing an import alias, and I expected an uppercase name after `as`.", "Import aliases must start with an uppercase letter.", .{ .example = "import Json/Decode as Decode" }),
         .expected_colon_after_type_annotation => reportParseProblem(ctx, "Type Application Needs Parentheses", "I was parsing a type annotation, and I found a type argument without parentheses.", "Roc type applications use parentheses around their arguments. Write `List(U8)`, not `List U8`.", .{ .example = "List(U8)" }),
         .expected_lower_ident_pat_field_name => reportParseProblem(ctx, "Expected Pattern Field", "I was parsing a record pattern, and I expected a lowercase field name.", "Record pattern fields start with lowercase names. You can bind the field directly or write `name: pattern`.", .{ .example = "{ name, age: years }" }),
         .expected_colon_after_pat_field_name => reportParseProblem(ctx, "Expected Pattern Field Colon", "I was parsing a record pattern field, and I expected `:` after the field name.", "Use a colon when a record pattern field has a nested pattern instead of just punning the field name.", .{ .example = "{ point: { x, y } }" }),
@@ -506,12 +494,13 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_close_curly_at_end_of_match => reportParseProblem(ctx, "Unclosed Match", "I was parsing a match expression, and the file ended before the closing `}`.", "Add a closing brace after the final match branch.", .{ .example = "match value {\n    Ok(x) => x\n}" }),
         .expected_open_curly_after_match => reportParseProblem(ctx, "Expected Match Body", "I was parsing a match expression, and I expected `{` after the matched value.", "Match branches are written inside braces after the expression being matched.", .{ .example = "match result {\n    Ok(x) => x\n    Err(_) => 0\n}" }),
         .expr_unexpected_token => reportParseProblem(ctx, "Unexpected Expression Syntax", "I was parsing an expression, and this token cannot start an expression here.", "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.", .{ .example = "add(1, 2)" }),
-        .crash_statement_in_expr_position => reportParseProblem(ctx, "Crash Statement In Expression", "I was parsing an expression, but `crash` starts a statement.", "If you need to crash in expression position, wrap the crash statement in a block expression.", .{ .example = "{\n    crash \"unreachable\"\n}" }),
         .return_outside_function => reportParseProblem(ctx, "Return Outside Function", "I was parsing a statement, and `return` appeared outside a function body.", "`return` exits from the current function. Move it inside a function body, or remove it if this code is already the final expression.", .{ .example = "foo = |x| {\n    if x < 0 { return Err(Negative) }\n    Ok(x)\n}" }),
         .expected_expr_record_field_name => reportParseProblem(ctx, "Expected Record Field", "I was parsing a record expression, and I expected a lowercase field name.", "Record fields start with lowercase names. After the name, either write `: value` or omit the value to use field punning.", .{ .example = "{ name: \"Ada\", age }" }),
         .record_field_name_cannot_be_var => reportParseProblem(ctx, "Invalid Record Field Name", "Record field names cannot start with a dollar sign.", "Names that start with `$` are reassignable variables declared with the `var` keyword, so they cannot be used as record field names.", .{ .show_found = false }),
+        .optional_field_mark_after_colon => reportParseProblem(ctx, "Invalid Optional Field Syntax", "I was parsing a record type, and this optional field puts the `?` after the `:`.", "Optional fields are written with the `?` before the `:`: `?:` declares the field optional.", .{ .example = "{ name ?: Str }", .show_found = false }),
         .expected_ty_apply_close_round => reportParseProblem(ctx, "Expected Type Argument End", "I was parsing type arguments, and I expected `)`.", "Type applications put their arguments inside parentheses.", .{ .example = "Dict(Str, U64)" }),
         .expected_expr_apply_close_round => reportParseProblem(ctx, "Expected Call Argument End", "I was parsing function or method call arguments, and I expected `)`.", "Function call arguments go inside parentheses and are separated with commas.", .{ .example = "add(1, 2)" }),
+        .optional_field_access_cannot_be_called_directly => reportParseProblem(ctx, "Optional Field Query Cannot Be Called Directly", "I found call arguments immediately after an optional field query.", "The `.?` operator queries a runtime-optional field and produces a `Try`, not the field value itself. Handle or propagate the query result first, then call the extracted function.", .{ .example = "call = |record, arg| record.?function?(arg)" }),
         .where_expected_open_bracket => reportParseProblem(ctx, "Expected Where Clause List", "I was parsing a `where` clause, and I expected `[`.", "Where constraints are written in a square-bracketed list after `where`.", .{ .example = "where [a.hash : a -> U64]" }),
         .where_expected_close_bracket => reportParseProblem(ctx, "Expected Where Clause End", "I was parsing a `where` clause, and I expected `]`.", "Close the where constraint list after the final constraint.", .{ .example = "where [a.hash : a -> U64]" }),
         .where_expected_var => reportParseProblem(ctx, "Expected Type Variable", "I was parsing a `where` constraint, and I expected a lowercase type variable.", "A where constraint starts with the type variable being constrained.", .{ .example = "where [a.hash : a -> U64]" }),
@@ -521,6 +510,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .import_must_be_top_level => reportParseProblem(ctx, "Import Must Be Top Level", "I was parsing an import, but imports are only allowed at the top level.", "Move this import after the module header and before declarations or executable statements.", .{ .example = "import Json\n\nmain = 1" }),
         .invalid_type_arg => reportParseProblem(ctx, "Expected Type Argument", "I was parsing type parameters, and I expected a lowercase type variable or `_`.", "Type declaration parameters are lowercase names, named underscores, or `_`.", .{ .example = "Result(ok, err)" }),
         .expr_arrow_expects_ident => reportParseProblem(ctx, "Expected Arrow Target", "I was parsing an arrow expression, and I expected a name or parenthesized expression after the arrow.", "The right side of this arrow form must start with a value name, tag name, or parenthesized expression.", .{ .example = "value -> next" }),
+        .expr_pipe_expects_ident => reportParseProblem(ctx, "Expected Pipe Target", "I was parsing a pipe expression, and I expected a name or parenthesized expression after `|>`.", "The right side of a pipe must start with a value name, tag name, or parenthesized expression.", .{ .example = "value |> next" }),
         .expr_double_dot_is_not_range => reportParseProblem(ctx, "Not A Range Operator", "I was parsing an expression, and `..` is not a range operator.", "Use `..<` for an exclusive range or `..=` for an inclusive range.", .{ .example = "1..<10\n1..=10", .show_found = false }),
         .var_only_allowed_in_a_body => reportParseProblem(ctx, "Var Outside Body", "I was parsing a statement, and `var` appeared outside a function or block body.", "Mutable variables are local body statements. Move this `var` into a body, or use an ordinary top-level declaration.", .{ .example = "main = {\n    var count = 0\n    count\n}" }),
         .var_must_have_ident => reportParseProblem(ctx, "Expected Var Name", "I was parsing a `var` statement, and I expected a lowercase name.", "A mutable variable declaration starts with `var`, followed by the variable name.", .{ .example = "var count = 0" }),
@@ -534,14 +524,16 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_ty_anno_close_round_or_comma => reportParseProblem(ctx, "Expected Type Separator", "I was parsing type parameters, and I expected `,` or `)`.", "Separate type parameters with commas and close the parameter list with `)`.", .{ .example = "Result(ok, err)" }),
         .expected_expr_comma => reportParseProblem(ctx, "Expected Comma", "I was parsing a record update, and I expected `,` before the fields.", "A record update writes the base record after `..`, then a comma, then the updated fields.", .{ .example = "{ ..person, name: \"Ada\" }" }),
         .expected_expr_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a block expression, and I expected `}` before the file ended.", "Close the block after its final statement or expression.", .{ .example = "{\n    answer = 42\n    answer\n}" }),
-        .expr_dot_suffix_not_allowed => reportParseProblem(ctx, "Expected Record Accessor", "I was parsing access after `.`, and I expected a field name or tuple index.", "Record access uses a lowercase field name like `.name`. Tuple access uses a number like `.0`. Uppercase names, malformed names, and a bare `.` are not valid accessors.", .{ .example = "person.name\npair.0" }),
-        .incomplete_import => reportParseProblem(ctx, "Incomplete Import", "I was parsing an import, and the module path is incomplete.", "Imports must name a module, optionally with a qualifier and exposing list.", .{ .example = "import Json.Decode exposing [decode]" }),
+        .expr_dot_suffix_not_allowed => reportParseProblem(ctx, "Expected Record Accessor", "I was parsing access after `.`, and I expected a field name or tuple index.", "Required record access uses `.name`, optional record access uses `.?name`, and tuple access uses `.0`. Accessor names must be lowercase and adjacent to their punctuation.", .{ .example = "person.name\nmaybe_person.?name\npair.0" }),
+        .incomplete_import => reportParseProblem(ctx, "Incomplete Import", "I was parsing an import, and the module path is incomplete.", "Imports must name a module, optionally with a qualifier and exposing list.", .{ .example = "import Json/Decode exposing [decode]" }),
         .file_import_expected_as => reportParseProblem(ctx, "Expected File Import Name", "I was parsing a file import, and I expected `as` after the path.", "File imports give the file contents a local name using `as`.", .{ .example = "import \"data.txt\" as data : Str" }),
         .file_import_expected_name => reportParseProblem(ctx, "Expected File Import Binding", "I was parsing a file import, and I expected a lowercase binding name.", "The name after `as` is the local value that will contain the imported file contents.", .{ .example = "import \"data.txt\" as data : Str" }),
         .file_import_expected_type => reportParseProblem(ctx, "Expected File Import Type", "I was parsing a file import, and I expected a type annotation.", "File imports must say whether the imported contents are `Str` or `List(U8)`.", .{ .example = "import \"data.bin\" as bytes : List(U8)" }),
         .file_import_invalid_type => reportParseProblem(ctx, "Invalid File Import Type", "I was parsing a file import type, and only `Str` or `List(U8)` is allowed.", "Use `Str` for text files and `List(U8)` for raw bytes.", .{ .example = "import \"data.txt\" as data : Str" }),
         .nominal_associated_cannot_have_final_expression => reportParseProblem(ctx, "Unexpected Associated Expression", "I was parsing associated items for a nominal type, and I found a plain final expression.", "Associated item blocks can contain associated types and values. Remove the trailing expression or turn it into a named associated value.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
         .type_alias_cannot_have_associated => reportParseProblem(ctx, "Type Alias With Associated Items", "I was parsing a type alias, but only nominal types can have associated items.", "Use `:=` to define a nominal type with associated items, or remove the associated item block from this alias.", .{ .example = "Id := U64 implements [\n    zero = @Id 0\n]" }),
+        .where_alias_cannot_have_associated => reportParseProblem(ctx, "Where Alias With Associated Items", "I was parsing a where alias, but only nominal types can have associated items.", "A where alias names a set of method constraints, so it has no associated items. Remove the associated item block.", .{ .example = "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]" }),
+        .where_alias_expected_where => reportParseProblem(ctx, "Expected Where Clause", "I was parsing a where alias declaration, and I expected `where` after the `:`.", "A where alias is declared by naming a type variable and giving it a set of method constraints.", .{ .example = "a.Sortable : where [a.compare : a -> [LT, EQ, GT]]" }),
         .deprecated_number_suffix => reportDeprecatedNumberSuffix(ctx),
         .expected_targets_colon => reportParseProblem(ctx, "Expected Targets Colon", "I was parsing a `targets` section, and I expected `:` after `targets`.", "The targets section starts with `targets:` followed by a configuration record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
         .expected_targets_open_curly => reportParseProblem(ctx, "Expected Targets Record", "I was parsing a `targets` section, and I expected `{`.", "Targets are configured with fields inside a record.", .{ .example = "targets: { linux: { inputs: [app] } }" }),
@@ -568,6 +560,9 @@ pub const Diagnostic = struct {
     pub const Tag = enum {
         multiple_platforms,
         no_platform,
+        invalid_roc_version,
+        duplicate_roc_version,
+        roc_version_key_is_reserved,
         missing_arrow,
         expected_exposes,
         expected_exposes_close_square,
@@ -576,7 +571,7 @@ pub const Diagnostic = struct {
         expected_package_or_platform_colon,
         expected_package_or_platform_string,
         expected_package_platform_close_curly,
-        expected_package_platform_open_curly,
+        expected_app_open_curly,
         expected_packages,
         expected_packages_close_curly,
         expected_packages_open_curly,
@@ -618,6 +613,8 @@ pub const Diagnostic = struct {
         import_exposing_no_open,
         import_exposing_no_close,
         expected_type_field_name,
+        /// Optional fields must be named; `_` fields are fixed layout padding.
+        optional_unnamed_record_field,
         expected_colon_after_type_field_name,
         expected_arrow,
         multi_arrow_needs_parens,
@@ -637,13 +634,15 @@ pub const Diagnostic = struct {
         expected_close_curly_at_end_of_match,
         expected_open_curly_after_match,
         expr_unexpected_token,
-        crash_statement_in_expr_position,
         return_outside_function,
         expected_expr_record_field_name,
         /// `$name` idents are reassignable variables and cannot name record fields
         record_field_name_cannot_be_var,
+        optional_field_mark_after_colon,
         expected_ty_apply_close_round,
         expected_expr_apply_close_round,
+        /// `record.?field(args)` attempts to call the `Try` produced by an optional field query.
+        optional_field_access_cannot_be_called_directly,
         where_expected_open_bracket,
         where_expected_close_bracket,
         where_expected_var,
@@ -653,7 +652,8 @@ pub const Diagnostic = struct {
         import_must_be_top_level,
         invalid_type_arg,
         expr_arrow_expects_ident,
-        /// `a..b` is not range syntax — ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
+        expr_pipe_expects_ident,
+        /// `a..b` is not range syntax—ranges are `a..<b` (exclusive) or `a..=b` (inclusive)
         expr_double_dot_is_not_range,
         var_only_allowed_in_a_body,
         var_must_have_ident,
@@ -675,6 +675,8 @@ pub const Diagnostic = struct {
         file_import_invalid_type,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
+        where_alias_cannot_have_associated,
+        where_alias_expected_where,
         deprecated_number_suffix,
 
         // Targets section parse errors
@@ -744,6 +746,19 @@ pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
     return self.env.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
 }
 
+/// The compiler version a header pins, exactly as written in the source.
+///
+/// `field_idx` is a header's `roc_version` field. Returns null when its value
+/// is not a plain string literal—the parser has already reported that as
+/// `invalid_roc_version`, and every later phase treats an unreadable pin as no
+/// pin at all rather than guessing at what was meant.
+pub fn rocVersionText(self: *const AST, field_idx: RecordField.Idx) ?[]const u8 {
+    const field = self.store.getRecordField(field_idx);
+    const value = field.value orelse return null;
+    const token = self.store.singleStringPartToken(value) orelse return null;
+    return self.resolve(token);
+}
+
 /// Resolves a fully qualified name from a chain of qualifier tokens and a final token.
 /// If there are qualifiers, returns a slice from the first qualifier to the final token.
 /// Otherwise, returns the final token text with any leading dot stripped based on the token type.
@@ -783,61 +798,88 @@ pub fn resolveQualifiedName(
     }
 }
 
-/// Resolves the full module path for an import statement.
-/// For auto-expose imports, module_name_tok points to the second-to-last token.
-/// For explicit clause imports, module_name_tok points to the first token and
-/// we iterate through consecutive uppercase tokens.
-pub fn resolveImportModulePath(self: *const AST, module_name_tok: Token.Idx, qualifier_tok: ?Token.Idx, exposes: ExposedItem.Span) []const u8 {
-    const tags = self.tokens.tokens.items(.tag);
+/// Push a qualified name assembled from its interned identifier tokens. Unlike
+/// `resolveQualifiedName`, this intentionally excludes trivia between segments.
+fn pushQualifiedNameString(
+    self: *const AST,
+    env: *const CommonEnv,
+    tree: *SExprTree,
+    qualifiers: Token.Span,
+    final_token: Token.Idx,
+) std.mem.Allocator.Error!void {
+    const qualifier_tokens = self.store.tokenSlice(qualifiers);
+    const final_ident = self.tokens.resolveIdentifier(final_token) orelse unreachable;
 
-    // Check if this is auto-expose by seeing if the first exposed item's token
-    // immediately follows module_name_tok
-    var is_auto_expose = false;
-    if (exposes.span.len > 0) {
-        const exposed_slice = self.store.exposedItemSlice(exposes);
-        if (exposed_slice.len > 0) {
-            const first_exposed = self.store.getExposedItem(exposed_slice[0]);
-            const first_exposed_tok: ?Token.Idx = switch (first_exposed) {
-                .lower_ident => |i| i.ident,
-                .upper_ident => |i| i.ident,
-                .upper_ident_star => |i| i.ident,
-                .malformed => null,
-            };
-            if (first_exposed_tok) |tok| {
-                if (tok == module_name_tok + 1) {
-                    is_auto_expose = true;
-                }
-            }
-        }
+    var byte_count = env.getIdent(final_ident).len;
+    for (qualifier_tokens) |raw_token| {
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        byte_count += env.getIdent(segment).len + 1;
     }
 
-    // Get start position (qualifier or first module segment)
-    const start_offset: usize = if (qualifier_tok) |q|
-        self.tokens.resolve(q).start.offset
-    else
-        self.tokens.resolve(module_name_tok).start.offset;
-
-    // Find the end token
-    var end_tok = module_name_tok;
-    if (!is_auto_expose) {
-        // For explicit clauses, iterate through consecutive uppercase tokens
-        var tok = module_name_tok + 1;
-        while (tok < tags.len) {
-            const tag = tags[tok];
-            if (tag == .NoSpaceDotUpperIdent or tag == .DotUpperIdent) {
-                end_tok = tok;
-                tok += 1;
-            } else {
-                break;
-            }
-        }
+    const begin = try tree.reserveStringBuffer(byte_count);
+    const buffer = tree.reservedStringBuffer(begin);
+    var offset: usize = 0;
+    for (qualifier_tokens) |raw_token| {
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        const text = env.getIdent(segment);
+        std.mem.copyForwards(u8, buffer[offset..][0..text.len], text);
+        offset += text.len;
+        buffer[offset] = '.';
+        offset += 1;
     }
+    const final_text = env.getIdent(final_ident);
+    std.mem.copyForwards(u8, buffer[offset..][0..final_text.len], final_text);
+    offset += final_text.len;
+    std.debug.assert(offset == buffer.len);
+    try tree.pushReservedString(begin, buffer);
+}
 
-    // Get end position
-    const end_offset = self.tokens.resolve(end_tok).end.offset;
-
+/// Resolves the complete target spelling selected by import parsing.
+pub fn resolveImportTarget(self: *const AST, target: ImportTarget) []const u8 {
+    const start_offset: usize = self.tokens.resolve(target.start_tok).start.offset;
+    const end_offset: usize = self.tokens.resolve(target.lastToken()).end.offset;
     return self.env.source[start_offset..end_offset];
 }
+
+/// Identifies whether an import resolves within the current package or through
+/// a declared package qualifier.
+pub const ImportOrigin = enum(u1) {
+    local,
+    package,
+};
+
+/// The explicit anchor from which a local import path is resolved.
+pub const LocalImportBase = enum(u2) {
+    importer,
+    package_root,
+    parent,
+};
+
+/// The two import hierarchies are explicit parser output. `module_name_tok`
+/// ends the source-module path; `nested_start_tok` and `nested_len` describe
+/// only the nested type path after that file boundary.
+pub const ImportTarget = struct {
+    origin: ImportOrigin,
+    base: LocalImportBase,
+    parent_count: u16,
+    start_tok: Token.Idx,
+    path_start_tok: Token.Idx,
+    module_name_tok: Token.Idx,
+    qualifier_tok: ?Token.Idx,
+    nested_start_tok: ?Token.Idx,
+    nested_len: u16,
+
+    pub fn hasNestedTypes(self: ImportTarget) bool {
+        return self.nested_len != 0;
+    }
+
+    pub fn lastToken(self: ImportTarget) Token.Idx {
+        if (self.nested_start_tok) |start| {
+            return start + self.nested_len - 1;
+        }
+        return self.module_name_tok;
+    }
+};
 
 /// Contains properties of the thing to the right of the `import` keyword.
 pub const ImportRhs = packed struct {
@@ -845,8 +887,10 @@ pub const ImportRhs = packed struct {
     aliased: u1,
     /// 1 in case the import is qualified, e.g. `pf` in `import pf.Stdout ...`
     qualified: u1,
-    /// The number of things in the exposes list. e.g. 3 in `import SomeModule exposing [a1, a2, a3]`
-    num_exposes: u30,
+    has_nested: u1,
+    origin: u1,
+    base: u2,
+    reserved: u26 = 0,
 };
 
 // Check that all packed structs are 4 bytes size as they as cast to
@@ -876,10 +920,13 @@ pub fn toSExprStr(ast: *@This(), gpa: std.mem.Allocator, env: *const CommonEnv, 
 /// 1. An alias of the form `Foo = (Bar, Baz)`
 /// 2. A nominal type of the form `Foo := [Bar, Baz]`
 /// 3. An opaque type of the form `Foo :: [Bar, Baz]`
+/// 4. A where alias of the form `a.Foo : where [a.method : a -> Str]`, which
+///    names a reusable set of method constraints rather than a type.
 pub const TypeDeclKind = enum {
     alias,
     nominal,
     @"opaque",
+    where_alias,
 };
 
 /// Represents a statement.  Not all statements are valid in all positions.
@@ -926,13 +973,9 @@ pub const Statement = union(enum) {
         region: TokenizedRegion,
     },
     import: struct {
-        module_name_tok: Token.Idx,
-        qualifier_tok: ?Token.Idx,
+        target: ImportTarget,
         alias_tok: ?Token.Idx,
         exposes: ExposedItem.Span,
-        /// True when importing like `import json.Parser.Config` where Config is auto-exposed
-        /// but Parser should not become an alias (unlike `import json.Parser exposing [Config]`)
-        nested_import: bool,
         region: TokenizedRegion,
     },
     /// File import: `import "path" as name : Type`
@@ -946,9 +989,14 @@ pub const Statement = union(enum) {
     },
     type_decl: struct {
         header: TypeHeader.Idx,
+        /// The declared type. For `.where_alias` declarations this is the
+        /// receiver type variable the constraints apply to (the `a` in
+        /// `a.Foo : where [...]`).
         anno: TypeAnno.Idx,
         kind: TypeDeclKind,
-        /// Where clause (invalid in type declarations, but preserved for error recovery/formatting)
+        /// The constraint set for `.where_alias` declarations. For every other
+        /// kind a where clause is invalid, and is preserved only for error
+        /// recovery and formatting.
         where: ?Collection.Idx,
         /// Associated items block for .nominal types
         /// (e.g. the curly braces in `Foo := [A, B].{ x = 5 }`)
@@ -1017,7 +1065,7 @@ pub const Statement = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, import.region);
 
                 // Reconstruct full qualified module name using the new helper
-                const full_module_name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes);
+                const full_module_name = ast.resolveImportTarget(import.target);
                 try tree.pushStringPair("raw", full_module_name);
 
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`
@@ -1095,6 +1143,16 @@ pub const Statement = union(enum) {
                 }
 
                 try ast.store.getTypeAnno(a.anno).pushToSExprTree(gpa, env, ast, tree);
+
+                if (a.where) |where_coll| {
+                    const where_node = tree.beginNode();
+                    try tree.pushStaticAtom("where");
+                    const where_attrs = tree.beginNode();
+                    for (ast.store.whereClauseSlice(.{ .span = ast.store.getCollection(where_coll).span })) |clause_idx| {
+                        try ast.store.getWhereClause(clause_idx).pushToSExprTree(gpa, env, ast, tree);
+                    }
+                    try tree.endNode(where_node, where_attrs);
+                }
 
                 // Add associated block if present
                 if (a.associated) |assoc| {
@@ -1301,7 +1359,7 @@ pub const Pattern = union(enum) {
         /// True when the tag was written with an argument list, including an
         /// empty argument list such as `Tag()`.
         has_args: bool = false,
-        /// True when written as `Type.(pattern)` — a nominal-value destructure
+        /// True when written as `Type.(pattern)`—a nominal-value destructure
         /// (the inverse of `Type.(value)` construction), where `tag_tok` is the
         /// nominal type and `args` is the backing pattern. False for ordinary
         /// tag patterns like `Tag(args)` / `Module.Tag`.
@@ -1678,6 +1736,37 @@ pub const BinOp = struct {
     }
 };
 
+/// Whether a record-field access segment requires the field to be present or
+/// queries a runtime-optional field.
+pub const FieldAccessMode = enum(u8) {
+    required,
+    optional,
+};
+
+/// One source-ordered segment in a contiguous record-field access path.
+///
+/// `field_token` is the composite dotted token (`.field` or `.?field`), so it
+/// carries the exact source region and spelling of this segment without a
+/// synthetic identifier expression.
+pub const FieldAccessSegment = struct {
+    field_token: Token.Idx,
+    mode: FieldAccessMode,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: base.DataSpan };
+};
+
+/// A maximal contiguous record-field access path.
+///
+/// Parentheses and non-field suffixes form path boundaries. For example,
+/// `a.?b.c.?d` is one node whose receiver is `a` and whose segments are
+/// `[b optional, c required, d optional]`, while `(a.?b).c` is two nodes.
+pub const FieldAccess = struct {
+    receiver: Expr.Idx,
+    segments: FieldAccessSegment.Span,
+    region: TokenizedRegion,
+};
+
 /// TODO
 pub const Unary = struct {
     operator: Token.Idx,
@@ -1750,6 +1839,9 @@ pub const Header = union(enum) {
         provides: Collection.Idx,
         platform_idx: RecordField.Idx,
         packages: Collection.Idx,
+        /// The optional `roc: "<version>"` entry of `packages`. Like
+        /// `platform_idx`, this still appears in `packages` too.
+        roc_version: ?RecordField.Idx,
         region: TokenizedRegion,
     },
     module: struct {
@@ -1759,6 +1851,9 @@ pub const Header = union(enum) {
     package: struct {
         exposes: Collection.Idx,
         packages: Collection.Idx,
+        /// The optional `roc: "<version>"` entry of `packages`, which still
+        /// appears in `packages` too.
+        roc_version: ?RecordField.Idx,
         region: TokenizedRegion,
     },
     platform: struct {
@@ -1766,6 +1861,9 @@ pub const Header = union(enum) {
         requires_entries: RequiresEntry.Span, // [Model : model] for main : () -> { ... }
         exposes: Collection.Idx,
         packages: Collection.Idx,
+        /// The optional `roc: "<version>"` entry of `packages`, which still
+        /// appears in `packages` too.
+        roc_version: ?RecordField.Idx,
         provides: SymbolMapEntry.Span, // provides { "roc_main": main_for_host! }
         hosted: SymbolMapEntry.Span, // hosted { "roc_stdout_line": Stdout.line! }
         targets: ?TargetsSection.Idx, // Required for new platforms, optional during migration
@@ -1793,12 +1891,25 @@ pub const Header = union(enum) {
 
     pub const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
+    /// Record which dependency-record entry pins the compiler version. The
+    /// entry also appears under `packages`; this says it was recognized as the
+    /// pin rather than as a dependency named `roc`.
+    fn pushRocVersionToSExprTree(
+        roc_version: ?RecordField.Idx,
+        ast: *const AST,
+        tree: *SExprTree,
+    ) std.mem.Allocator.Error!void {
+        const field_idx = roc_version orelse return;
+        try tree.pushStringPair("roc-version", ast.rocVersionText(field_idx) orelse "");
+    }
+
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
             .app => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("app");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try pushRocVersionToSExprTree(a.roc_version, ast, tree);
                 const attrs = tree.beginNode();
 
                 // Provides
@@ -1857,6 +1968,7 @@ pub const Header = union(enum) {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("package");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try pushRocVersionToSExprTree(a.roc_version, ast, tree);
                 const attrs = tree.beginNode();
 
                 // Exposes
@@ -1891,6 +2003,7 @@ pub const Header = union(enum) {
                 try tree.pushStaticAtom("platform");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("name", ast.resolve(a.name));
+                try pushRocVersionToSExprTree(a.roc_version, ast, tree);
                 const attrs = tree.beginNode();
 
                 // Requires Entries (for-clause syntax)
@@ -2070,11 +2183,13 @@ pub const ExposedItem = union(enum) {
     lower_ident: struct {
         as: ?Token.Idx,
         ident: Token.Idx,
+        qualifiers: Token.Span,
         region: TokenizedRegion,
     },
     upper_ident: struct {
         as: ?Token.Idx,
         ident: Token.Idx,
+        qualifiers: Token.Span,
         region: TokenizedRegion,
     },
     upper_ident_star: struct {
@@ -2575,7 +2690,12 @@ pub const TypeAnno = union(enum) {
 /// TODO
 pub const AnnoRecordField = struct {
     name: Token.Idx,
+    /// The `?` token when this field is optional, or `null` for a required field.
+    optional_mark: ?Token.Idx,
     ty: TypeAnno.Idx,
+    /// The default value expression for a defaulted field (`a : U8 ?? 10`),
+    /// or `null` for a field with no default.
+    default_value: ?Expr.Idx = null,
     region: TokenizedRegion,
 
     pub const Idx = enum(u32) { _ };
@@ -2586,10 +2706,20 @@ pub const AnnoRecordField = struct {
         try tree.pushStaticAtom("anno-record-field");
         try ast.appendRegionInfoToSexprTree(env, tree, self.region);
         try tree.pushStringPair("name", ast.resolve(self.name));
+        if (self.optional_mark != null) try tree.pushBoolPair("optional", true);
         const attrs = tree.beginNode();
 
         const anno = ast.store.getTypeAnno(self.ty);
         try anno.pushToSExprTree(gpa, env, ast, tree);
+
+        if (self.default_value) |default_idx| {
+            const default_begin = tree.beginNode();
+            try tree.pushStaticAtom("default");
+            const default_attrs = tree.beginNode();
+            const default_expr = ast.store.getExpr(default_idx);
+            try default_expr.pushToSExprTree(gpa, env, ast, tree);
+            try tree.endNode(default_begin, default_attrs);
+        }
 
         try tree.endNode(begin, attrs);
     }
@@ -2621,20 +2751,25 @@ pub const WhereClause = union(enum) {
         region: TokenizedRegion,
     },
 
-    /// Module type alias constraint.
+    /// Where alias constraint.
     ///
-    /// Specifies that a type variable must satisfy the constraints for an alias type.
-    /// This is useful to avoid writing out the constraints repeatedly which can be cumbersome and error prone
+    /// Specifies that a type variable must satisfy every constraint named by a
+    /// where alias. This avoids writing the same constraints out repeatedly,
+    /// which is cumbersome and error prone.
+    ///
+    /// `alias` names the where alias being applied, and is a `ty` (or an
+    /// `apply` over one) so that module qualification and arguments resolve
+    /// exactly the way they do for any other type name.
     ///
     /// Example:
     /// ```roc
-    /// Sort(a) : a where [a.order : elem, elem -> [LT, EQ, GT]]
+    /// elem.Sort : where [elem.order : elem -> [LT, EQ, GT]]
     ///
     /// sort : List(elem) -> List(elem) where [elem.Sort]
     /// ```
     mod_alias: struct {
         var_tok: Token.Idx,
-        name_tok: Token.Idx,
+        alias: TypeAnno.Idx,
         region: TokenizedRegion,
     },
 
@@ -2680,11 +2815,8 @@ pub const WhereClause = union(enum) {
 
                 try tree.pushStringPair("module-of", ast.resolve(a.var_tok));
 
-                // remove preceding dot
-                const alias_name = ast.resolve(a.name_tok)[1..];
-                try tree.pushStringPair("name", alias_name);
-
                 const attrs = tree.beginNode();
+                try ast.store.getTypeAnno(a.alias).pushToSExprTree(gpa, env, ast, tree);
                 try tree.endNode(begin, attrs);
             },
             .malformed => |m| {
@@ -2780,10 +2912,9 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
-    /// Record field access, written `receiver.field` with no argument list.
-    /// Calling a function stored in the field is a separate ordinary apply,
-    /// written `(receiver.field)(args)`.
-    field_access: BinOp,
+    /// A maximal contiguous record-field access path. Each segment explicitly
+    /// records required (`.field`) or optional (`.?field`) access.
+    field_access: FieldAccess,
     /// Attached method call, written `receiver.method(args)`.
     method_call: struct {
         receiver: Expr.Idx,
@@ -2825,6 +2956,10 @@ pub const Expr = union(enum) {
         region: TokenizedRegion,
     },
     dbg: struct {
+        expr: Expr.Idx,
+        region: TokenizedRegion,
+    },
+    crash: struct {
         expr: Expr.Idx,
         region: TokenizedRegion,
     },
@@ -2883,10 +3018,8 @@ pub const Expr = union(enum) {
     pub const Span = struct { span: base.DataSpan };
 
     pub fn as_string_part_region(self: @This()) Allocator.Error!TokenizedRegion {
-        switch (self) {
-            .string_part => |part| return part.region,
-            else => return error.ExpectedStringPartRegion,
-        }
+        if (self != .string_part) return error.ExpectedStringPartRegion;
+        return self.string_part.region;
     }
 
     /// Extract the region from any Expr variant
@@ -2919,6 +3052,7 @@ pub const Expr = union(enum) {
             .if_without_else => |e| e.region,
             .match => |e| e.region,
             .dbg => |e| e.region,
+            .crash => |e| e.region,
             .block => |e| e.region,
             .record_builder => |e| e.region,
             .nominal_record => |e| e.region,
@@ -3107,10 +3241,11 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-tag");
                 try ast.appendRegionInfoToSexprTree(env, tree, tag.region);
 
-                // Resolve the fully qualified name
-                const strip_tokens = [_]Token.Tag{.NoSpaceDotUpperIdent};
-                const fully_qualified_name = ast.resolveQualifiedName(tag.qualifiers, tag.token, &strip_tokens);
-                try tree.pushStringPair("raw", fully_qualified_name);
+                const raw_begin = tree.beginNode();
+                try tree.pushStaticAtom("raw");
+                try ast.pushQualifiedNameString(env, tree, tag.qualifiers, tag.token);
+                const raw_attrs = tree.beginNode();
+                try tree.endNode(raw_begin, raw_attrs);
                 const attrs = tree.beginNode();
 
                 try tree.endNode(begin, attrs);
@@ -3208,10 +3343,7 @@ pub const Expr = union(enum) {
                 // Add raw attribute
                 const raw_begin = tree.beginNode();
                 try tree.pushStaticAtom("raw");
-                // Resolve the fully qualified name
-                const strip_tokens = [_]Token.Tag{ .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent };
-                const fully_qualified_name = ast.resolveQualifiedName(ident.qualifiers, ident.token, &strip_tokens);
-                try tree.pushString(fully_qualified_name);
+                try ast.pushQualifiedNameString(env, tree, ident.qualifiers, ident.token);
                 const attrs2 = tree.beginNode();
                 try tree.endNode(raw_begin, attrs2);
 
@@ -3222,6 +3354,16 @@ pub const Expr = union(enum) {
             .dbg => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-dbg");
+                const attrs = tree.beginNode();
+
+                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
+
+                try tree.endNode(begin, attrs);
+            },
+            .crash => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-crash");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
@@ -3328,11 +3470,21 @@ pub const Expr = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
-                // Push left expression
-                try ast.store.getExpr(a.left).pushToSExprTree(gpa, env, ast, tree);
+                const receiver = tree.beginNode();
+                try tree.pushStaticAtom("receiver");
+                const receiver_attrs = tree.beginNode();
+                try ast.store.getExpr(a.receiver).pushToSExprTree(gpa, env, ast, tree);
+                try tree.endNode(receiver, receiver_attrs);
 
-                // Push right expression
-                try ast.store.getExpr(a.right).pushToSExprTree(gpa, env, ast, tree);
+                for (ast.store.fieldAccessSegmentSlice(a.segments)) |segment| {
+                    const segment_node = tree.beginNode();
+                    try tree.pushStaticAtom("segment");
+                    try tree.pushStringPair("mode", @tagName(segment.mode));
+                    const field_ident = ast.tokens.resolveIdentifier(segment.field_token) orelse unreachable;
+                    try tree.pushStringPair("field", env.getIdent(field_ident));
+                    const segment_attrs = tree.beginNode();
+                    try tree.endNode(segment_node, segment_attrs);
+                }
 
                 try tree.endNode(begin, attrs);
             },

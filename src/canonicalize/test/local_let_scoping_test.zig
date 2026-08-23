@@ -30,11 +30,8 @@ fn scopingDiagnosticCounts(source: []const u8) ScopingTestError!Counts {
 
     var counts = Counts{};
     for (diagnostics) |diag| {
-        switch (diag) {
-            .local_reference_before_definition => counts.forward_ref += 1,
-            .mutually_recursive_local_definitions => counts.mutual += 1,
-            else => {},
-        }
+        if (diag == .local_reference_before_definition) counts.forward_ref += 1;
+        if (diag == .mutually_recursive_local_definitions) counts.mutual += 1;
     }
     return counts;
 }

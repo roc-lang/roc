@@ -8,19 +8,9 @@ type=expr
 if x > 5 "big" else "small"
 ~~~
 # EXPECTED
-UNCONDITIONAL CONDITION - if_expression.md:1:4:1:9
+NIL
 # PROBLEMS
-
-┌─────────────────────────┐
-│ UNCONDITIONAL CONDITION ├─ This if condition is known at compile time, so ──┐
-└┬────────────────────────┘  this conditional will always make the same       │
- │                           choice.                                          │
- │                                                                            │
- │  if x > 5 "big" else "small"                                               │
- │     ‾‾‾‾‾                                                                  │
- └────────────────────────────────────────────────────── if_expression.md:1:4 ┘
-
-
+NIL
 # TOKENS
 ~~~zig
 KwIf,LowerIdent,OpGreaterThan,Int,StringStart,StringPart,StringEnd,KwElse,StringStart,StringPart,StringEnd,
@@ -46,11 +36,9 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-dispatch-call (method "is_gt") (constraint-fn-var 208)
-				(receiver
-					(e-runtime-error (tag "ident_not_in_scope")))
-				(args
-					(e-num (value "5"))))
+			(e-binop (op "gt")
+				(e-runtime-error (tag "ident_not_in_scope"))
+				(e-num (value "5")))
 			(e-string
 				(e-literal (string "big")))))
 	(if-else

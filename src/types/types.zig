@@ -41,11 +41,12 @@ test {
     // Folding `binop_negated` and `num_literal` into the `origin` union is a
     // semantic regrouping (kind-specific payloads now live inside their variant),
     // not a size win: the literal-origin variant still embeds a full `NumeralInfo`,
-    // so the `Origin` union dominates the struct. Provenance adds a raw expr index
-    // (4B) plus a where-clause expect region (8B), both `maxInt`-sentinel packed.
-    // The optional derived-map payload selection adds its tag, payload index,
-    // and optional discriminant without affecting type identity.
-    try std.testing.expectEqual(96, @sizeOf(StaticDispatchConstraint));
+    // so the `Origin` union dominates the struct. Provenance adds one raw expr
+    // index (4B); expect effects live in checker-owned slots because they belong
+    // to call occurrences, not copied type constraints. The optional derived-map
+    // payload selection adds its tag, payload index, and optional discriminant
+    // without affecting type identity.
+    try std.testing.expectEqual(88, @sizeOf(StaticDispatchConstraint));
     // Directed effect dependencies must survive type generalization,
     // instantiation, and cross-module copying, so they live with the function
     // payload rather than in checker-only side state.
@@ -93,44 +94,28 @@ pub const Var = enum(u32) {
 /// A mapping from polymorphic type variables to concrete type variables
 pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var), 80);
 
-/// TypeScope represents nested type scopes for resolving polymorphic type variables.
-/// Each HashMap in the list represents a scope level, mapping polymorphic type variables
-/// to their resolved monomorphic equivalents.
-pub const TypeScope = struct {
-    scopes: std.array_list.Managed(VarMap),
-
-    pub fn init(allocator: std.mem.Allocator) TypeScope {
-        return .{
-            .scopes = std.array_list.Managed(VarMap).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *TypeScope) void {
-        for (self.scopes.items) |*scope| {
-            scope.deinit();
-        }
-        self.scopes.deinit();
-    }
-
-    /// Look up a type variable in all nested scopes, returning the mapped variable if found
-    pub fn lookup(self: *const TypeScope, var_to_find: Var) ?Var {
-        for (self.scopes.items) |*scope| {
-            if (scope.get(var_to_find)) |mapped_var| {
-                return mapped_var;
-            }
-        }
-        return null;
-    }
+/// Checker decisions a descriptor carries alongside its content. Descriptors
+/// live in a struct-of-arrays keyed by every union-find resolve, so these share
+/// one byte-wide column instead of one column each.
+pub const DescriptorFlags = packed struct(u8) {
+    /// The checker closed this otherwise-unresolved variable to `[]` after
+    /// proving that no runtime constructor can inhabit it. The checked output
+    /// preserves the variable identity and carries `[]` only as its row default.
+    empty_tag_union_is_default: bool = false,
+    /// Checking rejected a static-dispatch obligation whose constraint function
+    /// type is this equivalence class. The marker rides the class rather than a
+    /// raw variable index, so every site whose constraint callable unified into
+    /// the same class reports the same rejection. See design.md's "Static
+    /// Dispatch In Monotype" section.
+    static_dispatch_rejected: bool = false,
+    _unused: u6 = 0,
 };
 
 /// A type descriptor
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
-    /// The checker closed this otherwise-unresolved variable to `[]` after
-    /// proving that no runtime constructor can inhabit it. The checked output
-    /// preserves the variable identity and carries `[]` only as its row default.
-    empty_tag_union_is_default: bool = false,
+    flags: DescriptorFlags = .{},
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -189,6 +174,7 @@ pub const Content = union(enum(u8)) {
     flex: Flex,
     rigid: Rigid,
     alias: Alias,
+    field_presence: FieldPresence,
     structure: FlatType,
     err,
 
@@ -202,10 +188,19 @@ pub const Content = union(enum(u8)) {
                     .record => |record| {
                         return record;
                     },
-                    else => return null,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .field_presence, .err => return null,
         }
     }
 
@@ -217,10 +212,19 @@ pub const Content = union(enum(u8)) {
                     .tag_union => |tag_union| {
                         return tag_union;
                     },
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .field_presence, .err => return null,
         }
     }
 
@@ -232,10 +236,19 @@ pub const Content = union(enum(u8)) {
                     .nominal_type => |nominal_type| {
                         return nominal_type;
                     },
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .fn_pure,
+                    .fn_effectful,
+                    .fn_unbound,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .field_presence, .err => return null,
         }
     }
 
@@ -247,10 +260,17 @@ pub const Content = union(enum(u8)) {
                     .fn_pure => |func| return func,
                     .fn_effectful => |func| return func,
                     .fn_unbound => |func| return func,
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .field_presence, .err => return null,
         }
     }
 
@@ -262,10 +282,17 @@ pub const Content = union(enum(u8)) {
                     .fn_pure => |func| return .{ .func = func, .ext = .pure },
                     .fn_effectful => |func| return .{ .func = func, .ext = .effectful },
                     .fn_unbound => |func| return .{ .func = func, .ext = .unbound },
-                    else => return null,
+                    .record,
+                    .record_unbound,
+                    .tuple,
+                    .nominal_type,
+                    .empty_record,
+                    .tag_union,
+                    .empty_tag_union,
+                    => return null,
                 }
             },
-            else => return null,
+            .flex, .rigid, .alias, .field_presence, .err => return null,
         }
     }
 };
@@ -332,7 +359,7 @@ pub const Alias = struct {
     origin_module: ModuleIdentity.Idx,
     /// CIR statement index of the source declaration in origin_module, when
     /// this alias came from a concrete source declaration. A decl LOCATOR for
-    /// resolving method tables in the owning env — never part of identity.
+    /// resolving method tables in the owning env—never part of identity.
     source_decl: SourceDecl = .none,
 };
 
@@ -456,6 +483,51 @@ const NominalSource = packed struct(u32) {
 
     pub fn originIsBuiltin(self: NominalSource) bool {
         return self.builtin_origin;
+    }
+};
+
+// field presence //
+
+/// The solved KIND of a record field's presence axis (design.md "Field Kinds
+/// (All-Dynamic Optional Fields)" and "Defaulted Fields").
+///
+/// `present` is a required field: always there, plain inline slot, read with
+/// `.field`. `optional` is an optional field: may be missing AT RUNTIME,
+/// tagged slot, read with `.?field`. `defaulted` is a required field whose
+/// CONSTRUCTION may be omitted (the slot is materialized from the default):
+/// inline slot, read with `.field`. In an ordinary value relation,
+/// `required ~ defaulted` merges to `required`: a shared field is already
+/// supplied, so the default identity is irrelevant to that value. The
+/// checker's explicit required-access relation preserves a defaulted
+/// declaration while accepting its inline slot. `required ~ optional` and
+/// `optional ~ defaulted` are mismatches (one value has one layout), and two
+/// defaulted kinds unify exactly when their default identities are equal.
+///
+pub const FieldPresence = union(enum) {
+    required,
+    optional,
+    defaulted: DefaultId,
+};
+
+/// Stable identity of a defaulted field's default value (design.md
+/// "Defaulted Fields"). The default expression itself never lives in the
+/// type graph: the kind carries only this key—the declaring module's deep
+/// content identity plus the canonical (CIR) node index of the default
+/// expression in that module. Like `Alias.origin_module`, crossing a store
+/// boundary rebases the origin half. Two defaulted kinds unify exactly when
+/// their identities are equal: one written default is one default, and two
+/// separately written defaults never merge (even if textually identical).
+pub const DefaultId = struct {
+    /// Env-local index of the declaring module's deep content identity in
+    /// the owning store's identity table (see `base.module_identity`).
+    origin_module: ModuleIdentity.Idx,
+    /// The CIR expression node index of the default value in the declaring
+    /// module—stable, deterministic, and directly resolvable to the
+    /// expression for construction-site lowering.
+    expr_node: u32,
+
+    pub fn eql(a: DefaultId, b: DefaultId) bool {
+        return a.origin_module == b.origin_module and a.expr_node == b.expr_node;
     }
 };
 
@@ -606,7 +678,7 @@ pub const NominalDecl = struct {
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).
     origin_module: ModuleIdentity.Idx,
-    /// Packed statement locator plus opacity and builtin-origin bits — the
+    /// Packed statement locator plus opacity and builtin-origin bits—the
     /// same bits nominal applications of this declaration carry. The
     /// statement must be present: a declaration entry without a source
     /// statement has no key and cannot be registered.
@@ -616,7 +688,7 @@ pub const NominalDecl = struct {
     /// the application's actual args for these, positionally.
     formals: Var.SafeList.Range,
     /// The declaration's backing template. It references `formals` and is
-    /// never unified against directly — backing access instantiates a copy
+    /// never unified against directly—backing access instantiates a copy
     /// with actual args substituted for formals.
     backing: Var,
     /// Declaration flags, padding-free so serialized bytes are deterministic.
@@ -681,8 +753,8 @@ pub const RecordField = struct {
 
     /// The name of the field
     name: Ident.Idx,
-    /// The type of the field's value
-    var_: Var,
+    /// Whether the field is required or optional, and it's type
+    presence: Presence,
 
     /// A function to be passed into std.mem.sort to sort fields by name
     pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
@@ -695,6 +767,65 @@ pub const RecordField = struct {
         const b_text = store.getText(b.name);
         return std.mem.order(u8, a_text, b_text);
     }
+
+    /// Whether a record field's kind is concretely required or still carried
+    /// on a presence var (design.md "Field Kinds (All-Dynamic Optional
+    /// Fields)").
+    pub const Presence = struct {
+        /// Every field has a value type variable.
+        var_: Var,
+        /// A field-kind variable, or `no_presence_var` for a required field.
+        presence_var: Var,
+
+        const no_presence_var: Var = @enumFromInt(std.math.maxInt(u32));
+
+        pub const Decoded = union(enum) {
+            required: Var,
+            unknown: struct {
+                presence: Var,
+                var_: Var,
+            },
+        };
+
+        /// Construct a required field with no kind variable.
+        pub fn required(var_: Var) @This() {
+            return .{ .var_ = var_, .presence_var = no_presence_var };
+        }
+
+        /// Construct a field whose kind is carried by `presence`.
+        pub fn unknown(presence: Var, var_: Var) @This() {
+            std.debug.assert(presence != no_presence_var);
+            return .{ .var_ = var_, .presence_var = presence };
+        }
+
+        /// Recover the semantic field-kind representation.
+        pub fn decode(self: @This()) Decoded {
+            if (self.presence_var == no_presence_var) {
+                return .{ .required = self.var_ };
+            }
+
+            return .{ .unknown = .{ .presence = self.presence_var, .var_ = self.var_ } };
+        }
+
+        /// The field's value type variable. Every field carries one (unknown
+        /// fields on the second axis, independent of the solved kind). Graph
+        /// walks that only care about the type axis (rank adjustment, layout,
+        /// most consumers) use this; walks that must visit every reachable
+        /// variable also visit `presenceVar`.
+        pub fn typeVar(self: @This()) Var {
+            return self.var_;
+        }
+
+        /// The presence-axis variable of a kind-carrying field.
+        ///
+        /// Only fields with a dynamic kind carry one; a concrete `required`
+        /// field has no presence variable. This variable resolves to a
+        /// `Content.field_presence` (or stays flex) exactly like a type
+        /// variable resolves to a structure.
+        pub fn presenceVar(self: @This()) ?Var {
+            return if (self.presence_var == no_presence_var) null else self.presence_var;
+        }
+    };
 
     /// A safe multi list of record fields
     pub const SafeMultiList = MkSafeMultiList(Self);
@@ -714,6 +845,11 @@ pub const TwoRecordFields = struct {
     /// A safe multi list of tag union fields
     pub const SafeMultiList = MkSafeMultiList(@This());
 };
+
+test "record fields avoid tagged presence padding" {
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(RecordField.Presence));
+    try std.testing.expectEqual(@as(usize, 12), @sizeOf(RecordField));
+}
 
 // tag unions //
 
@@ -770,7 +906,7 @@ pub const TwoTags = struct {
 /// constraint.
 ///
 /// Derived once from the parser's exact digit facts (the module env's numeral
-/// table) — never from a pre-baked concrete value — so every stage that asks
+/// table)—never from a pre-baked concrete value—so every stage that asks
 /// "does this literal fit type T?" reads the same precomputed answer from the
 /// same computation (src/types/numeral.zig). Conversions to concrete bits do
 /// not read this struct at all; they consume the exact digits directly at
@@ -783,7 +919,7 @@ pub const NumeralInfo = struct {
     magnitude: [16]u8,
 
     /// Whether `magnitude` holds the combined digits. False for literals
-    /// whose digits exceed u128 — their `fits` set is still exact.
+    /// whose digits exceed u128—their `fits` set is still exact.
     has_magnitude: bool,
 
     /// Count of decimal digits after the point (0 for integer literals).
@@ -797,7 +933,7 @@ pub const NumeralInfo = struct {
     /// Whether the literal had a leading minus sign.
     is_negative: bool,
 
-    /// Whether the literal was written fractionally — with a decimal point or
+    /// Whether the literal was written fractionally—with a decimal point or
     /// nonzero fractional digits. `1e5` is not fractional; `3.0` is.
     is_fractional: bool,
 
@@ -859,7 +995,7 @@ pub const NumeralInfo = struct {
     ///
     /// Identity is the recorded digits, NOT the normalized value: `1.50`
     /// records {magnitude 150, scale 2} and hashes differently from `1.5`'s
-    /// {15, 1}. This is deliberate — leading/trailing-zero spellings are
+    /// {15, 1}. This is deliberate—leading/trailing-zero spellings are
     /// vanishingly rare in practice, so normalizing every literal's digits
     /// at key time to deduplicate them would be a net perf loss. The only
     /// cost of a missed match is a canonical-key/digest cache miss between
@@ -941,7 +1077,7 @@ pub const StaticDispatchConstraint = struct {
     /// Where this constraint was introduced, so ambiguity can be reported at the
     /// user's own expression without reconstructing var->expr maps after the
     /// fact. Copied verbatim by instantiation and cross-module import. This is
-    /// METADATA: it is deliberately excluded from type identity — canonical type
+    /// METADATA: it is deliberately excluded from type identity—canonical type
     /// keys (`writeConstraints`) and unification content-equality never read it,
     /// so two structurally identical constraints with different provenance stay
     /// equal.
@@ -960,14 +1096,13 @@ pub const StaticDispatchConstraint = struct {
     /// raw `CIR.Expr.Idx` of the expression that created the constraint, stored
     /// as a plain index because `types` sits below `canonicalize` in the layering
     /// and cannot name `CIR.Expr.Idx`; the checker converts it back. It is
-    /// module-local — after cross-module import it refers to the ORIGINATING
-    /// module's CIR. `expect_region` is the where-clause "expect" region, set
-    /// only when the constraint was created inside a where-clause annotation
-    /// context (distinct from the intro expr's own region). Both use a `maxInt`
-    /// sentinel for "absent" so the record grows by only an index + a region.
+    /// module-local—after cross-module import it refers to the ORIGINATING
+    /// module's CIR. It uses a `maxInt` sentinel for "absent" so the record is
+    /// exactly one index. Effect context belongs to checker-owned effect slots,
+    /// not constraint provenance: constraints are copied and merged, while an
+    /// effect belongs to the expression occurrence that performs the call.
     pub const Provenance = struct {
         intro_expr: OptExprIdx = .none,
-        expect_region: OptRegion = OptRegion.none,
 
         /// An optional raw `CIR.Expr.Idx`. `none` marks a synthetic constraint
         /// with no introducing expression.
@@ -985,32 +1120,32 @@ pub const StaticDispatchConstraint = struct {
                 return if (self == .none) null else @intFromEnum(self);
             }
         };
+    };
 
-        /// An optional region packed into a `Region` using a `maxInt` start
-        /// offset as the "absent" sentinel (a real region never starts at
-        /// `maxInt`), avoiding the extra tag byte a Zig optional would add.
-        pub const OptRegion = struct {
-            region: base.Region,
+    /// An optional region packed into a `Region` using a `maxInt` start offset
+    /// as the "absent" sentinel (a real region never starts at `maxInt`),
+    /// avoiding the extra tag byte a Zig optional would add.
+    pub const OptRegion = struct {
+        region: base.Region,
 
-            pub const none = OptRegion{ .region = .{
-                .start = .{ .offset = std.math.maxInt(u32) },
-                .end = .{ .offset = std.math.maxInt(u32) },
-            } };
+        pub const none = OptRegion{ .region = .{
+            .start = .{ .offset = std.math.maxInt(u32) },
+            .end = .{ .offset = std.math.maxInt(u32) },
+        } };
 
-            pub fn some(region: base.Region) OptRegion {
-                std.debug.assert(region.start.offset != std.math.maxInt(u32));
-                return .{ .region = region };
-            }
+        pub fn some(region: base.Region) OptRegion {
+            std.debug.assert(region.start.offset != std.math.maxInt(u32));
+            return .{ .region = region };
+        }
 
-            /// The region, or null when absent.
-            pub fn get(self: OptRegion) ?base.Region {
-                return if (self.region.start.offset == std.math.maxInt(u32)) null else self.region;
-            }
-        };
+        /// The region, or null when absent.
+        pub fn get(self: OptRegion) ?base.Region {
+            return if (self.region.start.offset == std.math.maxInt(u32)) null else self.region;
+        }
     };
 
     pub const InterpolationMetadata = struct {
-        expr_region: Provenance.OptRegion = Provenance.OptRegion.none,
+        expr_region: OptRegion = OptRegion.none,
         item_var: Var = no_var,
         interpolated_parts: InterpolationPartMetadata.SafeList.Range = .empty(),
 
@@ -1025,7 +1160,7 @@ pub const StaticDispatchConstraint = struct {
 
     /// The kinds of literal that desugar to open literal-conversion constraints.
     /// Adding a variant makes every kind-keyed `switch` fail to compile until
-    /// handled — the exhaustiveness *is* the checklist.
+    /// handled—the exhaustiveness *is* the checklist.
     pub const LiteralKind = enum(u4) {
         numeral, // numeric literal, dispatches `from_numeral`
         quote, // string literal, dispatches `from_quote`
@@ -1060,7 +1195,7 @@ pub const StaticDispatchConstraint = struct {
         /// uses (which stays a valid polymorphic signature). The bit rides the
         /// constraint itself through instantiation and unification merges (see
         /// unify.zig), including across module boundaries where the originating
-        /// scheme's body is not otherwise visible — module-local provenance like
+        /// scheme's body is not otherwise visible—module-local provenance like
         /// `intro_expr` cannot substitute for it.
         where_clause: struct { body_required: bool = false },
         from_literal: LiteralInfo, // From a literal conversion (from_numeral, from_quote, or from_interpolation)
@@ -1074,7 +1209,7 @@ pub const StaticDispatchConstraint = struct {
                     .quote => null,
                     .interpolation => null,
                 },
-                else => null,
+                .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
             };
         }
 
@@ -1082,7 +1217,7 @@ pub const StaticDispatchConstraint = struct {
         pub fn literalKind(self: Origin) ?LiteralKind {
             return switch (self) {
                 .from_literal => |lit| lit,
-                else => null,
+                .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
             };
         }
 
@@ -1091,7 +1226,7 @@ pub const StaticDispatchConstraint = struct {
         pub fn binopNegated(self: Origin) bool {
             return switch (self) {
                 .desugared_binop => |binop| binop.negated,
-                else => false,
+                .desugared_unaryop, .method_call, .where_clause, .from_literal => false,
             };
         }
     };
@@ -1132,15 +1267,4 @@ pub const TwoStaticDispatchConstraints = struct {
 
     /// A safe multi list of tag union fields
     pub const SafeMultiList = MkSafeMultiList(@This());
-};
-
-/// Polarity of a type, or roughly, what side of an arrow it appears on.
-pub const Polarity = enum {
-    /// A type that appears in negative/input position
-    neg,
-    /// A type that appears in positive/output position
-    pos,
-
-    pub const lhs = Polarity.neg;
-    pub const rhs = Polarity.pos;
 };

@@ -21,10 +21,8 @@ fn rand_idx(random: std.Random, comptime T: type) T {
         };
     }
 
-    return switch (@typeInfo(T)) {
-        .@"enum" => @enumFromInt(random.int(u32)),
-        else => @compileError("rand_idx needs an explicit constructor for this index type"),
-    };
+    if (@typeInfo(T) != .@"enum") @compileError("rand_idx needs an explicit constructor for this index type");
+    return @enumFromInt(random.int(u32));
 }
 
 /// Generate a random token index.
@@ -45,7 +43,7 @@ fn rand_region(random: std.Random) AST.TokenizedRegion {
 /// Helper to create a `DataSpan` from raw start and length positions.
 fn rand_span(random: std.Random) base.DataSpan {
     const start = random.int(u32);
-    const len = random.int(u30); // Constrain len to fit within u30 (used by ImportRhs.num_exposes)
+    const len = random.int(u32);
     return base.DataSpan{
         .start = start,
         .len = len,
@@ -67,6 +65,7 @@ test "NodeStore round trip - Headers" {
             .packages = rand_idx(random, AST.Collection.Idx),
             .platform_idx = rand_idx(random, AST.RecordField.Idx),
             .provides = rand_idx(random, AST.Collection.Idx),
+            .roc_version = @enumFromInt(7),
             .region = rand_region(random),
         },
     });
@@ -82,6 +81,7 @@ test "NodeStore round trip - Headers" {
         .package = .{
             .exposes = rand_idx(random, AST.Collection.Idx),
             .packages = rand_idx(random, AST.Collection.Idx),
+            .roc_version = null,
             .region = rand_region(random),
         },
     });
@@ -95,6 +95,7 @@ test "NodeStore round trip - Headers" {
             .hosted = .{ .span = rand_span(random), .layout = .expanded },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
+            .roc_version = @enumFromInt(3),
             .region = rand_region(random),
         },
     });
@@ -214,44 +215,76 @@ test "NodeStore round trip - Statement" {
     try statements.append(gpa, AST.Statement{
         .import = .{
             .alias_tok = null,
-            .module_name_tok = rand_token_idx(random),
-            .qualifier_tok = null,
+            .target = .{
+                .origin = .local,
+                .base = .importer,
+                .parent_count = 0,
+                .start_tok = rand_token_idx(random),
+                .path_start_tok = rand_token_idx(random),
+                .module_name_tok = rand_token_idx(random),
+                .qualifier_tok = null,
+                .nested_start_tok = null,
+                .nested_len = 0,
+            },
             .region = rand_region(random),
             .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
-            .nested_import = false,
         },
     });
     // Import with alias
     try statements.append(gpa, AST.Statement{
         .import = .{
             .alias_tok = rand_token_idx(random),
-            .module_name_tok = rand_token_idx(random),
-            .qualifier_tok = null,
+            .target = .{
+                .origin = .local,
+                .base = .package_root,
+                .parent_count = 0,
+                .start_tok = rand_token_idx(random),
+                .path_start_tok = rand_token_idx(random),
+                .module_name_tok = rand_token_idx(random),
+                .qualifier_tok = null,
+                .nested_start_tok = null,
+                .nested_len = 0,
+            },
             .region = rand_region(random),
             .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
-            .nested_import = false,
         },
     });
     // Import with qualifier but no alias
     try statements.append(gpa, AST.Statement{
         .import = .{
             .alias_tok = null,
-            .module_name_tok = rand_token_idx(random),
-            .qualifier_tok = rand_token_idx(random),
+            .target = .{
+                .origin = .package,
+                .base = .importer,
+                .parent_count = 0,
+                .start_tok = rand_token_idx(random),
+                .path_start_tok = rand_token_idx(random),
+                .module_name_tok = rand_token_idx(random),
+                .qualifier_tok = rand_token_idx(random),
+                .nested_start_tok = rand_token_idx(random),
+                .nested_len = 1,
+            },
             .region = rand_region(random),
             .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
-            .nested_import = false,
         },
     });
     // Import with both qualifier and alias
     try statements.append(gpa, AST.Statement{
         .import = .{
             .alias_tok = rand_token_idx(random),
-            .module_name_tok = rand_token_idx(random),
-            .qualifier_tok = rand_token_idx(random),
+            .target = .{
+                .origin = .package,
+                .base = .importer,
+                .parent_count = 0,
+                .start_tok = rand_token_idx(random),
+                .path_start_tok = rand_token_idx(random),
+                .module_name_tok = rand_token_idx(random),
+                .qualifier_tok = rand_token_idx(random),
+                .nested_start_tok = null,
+                .nested_len = 0,
+            },
             .region = rand_region(random),
             .exposes = AST.ExposedItem.Span{ .span = rand_span(random) },
-            .nested_import = false,
         },
     });
     try statements.append(gpa, AST.Statement{
@@ -756,9 +789,8 @@ test "NodeStore round trip - Expr" {
 
     try expressions.append(gpa, AST.Expr{
         .field_access = .{
-            .left = rand_idx(random, AST.Expr.Idx),
-            .right = rand_idx(random, AST.Expr.Idx),
-            .operator = rand_token_idx(random),
+            .receiver = rand_idx(random, AST.Expr.Idx),
+            .segments = .{ .span = rand_span(random) },
             .region = rand_region(random),
         },
     });
@@ -843,6 +875,12 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .crash = .{
+            .expr = rand_idx(random, AST.Expr.Idx),
+            .region = rand_region(random),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .record_builder = .{
             .fields = AST.RecordField.Span{ .span = rand_span(random) },
             .mapper = rand_idx(random, AST.Expr.Idx),
@@ -911,6 +949,43 @@ test "NodeStore round trip - Expr" {
         std.debug.print("Please add or remove test cases for missing expression variants.\n", .{});
         return error.IncompleteExprTestCoverage;
     }
+}
+
+test "NodeStore preserves flat field-access paths" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 3);
+    defer store.deinit();
+
+    const receiver = try store.addExpr(.{ .ident = .{
+        .token = 10,
+        .qualifiers = .{ .span = .{ .start = 0, .len = 0 } },
+        .region = .{ .start = 10, .end = 11 },
+    } });
+    const required = try store.addOrExtendFieldAccess(
+        receiver,
+        .{ .field_token = 11, .mode = .required },
+        .{ .start = 10, .end = 12 },
+    );
+    const mixed = try store.addOrExtendFieldAccess(
+        required,
+        .{ .field_token = 12, .mode = .optional },
+        .{ .start = 10, .end = 13 },
+    );
+
+    try testing.expectEqual(required, mixed);
+    const mixed_node = store.nodes.get(@enumFromInt(@intFromEnum(mixed)));
+    try testing.expectEqual(.field_access, mixed_node.tag);
+
+    const access = store.getExpr(mixed).field_access;
+    try testing.expectEqual(receiver, access.receiver);
+    try testing.expectEqual(AST.TokenizedRegion{ .start = 10, .end = 13 }, access.region);
+
+    const segments = store.fieldAccessSegmentSlice(access.segments);
+    try testing.expectEqual(@as(usize, 2), segments.len);
+    try testing.expectEqual(AST.FieldAccessSegment{ .field_token = 11, .mode = .required }, segments[0]);
+    try testing.expectEqual(AST.FieldAccessSegment{ .field_token = 12, .mode = .optional }, segments[1]);
+    try testing.expect(store.fieldAccessContainsOptional(mixed));
+    try testing.expect(!store.fieldAccessContainsOptional(receiver));
 }
 
 test "NodeStore round trip - Targets" {
@@ -1055,6 +1130,51 @@ test "NodeStore rejects optional index sentinel overflow in release builds" {
     }));
 }
 
+test "NodeStore round trip - annotation record field optional marker" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 4);
+    defer store.deinit();
+
+    const fields = [_]AST.AnnoRecordField{
+        .{
+            .name = 1,
+            .optional_mark = null,
+            .ty = @enumFromInt(2),
+            .region = .{ .start = 1, .end = 3 },
+        },
+        .{
+            .name = 4,
+            .optional_mark = 0,
+            .ty = @enumFromInt(5),
+            .region = .{ .start = 4, .end = 7 },
+        },
+        .{
+            .name = std.math.maxInt(u32),
+            .optional_mark = std.math.maxInt(u32) - 1,
+            .ty = @enumFromInt(std.math.maxInt(u32)),
+            .region = .{ .start = std.math.maxInt(u32) - 1, .end = std.math.maxInt(u32) },
+        },
+    };
+
+    for (fields) |field| {
+        const idx = try store.addAnnoRecordField(field);
+        try testing.expectEqualDeep(field, try store.getAnnoRecordField(idx));
+    }
+}
+
+test "NodeStore rejects optional annotation field marker sentinel overflow" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 2);
+    defer store.deinit();
+
+    try testing.expectError(error.OutOfMemory, store.addAnnoRecordField(.{
+        .name = 1,
+        .optional_mark = std.math.maxInt(u32),
+        .ty = @enumFromInt(2),
+        .region = .{ .start = 0, .end = 1 },
+    }));
+}
+
 test "NodeStore rejects unaddressable extra data reservations in release builds" {
     const gpa = testing.allocator;
     var store = try NodeStore.initCapacity(gpa, 16);
@@ -1073,6 +1193,7 @@ test "NodeStore rejects unaddressable extra data reservations in release builds"
             .hosted = .{ .span = .{ .start = 0, .len = 0 } },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
+            .roc_version = null,
             .region = .{ .start = 0, .end = 0 },
         },
     }));

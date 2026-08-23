@@ -25,6 +25,7 @@ pub const RegisterPlacement = call.RegisterPlacement;
 pub const RegisterCarrier = call.RegisterCarrier;
 pub const RegPiece = call.RegPiece;
 pub const RegClass = call.RegClass;
+pub const RegExtension = call.RegExtension;
 pub const Target = call.Target;
 pub const aarch64Target = call.aarch64Target;
 pub const lower = call.lower;
@@ -36,7 +37,7 @@ pub const PhysicalCall = call.PhysicalCall;
 pub const assignPhysicalArgs = call.assignPhysicalArgs;
 
 /// Whether a hosted function with these argument and return layouts must be passed a leading
-/// `*RocOps` — i.e. whether it could allocate or free Roc-managed memory. True exactly when
+/// `*RocOps`—i.e. whether it could allocate or free Roc-managed memory. True exactly when
 /// its return type or any argument type transitively contains a heap-allocated (refcounted)
 /// Roc value (List, Str, Box, recursive union), which is when the host needs the allocator
 /// vtable. A function over only flat scalars/structs is a bare C call with no `*RocOps`.

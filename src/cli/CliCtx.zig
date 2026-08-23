@@ -81,8 +81,8 @@ pub const Io = struct {
         stdout_file.enableAnsiEscapeCodes(self.std_io) catch {};
         stderr_file.enableAnsiEscapeCodes(self.std_io) catch {};
 
-        self.stdout_writer = stdout_file.writer(self.std_io, &self.stdout_buffer);
-        self.stderr_writer = stderr_file.writer(self.std_io, &self.stderr_buffer);
+        self.stdout_writer = stdout_file.writerStreaming(self.std_io, &self.stdout_buffer);
+        self.stderr_writer = stderr_file.writerStreaming(self.std_io, &self.stderr_buffer);
     }
 
     /// Get the stdout writer interface
@@ -93,6 +93,16 @@ pub const Io = struct {
     /// Get the stderr writer interface
     pub fn stderr(self: *Self) *std.Io.Writer {
         return &self.stderr_writer.interface;
+    }
+
+    /// Total bytes handed to stdout and stderr so far, counting both what has
+    /// already reached the OS and what is still sitting in the buffers. The top
+    /// level uses this to tell "the command explained itself" apart from "the
+    /// command exited non-zero in silence", without every reporting site having
+    /// to announce that it reported.
+    pub fn bytesWritten(self: *const Self) u64 {
+        return self.stdout_writer.pos + self.stdout_writer.interface.end +
+            self.stderr_writer.pos + self.stderr_writer.interface.end;
     }
 
     /// Flush both stdout and stderr buffers
@@ -248,11 +258,12 @@ pub const CliCtx = struct {
         self.no_color = no_color;
     }
 
-    /// Build the terminal-layout defaults before applying color policy.
+    /// Build terminal-layout defaults before applying color policy. Diagnostic
+    /// headers use the detected width, capped by the renderer at 120 columns.
     fn baseReportConfig(self: *const Self) ReportingConfig {
         var config = ReportingConfig.initColorTerminal();
         if (self.coreCtx().terminalWidth()) |cols| {
-            if (cols >= 40) config.max_line_width = cols;
+            if (cols > 0) config.max_line_width = cols;
         }
         return config;
     }
@@ -286,8 +297,8 @@ pub const CliCtx = struct {
         return policy.usesColor(self.streamSupportsAnsi(stream));
     }
 
-    /// Build the box-style terminal reporting configuration while applying the
-    /// shared color policy for the selected output stream.
+    /// Build the terminal reporting configuration while applying the shared
+    /// color policy for the selected output stream.
     pub fn reportConfig(self: *Self, stream: OutputStream) ReportingConfig {
         const policy = self.colorPolicy();
         const supports_ansi = self.streamSupportsAnsi(stream);
@@ -331,7 +342,7 @@ pub const CliCtx = struct {
             .runtime_error => if (self.exit_code == 0) {
                 self.exit_code = 1;
             },
-            .warning, .info => {},
+            .warning => {},
         }
     }
 
@@ -456,6 +467,44 @@ pub fn renderProblem(ctx: *CliCtx, problem: CliProblem) Allocator.Error!void {
 }
 
 // Tests
+
+const merged_stdio_helper_path_env = "ROC_CLI_IO_WRITER_TEST_HELPER";
+const merged_stdout_payload = "stdout \u{2713} issue-10465\n" ** 256;
+const merged_stderr_payload = "stderr \u{2713} issue-10465\n" ** 256;
+
+test "issue 10465 merged standard streams preserve both buffered outputs" {
+    const allocator = std.testing.allocator;
+    const test_io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const combined_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "combined.log" });
+    defer allocator.free(combined_path);
+
+    const helper_path_z = std.c.getenv(merged_stdio_helper_path_env) orelse return error.TestUnexpectedResult;
+    const helper_path = helper_path_z[0..std.mem.len(helper_path_z)];
+
+    var child = try std.process.spawn(test_io, .{
+        .argv = &.{ helper_path, combined_path },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+    errdefer child.kill(test_io);
+
+    const term = try child.wait(test_io);
+    switch (term) {
+        .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+        .signal, .stopped, .unknown => return error.TestUnexpectedResult,
+    }
+
+    const combined = try tmp.dir.readFileAlloc(test_io, "combined.log", allocator, .limited(64 * 1024));
+    defer allocator.free(combined);
+
+    try std.testing.expect(std.mem.find(u8, combined, merged_stderr_payload) != null);
+    try std.testing.expect(std.mem.find(u8, combined, merged_stdout_payload) != null);
+}
 
 test "CliCtx accumulates problems" {
     const allocator = std.testing.allocator;

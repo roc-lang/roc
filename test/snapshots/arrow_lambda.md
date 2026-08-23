@@ -70,18 +70,25 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# Basic lambda after arrow
+test1 = 10 |> (|x| x + 1)
+
+# Lambda ignoring argument
+test2 = "hello" |> (|_| "world")
+
+# Lambda with if expression
+test3 = "" |> (|s| if s.is_empty() "empty" else "not empty")
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "test1"))
-		(e-call (constraint-fn-var 239)
+		(e-call (constraint-fn-var 249)
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 230)
+				(e-dispatch-call (method "plus") (constraint-fn-var 240)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "x"))))
@@ -90,7 +97,7 @@ NO CHANGE
 			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "test2"))
-		(e-call (constraint-fn-var 256)
+		(e-call (constraint-fn-var 266)
 			(e-lambda
 				(args
 					(p-underscore))
@@ -100,14 +107,14 @@ NO CHANGE
 				(e-literal (string "hello")))))
 	(d-let
 		(p-assign (ident "test3"))
-		(e-call (constraint-fn-var 284)
+		(e-call (constraint-fn-var 294)
 			(e-lambda
 				(args
 					(p-assign (ident "s")))
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_empty") (constraint-fn-var 257)
+							(e-dispatch-call (method "is_empty") (constraint-fn-var 267)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "s"))))

@@ -16,22 +16,20 @@ yellow = Color.Yellow
 # EXPECTED
 INVALID NOMINAL TAG - nominal_tag_simple.md:7:10:7:22
 # PROBLEMS
+── ✗ invalid nominal tag ──────────────────────────── nominal_tag_simple.md:7:10
 
-┌─────────────────────┐
-│ INVALID NOMINAL TAG ├─ I'm having trouble with this nominal tag. ───────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  yellow = Color.Yellow                                                     │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └──────────────────────────────────────────────── nominal_tag_simple.md:7:10 ┘
+I'm having trouble with this nominal tag.
 
-    The tag is:
+yellow = Color.Yellow
+         ^^^^^^^^^^^^
 
-        Yellow
+The tag is:
 
-    But the nominal type needs it to one of:
+    Yellow
 
-        [Blue, Green, Red]
+But the nominal type needs it to one of:
+
+    [Blue, Green, Red]
 
 # TOKENS
 ~~~zig
@@ -81,8 +79,7 @@ NO CHANGE
 			(ty-lookup (name "Color") (local))))
 	(d-let
 		(p-assign (ident "yellow"))
-		(e-nominal (nominal "Color")
-			(e-tag (name "Yellow")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "Color") (local))))
 	(s-nominal-decl

@@ -21,33 +21,33 @@ checked modules → post-check IRs → LIR → TRMC/TCE → ARC → Interpret
 - **`interpreter.zig`** exports `LirInterpreter`. Each Roc call gets a frame
   whose local slots are looked up through the proc's sorted `frame_locals`
   span. Within a frame, `execStmtChain` walks the statement chain in a flat
-  loop — `join`/`jump` execute as loops without growing any stack — while
+  loop—`join`/`jump` execute as loops without growing any stack—while
   `assign_call` recurses natively into the callee (bounded by the call-depth
   cap below).
 
-- **`value.zig`** defines `Value` — a raw pointer to bytes in memory. Values
+- **`value.zig`** defines `Value`—a raw pointer to bytes in memory. Values
   carry no runtime type information; the layout is always tracked separately
   via `layout.Idx`.
 
 ## Evaluation Flow
 
-1. **Published inputs** — Consumers (REPL, tests, CLI) type check source and
+1. **Published inputs**—Consumers (REPL, tests, CLI) type check source and
    publish checked modules plus explicit roots.
-2. **Lowering** — The checked-module pipeline lowers through post-check IRs
+2. **Lowering**—The checked-module pipeline lowers through post-check IRs
    and LIR, rewrites tail recursion via TRMC/TCE (`src/lir/trmc.zig`), and
    inserts ARC, producing a `LirStore`, committed layouts, and explicit root
    procedures.
-3. **Execution** — On native compiler hosts, compile-time roots execute as
+3. **Execution**—On native compiler hosts, compile-time roots execute as
    dev-backend machine code. When the compiler itself targets wasm32 or another
    freestanding host, compile-time roots execute through `LirInterpreter`.
    This host-platform choice is not configurable. Both compile-time paths
    unconditionally use `.normalize`, so stored f32/f64 NaNs have canonical,
    host-independent bits; runtime consumers unconditionally use `.preserve`.
-4. **Interpreter statement walk** — When the interpreter is the selected
+4. **Interpreter statement walk**—When the interpreter is the selected
    execution engine, `execStmtChain` executes each frame's statement chain
    iteratively, dispatching per `CFStmt` variant; low-level ops go through
    `evalLowLevel`.
-5. **Crash handling** — Crash/expect expressions delegate to the host via
+5. **Crash handling**—Crash/expect expressions delegate to the host via
    `RocOps.crash`. Hosts supply a `CrashContext` (see `crash_context.zig`) to
    record messages.
 
@@ -56,12 +56,12 @@ All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 
 ## Evaluation Limits
 
-- **Call-depth cap** — `LirInterpreter` crashes ("stack overflow") after 1024
+- **Call-depth cap**—`LirInterpreter` crashes ("stack overflow") after 1024
   nested Roc calls (`max_call_depth`). Tail-recursive and
   constructor-tail-recursive functions don't hit this: the TRMC/TCE pass
   (`src/lir/trmc.zig`) rewrites them into join-point loops before the
   interpreter ever sees them.
-- **Debug value validation** — In Debug builds, `setLocal` walks values to
+- **Debug value validation**—In Debug builds, `setLocal` walks values to
   check they match their layouts. The walk is best-effort: it stops at
   `max_debug_value_depth` (64) nested values and after
   `max_debug_value_visits` (16) heap cells (so deep lists can't overflow the
@@ -71,7 +71,14 @@ All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 
 ## Host Integrations
 
-- **Interpreter shim** (`src/interpreter_shim/main.zig`) — Provides a
+- **Inspected evaluation** (`inspected.zig`, `inspected_run.zig`)—Compiles an
+  explicit checked root and executes it through a selected backend while
+  returning the inspected value, crash outcome, allocation count, and ordered
+  host events.
+- **Runtime host** (`runtime_host.zig`)—Implements compiler-owned `RocOps`
+  callbacks with allocation tracking and ordered `dbg`, failed-`expect`, and
+  crash capture. Production REPLs and evaluator tests use the same host.
+- **Interpreter shim** (`src/interpreter_shim/main.zig`)—Provides a
   C-callable entry point (`roc_entrypoint`) that maps/views an ARC-inserted LIR
   image and evaluates it via the interpreter.
 
@@ -79,19 +86,19 @@ All RocOps interactions (alloc, dealloc, crash, expect, dbg) happen through the
 
 Evaluation coverage lives in `src/eval/test/`:
 
-- `parallel_runner.zig` — Runs every data-driven `TestCase` on all enabled
+- `parallel_runner.zig`—Runs every data-driven `TestCase` on all enabled
   backends (interpreter, dev, wasm; llvm with `--llvm`) in forked
   subprocesses, requiring byte-identical `Str.inspect` output.
-- `eval_tests.zig` — Aggregates the `TestCase` tables from the
+- `eval_tests.zig`—Aggregates the `TestCase` tables from the
   `eval_*_tests.zig` files (recursive data, closures, low-level ops,
   polymorphism, issue repros, ...). `eval_trmc_tests.zig` holds the TRMC/TCE
   stack-safety gates and the CFold/NQueens/RBTreeCk benchmark ports.
-- `trmc_lir_test.zig`, `lir_inline_test.zig` — Standalone binaries asserting
+- `trmc_lir_test.zig`, `lir_inline_test.zig`—Standalone binaries asserting
   on LIR structure (TRMC pointer ops, detection/transform outcomes, inlining).
-- `host_effects_runner.zig` / `host_effects_tests.zig` — Runtime host-effect
+- `host_effects_runner.zig` / `host_effects_tests.zig`—Runtime host-effect
   coverage.
-- `RuntimeHostEnv.zig` — Test host implementing `RocOps` with allocation
-  tracking (`checkForLeaks()`) and crash capture.
+- `runtime_host.zig`—Shared `RocOps` host with allocation leak checks and
+  event capture.
 
 Run tests with:
 

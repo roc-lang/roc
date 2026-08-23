@@ -17,6 +17,17 @@ pub fn isBuiltinModule(env: *const ModuleEnv) bool {
     return env.module_role == .builtin;
 }
 
+/// Numeric builtin type names without the IEEE floats. These are the types
+/// that register `is_eq` (float equality is only the explicit `is_float_eq`)
+/// and the `to`/`until` bounded ranges (which need `minus_try`).
+pub const non_float_numeric_type_names = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec" };
+
+/// The IEEE float builtin type names.
+pub const float_numeric_type_names = [_][]const u8{ "F32", "F64" };
+
+/// Every numeric builtin type name.
+pub const numeric_type_names = non_float_numeric_type_names ++ float_numeric_type_names;
+
 /// Stable compiler-owned identity for each annotation-only Builtin intrinsic.
 pub const IntrinsicId = enum(u8) {
     str_inspect,
@@ -34,12 +45,26 @@ pub const IntrinsicId = enum(u8) {
         argument: u8,
     };
 
+    /// Arity for intrinsics whose implementation is emitted at each checked
+    /// call site. Null identifies wrappers lowered through another explicit
+    /// checked protocol.
+    pub fn callsiteArity(self: IntrinsicId) ?u8 {
+        return switch (self) {
+            .str_inspect, .structural_eq => null,
+            .parse_tag_union, .field_names_rename_fields, .field_names_for_size => 2,
+            .field_names_shortest_name,
+            .field_names_longest_name,
+            .field_names_iter,
+            .field_name,
+            => 1,
+        };
+    }
+
+    pub const max_callsite_arity = 2;
+
     /// Explicit request-topology contract for compiler-owned intrinsic calls.
     pub fn requestResultSource(self: IntrinsicId) RequestResultSource {
-        return switch (self) {
-            .field_names_rename_fields => .{ .argument = 0 },
-            else => .declared_return,
-        };
+        return if (self == .field_names_rename_fields) .{ .argument = 0 } else .declared_return;
     }
 };
 
@@ -297,6 +322,18 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("list_reserve")) |list_reserve_ident| {
         try low_level_map.put(list_reserve_ident, .list_reserve);
     }
+    if (env.common.findIdent("list_append_range_within")) |ident| {
+        try low_level_map.put(ident, .list_append_range_within);
+    }
+    if (env.common.findIdent("list_copy_range_within")) |ident| {
+        try low_level_map.put(ident, .list_copy_range_within);
+    }
+    if (env.common.findIdent("list_append_sublist")) |ident| {
+        try low_level_map.put(ident, .list_append_sublist);
+    }
+    if (env.common.findIdent("list_append_le_bytes")) |ident| {
+        try low_level_map.put(ident, .list_append_le_bytes);
+    }
     if (env.common.findIdent("u8_list_reserve")) |ident| {
         try low_level_map.put(ident, .list_reserve);
     }
@@ -320,6 +357,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
     if (env.common.findIdent("list_swap_unsafe")) |list_swap_unsafe_ident| {
         try low_level_map.put(list_swap_unsafe_ident, .list_swap);
+    }
+    if (env.common.findIdent("list_map_prepare_reuse")) |list_map_prepare_reuse_ident| {
+        try low_level_map.put(list_map_prepare_reuse_ident, .list_map_prepare_reuse);
     }
     if (env.common.findIdent("list_map_can_reuse")) |list_map_can_reuse_ident| {
         try low_level_map.put(list_map_can_reuse_ident, .list_map_can_reuse);
@@ -383,11 +423,11 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
             try low_level_map.put(ident, primitive.op);
         }
     }
-    const numeric_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64" };
+    const numeric_types = numeric_type_names;
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
     // Numeric equality operations.
     // Float `is_eq` is deliberately not public; `is_float_eq` is the explicit IEEE 754 comparison.
-    const eq_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec" };
+    const eq_types = non_float_numeric_type_names;
     for (eq_types) |num_type| {
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.is_eq", .{num_type}, .num_is_eq);
     }
@@ -436,6 +476,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.from_bits", .{}, .f32_from_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.to_bits", .{}, .f64_to_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F64.from_bits", .{}, .f64_from_bits);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.Dec.to_attos", .{}, .dec_to_attos);
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.Dec.from_attos", .{}, .dec_from_attos);
 
     // Numeric comparison operations (all numeric types)
     for (numeric_types) |num_type| {
@@ -1471,11 +1513,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("dec_to_i64_try_unsafe")) |ident| {
         try low_level_map.put(ident, .dec_to_i64_try_unsafe);
     }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i128_wrap")) |ident| {
+    if (env.common.findIdent("Builtin.Num.Dec.to_i128")) |ident| {
         try low_level_map.put(ident, .dec_to_i128_trunc);
-    }
-    if (env.common.findIdent("dec_to_i128_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_i128_try_unsafe);
     }
     if (env.common.findIdent("Builtin.Num.Dec.to_u8_wrap")) |ident| {
         try low_level_map.put(ident, .dec_to_u8_trunc);
@@ -1547,10 +1586,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
                 // The annotation must be a function type for low-level operations
                 const annotation = env.store.getAnnotation(def.annotation.?);
                 const type_anno = env.store.getTypeAnno(annotation.anno);
-                const num_params: u32 = switch (type_anno) {
-                    .@"fn" => |func| func.args.span.len,
-                    else => return error.BuiltinLowLevelAnnotationMustBeFunction,
-                };
+                if (type_anno != .@"fn") return error.BuiltinLowLevelAnnotationMustBeFunction;
+                const num_params: u32 = type_anno.@"fn".args.span.len;
 
                 // Create parameter patterns for the lambda
                 const patterns_start = env.store.scratchTop("patterns");
@@ -1597,6 +1634,15 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
                 // Track this replaced def index
                 try new_def_indices.append(gpa, def_idx);
+                if (env.provided_low_level_defs.items.items.len > 0) {
+                    const previous = env.provided_low_level_defs.items.items[env.provided_low_level_defs.items.items.len - 1];
+                    std.debug.assert(previous.def_idx < @intFromEnum(def_idx));
+                }
+                _ = try env.provided_low_level_defs.append(gpa, .{
+                    .def_idx = @intFromEnum(def_idx),
+                    .op = low_level_op,
+                    ._padding = 0,
+                });
             }
         }
     }
@@ -1607,4 +1653,16 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
 
     return new_def_indices;
+}
+
+test "intrinsic call-site protocol classifies every intrinsic" {
+    try std.testing.expectEqual(@as(?u8, null), IntrinsicId.str_inspect.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, null), IntrinsicId.structural_eq.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.parse_tag_union.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.field_names_rename_fields.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_shortest_name.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_longest_name.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_names_iter.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 2), IntrinsicId.field_names_for_size.callsiteArity());
+    try std.testing.expectEqual(@as(?u8, 1), IntrinsicId.field_name.callsiteArity());
 }

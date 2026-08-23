@@ -153,6 +153,24 @@ pub const Store = struct {
         unreachable;
     }
 
+    /// Record that a checker-selected compile-time root will execute this site.
+    /// The pending diagnostic must therefore be decided empirically by that
+    /// root rather than flushed as an unconditionally runtime-reachable error.
+    pub fn markPendingStaticExhaustivenessEmpirical(
+        self: *Self,
+        source: ExhaustivenessSiteSource,
+    ) void {
+        for (self.pending_static_exhaustiveness.items) |*pending| {
+            if (!exhaustivenessSourcesEqual(pending.source, source)) continue;
+            pending.mode = .empirical;
+            return;
+        }
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
+        }
+        unreachable;
+    }
+
     pub fn resolvePendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
         var write: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
@@ -190,7 +208,54 @@ pub const Store = struct {
                 switch (problem) {
                     .non_exhaustive_match => |*match| match.empirical = true,
                     .non_exhaustive_destructure => |*destructure| destructure.empirical = true,
-                    else => unreachable,
+                    .type_mismatch,
+                    .type_apply_mismatch_arities,
+                    .static_dispatch,
+                    .cannot_access_opaque_nominal,
+                    .nominal_type_resolution_failed,
+                    .recursive_alias,
+                    .not_a_where_alias,
+                    .where_alias_in_type_position,
+                    .recursive_where_alias,
+                    .where_clause_receiver_not_introduced,
+                    .invalid_nominal_decl_recursion,
+                    .infinite_recursion,
+                    .anonymous_recursion,
+                    .polymorphic_value,
+                    .polymorphic_var_annotation,
+                    .effectful_top_level,
+                    .effectful_expect,
+                    .effectful_function_name,
+                    .annotation_only_value,
+                    .annotation_only_value_use,
+                    .unsupported_generated_method,
+                    .hosted_unboxed_function,
+                    .host_boundary_open_row,
+                    .host_boundary_optional_field,
+                    .platform_def_not_found,
+                    .platform_hosted_section,
+                    .platform_alias_not_found,
+                    .comptime_crash,
+                    .comptime_invalid_numeral,
+                    .comptime_invalid_quote,
+                    .comptime_expect_failed,
+                    .comptime_eval_error,
+                    .invalid_numeric_literal,
+                    .tuple_access_needs_annotation,
+                    .invalid_tuple_access,
+                    .optional_access_of_required_field,
+                    .effectful_default_value,
+                    .non_concrete_default_value,
+                    .recursive_default_value,
+                    .circular_value_definition,
+                    .literal_defaulted,
+                    .redundant_pattern,
+                    .unmatchable_pattern,
+                    .unreachable_code,
+                    .comptime_unused_branch,
+                    .comptime_condition,
+                    .associated_item_not_found,
+                    => unreachable,
                 }
             }
             _ = try self.appendProblem(gpa, problem);
@@ -228,14 +293,14 @@ pub const Store = struct {
         return self.problems.items.len;
     }
 
-    /// Discard every problem appended after `new_len` — the rollback of a
+    /// Discard every problem appended after `new_len`—the rollback of a
     /// speculative probe that recorded against this store. Problem entries
     /// reference other stores by index (snapshots, extra strings) and own no
     /// memory themselves, so truncation is a plain length rewind; the caller
     /// rewinds the referenced stores in tandem.
     ///
     /// `extra_strings_backing` / `missing_patterns_backing` are deliberately
-    /// NOT rewound here: no probe path writes them — they are appended to
+    /// NOT rewound here: no probe path writes them—they are appended to
     /// only by exhaustiveness checking (Check.zig, checkMatchExpr's
     /// non-exhaustive-match reporting), which never runs inside a probe. The
     /// probe rollback site asserts that their lengths are unchanged; if a

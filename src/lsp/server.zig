@@ -158,7 +158,12 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
 
             const payload = self.transport.readMessage() catch |err| switch (err) {
                 error.EndOfStream => return false,
-                else => return err,
+                error.HeaderTooLong,
+                error.InvalidHeader,
+                error.MissingContentLength,
+                error.OutOfMemory,
+                error.PayloadTooLarge,
+                => return err,
             };
             defer self.allocator.free(payload);
 
@@ -166,10 +171,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                 log.err("failed to process message: {s}", .{@errorName(err)});
             };
 
-            return switch (self.state) {
-                .exit_success, .exit_failure => false,
-                else => true,
-            };
+            return self.state != .exit_success and self.state != .exit_failure;
         }
 
         fn handlePayload(self: *Self, payload: []u8) PayloadError!void {
@@ -177,19 +179,15 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             defer parsed.deinit();
 
             const root = parsed.value;
-            const obj = switch (root) {
-                .object => |o| o,
-                else => {
-                    log.err("received non-object JSON-RPC message", .{});
-                    return;
-                },
-            };
+            if (std.meta.activeTag(root) != .object) {
+                log.err("received non-object JSON-RPC message", .{});
+                return;
+            }
+            const obj = root.object;
 
             const method_value = obj.get("method") orelse return;
-            const method = switch (method_value) {
-                .string => |text| text,
-                else => return,
-            };
+            if (std.meta.activeTag(method_value) != .string) return;
+            const method = method_value.string;
 
             if (obj.get("id")) |id_node| {
                 var id = try protocol.JsonId.fromJsonValue(self.allocator, id_node);
@@ -387,7 +385,31 @@ fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io) CreateLogFileErro
         error.PathAlreadyExists => try std.Io.Dir.openFileAbsolute(std_io, absolute_path, .{
             .mode = .read_write,
         }),
-        else => return err,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
     };
     // File is opened in append mode (non-truncate)
     return .{ .file = file, .path = absolute_path };

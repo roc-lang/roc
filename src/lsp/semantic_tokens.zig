@@ -185,7 +185,8 @@ pub fn extractSemanticTokensWithImports(
     const builtin_indices = compiled_builtins.builtinIndices(CIR);
     var builtin_module = builtin_static.moduleView(allocator, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return extractSemanticTokens(allocator, source, info),
+        error.CorruptEmbeddedBuiltins,
+        => return extractSemanticTokens(allocator, source, info),
     };
     defer builtin_module.deinit();
 
@@ -274,10 +275,8 @@ const ImportContext = struct {
             const def = module_env.store.getDef(def_idx);
             // Check if this definition is a function by looking at its expression
             const expr = module_env.store.getExpr(def.expr);
-            const is_function = switch (expr) {
-                .e_lambda, .e_closure => true,
-                else => false,
-            };
+            const expr_tag = std.meta.activeTag(expr);
+            const is_function = expr_tag == .e_lambda or expr_tag == .e_closure;
             if (is_function) {
                 // Get the name from the pattern
                 const pattern = module_env.store.getPattern(def.pattern);
@@ -325,9 +324,25 @@ const SemanticCollector = struct {
                 try self.addToken(pattern_region, .variable);
             },
             .s_expr => |e| try self.visitExpr(e.expr),
-            // Type declarations and imports don't need special handling
-            // since they're covered by the tokenizer
-            else => {},
+            // These are covered by the tokenizer or traversed from declarations.
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => {},
         }
     }
 
@@ -335,10 +350,8 @@ const SemanticCollector = struct {
     fn visitDecl(self: *SemanticCollector, pattern_idx: CIR.Pattern.Idx, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
         // Check if RHS is a lambda/closure (then LHS is a function name)
         const expr = self.module_env.store.getExpr(expr_idx);
-        const is_function = switch (expr) {
-            .e_closure, .e_lambda, .e_hosted_lambda => true,
-            else => false,
-        };
+        const expr_tag = std.meta.activeTag(expr);
+        const is_function = expr_tag == .e_closure or expr_tag == .e_lambda or expr_tag == .e_hosted_lambda;
 
         // Add token for pattern with appropriate type
         const pattern_region = self.module_env.store.getPatternRegion(pattern_idx);
@@ -361,15 +374,12 @@ const SemanticCollector = struct {
             .e_closure => |c| {
                 // Closure wraps a lambda - get the inner lambda's args
                 const lambda = self.module_env.store.getExpr(c.lambda_idx);
-                switch (lambda) {
-                    .e_lambda => |l| {
-                        var i: u32 = 0;
-                        while (i < l.args.span.len) : (i += 1) {
-                            const param_idx: CIR.Pattern.Idx = @enumFromInt(l.args.span.start + i);
-                            try self.visitPatternAsParameter(param_idx);
-                        }
-                    },
-                    else => {},
+                if (std.meta.activeTag(lambda) == .e_lambda) {
+                    var i: u32 = 0;
+                    while (i < lambda.e_lambda.args.span.len) : (i += 1) {
+                        const param_idx: CIR.Pattern.Idx = @enumFromInt(lambda.e_lambda.args.span.start + i);
+                        try self.visitPatternAsParameter(param_idx);
+                    }
                 }
             },
             .e_lambda => |l| {
@@ -388,7 +398,63 @@ const SemanticCollector = struct {
                     try self.visitPatternAsParameter(param_idx);
                 }
             },
-            else => {},
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_str,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_lookup_required,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_match,
+            .e_if,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_tag,
+            .e_nominal,
+            .e_nominal_external,
+            .e_zero_argument_tag,
+            .e_binop,
+            .e_unary_minus,
+            .e_unary_not,
+            .e_field_access,
+            .e_method_call,
+            .e_dispatch_call,
+            .e_interpolation,
+            .e_structural_eq,
+            .e_structural_hash,
+            .e_method_eq,
+            .e_type_method_call,
+            .e_type_dispatch_call,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_crash,
+            .e_dbg,
+            .e_expect_err,
+            .e_expect,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_return,
+            .e_break,
+            .e_for,
+            .e_run_low_level,
+            => {},
         }
     }
 
@@ -436,7 +502,19 @@ const SemanticCollector = struct {
                 const region = self.module_env.store.getPatternRegion(pattern_idx);
                 try self.addToken(region, .parameter);
             },
-            else => {},
+            .applied_tag,
+            .nominal,
+            .nominal_external,
+            .num_literal,
+            .frac_f32_literal,
+            .frac_f64_literal,
+            .small_dec_literal,
+            .dec_literal,
+            .num_from_numeral_literal,
+            .str_literal,
+            .str_interpolation,
+            .runtime_error,
+            => {},
         }
     }
 
@@ -457,7 +535,63 @@ const SemanticCollector = struct {
                 // Visit lambda body
                 try self.visitExpr(l.body);
             },
-            else => {},
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_str,
+            .e_bytes_literal,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_lookup_required,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_match,
+            .e_if,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_nominal,
+            .e_nominal_external,
+            .e_zero_argument_tag,
+            .e_hosted_lambda,
+            .e_binop,
+            .e_unary_minus,
+            .e_unary_not,
+            .e_field_access,
+            .e_method_call,
+            .e_dispatch_call,
+            .e_interpolation,
+            .e_structural_eq,
+            .e_structural_hash,
+            .e_method_eq,
+            .e_type_method_call,
+            .e_type_dispatch_call,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_crash,
+            .e_dbg,
+            .e_expect_err,
+            .e_expect,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_return,
+            .e_break,
+            .e_for,
+            .e_run_low_level,
+            => {},
         }
     }
 

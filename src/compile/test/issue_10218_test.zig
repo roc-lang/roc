@@ -73,6 +73,10 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
                     }
                     try stack.append(allocator, .{ .stmt = str_match_set.on_miss });
                 },
+                .boxy_tag_match => |tag_match| {
+                    try stack.append(allocator, .{ .stmt = tag_match.on_match });
+                    try stack.append(allocator, .{ .stmt = tag_match.on_miss });
+                },
                 .join => |join_stmt| {
                     try stack.append(allocator, .{ .stmt = join_stmt.body });
                     try stack.append(allocator, .{ .stmt = join_stmt.remainder });
@@ -82,6 +86,17 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
                 .init_uninitialized,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
@@ -155,6 +170,17 @@ fn retainReachesListSetCall(
             .init_uninitialized,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -186,6 +212,7 @@ fn retainReachesListSetCall(
             .str_match,
             .str_match_set,
             .join,
+            .boxy_tag_match,
             => return false,
         }
     }
@@ -200,14 +227,13 @@ fn expectNoRetainBeforeListSet(
     var retains_before_list_set: usize = 0;
     for (0..store.cfStmtCount()) |stmt_index| {
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-        switch (stmt) {
-            .assign_low_level => |assign| {
-                if (assign.op == .list_set) saw_list_set = true;
-            },
-            .incref => |retain| if (try retainReachesListSetCall(store, retain.next, retain.value)) {
+        if (stmt == .assign_low_level) {
+            if (stmt.assign_low_level.op == .list_set) saw_list_set = true;
+        } else if (stmt == .incref) {
+            const retain = stmt.incref;
+            if (try retainReachesListSetCall(store, retain.next, retain.value)) {
                 retains_before_list_set += 1;
-            },
-            else => {},
+            }
         }
     }
     try std.testing.expect(saw_list_set);

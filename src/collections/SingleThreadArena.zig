@@ -9,8 +9,8 @@
 //! standard library arena is lock-free and pays an atomic read-modify-write
 //! (plus a reclaim `cmpxchg`) on every allocation so that one arena can be
 //! shared across threads. Every arena in this codebase is instead owned by a
-//! single thread for its whole lifetime — worker threads each construct their
-//! own — so that synchronization is pure overhead here. Dropping it leaves a
+//! single thread for its whole lifetime—worker threads each construct their
+//! own—so that synchronization is pure overhead here. Dropping it leaves a
 //! plain bump in the fast path. The child allocator must still be thread-safe
 //! if several arenas share one concurrently, but this wrapper holds no shared
 //! state of its own.

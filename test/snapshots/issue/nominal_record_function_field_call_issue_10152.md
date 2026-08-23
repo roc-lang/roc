@@ -46,8 +46,9 @@ EndOfFile,
 				(e-apply
 					(e-tuple
 						(e-field-access
-							(e-ident (raw "rec"))
-							(e-ident (raw "f"))))
+							(receiver
+								(e-ident (raw "rec")))
+							(segment (mode "required") (field "f"))))
 					(e-int (raw "1")))))))
 ~~~
 # FORMATTED
@@ -62,11 +63,13 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "rec")))
-			(e-call (constraint-fn-var 234)
-				(e-field-access (field "f")
+			(e-call (constraint-fn-var 244)
+				(e-field-access
 					(receiver
 						(e-lookup-local
-							(p-assign (ident "rec")))))
+							(p-assign (ident "rec"))))
+					(segments
+						(segment (name "f") (mode "required"))))
 				(e-num (value "1"))))
 		(annotation
 			(ty-fn (effectful false)

@@ -6,7 +6,6 @@ const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
-const types = @import("types");
 
 const layout_mod = @import("layout.zig");
 const graph_mod = @import("./graph.zig");
@@ -34,8 +33,6 @@ const ScalarInfo = layout_mod.ScalarInfo;
 const LayoutGraph = graph_mod.Graph;
 const GraphNodeId = graph_mod.NodeId;
 const GraphRef = graph_mod.Ref;
-const Var = types.Var;
-const TypeScope = types.TypeScope;
 pub const ModuleVarKey = work_mod.ModuleVarKey;
 
 fn assertAppendIdx(expected: usize, idx: anytype) void {
@@ -44,16 +41,6 @@ fn assertAppendIdx(expected: usize, idx: anytype) void {
     } else if (@intFromEnum(idx) != expected) {
         unreachable;
     }
-}
-
-/// Whether any field is an unnamed `_` padding spacer. A nominal record opts into
-/// declared-order-plus-padding layout by including such a field; without one it
-/// lays out like a structural record.
-fn hasAnyPaddingField(fields: []const StructField) bool {
-    for (fields) |field| {
-        if (field.is_padding) return true;
-    }
-    return false;
 }
 
 /// Errors that can occur during layout computation
@@ -564,15 +551,15 @@ pub const Store = struct {
     pub const insertTuple = insertStruct;
 
     /// Insert a record layout from field layouts in canonical record-field order.
-    /// The shared layout commit performs one stable sort by descending alignment,
-    /// preserving canonical alphabetical order among equal-alignment fields.
+    /// The shared layout commit sorts by descending sort key, then canonical
+    /// semantic index.
     pub fn putRecord(self: *Self, field_layouts: []const Layout) std.mem.Allocator.Error!Idx {
         return self.putTuple(field_layouts);
     }
 
     /// Insert a struct layout from semantic fields.
-    /// `fields[i].index` is the canonical semantic field index before the shared
-    /// stable alignment sort at layout commit.
+    /// `fields[i].index` is the canonical semantic field index used to break
+    /// ties between equal sort keys.
     pub fn putStructFields(self: *Self, fields: []const StructField) std.mem.Allocator.Error!Idx {
         const trace = tracy.traceNamed(@src(), "layoutStore.putStructFields");
         defer trace.end();
@@ -584,7 +571,7 @@ pub const Store = struct {
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
         try temp_fields.appendSlice(self.allocator, fields);
-        try self.stableSortStructFieldsByLayoutAlignment(temp_fields.items);
+        self.sortStructFields(temp_fields.items);
 
         const sizes = self.structSizes(temp_fields.items);
         if (sizes.get(.u64) == 0) {
@@ -619,9 +606,8 @@ pub const Store = struct {
         );
     }
 
-    /// Insert a tuple layout from concrete element layouts.
-    /// The shared layout commit performs one stable sort by descending alignment,
-    /// preserving original tuple index order among equal-alignment elements.
+    /// Insert a tuple layout from concrete element layouts. The shared layout
+    /// commit sorts by descending sort key, then original tuple index.
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
@@ -634,36 +620,31 @@ pub const Store = struct {
         return self.putStructFields(temp_fields.items);
     }
 
-    /// Sort structural-record / tuple fields by descending sort key, stably.
-    /// Routes through the shared `field_order.computeStructuralFieldOrder` so the
-    /// layout store and `roc glue` order structural records by the exact same
-    /// logic. The sort key is target-independent (a pointer sorts between 4- and
-    /// 8-byte alignment), so the resulting field order is identical on 32-bit and
-    /// 64-bit targets. Empty field names keep the pure stable sort: callers
-    /// presort by name elsewhere, so equal-key fields stay in input order.
-    fn stableSortStructFieldsByLayoutAlignment(self: *Self, fields: []StructField) std.mem.Allocator.Error!void {
+    /// Sort structural-record / tuple fields by the total canonical key:
+    /// descending target-independent sort key, then ascending semantic index.
+    /// This is independent of the order in which callers present the fields.
+    fn sortStructFields(self: *Self, fields: []StructField) void {
         if (fields.len <= 1) return;
 
-        const structural = try self.allocator.alloc(field_order.StructuralField, fields.len);
-        defer self.allocator.free(structural);
-        for (fields, structural) |field, *out| {
-            out.* = .{
-                .sort_key = if (field.is_padding)
-                    .align_1
-                else
-                    self.getLayout(field.layout).sortKey(),
-                .name = "",
-            };
-        }
+        const SortContext = struct {
+            store: *const Self,
 
-        const order = try self.allocator.alloc(u16, fields.len);
-        defer self.allocator.free(order);
-        field_order.computeStructuralFieldOrder(structural, order);
+            fn key(ctx: @This(), field: StructField) field_order.StructuralField {
+                return .{
+                    .sort_key = if (field.is_padding)
+                        .align_1
+                    else
+                        ctx.store.getLayout(field.layout).sortKey(),
+                    .semantic_index = field.index,
+                };
+            }
 
-        const scratch = try self.allocator.alloc(StructField, fields.len);
-        defer self.allocator.free(scratch);
-        for (order, scratch) |src, *dst| dst.* = fields[src];
-        @memcpy(fields, scratch);
+            fn lessThan(ctx: @This(), a: StructField, b: StructField) bool {
+                return field_order.comesBefore(ctx.key(a), ctx.key(b));
+            }
+        };
+
+        std.sort.pdq(StructField, fields, SortContext{ .store = self }, SortContext.lessThan);
     }
 
     /// Create a tag union layout from pre-computed variant payload layouts.
@@ -691,13 +672,17 @@ pub const Store = struct {
         );
     }
 
-    fn buildUninternedStructLayout(self: *Self, input_fields: []const StructField) std.mem.Allocator.Error!Layout {
+    fn buildUninternedStructLayout(
+        self: *Self,
+        input_fields: []const StructField,
+        order: graph_mod.FieldSpan.FieldOrder,
+    ) std.mem.Allocator.Error!Layout {
         std.debug.assert(input_fields.len >= 1);
 
         var temp_fields = std.ArrayList(StructField).empty;
         defer temp_fields.deinit(self.allocator);
         try temp_fields.appendSlice(self.allocator, input_fields);
-        try self.stableSortStructFieldsByLayoutAlignment(temp_fields.items);
+        if (order == .structural) self.sortStructFields(temp_fields.items);
 
         const sizes = self.structSizes(temp_fields.items);
         if (sizes.get(.u64) == 0) {
@@ -794,7 +779,7 @@ pub const Store = struct {
 
                 var key = std.ArrayList(u8).empty;
                 defer key.deinit(allocator);
-                var visited = std.AutoHashMap(GraphNodeId, u32).init(allocator);
+                var visited = collections.DenseMap(GraphNodeId, u32).init(allocator);
                 defer visited.deinit();
 
                 try key.append(allocator, 1); // Recursive graph key format version.
@@ -841,7 +826,7 @@ pub const Store = struct {
             graph: *const LayoutGraph,
             allocator: Allocator,
             key: *std.ArrayList(u8),
-            visited: *std.AutoHashMap(GraphNodeId, u32),
+            visited: *collections.DenseMap(GraphNodeId, u32),
             unresolved_ref: GraphRef,
         ) Allocator.Error!void {
             const ref = resolveNominalRef(graph, unresolved_ref);
@@ -870,7 +855,7 @@ pub const Store = struct {
             graph: *const LayoutGraph,
             allocator: Allocator,
             key: *std.ArrayList(u8),
-            visited: *std.AutoHashMap(GraphNodeId, u32),
+            visited: *collections.DenseMap(GraphNodeId, u32),
             node_id: GraphNodeId,
         ) Allocator.Error!void {
             switch (graph.getNode(node_id)) {
@@ -891,9 +876,7 @@ pub const Store = struct {
                 .struct_ => |span| {
                     try key.append(allocator, 4);
                     const fields = graph.getFields(span);
-                    var has_padding = false;
-                    for (fields) |field| has_padding = has_padding or field.is_padding;
-                    try key.append(allocator, @intFromBool(graph.isNominalStruct(node_id) and has_padding));
+                    try key.append(allocator, @intFromEnum(span.order));
                     try appendValue(key, allocator, @as(u16, @intCast(fields.len)));
                     for (fields) |field| {
                         try appendValue(key, allocator, field.index);
@@ -1116,7 +1099,9 @@ pub const Store = struct {
                             .is_padding = field.is_padding,
                         });
                     }
-                    break :blk .{ .struct_ = try working.appendFields(self.allocator, fields.items) };
+                    var translated = try working.appendFields(self.allocator, fields.items);
+                    if (span.order == .declared) translated = working.declaredOrder(translated);
+                    break :blk .{ .struct_ = translated };
                 },
                 .tag_union => |span| blk: {
                     var refs = std.ArrayList(GraphRef).empty;
@@ -1129,9 +1114,6 @@ pub const Store = struct {
                 },
             };
             working.setNode(working_node_id, translated_node);
-            if (graph.isNominalStruct(@enumFromInt(i))) {
-                try working.markNominalStruct(self.allocator, working_node_id);
-            }
         }
 
         const raw_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
@@ -1590,7 +1572,7 @@ pub const Store = struct {
 
                             self_resolver.store.updateLayout(
                                 self_resolver.raw_layouts[index],
-                                try self_resolver.store.buildUninternedStructLayout(fields.items),
+                                try self_resolver.store.buildUninternedStructLayout(fields.items, span.order),
                             );
                         }
                     },
@@ -1804,12 +1786,7 @@ pub const Store = struct {
                                     });
                                 }
 
-                                // A nominal record keeps its declared order (and auto-pads)
-                                // only when it opts in with an unnamed `_` field; otherwise it
-                                // lays out exactly like a structural record (sort-key sorted).
-                                const keep_declared = self_finalizer.graph.isNominalStruct(node_id) and
-                                    hasAnyPaddingField(fields.items);
-                                break :blk_struct if (keep_declared)
+                                break :blk_struct if (span.order == .declared)
                                     try self_finalizer.store.putNominalStructFields(fields.items)
                                 else
                                     try self_finalizer.store.putStructFields(fields.items);
@@ -1983,11 +1960,7 @@ pub const Store = struct {
     /// Get bundled information about a list layout's element
     pub fn getListInfo(self: *const Self, layout: Layout) ListInfo {
         std.debug.assert(layout.tag == .list or layout.tag == .list_of_zst);
-        const elem_layout_idx: Idx = switch (layout.tag) {
-            .list => layout.getIdx(),
-            .list_of_zst => .zst,
-            else => unreachable,
-        };
+        const elem_layout_idx: Idx = if (layout.tag == .list) layout.getIdx() else .zst;
         const elem_layout = self.getLayout(elem_layout_idx);
         return ListInfo{
             .elem_layout_idx = elem_layout_idx,
@@ -2000,21 +1973,18 @@ pub const Store = struct {
 
     pub fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: Idx) Idx {
         const layout_val = self.getLayout(layout_idx);
-        return switch (layout_val.tag) {
-            .closure => self.runtimeRepresentationLayoutIdx(layout_val.getClosure().captures_layout_idx),
-            else => layout_idx,
-        };
+        if (layout_val.tag == .closure) return self.runtimeRepresentationLayoutIdx(layout_val.getClosure().captures_layout_idx);
+        return layout_idx;
     }
 
     pub fn builtinListAbi(self: *const Self, list_layout_idx: Idx) BuiltinListAbi {
         const list_layout = self.getLayout(list_layout_idx);
         std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
         const info = self.getListInfo(list_layout);
-        const runtime_elem_layout_idx = switch (list_layout.tag) {
-            .list => self.runtimeRepresentationLayoutIdx(info.elem_layout_idx),
-            .list_of_zst => null,
-            else => unreachable,
-        };
+        const runtime_elem_layout_idx = if (list_layout.tag == .list)
+            self.runtimeRepresentationLayoutIdx(info.elem_layout_idx)
+        else
+            null;
         const runtime_elem_layout = if (runtime_elem_layout_idx) |idx| self.getLayout(idx) else info.elem_layout;
 
         return .{
@@ -2033,11 +2003,10 @@ pub const Store = struct {
         const box_layout = self.getLayout(box_layout_idx);
         std.debug.assert(box_layout.tag == .box or box_layout.tag == .box_of_zst);
         const info = self.getBoxInfo(box_layout);
-        const runtime_elem_layout_idx = switch (box_layout.tag) {
-            .box => self.runtimeRepresentationLayoutIdx(info.elem_layout_idx),
-            .box_of_zst => null,
-            else => unreachable,
-        };
+        const runtime_elem_layout_idx = if (box_layout.tag == .box)
+            self.runtimeRepresentationLayoutIdx(info.elem_layout_idx)
+        else
+            null;
         const runtime_elem_layout = if (runtime_elem_layout_idx) |idx| self.getLayout(idx) else info.elem_layout;
 
         return .{
@@ -2055,11 +2024,7 @@ pub const Store = struct {
     /// Get bundled information about a box layout's element
     pub fn getBoxInfo(self: *const Self, layout: Layout) BoxInfo {
         std.debug.assert(layout.tag == .box or layout.tag == .box_of_zst);
-        const elem_layout_idx: Idx = switch (layout.tag) {
-            .box => layout.getIdx(),
-            .box_of_zst => .zst,
-            else => unreachable,
-        };
+        const elem_layout_idx: Idx = if (layout.tag == .box) layout.getIdx() else .zst;
         const elem_layout = self.getLayout(elem_layout_idx);
         return BoxInfo{
             .elem_layout_idx = elem_layout_idx,
@@ -2158,12 +2123,23 @@ pub const Store = struct {
 
     /// Get the offset of a struct field at the given sorted index.
     /// Effective alignment (in bytes) of a struct field for offset/size
-    /// computation. Padding spacers are always alignment 1 — their value
+    /// computation. Padding spacers are always alignment 1—their value
     /// layout's alignment is ignored so they never introduce internal padding
     /// nor inflate the struct's alignment.
     fn structFieldAlignmentBytes(field: StructField, size_align: SizeAlign) u32 {
         if (field.is_padding) return 1;
         return @intCast(size_align.alignment.toByteUnits());
+    }
+
+    pub inline fn getStructField(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) StructField {
+        const fields = self.getStructData(struct_idx).getFields();
+        std.debug.assert(field_index_in_sorted_fields < fields.count);
+        const absolute_index: StructField.SafeMultiList.Idx = @enumFromInt(@intFromEnum(fields.start) + field_index_in_sorted_fields);
+        return .{
+            .index = self.struct_fields.fieldItem(.index, absolute_index),
+            .layout = self.struct_fields.fieldItem(.layout, absolute_index),
+            .is_padding = self.struct_fields.fieldItem(.is_padding, absolute_index),
+        };
     }
 
     pub fn getStructFieldOffsetAt(
@@ -2172,14 +2148,11 @@ pub const Store = struct {
         field_index_in_sorted_fields: u32,
         target_usize: target.TargetUsize,
     ) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-
         var current_offset: u32 = 0;
         var field_idx: u32 = 0;
 
         while (field_idx < field_index_in_sorted_fields) : (field_idx += 1) {
-            const field = sorted_fields.get(field_idx);
+            const field = self.getStructField(struct_idx, field_idx);
             const field_layout = self.getLayout(field.layout);
             const field_size_align = self.layoutSizeAlignAt(field_layout, target_usize);
             const field_alignment = structFieldAlignmentBytes(field, field_size_align);
@@ -2187,7 +2160,7 @@ pub const Store = struct {
             current_offset += field_size_align.size;
         }
 
-        const requested_field = sorted_fields.get(field_index_in_sorted_fields);
+        const requested_field = self.getStructField(struct_idx, field_index_in_sorted_fields);
         const requested_field_layout = self.getLayout(requested_field.layout);
         const requested_field_size_align = self.layoutSizeAlignAt(requested_field_layout, target_usize);
         return @intCast(std.mem.alignForward(u32, current_offset, structFieldAlignmentBytes(requested_field, requested_field_size_align)));
@@ -2208,18 +2181,14 @@ pub const Store = struct {
 
     /// Get the size of a struct field at the given sorted index for an explicit pointer width.
     pub fn getStructFieldSizeAt(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32, target_usize: target.TargetUsize) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-        const field = sorted_fields.get(field_index_in_sorted_fields);
+        const field = self.getStructField(struct_idx, field_index_in_sorted_fields);
         const field_layout = self.getLayout(field.layout);
         return self.layoutSizeAlignAt(field_layout, target_usize).size;
     }
 
     /// Get the alignment of a struct field at the given sorted index for an explicit pointer width.
     pub fn getStructFieldAlignmentAt(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32, target_usize: target.TargetUsize) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-        const field = sorted_fields.get(field_index_in_sorted_fields);
+        const field = self.getStructField(struct_idx, field_index_in_sorted_fields);
         const field_layout = self.getLayout(field.layout);
         return structFieldAlignmentBytes(field, self.layoutSizeAlignAt(field_layout, target_usize));
     }
@@ -2230,9 +2199,7 @@ pub const Store = struct {
 
     /// Get the layout index of a struct field at the given sorted index.
     pub fn getStructFieldLayout(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) Idx {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-        return sorted_fields.get(field_index_in_sorted_fields).layout;
+        return self.getStructField(struct_idx, field_index_in_sorted_fields).layout;
     }
 
     /// Whether the struct field at the given sorted index is an unnamed padding
@@ -2240,9 +2207,7 @@ pub const Store = struct {
     /// skipped by every semantic field operation (equality, refcount, inspect,
     /// glue, construction).
     pub fn getStructFieldIsPadding(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) bool {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-        return sorted_fields.get(field_index_in_sorted_fields).is_padding;
+        return self.getStructField(struct_idx, field_index_in_sorted_fields).is_padding;
     }
 
     /// Backwards-compat aliases
@@ -2252,11 +2217,9 @@ pub const Store = struct {
     /// Position in committed struct field order for an original field index.
     fn getStructFieldPositionByOriginalIndex(self: *const Self, struct_idx: StructIdx, original_index: u32) u32 {
         const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-
-        for (0..sorted_fields.len) |i| {
-            const field = sorted_fields.get(@intCast(i));
-            if (field.index == original_index) {
+        const fields = sd.getFields();
+        for (0..fields.count) |i| {
+            if (self.getStructField(struct_idx, @intCast(i)).index == original_index) {
                 return @intCast(i);
             }
         }
@@ -2290,10 +2253,8 @@ pub const Store = struct {
 
     /// Get the layout index of a struct field by its ORIGINAL index (source order).
     pub fn getStructFieldLayoutByOriginalIndex(self: *const Self, struct_idx: StructIdx, original_index: u32) Idx {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
         const pos = self.getStructFieldPositionByOriginalIndex(struct_idx, original_index);
-        return sorted_fields.get(pos).layout;
+        return self.getStructField(struct_idx, pos).layout;
     }
 
     /// Backwards-compat alias
@@ -2306,10 +2267,8 @@ pub const Store = struct {
         original_index: u32,
         target_usize: target.TargetUsize,
     ) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
         const pos = self.getStructFieldPositionByOriginalIndex(struct_idx, original_index);
-        const field = sorted_fields.get(pos);
+        const field = self.getStructField(struct_idx, pos);
         const field_layout = self.getLayout(field.layout);
         return self.sizeAt(field_layout, target_usize);
     }
@@ -2321,10 +2280,8 @@ pub const Store = struct {
 
     /// Get the alignment of a struct field by its ORIGINAL index at an explicit pointer width.
     pub fn getStructFieldAlignmentByOriginalIndexAt(self: *const Self, struct_idx: StructIdx, original_index: u32, target_usize: target.TargetUsize) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
         const pos = self.getStructFieldPositionByOriginalIndex(struct_idx, original_index);
-        const field = sorted_fields.get(pos);
+        const field = self.getStructField(struct_idx, pos);
         const field_layout = self.getLayout(field.layout);
         return structFieldAlignmentBytes(field, self.layoutSizeAlignAt(field_layout, target_usize));
     }
@@ -2455,7 +2412,7 @@ pub const Store = struct {
         return self.layoutSizeAlign(layout).size;
     }
 
-    /// The alignment class of a struct from its (already-committed) fields — the
+    /// The alignment class of a struct from its (already-committed) fields—the
     /// max sort key of its non-padding fields. Used at commit time to compute the
     /// `sort_key` stored on the struct layout.
     fn structFieldsSortKey(self: *const Self, fields: []const StructField) layout_mod.SortKey {
@@ -2486,24 +2443,67 @@ pub const Store = struct {
     /// Check if a layout contains any refcounted data (directly or transitively).
     /// This is more comprehensive than Layout.isRefcounted() which only checks if
     /// the layout itself is heap-allocated. This function also returns true for
-    /// tuples/records that contain strings, lists, or boxes.
+    /// tuples/records that contain strings, lists, or heap-allocated boxes.
     ///
     /// For struct/tag-union layouts the answer is read from a bit precomputed when
     /// the layout was committed (`StructData.contains_refcounted`), so this is O(1)
     /// and never allocates. Closures defer to their captures layout (a bounded
     /// chain). Recursion is not a concern: recursive back-edges are materialized as
-    /// box layouts, which short-circuit to `true` here.
+    /// box layouts, which short-circuit to `true` here. `box_of_zst` is the
+    /// exception: it has pointer-sized runtime representation, but uses the
+    /// null pointer and has no refcount header.
     pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
         return switch (l.tag) {
             .scalar => l.getScalar().tag == .str,
-            .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
+            .list, .list_of_zst, .box, .erased_callable => true,
             // Compiler-internal pointers are never refcounted (TRMC holes); this is
             // what keeps ARC from tracking hole/head locals.
-            .ptr => false,
+            .ptr, .box_of_zst => false,
             .zst => false,
             .struct_ => self.getStructData(l.getStruct().idx).contains_refcounted,
             .tag_union => self.getTagUnionData(l.getTagUnion().idx).contains_refcounted,
             .closure => self.layoutContainsRefcounted(self.getLayout(l.getClosure().captures_layout_idx)),
+        };
+    }
+
+    /// Like `layoutContainsRefcounted`, but treats `box_of_zst` as refcounted.
+    ///
+    /// A `box_of_zst` is the erased box representation: its payload layout is
+    /// erased to zero-sized, but at runtime it holds a real refcounted heap
+    /// allocation (the boxed concrete payload). `layoutContainsRefcounted`
+    /// reports it as unrefcounted because a standalone `box_of_zst` local names
+    /// a canonical null box, but the descriptor-guided boxy runtime—which
+    /// maintains refcounts of the actual erased allocations—must treat it as
+    /// refcounted so a container of erased boxes increfs its elements on clone
+    /// and decrefs them on drop. Reference counting a canonical null box is a
+    /// null-safe no-op, so this is correct for both uses. This mirrors the
+    /// refcount presence the interpreter computes for the same runtime.
+    pub fn layoutContainsRcErasedBox(self: *const Self, l: Layout) bool {
+        return switch (l.tag) {
+            .scalar => l.getScalar().tag == .str,
+            .list, .list_of_zst, .box, .box_of_zst, .erased_callable => true,
+            .ptr => false,
+            .zst => false,
+            .struct_ => blk: {
+                const sd = self.getStructData(l.getStruct().idx);
+                const struct_idx = l.getStruct().idx;
+                var i: u32 = 0;
+                while (i < sd.fields.count) : (i += 1) {
+                    if (self.getStructFieldIsPadding(struct_idx, i)) continue;
+                    if (self.layoutContainsRcErasedBox(self.getLayout(self.getStructFieldLayout(struct_idx, i)))) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => blk: {
+                const tu_data = self.getTagUnionData(l.getTagUnion().idx);
+                const variants = self.getTagUnionVariants(tu_data);
+                var i: u32 = 0;
+                while (i < variants.len) : (i += 1) {
+                    if (self.layoutContainsRcErasedBox(self.getLayout(variants.get(i).payload_layout))) break :blk true;
+                }
+                break :blk false;
+            },
+            .closure => self.layoutContainsRcErasedBox(self.getLayout(l.getClosure().captures_layout_idx)),
         };
     }
 
@@ -2531,6 +2531,22 @@ pub const Store = struct {
 
     pub fn rcHelperPlan(self: *const Self, helper_key: @import("./rc_helper.zig").HelperKey) @import("./rc_helper.zig").Plan {
         return rc_helper.Resolver.init(self).plan(helper_key);
+    }
+
+    /// Like `rcHelperPlan`, but treats erased boxes (`box_of_zst`) as
+    /// refcounted container elements/fields/payloads. Used by the
+    /// descriptor-guided boxy runtime's concrete RC path so it matches the
+    /// interpreter; not used to decide which RC statements a program lowers to.
+    pub fn rcHelperPlanErasedBox(self: *const Self, helper_key: @import("./rc_helper.zig").HelperKey) @import("./rc_helper.zig").Plan {
+        return rc_helper.Resolver.initErasedBox(self).plan(helper_key);
+    }
+
+    pub fn rcHelperStructFieldPlanErasedBox(self: *const Self, struct_plan: @import("./rc_helper.zig").StructPlan, field_index: u32) ?@import("./rc_helper.zig").FieldPlan {
+        return rc_helper.Resolver.initErasedBox(self).structFieldPlan(struct_plan, field_index);
+    }
+
+    pub fn rcHelperTagUnionVariantPlanErasedBox(self: *const Self, tag_plan: @import("./rc_helper.zig").TagUnionPlan, variant_index: u32) ?@import("./rc_helper.zig").HelperKey {
+        return rc_helper.Resolver.initErasedBox(self).tagUnionVariantPlan(tag_plan, variant_index);
     }
 
     pub fn rcHelperStructFieldCount(self: *const Self, struct_plan: @import("./rc_helper.zig").StructPlan) u32 {
@@ -2561,59 +2577,12 @@ pub const Store = struct {
         return rc_helper.Resolver.init(self).tagUnionVariantPlan(tag_plan, variant_index);
     }
 
-    /// Note: the caller must verify ahead of time that the given variable does not
-    /// resolve to a flex var or rigid var, unless that flex var or rigid var is
-    /// wrapped in a Box or a Num (e.g. `Num a` or `Int a`).
-    ///
-    /// For example, when checking types that are exposed to the host, they should
-    /// all have been verified to be either monomorphic or boxed. Same with repl
-    /// code like this:
-    ///
-    /// ```
-    /// val : a
-    ///
-    /// val
-    /// ```
-    ///
-    /// This flex var should be replaced by an Error type before calling this function.
-    ///
-    /// The module_idx parameter specifies which module the type variable belongs to.
-    /// This is essential for cross-module layout computation where different modules
-    /// may have type variables with the same numeric value referring to different types.
-    ///
-    /// The caller_module_idx parameter specifies the module that owns the type variables
-    /// in the type_scope mappings. When a flex/rigid var is looked up in type_scope and
-    /// found, the mapped var belongs to caller_module_idx, not module_idx. This is critical
-    /// for cross-module polymorphic function calls.
-    pub fn fromTypeVar(
-        self: *Self,
-        module_idx: u32,
-        unresolved_var: Var,
-        type_scope: *const TypeScope,
-        caller_module_idx: ?u32,
-    ) std.mem.Allocator.Error!Idx {
-        // Shared ordinary-data layout resolution now lives in TypeLayoutResolver.
-        // Keep the legacy store-owned implementation below only as transitional
-        // dead code until the remaining store-owned state is fully removed.
-        if (self.layouts.len() >= num_primitives) {
-            const TypeLayoutResolver = @import("type_layout_resolver.zig").Resolver;
-
-            var resolver = TypeLayoutResolver.init(self);
-            defer resolver.deinit();
-            return resolver.resolve(module_idx, unresolved_var, type_scope, caller_module_idx);
-        }
-        unreachable;
-    }
-
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         const trace = tracy.traceNamed(@src(), "layoutStore.insertLayout");
         defer trace.end();
 
-        switch (layout.tag) {
-            .scalar => return idxFromScalar(layout.getScalar()),
-            .zst => return .zst,
-            else => {},
-        }
+        if (layout.tag == .scalar) return idxFromScalar(layout.getScalar());
+        if (layout.tag == .zst) return .zst;
 
         try self.buildExistingLayoutInternKey(layout);
         if (self.lookupInternedScratchKey()) |existing| return existing;
@@ -2636,12 +2605,12 @@ pub const Store = struct {
         var steps: usize = 0;
         while (steps < self.layouts.len()) : (steps += 1) {
             const layout = self.getLayout(current);
-            switch (layout.tag) {
-                .list, .list_of_zst => return current,
-                .box => current = layout.getIdx(),
-                .box_of_zst => return null,
-                else => return null,
+            if (layout.tag == .list or layout.tag == .list_of_zst) return current;
+            if (layout.tag == .box) {
+                current = layout.getIdx();
+                continue;
             }
+            return null;
         }
         std.debug.panic(
             "layout.Store invariant violated: list-layout resolution encountered a cycle starting at layout {d}",
@@ -2654,7 +2623,7 @@ pub const Store = struct {
     }
 };
 
-test "layout store commits struct fields with a stable alignment sort" {
+test "layout store commits struct fields in canonical structural order" {
     const testing = std.testing;
 
     var store = try Store.init(testing.allocator, .u64);
@@ -2695,7 +2664,7 @@ test "putNominalStructFields keeps a padding-free declared order verbatim" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
 
-    // Declared order { _:U8, _:U8, _:U8, _:U8, x:U32 } — mirrors a C struct
+    // Declared order { _:U8, _:U8, _:U8, _:U8, x:U32 }—mirrors a C struct
     // with three padding bytes before a u32. Alignment sort would hoist the u32
     // first; declared order must be kept.
     const declared_fields = [_]StructField{
@@ -2763,8 +2732,7 @@ test "commitGraph keeps a nominal struct with a `_` field in declared order" {
         .{ .index = 4, .child = .{ .canonical = .u32 } },
         .{ .index = 5, .child = .{ .canonical = .zst }, .is_padding = true },
     });
-    graph.setNode(struct_node, .{ .struct_ = fields });
-    try graph.markNominalStruct(testing.allocator, struct_node);
+    graph.setNode(struct_node, .{ .struct_ = graph.declaredOrder(fields) });
 
     var commit = try store.commitGraph(&graph, .{ .local = struct_node });
     defer commit.deinit(testing.allocator);
@@ -2776,7 +2744,7 @@ test "commitGraph keeps a nominal struct with a `_` field in declared order" {
     try testing.expectEqual(@as(u32, 8), store.getStructSize(struct_idx));
 }
 
-test "commitGraph lays out a no-padding nominal struct structurally" {
+test "commitGraph structural order ignores graph field presentation order" {
     const testing = std.testing;
 
     var store = try Store.init(testing.allocator, .u64);
@@ -2786,30 +2754,24 @@ test "commitGraph lays out a no-padding nominal struct structurally" {
     defer graph.deinit(testing.allocator);
 
     const struct_node = try graph.reserveNode(testing.allocator);
-    // Declared order { a:U8, b:U8, c:U8, d:U8, e:U32 } with no `_` field: a
-    // nominal record without an opt-in marker lays out like a structural record,
-    // so the u32 sorts to offset 0.
+    // The graph presents two equal-key fields in reverse semantic order. A
+    // structural commit must use their canonical indices, never input order.
     const fields = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
-        .{ .index = 0, .child = .{ .canonical = .u8 } },
-        .{ .index = 1, .child = .{ .canonical = .u8 } },
-        .{ .index = 2, .child = .{ .canonical = .u8 } },
-        .{ .index = 3, .child = .{ .canonical = .u8 } },
-        .{ .index = 4, .child = .{ .canonical = .u32 } },
+        .{ .index = 1, .child = .{ .canonical = .f32 } },
+        .{ .index = 0, .child = .{ .canonical = .f32 } },
     });
     graph.setNode(struct_node, .{ .struct_ = fields });
-    try graph.markNominalStruct(testing.allocator, struct_node);
 
     var commit = try store.commitGraph(&graph, .{ .local = struct_node });
     defer commit.deinit(testing.allocator);
 
     const struct_idx = store.getLayout(commit.root_idx).getStruct().idx;
-    // Structural sort hoists the u32 to offset 0.
-    try testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 4));
-    try testing.expectEqual(@as(u32, 4), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try testing.expectEqual(@as(u32, 4), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     try testing.expectEqual(@as(u32, 8), store.getStructSize(struct_idx));
 }
 
-test "uninterned struct layouts use the same stable alignment sort as interned ones" {
+test "uninterned struct layouts use the same structural order as interned ones" {
     const testing = std.testing;
 
     var store = try Store.init(testing.allocator, .u64);
@@ -2825,7 +2787,7 @@ test "uninterned struct layouts use the same stable alignment sort as interned o
 
     const interned_idx = try store.putStructFields(&semantic_fields);
     const interned_layout = store.getLayout(interned_idx);
-    const uninterned_layout = try store.buildUninternedStructLayout(&semantic_fields);
+    const uninterned_layout = try store.buildUninternedStructLayout(&semantic_fields, .structural);
 
     try testing.expectEqual(LayoutTag.struct_, interned_layout.tag);
     try testing.expectEqual(LayoutTag.struct_, uninterned_layout.tag);
@@ -2845,6 +2807,25 @@ test "uninterned struct layouts use the same stable alignment sort as interned o
         try testing.expectEqual(left.index, right.index);
         try testing.expectEqual(left.layout, right.layout);
     }
+}
+
+test "uninterned struct layouts preserve explicit declared order" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const declared_fields = [_]StructField{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 2, .layout = .zst, .is_padding = true },
+        .{ .index = 1, .layout = .u64 },
+    };
+    const uninterned_layout = try store.buildUninternedStructLayout(&declared_fields, .declared);
+    const struct_idx = uninterned_layout.getStruct().idx;
+
+    try testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
+    try testing.expectEqual(@as(u32, 8), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
+    try testing.expectEqual(@as(u32, 16), store.getStructSize(struct_idx));
 }
 
 test "layout store records explicit resolved list layout facts for boxed lists" {
@@ -2876,7 +2857,7 @@ test "ZST containers are refcounted layouts with no refcounted children" {
 
     try testing.expect(!store.layoutContainsRefcounted(store.getLayout(.zst)));
     try testing.expect(store.layoutContainsRefcounted(store.getLayout(list_zst_idx)));
-    try testing.expect(store.layoutContainsRefcounted(store.getLayout(box_zst_idx)));
+    try testing.expect(!store.layoutContainsRefcounted(store.getLayout(box_zst_idx)));
 
     const list_abi = store.builtinListAbi(list_zst_idx);
     try testing.expectEqual(@as(?Idx, null), list_abi.elem_layout_idx);
@@ -2887,6 +2868,11 @@ test "ZST containers are refcounted layouts with no refcounted children" {
     try testing.expectEqual(@as(?Idx, null), box_abi.elem_layout_idx);
     try testing.expectEqual(@as(u32, 0), box_abi.elem_size);
     try testing.expect(!box_abi.contains_refcounted);
+
+    try testing.expectEqual(
+        rc_helper.Plan.noop,
+        store.rcHelperPlan(.{ .op = .decref, .layout_idx = box_zst_idx }),
+    );
 }
 
 test "RC helper plans recurse through only refcounted struct fields" {

@@ -215,7 +215,6 @@ expect {
 ~~~
 # EXPECTED
 EXPECTED RECORD ACCESSOR - syntax_grab_bag.md:154:2:154:5
-NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
 MOD NOT FOUND - syntax_grab_bag.md:16:1:16:27
 MOD NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
@@ -271,791 +270,674 @@ MISSING METHOD - syntax_grab_bag.md:101:3:101:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
+TYPE MISMATCH - syntax_grab_bag.md:175:26:175:27
+TYPE MISMATCH - syntax_grab_bag.md:175:34:175:40
 DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
 MISSING METHOD - syntax_grab_bag.md:189:26:189:40
 MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
+── ✗ expected record accessor ───────────────────────── syntax_grab_bag.md:154:2
 
-┌──────────────────────────┐
-│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
-└┬─────────────────────────┘  expected a field name or tuple index.           │
- │                                                                            │
- │  ...                                                                       │
- │  ‾‾‾                                                                       │
- └────────────────────────────────────────────────── syntax_grab_bag.md:154:2 ┘
+I was parsing access after `.`, and I expected a field name or tuple index.
 
-    Record access uses a lowercase field name like `.name`. Tuple access uses a
-    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
-    valid accessors.
+...
+^^^
 
-    For example:
-        person.name
-        pair.0
+Required record access uses .name, optional record access uses .?name, and
+tuple access uses .0. Accessor names must be lowercase and adjacent to their
+punctuation.
 
-    I found `...` here.
+For example:
+    person.name
+    maybe_person.?name
+    pair.0
 
+I found ... here.
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: malformed import ───┐
-└┬────────────────┘  mod name contains invalid control characters.         │
- │                                                                            │
- │  import # Comment after import keyword                                     │
- │      pf # Comment after qualifier                                          │
- │          .StdoutMultiline # Comment after ident                            │
- │          exposing [ # Comment after exposing open                          │
- │              line!, # Comment after exposed item                           │
- │              write!, # Another after exposed item                          │
- │          ] # Comment after exposing close                                  │
- │                                                                            │
- └──────────────────────────────────────────────────── syntax_grab_bag.md:6:1 ┘
+── ✗ mod not found ────────────────────────────────── syntax_grab_bag.md:16:1
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+The mod BadName was not found in this Roc project.
 
+import BadName as GoodName
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `BadName` was not found in this Roc ─────────┐
-└┬─────────────────┘  project.                                                │
- │                                                                            │
- │  import BadName as GoodName                                                │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:16:1 ┘
+── ✗ mod not found ────────────────────────────────── syntax_grab_bag.md:17:1
 
+The mod BadNameMultiline was not found in this Roc project.
 
+import
+    BadNameMultiline
+        as
+        GoodNameMultiline
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ The mod `BadNameMultiline` was not found in this ────┐
-└┬─────────────────┘  Roc project.                                            │
- │                                                                            │
- │  import                                                                    │
- │      BadNameMultiline                                                      │
- │          as                                                                │
- │          GoodNameMultiline                                                 │
- │                                                                            │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:17:1 ┘
+── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:36:8
 
+The type Bar is not declared in this scope.
 
+Foo : (Bar, Baz)
+       ^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │         ‾‾‾                                                                │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:36:8 ┘
+── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:36:13
 
+The type Baz is not declared in this scope.
 
+Foo : (Bar, Baz)
+            ^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Foo : (Bar, Baz)                                                          │
- │              ‾‾‾                                                           │
- └────────────────────────────────────────────────── syntax_grab_bag.md:36:13 ┘
+── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:39:2
 
+The type Bar is not declared in this scope.
 
+Bar, # Comment after pattern tuple item
+^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Bar` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Bar, # Comment after pattern tuple item                                   │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:39:2 ┘
+── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:40:2
 
+The type Baz is not declared in this scope.
 
+Baz, # Another after pattern tuple item
+^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Baz` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Baz, # Another after pattern tuple item                                   │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:40:2 ┘
+── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:43:19
 
+The type Ok is not declared in this scope.
 
+Some(a) : { foo : Ok(a), bar : Something }
+                  ^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Some(a) : { foo : Ok(a), bar : Something }                                │
- │                    ‾‾                                                      │
- └────────────────────────────────────────────────── syntax_grab_bag.md:43:19 ┘
+── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:43:32
 
+The type Something is not declared in this scope.
 
+Some(a) : { foo : Ok(a), bar : Something }
+                               ^^^^^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Some(a) : { foo : Ok(a), bar : Something }                                │
- │                                 ‾‾‾‾‾‾‾‾‾                                  │
- └────────────────────────────────────────────────── syntax_grab_bag.md:43:32 ┘
+── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:45:8
 
+The type Ok is not declared in this scope.
 
+foo : Ok(a), # After field
+      ^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  foo : Ok(a), # After field                                                │
- │        ‾‾                                                                  │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:45:8 ┘
+── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:46:8
 
+The type Something is not declared in this scope.
 
+bar : Something, # After last field
+      ^^^^^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  bar : Something, # After last field                                       │
- │        ‾‾‾‾‾‾‾‾‾                                                           │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:46:8 ┘
+── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:52:4
 
+The type Ok is not declared in this scope.
 
+Ok(a), # Comment after pattern record field
+^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Ok` is not declared in this scope. ────────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Ok(a), # Comment after pattern record field                               │
- │  ‾‾                                                                        │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:52:4 ┘
+── ✗ undeclared type ─────────────────────────────────── syntax_grab_bag.md:53:8
 
+The type Something is not declared in this scope.
 
+bar : Something, # Another after pattern record field
+      ^^^^^^^^^
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Something` is not declared in this scope. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  bar : Something, # Another after pattern record field                     │
- │        ‾‾‾‾‾‾‾‾‾                                                           │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:53:8 ┘
+── ✗ name not in scope ───────────────────────────────── syntax_grab_bag.md:72:4
 
+Nothing is named some_func in this scope.
 
+some_func() # After debug expr
+^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  some_func() # After debug expr                                            │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:72:4 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+── ● unused variable ─────────────────────────────────── syntax_grab_bag.md:97:3
 
+Variable lower is defined here and then never used:
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `lower` is defined here and then never used. ───┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  lower # After pattern comment                                             │
- │  ‾‾‾‾‾                                                                     │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:97:3 ┘
+lower # After pattern comment
+^^^^^
 
-    If you don't need this variable, prefix it with an underscore like `_lower`
-    to suppress this warning.
+If you don't need this variable, prefix it with an underscore like _lower to
+suppress this warning.
 
+── ● unused variable ──────────────────────────────────── syntax_grab_bag.md:1:1
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  # This is a mod comment!                                                  │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
+Variable rest is defined here and then never used:
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+# This is a mod comment!
+^
 
+If you don't need this variable, prefix it with an underscore like _rest to
+suppress this warning.
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  [1, 2 | 5, 3, .. as rest] => 123                                          │
- │      ‾‾‾‾‾                                                                 │
- └────────────────────────────────────────────────── syntax_grab_bag.md:108:7 ┘
+── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:108:7
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
+[1, 2 | 5, 3, .. as rest] => 123
+    ^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  # This is a mod comment!                                                  │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+── ● unused variable ──────────────────────────────────── syntax_grab_bag.md:1:1
 
+Variable rest is defined here and then never used:
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  2 | 5,                                                                    │
- │  ‾‾‾‾‾                                                                     │
- └────────────────────────────────────────────────── syntax_grab_bag.md:111:4 ┘
+# This is a mod comment!
+^
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+If you don't need this variable, prefix it with an underscore like _rest to
+suppress this warning.
 
+── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:111:4
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  # This is a mod comment!                                                  │
- │  ‾                                                                         │
- └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+2 | 5,
+^^^^^
 
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  (1, 2 | 5, 3) => 123                                                      │
- │      ‾‾‾‾‾                                                                 │
- └────────────────────────────────────────────────── syntax_grab_bag.md:120:7 ┘
+── ● unused variable ──────────────────────────────────── syntax_grab_bag.md:1:1
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+Variable rest is defined here and then never used:
 
+# This is a mod comment!
+^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `add` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
- │                                    ‾‾‾                                     │
- └───────────────────────────────────────────────── syntax_grab_bag.md:121:37 ┘
+If you don't need this variable, prefix it with an underscore like _rest to
+suppress this warning.
 
-    Is it misspelled, or is there an import missing?
+── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:120:7
 
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
- │                    ‾‾‾‾‾‾                                                  │
- └───────────────────────────────────────────────── syntax_grab_bag.md:121:21 ┘
+(1, 2 | 5, 3) => 123
+    ^^^^^
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
+── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:121:37
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  .. # After spread operator                                                │
- │      rest, # After last field                                              │
- │                                                                            │
- └────────────────────────────────────────────────── syntax_grab_bag.md:127:4 ┘
+Nothing is named add in this scope.
 
-    If you don't need this variable, prefix it with an underscore like `_rest`
-    to suppress this warning.
+{ foo: 1, bar: 2, ..rest } => 12->add(34)
+                                  ^^^
 
+Is it misspelled, or is there an import missing?
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  { foo: 1, bar: 2 | 7 } => 12                                              │
- │                 ‾‾‾‾‾                                                      │
- └───────────────────────────────────────────────── syntax_grab_bag.md:130:18 ┘
+── ● unused variable ───────────────────────────────── syntax_grab_bag.md:121:21
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+Variable rest is defined here and then never used:
 
+{ foo: 1, bar: 2, ..rest } => 12->add(34)
+                  ^^^^^^
 
-┌─────────────────┐
-│ NOT IMPLEMENTED ├─ This feature is not yet implemented: alternatives ───────┐
-└┬────────────────┘  pattern outside match expression.                        │
- │                                                                            │
- │  bar: 2 | 7, # After last record field                                     │
- │       ‾‾‾‾‾                                                                │
- └────────────────────────────────────────────────── syntax_grab_bag.md:133:9 ┘
+If you don't need this variable, prefix it with an underscore like _rest to
+suppress this warning.
 
-    This error doesn't have a proper diagnostic report yet. Let us know if you
-    want to help improve Roc's error messages!
+── ● unused variable ────────────────────────────────── syntax_grab_bag.md:127:4
 
+Variable rest is defined here and then never used:
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `b` is defined here and then never used. ───────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  b,                                                                        │
- │  ‾                                                                         │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:82:2 ┘
+.. # After spread operator
+    rest, # After last field
 
-    If you don't need this variable, prefix it with an underscore like `_b` to
-    suppress this warning.
+If you don't need this variable, prefix it with an underscore like _rest to
+suppress this warning.
 
+── ✗ not implemented ───────────────────────────────── syntax_grab_bag.md:130:18
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  blah == 1 # Comment after expect statement                                │
- │  ‾‾‾‾                                                                      │
- └────────────────────────────────────────────────── syntax_grab_bag.md:141:2 ┘
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
-    Is it misspelled, or is there an import missing?
+{ foo: 1, bar: 2 | 7 } => 12
+               ^^^^^
 
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `String` is not declared in this scope. ────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  main! : List(String) -> Try({}, _)                                        │
- │               ‾‾‾‾‾‾                                                       │
- └───────────────────────────────────────────────── syntax_grab_bag.md:143:14 ┘
+── ✗ not implemented ────────────────────────────────── syntax_grab_bag.md:133:9
 
+This feature is not yet implemented: alternatives pattern outside match
+expression.
 
+bar: 2 | 7, # After last record field
+     ^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  expect blah == 1                                                          │
- │         ‾‾‾‾                                                               │
- └────────────────────────────────────────────────── syntax_grab_bag.md:147:9 ┘
+This error doesn't have a proper diagnostic report yet. Let us know if you want
+to help improve Roc's error messages!
 
-    Is it misspelled, or is there an import missing?
+── ● unused variable ─────────────────────────────────── syntax_grab_bag.md:82:2
 
+Variable b is defined here and then never used:
 
-┌─────────────────────┐
-│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
-└┬────────────────────┘                                                       │
- │                                                                            │
- │  ...                                                                       │
- │  ‾‾‾                                                                       │
- └────────────────────────────────────────────────── syntax_grab_bag.md:154:2 ┘
+b,
+^
 
-    This might be a syntax error, an unsupported language feature, or a typo.
+If you don't need this variable, prefix it with an underscore like _b to
+suppress this warning.
 
+── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:141:2
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  some_func(                                                                │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └────────────────────────────────────────────────── syntax_grab_bag.md:158:2 ┘
+Nothing is named blah in this scope.
 
-    Is it misspelled, or is there an import missing?
+blah == 1 # Comment after expect statement
+^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!("Adding ${n} to ${number}")                                  │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────────────────────────── syntax_grab_bag.md:175:3 ┘
+── ✗ undeclared type ───────────────────────────────── syntax_grab_bag.md:143:14
 
-    Is it misspelled, or is there an import missing?
+The type String is not declared in this scope.
 
+main! : List(String) -> Try({}, _)
+             ^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `punned` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
- │                                                               ‾‾‾‾‾‾       │
- └───────────────────────────────────────────────── syntax_grab_bag.md:178:63 ┘
+── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:147:9
 
-    Is it misspelled, or is there an import missing?
+Nothing is named blah in this scope.
 
+expect blah == 1
+       ^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `nested` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
- │                                          ‾‾‾‾‾‾                            │
- └───────────────────────────────────────────────── syntax_grab_bag.md:179:42 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+── ✗ unrecognized syntax ────────────────────────────── syntax_grab_bag.md:154:2
 
+I don't recognize this syntax.
 
-┌──────────────────────────────┐
-│ INVALID ASSIGNMENT TO ITSELF ├─ The value `tuple` is assigned to itself, ───┐
-└┬─────────────────────────────┘  which would cause an infinite loop at       │
- │                                runtime.                                    │
- │                                                                            │
- │  tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
- │                                                  ‾‾‾‾‾                     │
- └───────────────────────────────────────────────── syntax_grab_bag.md:179:50 ┘
+...
+^^^
 
-    Only functions can reference themselves (for recursion). For non-function
-    values, the right-hand side must be fully computable without referring to
-    the value being assigned.
+This might be a syntax error, an unsupported language feature, or a typo.
 
+── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:158:2
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `tag1` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  tag1,                                                                     │
- │  ‾‾‾‾                                                                      │
- └────────────────────────────────────────────────── syntax_grab_bag.md:183:3 ┘
+Nothing is named some_func in this scope.
 
-    Is it misspelled, or is there an import missing?
+some_func(
+^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `nested` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  (nested, tuple),                                                          │
- │   ‾‾‾‾‾‾                                                                   │
- └────────────────────────────────────────────────── syntax_grab_bag.md:185:4 ┘
+── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:175:3
 
-    Is it misspelled, or is there an import missing?
+Nothing is named line! in this scope.
 
+Stdout.line!("Adding ${n} to ${number}")
+^^^^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `foo` in this scope. ─────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  …t = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5 │
- │           ‾‾‾                                                              │
- └───────────────────────────────────────────────── syntax_grab_bag.md:188:22 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:178:63
 
+Nothing is named punned in this scope.
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `some_fn` in this scope. ─────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_me…│
- │           ‾‾‾‾‾‾‾                                                          │
- └───────────────────────────────────────────────── syntax_grab_bag.md:189:26 ┘
+record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+                                                             ^^^^^^
 
-    Is it misspelled, or is there an import missing?
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:179:42
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `arg1` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  …some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.…│
- │           ‾‾‾‾                                                             │
- └───────────────────────────────────────────────── syntax_grab_bag.md:189:34 ┘
+Nothing is named nested in this scope.
 
-    Is it misspelled, or is there an import missing?
+tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+                                        ^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!(interpolated)?                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────────────────────────── syntax_grab_bag.md:190:2 ┘
+── ✗ invalid assignment to itself ──────────────────── syntax_grab_bag.md:179:50
 
-    Is it misspelled, or is there an import missing?
+The value tuple is assigned to itself, which would cause an infinite loop at
+runtime.
 
+tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+                                                ^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  Stdout.line!(                                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────────────────────────── syntax_grab_bag.md:191:2 ┘
+Only functions can reference themselves (for recursion). For non-function
+values, the right-hand side must be fully computable without referring to the
+value being assigned.
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:183:3
 
+Nothing is named tag1 in this scope.
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `Num.toStr` does not exist. ──────────────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  Num.toStr(number) # Comment after string interpolation expr               │
- │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └────────────────────────────────────────────────── syntax_grab_bag.md:193:4 ┘
+tag1,
+^^^^
 
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:185:4
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `tag_with_payload` is defined here and then ────┐
-└┬────────────────┘  never used.                                              │
- │                                                                            │
- │  tag_with_payload = Ok(number)                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └────────────────────────────────────────────────── syntax_grab_bag.md:164:2 ┘
+Nothing is named nested in this scope.
 
-    If you don't need this variable, prefix it with an underscore like
-    `_tag_with_payload` to suppress this warning.
+(nested, tuple),
+ ^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `record` is defined here and then never used. ──┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
- │  ‾‾‾‾‾‾                                                                    │
- └────────────────────────────────────────────────── syntax_grab_bag.md:178:2 ┘
+── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:188:22
 
-    If you don't need this variable, prefix it with an underscore like
-    `_record` to suppress this warning.
+Nothing is named foo in this scope.
 
+bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+                    ^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `multiline_tuple` is defined here and then ─────┐
-└┬────────────────┘  never used.                                              │
- │                                                                            │
- │  multiline_tuple = (                                                       │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └────────────────────────────────────────────────── syntax_grab_bag.md:180:2 ┘
+Is it misspelled, or is there an import missing?
 
-    If you don't need this variable, prefix it with an underscore like
-    `_multiline_tuple` to suppress this warning.
+── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:189:26
 
+Nothing is named some_fn in this scope.
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `bin_op_result` is defined here and then ───────┐
-└┬────────────────┘  never used.                                              │
- │                                                                            │
- │  bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or… │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                             │
- └────────────────────────────────────────────────── syntax_grab_bag.md:188:2 ┘
+static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+                        ^^^^^^^
 
-    If you don't need this variable, prefix it with an underscore like
-    `_bin_op_result` to suppress this warning.
+Is it misspelled, or is there an import missing?
 
+── ✗ name not in scope ─────────────────────────────── syntax_grab_bag.md:189:34
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `static_dispatch_style` is defined here and ────┐
-└┬────────────────┘  then never used.                                         │
- │                                                                            │
- │  static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_st… │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └────────────────────────────────────────────────── syntax_grab_bag.md:189:2 ┘
+Nothing is named arg1 in this scope.
 
-    If you don't need this variable, prefix it with an underscore like
-    `_static_dispatch_style` to suppress this warning.
-
-
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  tuple : Value((a, b, c))                                                  │
- │          ‾‾‾‾‾                                                             │
- └────────────────────────────────────────────────── syntax_grab_bag.md:201:9 ┘
-
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This `if` condition must evaluate to a `Bool` – either ────┐
-└┬──────────────┘  `True` or `False`.                                         │
- │                                                                            │
- │  if num {                                                                  │
- │     ‾‾‾                                                                    │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:70:5 ┘
-
-    It is:
-
-        U64
-
-    But I need this to be a `Bool` value.
-
-
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  "foo" => # After arrow comment                                            │
- │  ‾‾‾‾‾                                                                     │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:99:3 ┘
-
-    The value's type, which does not have a method named `from_quote`, is:
-
-        [Blue, Green, Red, ..]
-
-
-┌────────────────┐
-│ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
-└┬───────────────┘  whose type doesn't have that method.                      │
- │                                                                            │
- │  "foo" | "bar" => 200                                                      │
- │  ‾‾‾‾‾                                                                     │
- └────────────────────────────────────────────────── syntax_grab_bag.md:101:3 ┘
-
-    The value's type, which does not have a method named `from_quote`, is:
-
-        [Blue, Green, Red, ..]
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ The sixth branch of this `match` does not match the ───────┐
-└┬──────────────┘  previous ones.                                             │
- │                                                                            │
- │  match a {                                                                 │
- │      Blue | Green | Red => {                                               │
- │          x = 12                                                            │
- │          x                                                                 │
- │      }                                                                     │
- │      Blue # After pattern in alt                                           │
- │      | # Before pattern in alt                                             │
- │          Green                                                             │
- │      | Red # After alt pattern                                             │
- │          => {                                                              │
- │              x = 12                                                        │
- │              x                                                             │
- │          }                                                                 │
- │      lower # After pattern comment                                         │
- │          => 1                                                              │
- │      "foo" => # After arrow comment                                        │
- │          100                                                               │
- │      "foo" | "bar" => 200                                                  │
- │      [1, 2, 3, .. as rest] # After pattern comment                         │
- │          => # After arrow comment                                          │
- │              123 # After branch comment                                    │
- │                                                                            │
- │      # Just a random comment                                               │
- │                                                                            │
- │      [1, 2 | 5, 3, .. as rest] => 123                                      │
- │      [                                                                     │
- │          1,                                                                │
- │          2 | 5,                                                            │
- │          3,                                                                │
- │          .. # After DoubleDot                                              │
- │              as # Before alias                                             │
- │                  rest, # After last pattern in list                        │
- │      ] => 123                                                              │
- │      3.14 => 314                                                           │
- │      3.14 | 6.28 => 314                                                    │
- │      (1, 2, 3) => 123                                                      │
- │      (1, 2 | 5, 3) => 123                                                  │
- │      { foo: 1, bar: 2, ..rest } => 12->add(34)                             │
- │      { # After pattern record open                                         │
- │          foo # After pattern record field name                             │
- │              : # Before pattern record field value                         │
- │                  1, # After pattern record field                           │
- │          bar: 2,                                                           │
- │          .. # After spread operator                                        │
- │              rest, # After last field                                      │
- │      } => 12                                                               │
- │      { foo: 1, bar: 2 | 7 } => 12                                          │
- │      {                                                                     │
- │          foo: 1,                                                           │
- │          bar: 2 | 7, # After last record field                             │
- │      } => 12                                                               │
- │      Ok(123) => 123                                                        │
- │      Ok(Some(dude)) => dude                                                │
- │      TwoArgs("hello", Some("world")) => 1000                               │
- │  }                                                                         │
- │                                                                            │
- └─────────────────────────────────────────────────── syntax_grab_bag.md:84:3 ┘
-
-    This sixth branch is trying to match:
-
-        List(d)
-          where [
-            d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-            d.is_eq : d, d -> Bool,
-          ]
-
-    But the expression between the `match` parenthesis has the type:
-
-        [Blue, Green, Red, ..]
-
-    These can never match! Either the pattern or expression has a problem.
-
-
-┌──────────────┐
-│ TOO FEW ARGS ├─ The `match_time` function expects 2 arguments, but it got ──┐
-└┬─────────────┘  1 instead.                                                  │
- │                                                                            │
- │  match_time(                                                               │
- │      ..., # Single args with comment                                       │
- │  )                                                                         │
- │                                                                            │
- └────────────────────────────────────────────────── syntax_grab_bag.md:155:2 ┘
-
-    The `match_time` function has the type:
-
-        [Blue, Green, Red, ..], _arg -> Error
-
-    Are there any missing commas?
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ The first argument being passed to this function has the ──┐
-└┬──────────────┘  wrong type.                                                │
- │                                                                            │
- │  add_one(                                                                  │
- │      dbg # After dbg in list                                               │
- │          number, # after dbg expr as arg                                   │
- │  ), # Comment one                                                          │
- │                                                                            │
- └────────────────────────────────────────────────── syntax_grab_bag.md:167:4 ┘
-
-    This argument has the type:
-
-        {}
-
-    But `add_one` needs the first argument to be:
-
-        U64
-
-
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  tuple : Value((a, b, c))                                                  │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
- └────────────────────────────────────────────────── syntax_grab_bag.md:201:1 ┘
-
-    Add a value body here, or put hosted functions in a platform type mod so
-    they are published through the host boundary.
-
-
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named ────────────────┐
-└┬───────────────┘  `static_dispatch_method` on an unresolved type            │
- │                  variable, but unresolved type variables have no methods.  │
- │                                                                            │
- │  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_me…│
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
- └───────────────────────────────────────────────── syntax_grab_bag.md:189:26 ┘
-
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
-
-
-┌────────────────┐
-│ MISSING METHOD ├─ This is trying to dispatch a method named ────────────────┐
-└┬───────────────┘  `next_static_dispatch_method` on an unresolved type       │
- │                  variable, but unresolved type variables have no methods.  │
- │                                                                            │
- │  …style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_me…│
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                         │
- └───────────────────────────────────────────────── syntax_grab_bag.md:189:26 ┘
-
-    Hint: You can replace this static dispatch call with an ordinary function
-    call, or force the type variable to become more concrete—for example, by
-    adding a type annotation that narrows its type to something that actually
-    has methods.
+static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+                                ^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:190:2
+
+Nothing is named line! in this scope.
+
+Stdout.line!(interpolated)?
+^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ──────────────────────────────── syntax_grab_bag.md:191:2
+
+Nothing is named line! in this scope.
+
+Stdout.line!(
+^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ does not exist ─────────────────────────────────── syntax_grab_bag.md:193:4
+
+Num.toStr does not exist.
+
+Num.toStr(number) # Comment after string interpolation expr
+^^^^^^^^^
+
+── ● unused variable ────────────────────────────────── syntax_grab_bag.md:164:2
+
+Variable tag_with_payload is defined here and then never used:
+
+tag_with_payload = Ok(number)
+^^^^^^^^^^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like
+_tag_with_payload to suppress this warning.
+
+── ● unused variable ────────────────────────────────── syntax_grab_bag.md:178:2
+
+Variable record is defined here and then never used:
+
+record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+^^^^^^
+
+If you don't need this variable, prefix it with an underscore like _record to
+suppress this warning.
+
+── ● unused variable ────────────────────────────────── syntax_grab_bag.md:180:2
+
+Variable multiline_tuple is defined here and then never used:
+
+multiline_tuple = (
+^^^^^^^^^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like
+_multiline_tuple to suppress this warning.
+
+── ● unused variable ────────────────────────────────── syntax_grab_bag.md:188:2
+
+Variable bin_op_result is defined here and then never used:
+
+bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+^^^^^^^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like
+_bin_op_result to suppress this warning.
+
+── ● unused variable ────────────────────────────────── syntax_grab_bag.md:189:2
+
+Variable static_dispatch_style is defined here and then never used:
+
+static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+^^^^^^^^^^^^^^^^^^^^^
+
+If you don't need this variable, prefix it with an underscore like
+_static_dispatch_style to suppress this warning.
+
+── ✗ undeclared type ────────────────────────────────── syntax_grab_bag.md:201:9
+
+The type Value is not declared in this scope.
+
+tuple : Value((a, b, c))
+        ^^^^^
+
+── ✗ type mismatch ───────────────────────────────────── syntax_grab_bag.md:70:5
+
+This if condition must evaluate to a Bool – either True or False.
+
+if num {
+   ^^^
+
+It is:
+
+    U64
+
+But I need this to be a Bool value.
+
+── ✗ missing method ──────────────────────────────────── syntax_grab_bag.md:99:3
+
+This from_quote method is being called on a value whose type doesn't have that
+method.
+
+"foo" => # After arrow comment
+^^^^^
+
+The value's type, which does not have a method named from_quote, is:
+
+    [Blue, Green, Red, ..]
+
+── ✗ missing method ─────────────────────────────────── syntax_grab_bag.md:101:3
+
+This from_quote method is being called on a value whose type doesn't have that
+method.
+
+"foo" | "bar" => 200
+^^^^^
+
+The value's type, which does not have a method named from_quote, is:
+
+    [Blue, Green, Red, ..]
+
+── ✗ type mismatch ───────────────────────────────────── syntax_grab_bag.md:84:3
+
+The sixth branch of this match does not match the previous ones.
+
+match a {
+    Blue | Green | Red => {
+        x = 12
+        x
+    }
+    Blue # After pattern in alt
+    | # Before pattern in alt
+        Green
+    | Red # After alt pattern
+        => {
+            x = 12
+            x
+        }
+    lower # After pattern comment
+        => 1
+    "foo" => # After arrow comment
+        100
+    "foo" | "bar" => 200
+    [1, 2, 3, .. as rest] # After pattern comment
+        => # After arrow comment
+            123 # After branch comment
+
+    # Just a random comment
+
+    [1, 2 | 5, 3, .. as rest] => 123
+    [
+        1,
+        2 | 5,
+        3,
+        .. # After DoubleDot
+            as # Before alias
+                rest, # After last pattern in list
+    ] => 123
+    3.14 => 314
+    3.14 | 6.28 => 314
+    (1, 2, 3) => 123
+    (1, 2 | 5, 3) => 123
+    { foo: 1, bar: 2, ..rest } => 12->add(34)
+    { # After pattern record open
+        foo # After pattern record field name
+            : # Before pattern record field value
+                1, # After pattern record field
+        bar: 2,
+        .. # After spread operator
+            rest, # After last field
+    } => 12
+    { foo: 1, bar: 2 | 7 } => 12
+    {
+        foo: 1,
+        bar: 2 | 7, # After last record field
+    } => 12
+    Ok(123) => 123
+    Ok(Some(dude)) => dude
+    TwoArgs("hello", Some("world")) => 1000
+}
+
+This sixth branch is trying to match:
+
+    List(d)
+      where [
+        d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
+        d.is_eq : d, d -> Bool,
+      ]
+
+But the expression between the match parenthesis has the type:
+
+    [Blue, Green, Red, ..]
+
+These can never match! Either the pattern or expression has a problem.
+
+── ✗ too few args ───────────────────────────────────── syntax_grab_bag.md:155:2
+
+The match_time function expects 2 arguments, but it got 1 instead.
+
+match_time(
+    ..., # Single args with comment
+)
+
+The match_time function has the type:
+
+    [Blue, Green, Red, ..], _arg -> d
+      where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]
+
+Are there any missing commas?
+
+── ✗ type mismatch ──────────────────────────────────── syntax_grab_bag.md:167:4
+
+The first argument being passed to this function has the wrong type.
+
+add_one(
+    dbg # After dbg in list
+        number, # after dbg expr as arg
+), # Comment one
+
+This argument has the type:
+
+    {}
+
+But add_one needs the first argument to be:
+
+    U64
+
+── ✗ type mismatch ─────────────────────────────────── syntax_grab_bag.md:175:26
+
+This expression is used in an unexpected way.
+
+Stdout.line!("Adding ${n} to ${number}")
+                       ^
+
+It has the type:
+
+    Dec
+
+But you are trying to use it as:
+
+    Str
+
+── ✗ type mismatch ─────────────────────────────────── syntax_grab_bag.md:175:34
+
+This expression is used in an unexpected way.
+
+Stdout.line!("Adding ${n} to ${number}")
+                               ^^^^^^
+
+It has the type:
+
+    Dec
+
+But you are trying to use it as:
+
+    Str
+
+── ● declaration has no value ───────────────────────── syntax_grab_bag.md:201:1
+
+This declaration has a type annotation but no implementation.
+
+tuple : Value((a, b, c))
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Add a value body here, or put hosted functions in a platform type mod so
+they are published through the host boundary.
+
+── ✗ missing method ────────────────────────────────── syntax_grab_bag.md:189:26
+
+This is trying to dispatch a method named static_dispatch_method on an
+unresolved type variable, but unresolved type variables have no methods.
+
+static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+                        ^^^^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
+
+── ✗ missing method ────────────────────────────────── syntax_grab_bag.md:189:26
+
+This is trying to dispatch a method named next_static_dispatch_method on an
+unresolved type variable, but unresolved type variables have no methods.
+
+static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Hint: You can replace this static dispatch call with an ordinary function call,
+or force the type variable to become more concrete—for example, by adding a
+type annotation that narrows its type to something that actually has methods.
 
 # TOKENS
 ~~~zig
@@ -1733,19 +1615,20 @@ EndOfFile,
 							(p-ident (raw "static_dispatch_style"))
 							(e-question-suffix
 								(e-field-access
-									(e-question-suffix
-										(e-method-call (method ".next_static_dispatch_method")
-											(receiver
-												(e-question-suffix
-													(e-method-call (method ".static_dispatch_method")
-														(receiver
-															(e-question-suffix
-																(e-apply
-																	(e-ident (raw "some_fn"))
-																	(e-ident (raw "arg1")))))
-														(args))))
-											(args)))
-									(e-ident (raw "record_field")))))
+									(receiver
+										(e-question-suffix
+											(e-method-call (method ".next_static_dispatch_method")
+												(receiver
+													(e-question-suffix
+														(e-method-call (method ".static_dispatch_method")
+															(receiver
+																(e-question-suffix
+																	(e-apply
+																		(e-ident (raw "some_fn"))
+																		(e-ident (raw "arg1")))))
+															(args))))
+												(args))))
+									(segment (mode "required") (field "record_field")))))
 						(e-question-suffix
 							(e-apply
 								(e-ident (raw "Stdout.line!"))
@@ -1905,7 +1788,7 @@ match_time = |
 		3.14 | 6.28 => 314
 		(1, 2, 3) => 123
 		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12->add(34)
+		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
 		{ # After pattern record open
 			foo # After pattern record field name
 				: # Before pattern record field value
@@ -2010,323 +1893,21 @@ expect {
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-lambda
-			(args
-				(p-assign (ident "num")))
-			(e-block
-				(s-let
-					(p-assign (ident "other"))
-					(e-num (value "1")))
-				(e-if
-					(if-branches
-						(if-branch
-							(e-runtime-error (tag "erroneous_value_use"))
-							(e-block
-								(s-dbg
-									(e-runtime-error (tag "erroneous_value_expr")))
-								(e-num (value "0")))))
-					(if-else
-						(e-block
-							(s-dbg
-								(e-num (value "123")))
-							(e-lookup-local
-								(p-assign (ident "other"))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-runtime-error (tag "erroneous_value_expr")))
-	(d-let
-		(p-assign (ident "main!"))
 		(e-lambda
 			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "world"))
-					(e-string
-						(e-literal (string "World"))))
-				(s-var
-					(p-assign (ident "number"))
-					(e-num (value "123")))
-				(s-expect
-					(e-method-eq (negated "false")
-						(lhs
-							(e-runtime-error (tag "ident_not_in_scope")))
-						(rhs
-							(e-num (value "1")))))
-				(s-let
-					(p-assign (ident "tag"))
-					(e-tag (name "Blue")))
-				(s-return
-					(e-runtime-error (tag "expr_not_canonicalized")))
-				(s-expr
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-expr
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-crash (msg "Unreachable!"))
-				(s-let
-					(p-assign (ident "tag_with_payload"))
-					(e-tag (name "Ok")
-						(args
-							(e-runtime-error (tag "erroneous_value_use")))))
-				(s-let
-					(p-assign (ident "interpolated"))
-					(e-block
-						(s-let
-							(p-assign (ident "#interp_0"))
-							(e-lookup-local
-								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1858) (dispatcher-var 374)
-							(first
-								(e-literal (string "Hello, ")))
-							(parts
-								(e-lookup-local
-									(p-assign (ident "#interp_0")))
-								(e-literal (string ""))))))
-				(s-let
-					(p-assign (ident "list"))
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-for
-					(p-assign (ident "n"))
-					(e-runtime-error (tag "erroneous_value_use"))
-					(e-block
-						(s-expr
-							(e-runtime-error (tag "erroneous_value_expr")))
-						(s-reassign
-							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 1940)
-								(receiver
-									(e-runtime-error (tag "erroneous_value_use")))
-								(args
-									(e-runtime-error (tag "erroneous_value_use")))))
-						(e-empty_record)))
-				(s-let
-					(p-assign (ident "record"))
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-let
-					(p-assign (ident "tuple"))
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-let
-					(p-assign (ident "multiline_tuple"))
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(s-let
-					(p-assign (ident "bin_op_result"))
-					(e-if
-						(if-branches
-							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 2076)
-									(receiver
-										(e-match
-											(match
-												(cond
-													(e-runtime-error (tag "erroneous_value_expr")))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-num (value "12"))))))))
-									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 2073)
-											(receiver
-												(e-num (value "5")))
-											(args
-												(e-num (value "5"))))))
-								(e-nominal-external
-									(builtin)
-									(e-tag (name "True")))))
-						(if-else
-							(e-if
-								(if-branches
-									(if-branch
-										(e-if
-											(if-branches
-												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 2109)
-														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 2099)
-																(receiver
-																	(e-num (value "13")))
-																(args
-																	(e-num (value "2")))))
-														(args
-															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 2136)
-														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 2126)
-																(receiver
-																	(e-num (value "10")))
-																(args
-																	(e-num (value "1")))))
-														(args
-															(e-num (value "16"))))))
-											(if-else
-												(e-nominal-external
-													(builtin)
-													(e-tag (name "False")))))
-										(e-nominal-external
-											(builtin)
-											(e-tag (name "True")))))
-								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 2173)
-										(receiver
-											(e-num (value "12")))
-										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 2170)
-												(receiver
-													(e-num (value "3")))
-												(args
-													(e-num (value "5")))))))))))
-				(s-let
-					(p-assign (ident "static_dispatch_style"))
-					(e-match
-						(match
-							(cond
-								(e-field-access (field "record_field")
-									(receiver
-										(e-match
-											(match
-												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 2231)
-														(receiver
-															(e-match
-																(match
-																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 2202)
-																			(receiver
-																				(e-match
-																					(match
-																						(cond
-																							(e-runtime-error (tag "erroneous_value_expr")))
-																						(branches
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-runtime-error (tag "erroneous_value_expr"))))
-																							(branch
-																								(patterns
-																									(pattern (degenerate false)
-																										(p-nominal-external (builtin)
-																											(p-applied-tag))))
-																								(value
-																									(e-return
-																										(e-nominal-external
-																											(builtin)
-																											(e-tag (name "Err")
-																												(args
-																													(e-lookup-local
-																														(p-assign (ident "#err")))))))))))))
-																			(args)))
-																	(branches
-																		(branch
-																			(patterns
-																				(pattern (degenerate false)
-																					(p-nominal-external (builtin)
-																						(p-applied-tag))))
-																			(value
-																				(e-runtime-error (tag "erroneous_value_expr"))))
-																		(branch
-																			(patterns
-																				(pattern (degenerate false)
-																					(p-nominal-external (builtin)
-																						(p-applied-tag))))
-																			(value
-																				(e-return
-																					(e-nominal-external
-																						(builtin)
-																						(e-tag (name "Err")
-																							(args
-																								(e-lookup-local
-																									(p-assign (ident "#err")))))))))))))
-														(args)))
-												(branches
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-lookup-local
-																(p-assign (ident "#ok")))))
-													(branch
-														(patterns
-															(pattern (degenerate false)
-																(p-nominal-external (builtin)
-																	(p-applied-tag))))
-														(value
-															(e-return
-																(e-nominal-external
-																	(builtin)
-																	(e-tag (name "Err")
-																		(args
-																			(e-lookup-local
-																				(p-assign (ident "#err")))))))))))))))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "#ok")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-return
-											(e-nominal-external
-												(builtin)
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err")))))))))))))
-				(s-expr
-					(e-match
-						(match
-							(cond
-								(e-runtime-error (tag "erroneous_value_expr")))
-							(branches
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-lookup-local
-											(p-assign (ident "#ok")))))
-								(branch
-									(patterns
-										(pattern (degenerate false)
-											(p-nominal-external (builtin)
-												(p-applied-tag))))
-									(value
-										(e-return
-											(e-nominal-external
-												(builtin)
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err")))))))))))))
-				(e-runtime-error (tag "erroneous_value_expr"))))
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
+	(d-let
+		(p-assign (ident "main!"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-apply (name "List") (builtin)
@@ -2341,14 +1922,14 @@ expect {
 			(ty-record)))
 	(d-let
 		(p-assign (ident "tuple"))
-		(e-anno-only)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-malformed)))
 	(s-import (mod "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (mod "#malformed_import_0")
+	(s-import (mod "pf.StdoutMultiline")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
@@ -2453,11 +2034,7 @@ expect {
 			(ty-apply (name "Maybe") (local)
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(s-expect
-		(e-method-eq (negated "false")
-			(lhs
-				(e-runtime-error (tag "ident_not_in_scope")))
-			(rhs
-				(e-num (value "1")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expect
 		(e-block
 			(s-let
@@ -2479,8 +2056,8 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "Error -> U64"))
-		(patt (type "[Blue, Green, Red, ..], _arg -> Error"))
+		(patt (type "U64 -> U64"))
+		(patt (type "[Blue, Green, Red, ..], _arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2495,19 +2072,19 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))
 					(ty-rigid-var (name "b")))))
-		(alias (type "Foo")
+		(alias (type "Error")
 			(ty-header (name "Foo")))
-		(alias (type "FooMultiline")
+		(alias (type "Error")
 			(ty-header (name "FooMultiline")))
-		(alias (type "Some(a)")
+		(alias (type "Error")
 			(ty-header (name "Some")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "SomeMl(a)")
+		(alias (type "Error")
 			(ty-header (name "SomeMl")
 				(ty-args
 					(ty-rigid-var (name "a")))))
-		(alias (type "SomeMultiline(a)")
+		(alias (type "Error")
 			(ty-header (name "SomeMultiline")
 				(ty-args
 					(ty-rigid-var (name "a")))))
@@ -2525,8 +2102,8 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error -> U64"))
-		(expr (type "[Blue, Green, Red, ..], _arg -> Error"))
+		(expr (type "U64 -> U64"))
+		(expr (type "[Blue, Green, Red, ..], _arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

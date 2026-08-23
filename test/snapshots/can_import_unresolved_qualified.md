@@ -45,138 +45,110 @@ DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:28
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:22:10:22:28
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
+── ● duplicate definition ─────────────── can_import_unresolved_qualified.md:1:1
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
-└┬─────────────────────┘                                                      │
- │                                                                            │
- │  import json.Json                                                          │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────── can_import_unresolved_qualified.md:1:1 ┘
+The name Json is being redeclared here:
 
-    In this scope, `Json` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  import json.Json                                                     │
-      │  ‾                                                                    │
-      └─────────────────────────────── can_import_unresolved_qualified.md:1:1 ┘
+import json.Json
+^^^^^^^^^^^^^^^^
 
+In this scope, Json was already defined in can_import_unresolved_qualified.md:1:1:
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `method` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  main = Json.NonExistent.method                                            │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └──────────────────────────────────── can_import_unresolved_qualified.md:5:8 ┘
+import json.Json
+^
 
-    Is it misspelled, or is there an import missing?
+── ✗ name not in scope ────────────────── can_import_unresolved_qualified.md:5:8
 
+Nothing is named method in this scope.
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `InvalidType` type is declared to be in ───────────┐
-└┬─────────────────┘  `json.Json`, which does not exist.                      │
- │                                                                            │
- │  parseData : Json.InvalidType -> Str                                       │
- │                  ‾‾‾‾‾‾‾‾‾‾‾‾                                              │
- └─────────────────────────────────── can_import_unresolved_qualified.md:8:17 ┘
+main = Json.NonExistent.method
+       ^^^^^^^^^^^^^^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
+── ✗ mod not found ────────────────── can_import_unresolved_qualified.md:8:17
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `stringify` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  parseData = |data| Json.stringify(data)                                   │
- │                     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └─────────────────────────────────── can_import_unresolved_qualified.md:9:20 ┘
+This InvalidType type is declared to be in json.Json, which does not exist.
 
-    Is it misspelled, or is there an import missing?
+parseData : Json.InvalidType -> Str
+                ^^^^^^^^^^^^
 
+── ✗ name not in scope ───────────────── can_import_unresolved_qualified.md:9:20
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Server.Request` type is declared to be in ────────┐
-└┬─────────────────┘  `http.Client`, which does not exist.                    │
- │                                                                            │
- │  processRequest : Http.Server.Request -> Http.Server.Response              │
- │                              ‾‾‾‾‾‾‾‾                                      │
- └────────────────────────────────── can_import_unresolved_qualified.md:12:29 ┘
+Nothing is named stringify in this scope.
 
+parseData = |data| Json.stringify(data)
+                   ^^^^^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌──────────────────┐
-│ MOD NOT FOUND ├─ This `Server.Response` type is declared to be in ───────┐
-└┬─────────────────┘  `http.Client`, which does not exist.                    │
- │                                                                            │
- │  processRequest : Http.Server.Request -> Http.Server.Response              │
- │                                                     ‾‾‾‾‾‾‾‾‾              │
- └────────────────────────────────── can_import_unresolved_qualified.md:12:52 ┘
+── ✗ mod not found ───────────────── can_import_unresolved_qualified.md:12:29
 
+This Server.Request type is declared to be in http.Client, which does not exist.
 
+processRequest : Http.Server.Request -> Http.Server.Response
+                            ^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `defaultResponse` in this scope. ─────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  processRequest = |req| Http.Server.defaultResponse                        │
- │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                        │
- └────────────────────────────────── can_import_unresolved_qualified.md:13:24 ┘
+── ✗ mod not found ───────────────── can_import_unresolved_qualified.md:12:52
 
-    Is it misspelled, or is there an import missing?
+This Server.Response type is declared to be in http.Client, which does not
+exist.
 
+processRequest : Http.Server.Request -> Http.Server.Response
+                                                   ^^^^^^^^^
 
-┌─────────────────┐
-│ UNUSED VARIABLE ├─ Variable `req` is defined here and then never used. ─────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  processRequest = |req| Http.Server.defaultResponse                        │
- │                    ‾‾‾                                                     │
- └────────────────────────────────── can_import_unresolved_qualified.md:13:19 ┘
+── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:13:24
 
-    If you don't need this variable, prefix it with an underscore like `_req`
-    to suppress this warning.
+Nothing is named defaultResponse in this scope.
 
+processRequest = |req| Http.Server.defaultResponse
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `prase` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  result = Json.prase("test")                                               │
- │           ‾‾‾‾‾‾‾‾‾‾                                                       │
- └────────────────────────────────── can_import_unresolved_qualified.md:16:10 ┘
+Is it misspelled, or is there an import missing?
 
-    Is it misspelled, or is there an import missing?
+── ● unused variable ────────────────── can_import_unresolved_qualified.md:13:19
 
+Variable req is defined here and then never used:
 
-┌────────────────┐
-│ DOES NOT EXIST ├─ `Unknown.Mod.config` does not exist. ─────────────────────┐
-└┬───────────────┘                                                            │
- │                                                                            │
- │  config = Unknown.Mod.config                                               │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └────────────────────────────────── can_import_unresolved_qualified.md:19:10 ┘
+processRequest = |req| Http.Server.defaultResponse
+                  ^^^
 
+If you don't need this variable, prefix it with an underscore like _req to
+suppress this warning.
 
+── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:16:10
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `invalidMethod` in this scope. ───────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  client = Http.invalidMethod                                               │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └────────────────────────────────── can_import_unresolved_qualified.md:22:10 ┘
+Nothing is named prase in this scope.
 
-    Is it misspelled, or is there an import missing?
+result = Json.prase("test")
+         ^^^^^^^^^^
 
+Is it misspelled, or is there an import missing?
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `create` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
- │                                                                            │
- │  parser = Json.Parser.Advanced.NonExistent.create                          │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
- └────────────────────────────────── can_import_unresolved_qualified.md:25:10 ┘
+── ✗ does not exist ─────────────────── can_import_unresolved_qualified.md:19:10
 
-    Is it misspelled, or is there an import missing?
+Unknown.Mod.config does not exist.
+
+config = Unknown.Mod.config
+         ^^^^^^^^^^^^^^^^^^
+
+── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:22:10
+
+Nothing is named invalidMethod in this scope.
+
+client = Http.invalidMethod
+         ^^^^^^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
+
+── ✗ name not in scope ──────────────── can_import_unresolved_qualified.md:25:10
+
+Nothing is named create in this scope.
+
+parser = Json.Parser.Advanced.NonExistent.create
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -253,20 +225,14 @@ NO CHANGE
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "parseData"))
-		(e-lambda
-			(args
-				(p-assign (ident "data")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "processRequest"))
-		(e-lambda
-			(args
-				(p-assign (ident "req")))
-			(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

@@ -10,20 +10,18 @@ f = || {
 }
 ~~~
 # EXPECTED
-CRASH EXPECTS STRING - fuzz_crash_067.md:1:8:3:2
+TYPE MISMATCH - fuzz_crash_067.md:2:11:2:12
 # PROBLEMS
+── ✗ type mismatch ────────────────────────────────────── fuzz_crash_067.md:2:11
 
-┌──────────────────────┐
-│ CRASH EXPECTS STRING ├─ The `crash` keyword expects a string literal as ────┐
-└┬─────────────────────┘  its argument.                                       │
- │                                                                            │
- │  f = || {                                                                  │
- │      crash 1                                                               │
- │  }                                                                         │
- │                                                                            │
- └───────────────────────────────────────────────────── fuzz_crash_067.md:1:8 ┘
+This number is being used where a non-number type is needed.
 
-    For example: `crash "Something went wrong"`
+crash 1
+      ^
+
+Other code expects this to have the type:
+
+    Str
 
 # TOKENS
 ~~~zig
@@ -57,13 +55,18 @@ f = || {
 (can-ir
 	(d-let
 		(p-assign (ident "f"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-lambda
+			(args)
+			(e-block
+				(e-run-low-level (op "crash")
+					(args
+						(e-runtime-error (tag "erroneous_value_expr"))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> Error")))
+		(patt (type "({}) -> _ret")))
 	(expressions
-		(expr (type "({}) -> Error"))))
+		(expr (type "({}) -> _ret"))))
 ~~~

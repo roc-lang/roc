@@ -111,8 +111,107 @@ const issue9658ScannerSource =
     \\main = scan("kkv,kv;")
 ;
 
+// https://github.com/roc-lang/roc/issues/10703
+// A `var` initialized as a bare alias of another in-scope variable
+// (`var $line_start = cluster_start`) must not hijack the initializer's
+// binder: SpecConstr's loop-state specialization used to install the
+// loop-carried slot value under `cluster_start`'s binder, so every read of
+// `cluster_start` inside the loop tracked `$line_start` instead. Correct runs
+// sum 1 + line_start per line (40 + 780 = 820 for count 40); the corrupted
+// lowering zeroed the `start - prefix_start` term and returned 40.
+const issue10703LineLayoutSource =
+    \\{
+    \\    list_at = |items, index| match List.get(items, index) {
+    \\        Err(OutOfBounds) => crash "validated index escaped"
+    \\        Ok(value) => value
+    \\    }
+    \\
+    \\    range_end = |range| range.start + range.length
+    \\
+    \\    append_line = |total, clusters, prefix_start, start, end| {
+    \\        first = list_at(clusters, start)
+    \\        last = list_at(clusters, end - 1)
+    \\        scalar_count = range_end(last.scalars) - first.scalars.start
+    \\        total + scalar_count + (start - prefix_start)
+    \\    }
+    \\
+    \\    build_range = |clusters, boundaries, cluster_start, cluster_end| {
+    \\        var $line_start = cluster_start
+    \\        var $candidate = cluster_start + 1
+    \\        var $total = 0.U64
+    \\        while $line_start < cluster_end {
+    \\            boundary = list_at(boundaries, $candidate)
+    \\            if boundary == 1 {
+    \\                $total = append_line($total, clusters, cluster_start, $line_start, $candidate)
+    \\                $line_start = $candidate
+    \\                $candidate = $line_start + 1
+    \\            } else {
+    \\                $candidate = $candidate + 1
+    \\            }
+    \\        }
+    \\        $total
+    \\    }
+    \\
+    \\    make_clusters = |count| {
+    \\        var $clusters = []
+    \\        var $index = 0.U64
+    \\        while $index < count {
+    \\            $clusters = $clusters.append({ scalars: { length: 1.U64, start: $index } })
+    \\            $index = $index + 1
+    \\        }
+    \\        $clusters
+    \\    }
+    \\
+    \\    make_boundaries = |count| {
+    \\        var $boundaries = []
+    \\        var $index = 0.U64
+    \\        while $index <= count {
+    \\            $boundaries = $boundaries.append(1.U64)
+    \\            $index = $index + 1
+    \\        }
+    \\        $boundaries
+    \\    }
+    \\
+    \\    Str.inspect(build_range(make_clusters(40), make_boundaries(40), 0.U64, 40))
+    \\}
+;
+
+// The dual-alias variant of issue 10703: two loop variables initialized from
+// the same in-scope variable (`base`). Both slots used to claim `base`'s
+// binder and one arbitrarily won, so reads of `base` inside the loop tracked
+// that slot's carried value. Correct runs add base (3) on each of the 6
+// iterations and then the final `$mark` (8): 26; the corrupted lowering
+// tracked `$i` and returned 3+4+5+6+7+8 plus 8 = 41.
+const issue10703DualAliasSource =
+    \\{
+    \\    walk = |base, limit| {
+    \\        var $i = base
+    \\        var $mark = base
+    \\        var $total = 0.U64
+    \\        while $i < limit {
+    \\            $total = $total + base
+    \\            $mark = $i
+    \\            $i = $i + 1
+    \\        }
+    \\        $total + $mark
+    \\    }
+    \\
+    \\    Str.inspect(walk(3.U64, 9))
+    \\}
+;
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    .{
+        .name = "issue 10703: loop var aliasing an argument leaves argument reads loop-invariant",
+        .source = issue10703LineLayoutSource,
+        .expected = .{ .allocations_at_most = .{ .output = "820", .max_allocations = 32, .optimized = true } },
+    },
+    .{
+        .name = "issue 10703: two loop vars seeded from one variable keep its reads intact",
+        .source = issue10703DualAliasSource,
+        .expected = .{ .allocations_at_most = .{ .output = "26", .max_allocations = 4, .optimized = true } },
+    },
     .{
         .name = "issue 9658: scanner loop with merging mutable Str alias groups certifies and evaluates",
         .source_kind = .module,
@@ -416,7 +515,7 @@ pub const tests = [_]TestCase{
     .{
         // An unnamed padding field whose type is refcounted (`Str`). Its bytes
         // are uninitialized garbage and must never be refcounted, compared, or
-        // inspected — only its size is reserved. If the padding spacer were
+        // inspected—only its size is reserved. If the padding spacer were
         // treated as a live Str, dropping the value would decref garbage and
         // crash, so this exercises the refcount/equality padding skip on every
         // backend.
@@ -801,5 +900,74 @@ pub const tests = [_]TestCase{
         \\main = use_hooks(hooks)
         ,
         .expected = .{ .inspect_str = "Text(\"hello\")" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9856
+        .name = "issue 9856: crash accepts multiline strings on every backend",
+        .source =
+        \\{
+        \\    crash
+        \\        \\This does not
+        \\        \\work.
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9856
+        .name = "issue 9856: crash evaluates interpolation on every backend",
+        .source =
+        \\{
+        \\    n : I64
+        \\    n = 42
+        \\    crash "runtime-built crash message long enough for heap storage: ${n.to_str()}"
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10763
+        .name = "issue 10763: separate calls instantiate a partial scheme independently",
+        .source_kind = .module,
+        .source =
+        \\mk : {} -> ((() -> val), val -> Try({}, [NotEq, ..])) where [val.is_eq : val, val -> Bool]
+        \\mk = |_| |thunk, expected| if thunk() == expected { Ok({}) } else { Err(NotEq) }
+        \\
+        \\main = {
+        \\    check_num = mk({})
+        \\    check_str = mk({})
+        \\    (check_num(|| 42.U64, 42), check_str(|| "a", "a"), check_str(|| "a", "b"))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(Ok({}), Ok({}), Err(NotEq))" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10483
+        .name = "issue 10483: top-level record destructure binder is callable from another root",
+        .source_kind = .module,
+        .source =
+        \\s : { scale : U64 -> U64, other : U64 }
+        \\s = { scale: |x| x * 2, other: 0 }
+        \\
+        \\{ scale, .. } = s
+        \\
+        \\main = scale(21)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10483
+        .name = "issue 10483: top-level destructure preserves callable values nested in data",
+        .source_kind = .module,
+        .source =
+        \\s : { ops : { scale : U64 -> U64 }, other : U64 }
+        \\s = { ops: { scale: |x| x * 2 }, other: 0 }
+        \\
+        \\{ ops, .. } = s
+        \\
+        \\scale = ops.scale
+        \\main = scale(21)
+        ,
+        .expected = .{ .inspect_str = "42" },
     },
 };

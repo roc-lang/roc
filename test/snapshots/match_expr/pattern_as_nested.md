@@ -11,9 +11,29 @@ match person {
 }
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - pattern_as_nested.md:1:1:1:1
 # PROBLEMS
-NIL
+── ✗ type mismatch ──────────────────────────────────── pattern_as_nested.md:1:5
+
+The second branch of this match does not match the previous ones.
+
+match person {
+    { name, address: { city } as addr } as fullPerson => (fullPerson, addr, city)
+    { name } as simplePerson => (simplePerson, name, "unknown")
+}
+
+This second branch is trying to match:
+
+    { name: _field }
+
+But the expression between the match parenthesis has the type:
+
+    { address: _field, name: _field2 }
+
+These can never match! Either the pattern or expression has a problem.
+Hint: This pattern doesn't bind the address field. Match it explicitly with
+address: _, or add .. to match all the remaining fields.
+
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -133,5 +153,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "(Error, { city: Str }, Str)"))
+(expr (type "({ address: { city: a }, name: _field }, { city: a }, a)"))
 ~~~

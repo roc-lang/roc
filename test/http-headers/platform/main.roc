@@ -10,7 +10,9 @@ platform "http-headers"
 		x64mac: { inputs: ["libhost.a", app], output: Exe },
 		arm64mac: { inputs: ["libhost.a", app], output: Exe },
 		x64musl: { inputs: ["libhost.a", app], output: Exe },
+		x64v1musl: { inputs: ["libhost.a", app], output: Exe },
 		arm64musl: { inputs: ["libhost.a", app], output: Exe },
+		arm64v1musl: { inputs: ["libhost.a", app], output: Exe },
 		x64win: { inputs: ["host.lib", app], output: Exe },
 		arm64win: { inputs: ["host.lib", app], output: Exe },
 	}

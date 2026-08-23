@@ -2,8 +2,8 @@
 //!
 //! Adapted from the Zig compiler (MIT License, "Copyright (c) Zig contributors"):
 //! `src/codegen/aarch64/abi.zig` @ 24fdd5b7a4 (Release 0.16.0). The classification
-//! algorithm — homogeneous-float-aggregate (HFA) detection, then size-based
-//! integer/double-integer/memory selection — is unchanged; it has been rewritten to
+//! algorithm—homogeneous-float-aggregate (HFA) detection, then size-based
+//! integer/double-integer/memory selection—is unchanged; it has been rewritten to
 //! read Roc's layout store instead of Zig's `Type`/`Zcu`.
 //!
 //! AAPCS64 does not vary parameter classification by argument-vs-return position, and
@@ -148,7 +148,7 @@ fn countVectors(store: *const Store, idx: Idx, maybe_kind: *?layout.Vector) u8 {
             if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
             return countVectors(store, info.variants.get(0).payload_layout, maybe_kind);
         },
-        else => return invalid_float_count,
+        .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
     }
 }
 
@@ -211,7 +211,7 @@ fn countFloats(store: *const Store, idx: Idx, maybe_float_bits: *?u16) u8 {
         },
         // Anything else (pointer, list, box, non-transparent tag union, …)
         // makes the aggregate non-homogeneous.
-        else => return invalid_float_count,
+        .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
     }
 }
 
@@ -348,7 +348,7 @@ test "aarch64 classify: unnamed padding makes an aggregate non-HFA" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
 
-    // { a : F32, b : F32, _ : F32 } — three f32-sized fields, but the third is unnamed,
+    // { a : F32, b : F32, _ : F32 }—three f32-sized fields, but the third is unnamed,
     // alignment-1 padding rather than a float member, so this is NOT a homogeneous float
     // aggregate. It falls back to size-based classification (12 bytes -> two registers).
     const padded = try store.putNominalStructFields(&.{

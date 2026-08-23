@@ -32,6 +32,7 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
 
 /// Error set shared by LIR-lowering harness helpers and focused inspectors.
 pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
+    lir.CheckedPipeline.LowerResourceError ||
     std.Io.Dir.CreateDirPathError ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||
@@ -79,9 +80,17 @@ pub const LirInspectFn = *const fn (
 
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
+    specialization_strategy: base.SpecializationStrategy = .lss,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     inline_mode: lir.CheckedPipeline.InlineMode = .none,
+    consume_dead_boxes: bool = false,
     list_in_place_map: bool = false,
+    proc_debug_names: bool = false,
+    prove_ranges: bool = false,
+    allow_user_errors: bool = false,
+    /// Receives the expression count of the lifted program handed to lambda-set
+    /// solving, for tests that assert on post-check program growth.
+    lifted_expr_count_out: ?*usize = null,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -122,6 +131,13 @@ pub fn expectLirInspection(app_body: []const u8, inspect: LirInspectFn) LowerToL
     try runToLir(app_body, null, .{}, inspect);
 }
 
+/// Lower an app whose body is `app_body` to LIR with explicit lowering
+/// options, then run a focused invariant check against the actual lowered
+/// store and layout store.
+pub fn expectLirInspectionWithOptions(app_body: []const u8, opts: LirLoweringOptions, inspect: LirInspectFn) LowerToLirHarnessError!void {
+    try runToLir(app_body, null, opts, inspect);
+}
+
 /// Lower `app_body` twice and assert the two LIR dumps are byte-identical, so
 /// a regression that made lowering (e.g. capture order) depend on iteration or
 /// scheduling order would fail here rather than silently.
@@ -141,7 +157,7 @@ pub fn expectDeterministicLir(app_body: []const u8) LowerToLirHarnessError!void 
 
 /// Lower `app_body` for both pointer widths (with in-place `List.map` reuse
 /// enabled) and assert the two LIR dumps are byte-identical. This guards that
-/// lowering produces a target-independent op stream — the property that lets a
+/// lowering produces a target-independent op stream—the property that lets a
 /// single lowered LIR image be cached across 32-bit and 64-bit targets. A
 /// regression that reintroduced a pointer-width-dependent lowering decision
 /// (for example, baking the `list_map_can_reuse` interchangeability check for
@@ -252,10 +268,14 @@ fn lowerAppPathToLir(
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
-    try std.testing.expect(!coord.hasUserErrors());
+    if (!opts.allow_user_errors) {
+        try std.testing.expect(!coord.hasUserErrors());
+    }
 
     try coord.finalizeExecutableArtifacts();
-    try std.testing.expect(!coord.hasUserErrors());
+    if (!opts.allow_user_errors) {
+        try std.testing.expect(!coord.hasUserErrors());
+    }
 
     const root = coord.executableRootCheckedArtifact();
     const imports = try coord.collectImportedArtifactViews(arena, root);
@@ -272,9 +292,14 @@ fn lowerAppPathToLir(
         },
         .{ .requests = lir_roots },
         .{
+            .specialization_strategy = opts.specialization_strategy,
             .target_usize = opts.target_usize,
             .inline_mode = opts.inline_mode,
+            .consume_dead_boxes = opts.consume_dead_boxes,
             .list_in_place_map = opts.list_in_place_map,
+            .proc_debug_names = opts.proc_debug_names,
+            .prove_ranges = opts.prove_ranges,
+            .lifted_expr_count_out = opts.lifted_expr_count_out,
         },
     );
     defer lowered.deinit();

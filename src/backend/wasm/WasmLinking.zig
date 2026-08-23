@@ -17,13 +17,13 @@ const Import = WasmModule.Import;
 /// Index-based relocation types (no addend).
 /// These patch indices in instructions like `call`, `global.get`, `call_indirect`.
 pub const IndexRelocType = enum(u8) {
-    function_index_leb = 0, // R_WASM_FUNCTION_INDEX_LEB — function index in `call`
-    table_index_sleb = 1, // R_WASM_TABLE_INDEX_SLEB — signed table index in `i32.const`
-    table_index_i32 = 2, // R_WASM_TABLE_INDEX_I32 — table index as raw u32 in data
-    type_index_leb = 6, // R_WASM_TYPE_INDEX_LEB — type index in `call_indirect`
-    global_index_leb = 7, // R_WASM_GLOBAL_INDEX_LEB — global index in `global.get/set`
+    function_index_leb = 0, // R_WASM_FUNCTION_INDEX_LEB—function index in `call`
+    table_index_sleb = 1, // R_WASM_TABLE_INDEX_SLEB—signed table index in `i32.const`
+    table_index_i32 = 2, // R_WASM_TABLE_INDEX_I32—table index as raw u32 in data
+    type_index_leb = 6, // R_WASM_TYPE_INDEX_LEB—type index in `call_indirect`
+    global_index_leb = 7, // R_WASM_GLOBAL_INDEX_LEB—global index in `global.get/set`
     event_index_leb = 10, // R_WASM_EVENT_INDEX_LEB
-    table_index_rel_sleb = 12, // R_WASM_TABLE_INDEX_REL_SLEB — PIC relative table index
+    table_index_rel_sleb = 12, // R_WASM_TABLE_INDEX_REL_SLEB—PIC relative table index
     global_index_i32 = 13, // R_WASM_GLOBAL_INDEX_I32
     table_number_leb = 20, // R_WASM_TABLE_NUMBER_LEB
 };
@@ -31,12 +31,12 @@ pub const IndexRelocType = enum(u8) {
 /// Offset-based relocation types (have an addend).
 /// These patch memory addresses in load/store instructions and data segments.
 pub const OffsetRelocType = enum(u8) {
-    memory_addr_leb = 3, // R_WASM_MEMORY_ADDR_LEB — unsigned addr in load/store
-    memory_addr_sleb = 4, // R_WASM_MEMORY_ADDR_SLEB — signed addr in `i32.const`
-    memory_addr_i32 = 5, // R_WASM_MEMORY_ADDR_I32 — raw u32 addr in data segment
+    memory_addr_leb = 3, // R_WASM_MEMORY_ADDR_LEB—unsigned addr in load/store
+    memory_addr_sleb = 4, // R_WASM_MEMORY_ADDR_SLEB—signed addr in `i32.const`
+    memory_addr_i32 = 5, // R_WASM_MEMORY_ADDR_I32—raw u32 addr in data segment
     function_offset_i32 = 8, // R_WASM_FUNCTION_OFFSET_I32
     section_offset_i32 = 9, // R_WASM_SECTION_OFFSET_I32
-    memory_addr_rel_sleb = 11, // R_WASM_MEMORY_ADDR_REL_SLEB — PIC relative signed addr
+    memory_addr_rel_sleb = 11, // R_WASM_MEMORY_ADDR_REL_SLEB—PIC relative signed addr
 };
 
 comptime {
@@ -56,7 +56,7 @@ comptime {
 /// that references a symbol and needs patching when that symbol's value changes.
 pub const RelocationEntry = union(enum) {
     /// Index relocations: the value at `offset` is a symbol index (function, type, global).
-    /// No addend — the patched value is the symbol's resolved index directly.
+    /// No addend—the patched value is the symbol's resolved index directly.
     index: struct {
         type_id: IndexRelocType,
         offset: u32, // byte offset within the target section body
@@ -157,7 +157,7 @@ pub const SymKind = enum(u8) {
 /// Parsing rule: a function/global symbol gets a name from the linking section if
 /// `(flags & WASM_SYM_EXPLICIT_NAME) != 0` OR `(flags & WASM_SYM_UNDEFINED) == 0`
 /// (i.e. defined symbols always have names). Undefined symbols without EXPLICIT_NAME
-/// have `name = null` — their name must be looked up from the import section at the
+/// have `name = null`—their name must be looked up from the import section at the
 /// symbol's `index`.
 pub const SymInfo = struct {
     kind: SymKind,
@@ -213,7 +213,7 @@ pub const SymInfo = struct {
             .data => {
                 const name = try WasmModule.readString(bytes, cursor);
                 if ((flags & SymFlag.UNDEFINED) != 0) {
-                    // Imported data symbol — no segment info
+                    // Imported data symbol—no segment info
                     return .{ .kind = kind, .flags = flags, .name = name, .index = 0 };
                 }
                 const segment_index = try WasmModule.readU32(bytes, cursor);
@@ -256,7 +256,7 @@ pub const SymInfo = struct {
             .global => if (self.index < global_imports.len) global_imports[self.index].field_name else null,
             .table => if (self.index < table_imports.len) table_imports[self.index].field_name else null,
             .event => if (self.index < fn_imports.len) fn_imports[self.index].field_name else null,
-            else => null,
+            .data, .section => null,
         };
     }
 };
@@ -523,7 +523,7 @@ pub const InitFunc = struct {
 
 const testing = std.testing;
 
-test "RelocationSection.applyRelocsU32 — patches function_index_leb at correct offset" {
+test "RelocationSection.applyRelocsU32—patches function_index_leb at correct offset" {
     // Set up a 10-byte buffer with 5 zero bytes at offset 2 (the relocation site)
     var buf = [_]u8{ 0xAA, 0xBB, 0x80, 0x80, 0x80, 0x80, 0x00, 0xCC, 0xDD, 0xEE };
 
@@ -554,7 +554,7 @@ test "RelocationSection.applyRelocsU32 — patches function_index_leb at correct
     try testing.expectEqual(@as(u8, 0xCC), buf[7]);
 }
 
-test "RelocationSection.applyRelocsU32 — patches multiple sites for same symbol" {
+test "RelocationSection.applyRelocsU32—patches multiple sites for same symbol" {
     var buf = [_]u8{0} ** 15;
 
     var entries: std.ArrayList(RelocationEntry) = .empty;
@@ -586,7 +586,7 @@ test "RelocationSection.applyRelocsU32 — patches multiple sites for same symbo
     try testing.expectEqualSlices(u8, &expected, buf[10..15]);
 }
 
-test "RelocationSection.applyRelocsU32 — ignores entries for different symbols" {
+test "RelocationSection.applyRelocsU32—ignores entries for different symbols" {
     var buf = [_]u8{0} ** 10;
 
     var entries: std.ArrayList(RelocationEntry) = .empty;
@@ -619,7 +619,7 @@ test "RelocationSection.applyRelocsU32 — ignores entries for different symbols
     try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0, 0 }, buf[5..10]);
 }
 
-test "RelocationSection.applyRelocsU32 — memory_addr_leb adds addend correctly" {
+test "RelocationSection.applyRelocsU32—memory_addr_leb adds addend correctly" {
     var buf = [_]u8{0} ** 5;
 
     var entries: std.ArrayList(RelocationEntry) = .empty;
@@ -645,7 +645,7 @@ test "RelocationSection.applyRelocsU32 — memory_addr_leb adds addend correctly
     try testing.expectEqualSlices(u8, &expected, &buf);
 }
 
-test "RelocationSection.applyRelocsU32 — memory_addr_sleb handles negative addend" {
+test "RelocationSection.applyRelocsU32—memory_addr_sleb handles negative addend" {
     var buf = [_]u8{0} ** 5;
 
     var entries: std.ArrayList(RelocationEntry) = .empty;
@@ -671,7 +671,7 @@ test "RelocationSection.applyRelocsU32 — memory_addr_sleb handles negative add
     try testing.expectEqualSlices(u8, &expected, &buf);
 }
 
-test "LinkingSection.findSymbolByName — finds existing symbol" {
+test "LinkingSection.findSymbolByName—finds existing symbol" {
     var sym_table: std.ArrayList(SymInfo) = .empty;
     defer sym_table.deinit(testing.allocator);
     try sym_table.append(testing.allocator, .{
@@ -702,7 +702,7 @@ test "LinkingSection.findSymbolByName — finds existing symbol" {
     try testing.expectEqual(@as(?u32, 1), section.findSymbolByName("bar", imports, global_imports, table_imports));
 }
 
-test "LinkingSection.findSymbolByName — returns null for missing symbol" {
+test "LinkingSection.findSymbolByName—returns null for missing symbol" {
     var sym_table: std.ArrayList(SymInfo) = .empty;
     defer sym_table.deinit(testing.allocator);
     try sym_table.append(testing.allocator, .{
@@ -727,7 +727,7 @@ test "LinkingSection.findSymbolByName — returns null for missing symbol" {
     try testing.expectEqual(@as(?u32, null), section.findSymbolByName("missing", imports, global_imports, table_imports));
 }
 
-test "LinkingSection.findImportedFnSymIndex — finds undefined function symbol" {
+test "LinkingSection.findImportedFnSymIndex—finds undefined function symbol" {
     var sym_table: std.ArrayList(SymInfo) = .empty;
     defer sym_table.deinit(testing.allocator);
     // A defined function
@@ -758,7 +758,7 @@ test "LinkingSection.findImportedFnSymIndex — finds undefined function symbol"
     try testing.expectEqual(@as(?u32, null), section.findImportedFnSymIndex(99));
 }
 
-test "LinkingSection.findAndReindexImportedFn — updates index and returns sym index" {
+test "LinkingSection.findAndReindexImportedFn—updates index and returns sym index" {
     var sym_table: std.ArrayList(SymInfo) = .empty;
     defer sym_table.deinit(testing.allocator);
     try sym_table.append(testing.allocator, .{
@@ -787,7 +787,7 @@ test "LinkingSection.findAndReindexImportedFn — updates index and returns sym 
 
 // --- Parsing tests ---
 
-test "RelocationEntry.parse — parses index relocation (function_index_leb)" {
+test "RelocationEntry.parse—parses index relocation (function_index_leb)" {
     // type=0 (function_index_leb), offset=5, symbol_index=2
     var bytes: [3]u8 = .{ 0x00, 0x05, 0x02 };
     var cursor: usize = 0;
@@ -803,7 +803,7 @@ test "RelocationEntry.parse — parses index relocation (function_index_leb)" {
     }
 }
 
-test "RelocationEntry.parse — parses offset relocation (memory_addr_leb) with addend" {
+test "RelocationEntry.parse—parses offset relocation (memory_addr_leb) with addend" {
     // type=3 (memory_addr_leb), offset=10, symbol_index=1, addend=16
     var bytes: [4]u8 = .{ 0x03, 0x0A, 0x01, 0x10 };
     var cursor: usize = 0;
@@ -820,7 +820,7 @@ test "RelocationEntry.parse — parses offset relocation (memory_addr_leb) with 
     }
 }
 
-test "SymInfo.parse — parses undefined function symbol (implicitly named)" {
+test "SymInfo.parse—parses undefined function symbol (implicitly named)" {
     // kind=0 (function), flags=0x10 (UNDEFINED), index=3
     var bytes: [3]u8 = .{ 0x00, 0x10, 0x03 };
     var cursor: usize = 0;
@@ -831,7 +831,7 @@ test "SymInfo.parse — parses undefined function symbol (implicitly named)" {
     try testing.expectEqual(@as(u32, 3), sym.index);
 }
 
-test "SymInfo.parse — parses defined function symbol (explicitly named)" {
+test "SymInfo.parse—parses defined function symbol (explicitly named)" {
     // kind=0 (function), flags=0 (defined), index=1, name="my_func" (7 bytes)
     const bytes = [_]u8{ 0x00, 0x00, 0x01, 0x07 } ++ "my_func".*;
     var cursor: usize = 0;
@@ -842,7 +842,7 @@ test "SymInfo.parse — parses defined function symbol (explicitly named)" {
     try testing.expectEqual(@as(u32, 1), sym.index);
 }
 
-test "SymInfo.parse — parses data symbol with segment info" {
+test "SymInfo.parse—parses data symbol with segment info" {
     // kind=1 (data), flags=0 (defined), name="data_sym" (8 bytes),
     // segment_index=0, data_offset=16, data_size=4
     const bytes = [_]u8{ 0x01, 0x00, 0x08 } ++ "data_sym".* ++ [_]u8{ 0x00, 0x10, 0x04 };
@@ -855,7 +855,7 @@ test "SymInfo.parse — parses data symbol with segment info" {
     try testing.expectEqual(@as(u32, 4), sym.data_size);
 }
 
-test "RelocationSection.parse — parses section with multiple entries" {
+test "RelocationSection.parse—parses section with multiple entries" {
     // Build reloc section body: target_section=10, count=2, then 2 index relocs
     var bytes_list: std.ArrayList(u8) = .empty;
     defer bytes_list.deinit(testing.allocator);

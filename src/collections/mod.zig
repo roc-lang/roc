@@ -34,6 +34,9 @@ pub const GuardedList = @import("GuardedList.zig");
 
 pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
+pub const DenseMap = @import("DenseMap.zig").DenseMap;
+pub const DenseMapPool = @import("DenseMap.zig").DenseMapPool;
+
 pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuilder;
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
 pub const ExposedItemTarget = @import("ExposedItems.zig").ExposedItemTarget;
@@ -141,4 +144,5 @@ test "collections tests" {
     std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
     std.testing.refAllDecls(@import("SingleThreadArena.zig"));
+    std.testing.refAllDecls(@import("DenseMap.zig"));
 }

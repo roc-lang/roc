@@ -13,22 +13,19 @@ outer = |value| {
 }
 ~~~
 # EXPECTED
-CONSTRAINT IN WRONG ANNOTATION - where_clause_enclosing_rigid_error.md:3:29:3:46
+UNBOUND WHERE RECEIVER - where_clause_enclosing_rigid_error.md:3:29:3:46
 # PROBLEMS
+── ✗ unbound where receiver ───────── where_clause_enclosing_rigid_error.md:3:29
 
-┌────────────────────────────────┐
-│ CONSTRAINT IN WRONG ANNOTATION ├─ The type variable `a` was introduced by ──┐
-└┬───────────────────────────────┘  a different annotation, so this where     │
- │                                  clause cannot add the `show` method to    │
- │                                  it.                                       │
- │                                                                            │
- │  inner : a -> Str where [a.show : a -> Str]                                │
- │                          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                 │
- └──────────────────────────────── where_clause_enclosing_rigid_error.md:3:29 ┘
+The type variable a is not introduced by this annotation's type or a connected
+method constraint, so this where clause cannot add the show method to it.
 
-    A where clause can only add methods to type variables introduced by the
-    same annotation. Add this method to the annotation that introduced `a`, or
-    use a new type variable here.
+inner : a -> Str where [a.show : a -> Str]
+                        ^^^^^^^^^^^^^^^^^
+
+A where clause receiver must be introduced by the annotation's type, or by the
+method type of a receiver that is already connected to the annotation. Connect
+a to the annotation, or remove this constraint.
 
 # TOKENS
 ~~~zig
@@ -90,10 +87,7 @@ outer = |value| {
 (can-ir
 	(d-let
 		(p-assign (ident "outer"))
-		(e-lambda
-			(args
-				(p-assign (ident "value")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))
