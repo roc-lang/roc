@@ -126,6 +126,31 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Every runtime Dec-to-integer width recovers the whole part and truncates toward zero; all but I128 wrap past the destination range",
     },
     .{
+        .roc_file = "test/fx/runtime_conversion_exact_widths.roc",
+        .io_spec = "0<3|1>int: 3 3|1>frac: 3 3.0|1>signed: -3",
+        .description = "Conversions defined for every source value agree across backends",
+    },
+    .{
+        .roc_file = "test/fx/runtime_conversion_wrap_widths.roc",
+        .io_spec = "0<3|1>small: 3 3|1>negative: 65533|1>big: 44 44",
+        .description = "Wrapping conversions sign-extend a negative source and reduce modulo the destination range",
+    },
+    .{
+        .roc_file = "test/fx/runtime_conversion_try_widths.roc",
+        .io_spec = "0<3|1>fits: 3 3|1>past i8: out of range 150|1>past u8: out of range|1>from f64: 4 out of range",
+        .description = "Fallible conversions return an error when the value does not fit the destination",
+    },
+    .{
+        .roc_file = "test/fx/runtime_conversion_trunc_widths.roc",
+        .io_spec = "0<3|1>toward zero: 3 -3|1>narrow: 3 3",
+        .description = "Float-to-integer conversions discard the fractional part toward zero",
+    },
+    .{
+        .roc_file = "test/fx/runtime_conversion_to_str_widths.roc",
+        .io_spec = "0<3|1>unsigned: 3 3 3 3 3|1>signed: -3 -3 -3 -3 -3|1>frac: 3 3 3.0",
+        .description = "Every number type renders as text the same way on every backend",
+    },
+    .{
         .roc_file = "test/fx/runtime_i128_div_rem_mod.roc",
         .io_spec = "0<3|1>unsigned: 42857142857142857142 6 6|1>signed: 42857142857142857142 6 6|1>negative: -42857142857142857142 -6 1",
         .description = "Runtime 128-bit division, remainder and modulo agree across backends and keep the operands' full width",
