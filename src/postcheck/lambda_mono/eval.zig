@@ -1369,7 +1369,7 @@ pub const Evaluator = struct {
             => self.evalListOp(op, args, arg_types, result_ty),
 
             .box_box => self.boxValue(args[0]),
-            .box_unbox => if (args[0] == .box) args[0].box.* else self.unsupported_("box_unbox on non-box value"),
+            .box_unbox, .box_unbox_borrowed => if (args[0] == .box) args[0].box.* else self.unsupported_("box_unbox on non-box value"),
             .box_prepare_update => if (args[0] == .box) self.boxValue(args[0].box.*) else self.unsupported_("box_prepare_update on non-box value"),
             .erased_capture_load => if (args[0] == .box) args[0].box.* else args[0],
 

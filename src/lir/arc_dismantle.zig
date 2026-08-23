@@ -24,6 +24,7 @@ const core = @import("lir_core");
 const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
+const body_clone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -153,17 +154,39 @@ pub fn projectionOwnsAllRc(
     }
 }
 
-/// One refcounted field a dismantled container still owns at its death
-/// point: emission reads it into a temporary and releases the temporary.
-pub const ResidualField = struct {
+/// One committed refcounted field place of a dismantlable container.
+pub const FieldPlace = struct {
     /// Original field index, as `assign_ref .field` addresses it.
     field_idx: u32,
     layout_idx: layout_mod.Idx,
 };
 
-/// Residual ownership plan for one container local selected for dismantling.
+/// Committed field-place domain for one dismantlable container. Residual
+/// ownership is path state in ARC, not a global property of this descriptor.
 pub const Container = struct {
-    residual: []const ResidualField,
+    fields: []const FieldPlace,
+    full_mask: u64,
+};
+
+/// Exact resource-place transfer performed by one field read.
+pub const Take = struct {
+    root: LIR.LocalId,
+    field_mask: u64,
+};
+
+/// One direct-call argument whose owned unit came from an exact aggregate
+/// field place. The callee's declared outcome convention may return that
+/// unit to this place on selected result edges.
+pub const CallArg = struct {
+    stmt: LIR.CFStmtId,
+    position: u8,
+};
+
+/// Exact aggregate field place and result refinement that can restore it.
+pub const FieldRestitutionArg = struct {
+    place: Take,
+    projection: LIR.CFStmtId,
+    refinement: LIR.CFStmtId,
 };
 
 /// Per-procedure dismantling decisions consumed while emitting ARC operations.
@@ -171,20 +194,32 @@ pub const Dismantles = struct {
     arena: std.heap.ArenaAllocator,
     /// `assign_ref .field` statements whose reads consume the container's
     /// stored unit; emission skips their retain.
-    takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, void),
-    /// Dismantled containers. At the container's death point emission
-    /// releases the residual fields instead of the whole value.
+    takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
+    /// Dismantlable containers and their committed field-place domains.
     containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
     /// Takes on containers that are proc parameters solved borrowed: valid
     /// only in emissions where the demand vector overrides the parameter to
     /// owned (mode-specialized variants). The value is the parameter local,
     /// so emission can check the override for the current variant.
-    owned_only_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, LIR.LocalId),
+    owned_only_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
     /// Containers behind `owned_only_takes`, keyed by the parameter local.
     owned_only_containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
     /// Parameter positions whose owned variant activates an exact field take,
     /// indexed directly by source procedure id.
     owned_only_param_benefits: []arc_sig.ParamMask,
+    /// Binding targets produced by unconditional field takes. The target
+    /// carries the stored field unit even when its base binding was solved
+    /// borrowed.
+    take_bindings: []bool,
+    /// For a binding solved borrowed whose field read becomes a take in an
+    /// owned-parameter variant, the exact borrowed parameter root authorizing
+    /// that binding-mode override; `no_index` means no override.
+    owned_only_binding_roots: []u32,
+    /// Exact field-place destinations for outcome-conditioned argument
+    /// restitution. Entries exist only when the projection binding has no
+    /// operand use other than this call and the call result has the closed,
+    /// explicit discriminant refinement accepted by this pass.
+    field_restitution_args: std.AutoHashMapUnmanaged(CallArg, FieldRestitutionArg),
     /// Borrowed projection locals that denote the complete refcounted payload
     /// of another local. Moving one of these locals moves the root's unit
     /// directly when that unit is present; otherwise the ordinary retain is
@@ -201,16 +236,17 @@ pub const Dismantles = struct {
         self.containers.deinit(gpa);
         self.owned_only_takes.deinit(gpa);
         self.owned_only_containers.deinit(gpa);
+        self.field_restitution_args.deinit(gpa);
         self.projection_units.deinit(gpa);
         self.complete_takes.deinit(gpa);
         self.arena.deinit();
     }
 
-    pub fn isTake(self: *const Dismantles, stmt: LIR.CFStmtId) bool {
-        return self.takes.contains(stmt);
+    pub fn takeAt(self: *const Dismantles, stmt: LIR.CFStmtId) ?Take {
+        return self.takes.get(stmt);
     }
 
-    pub fn ownedOnlyTakeParam(self: *const Dismantles, stmt: LIR.CFStmtId) ?LIR.LocalId {
+    pub fn ownedOnlyTake(self: *const Dismantles, stmt: LIR.CFStmtId) ?Take {
         return self.owned_only_takes.get(stmt);
     }
 
@@ -228,6 +264,28 @@ pub const Dismantles = struct {
             dismantleInvariant("ARC owned-only benefit lookup exceeded the analyzed source-procedure table");
         }
         return self.owned_only_param_benefits[index];
+    }
+
+    pub fn ownedOnlyBindingRoot(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
+        const index = @intFromEnum(local);
+        if (index >= self.owned_only_binding_roots.len) {
+            dismantleInvariant("ARC owned-only binding lookup exceeded the analyzed local table");
+        }
+        const root = self.owned_only_binding_roots[index];
+        return if (root == no_index) null else @enumFromInt(root);
+    }
+
+    pub fn isTakeBinding(self: *const Dismantles, local: LIR.LocalId) bool {
+        const index = @intFromEnum(local);
+        if (index >= self.take_bindings.len) {
+            dismantleInvariant("ARC take-binding lookup exceeded the analyzed local table");
+        }
+        return self.take_bindings[index];
+    }
+
+    pub fn fieldRestitutionArg(self: *const Dismantles, stmt: LIR.CFStmtId, position: usize) ?FieldRestitutionArg {
+        if (position > std.math.maxInt(u8)) return null;
+        return self.field_restitution_args.get(.{ .stmt = stmt, .position = @intCast(position) });
     }
 
     pub fn projectionUnitOf(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
@@ -257,7 +315,6 @@ const Read = struct {
     stmt: LIR.CFStmtId,
     target: LIR.LocalId,
     field_idx: u32,
-    consuming: bool,
 };
 
 const Candidate = struct {
@@ -284,6 +341,13 @@ const Analysis = struct {
     /// Proc parameters. A parameter solved borrowed may still qualify as an
     /// owned-only candidate: mode-specialized variants re-emit it owned.
     is_param: []const bool,
+    /// Solved-borrowed bindings whose value reaches an explicitly owned
+    /// direct-call or low-level operand. Field-take variants override exactly
+    /// these bindings to owned instead of manufacturing a retain at that
+    /// ownership boundary.
+    owned_demand: []bool,
+    /// Same-value aliases propagate an owned demand back to their source.
+    demand_aliases: std.ArrayList(struct { source: LIR.LocalId, target: LIR.LocalId }) = .empty,
 
     fn deinit(self: *Analysis) void {
         var it = self.candidates.valueIterator();
@@ -294,6 +358,30 @@ const Analysis = struct {
         self.candidates.deinit(self.gpa);
         self.gpa.free(self.alias_root);
         self.gpa.free(self.state);
+        self.gpa.free(self.owned_demand);
+        self.demand_aliases.deinit(self.gpa);
+    }
+
+    fn demandOwned(self: *Analysis, local: LIR.LocalId) void {
+        self.owned_demand[@intFromEnum(local)] = true;
+    }
+
+    fn noteDemandAlias(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
+        try self.demand_aliases.append(self.gpa, .{ .source = source, .target = target });
+    }
+
+    fn closeOwnedDemand(self: *Analysis) void {
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (self.demand_aliases.items) |edge| {
+                if (!self.owned_demand[@intFromEnum(edge.target)]) continue;
+                const source = &self.owned_demand[@intFromEnum(edge.source)];
+                if (source.*) continue;
+                source.* = true;
+                changed = true;
+            }
+        }
     }
 
     /// Whether the local's layout and binding shape could ever benefit from
@@ -396,11 +484,10 @@ const Analysis = struct {
             .stmt = stmt,
             .target = target,
             .field_idx = field_idx,
-            .consuming = !self.solution.isBorrowed(target),
         });
     }
 
-    fn noteAliasDef(self: *Analysis, target: LIR.LocalId, source: LIR.LocalId) Error!void {
+    fn noteAliasDef(self: *Analysis, stmt: LIR.CFStmtId, target: LIR.LocalId, source: LIR.LocalId) Error!void {
         const target_index = @intFromEnum(target);
         if (self.state[target_index] == .transparent_alias) {
             // Redefinition of an existing alias: neither its old nor its new
@@ -422,20 +509,19 @@ const Analysis = struct {
             self.state[target_index] = .transparent_alias;
             self.alias_root[target_index] = @intFromEnum(root);
         } else {
-            // An owned alias duplicates the value; the container keeps a
-            // second observer.
-            self.useWhole(source);
+            // An owned same-value binding is a path-local whole use. It can
+            // move an intact container on this edge, while takes on mutually
+            // exclusive edges keep their exact residual states.
+            try self.useWholeAt(source, stmt);
             self.disqualify(target);
         }
     }
 };
 
-/// Per-field take dataflow state at one point in a candidate's region:
-/// which fields may have been taken on some path reaching this point, and
-/// which must have been taken on every such path. A take is valid only where
-/// the field cannot have been taken yet, a borrow only where it cannot have
-/// been taken yet, and every exit must agree (`may == must`) so the residual
-/// release is the same on all paths.
+/// Per-field take dataflow state at one point in a candidate's region. The
+/// may/must pair rejects double takes and post-take observations. Divergent
+/// exits are allowed: ARC carries their exact residual masks and normalizes
+/// them explicitly at the merge.
 const FlowState = struct {
     may: u64,
     must: u64,
@@ -457,6 +543,120 @@ const ReadKind = struct {
     visited: bool = false,
 };
 
+const FieldRestitution = struct {
+    call_arg: CallArg,
+    projection: LIR.CFStmtId,
+    switch_stmt: LIR.CFStmtId,
+    field_mask: u64,
+    outcomes: arc_sig.OutcomeSpan,
+};
+
+fn findOutcomeRefinement(
+    allocator: Allocator,
+    store: *const LirStore,
+    target: LIR.LocalId,
+    next: LIR.CFStmtId,
+    outcomes: arc_sig.OutcomeSpan,
+) Error!?LIR.CFStmtId {
+    if (outcomes.isEmpty()) return null;
+    var aliases = std.ArrayList(LIR.LocalId).empty;
+    defer aliases.deinit(allocator);
+    try aliases.append(allocator, target);
+    var discriminant: ?LIR.LocalId = null;
+    var cursor = next;
+    while (true) {
+        const stmt = store.getCFStmt(cursor);
+        if (stmt == .assign_ref) {
+            const assign = stmt.assign_ref;
+            switch (assign.op) {
+                .local => |source| {
+                    var source_is_result = false;
+                    for (aliases.items) |alias| source_is_result = source_is_result or alias == source;
+                    if (!source_is_result) return null;
+                    var already = false;
+                    for (aliases.items) |alias| already = already or alias == assign.target;
+                    if (!already) try aliases.append(allocator, assign.target);
+                    cursor = assign.next;
+                },
+                .discriminant => |op| {
+                    var source_is_result = false;
+                    for (aliases.items) |alias| source_is_result = source_is_result or alias == op.source;
+                    if (!source_is_result or discriminant != null) return null;
+                    discriminant = assign.target;
+                    cursor = assign.next;
+                },
+                .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
+            }
+        } else if (stmt == .switch_stmt) {
+            if (discriminant == null or stmt.switch_stmt.cond != discriminant.?) return null;
+            return cursor;
+        } else {
+            return null;
+        }
+    }
+}
+
+fn outcomeMaskForValue(outcomes: []const arc_sig.Outcome, value: u64) ?arc_sig.ParamMask {
+    if (value > std.math.maxInt(u16)) return null;
+    for (outcomes) |outcome| {
+        if (outcome.discriminant == @as(u16, @intCast(value))) return outcome.restituted_params;
+    }
+    return null;
+}
+
+fn defaultOutcomeMask(outcomes: []const arc_sig.Outcome, branches: anytype) ?arc_sig.ParamMask {
+    var mask: arc_sig.ParamMask = std.math.maxInt(arc_sig.ParamMask);
+    var any = false;
+    for (outcomes) |outcome| {
+        var explicit = false;
+        for (0..GuardedList.borrowLen(branches)) |index| {
+            if (GuardedList.at(branches, index).value == outcome.discriminant) {
+                explicit = true;
+                break;
+            }
+        }
+        if (explicit) continue;
+        any = true;
+        mask &= outcome.restituted_params;
+    }
+    return if (any) mask else null;
+}
+
+fn restoredFieldMaskForBranch(
+    solution: *const arc_solve.Solution,
+    restorations: []const FieldRestitution,
+    switch_stmt: LIR.CFStmtId,
+    value: u64,
+) u64 {
+    var restored: u64 = 0;
+    for (restorations) |receipt| {
+        if (receipt.switch_stmt != switch_stmt) continue;
+        const position_bit = arc_sig.paramBit(receipt.call_arg.position).?;
+        const outcomes = solution.sigTable().outcomesOf(.{ .outcomes = receipt.outcomes });
+        const mask = outcomeMaskForValue(outcomes, value) orelse continue;
+        if ((mask & position_bit) != 0) restored |= receipt.field_mask;
+    }
+    return restored;
+}
+
+fn restoredFieldMaskForDefault(
+    solution: *const arc_solve.Solution,
+    store: *const LirStore,
+    restorations: []const FieldRestitution,
+    switch_stmt: LIR.CFStmtId,
+) u64 {
+    const branches = store.getCFSwitchBranches(store.getCFStmt(switch_stmt).switch_stmt.branches);
+    var restored: u64 = 0;
+    for (restorations) |receipt| {
+        if (receipt.switch_stmt != switch_stmt) continue;
+        const position_bit = arc_sig.paramBit(receipt.call_arg.position).?;
+        const outcomes = solution.sigTable().outcomesOf(.{ .outcomes = receipt.outcomes });
+        const mask = defaultOutcomeMask(outcomes, branches) orelse continue;
+        if ((mask & position_bit) != 0) restored |= receipt.field_mask;
+    }
+    return restored;
+}
+
 /// Solve takes for every reachable statement in the store.
 pub fn compute(
     gpa: Allocator,
@@ -472,6 +672,15 @@ pub fn compute(
     const is_param = try gpa.alloc(bool, store.localCount());
     defer gpa.free(is_param);
     @memset(is_param, false);
+    const operand_read_counts = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(operand_read_counts);
+    @memset(operand_read_counts, 0);
+    const direct_call_stmt_by_arg = try gpa.alloc(u32, store.localCount());
+    defer gpa.free(direct_call_stmt_by_arg);
+    @memset(direct_call_stmt_by_arg, no_index);
+    const direct_call_position_by_arg = try gpa.alloc(u8, store.localCount());
+    defer gpa.free(direct_call_position_by_arg);
+    @memset(direct_call_position_by_arg, std.math.maxInt(u8));
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         const body = proc.body orelse continue;
@@ -497,10 +706,12 @@ pub fn compute(
         .alias_root = try gpa.alloc(u32, store.localCount()),
         .candidates = .empty,
         .is_param = is_param,
+        .owned_demand = try gpa.alloc(bool, store.localCount()),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
     @memset(analysis.alias_root, no_index);
+    @memset(analysis.owned_demand, false);
 
     // One linear scan over every reachable statement, classifying each
     // occurrence of each local. The switch is exhaustive so a new statement
@@ -518,7 +729,9 @@ pub fn compute(
         const stmt_index = @intFromEnum(current);
         if (visited.isSet(stmt_index)) continue;
         visited.set(stmt_index);
-        switch (store.getCFStmt(current)) {
+        const current_stmt = store.getCFStmt(current);
+        body_clone.countStmtReads(store, operand_read_counts, current_stmt);
+        switch (current_stmt) {
             .init_uninitialized => |stmt| {
                 analysis.useWhole(stmt.target);
                 try stack.append(gpa, stmt.next);
@@ -530,10 +743,11 @@ pub fn compute(
                         try analysis.noteDef(stmt.target, current);
                     },
                     .local => |source| {
+                        try analysis.noteDemandAlias(source, stmt.target);
                         if (stmt.target == source) {
                             analysis.useWhole(source);
                         } else {
-                            try analysis.noteAliasDef(stmt.target, source);
+                            try analysis.noteAliasDef(current, stmt.target, source);
                         }
                     },
                     .discriminant => |op| {
@@ -565,7 +779,16 @@ pub fn compute(
             },
             .assign_call => |stmt| {
                 const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
+                const callee_sig = solution.sigOf(stmt.proc);
+                for (0..GuardedList.borrowLen(args)) |i| {
+                    const arg = GuardedList.at(args, i);
+                    if (i < arc_sig.tracked_param_count) {
+                        direct_call_stmt_by_arg[@intFromEnum(arg)] = @intFromEnum(current);
+                        direct_call_position_by_arg[@intFromEnum(arg)] = @intCast(i);
+                    }
+                    try analysis.useWholeAt(arg, current);
+                    if (callee_sig.paramMode(i) == .owned) analysis.demandOwned(arg);
+                }
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
@@ -665,7 +888,12 @@ pub fn compute(
             },
             .assign_low_level => |stmt| {
                 const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
+                const demand_mask = stmt.rc_effect.consume_args | stmt.rc_effect.retain_args;
+                for (0..GuardedList.borrowLen(args)) |i| {
+                    const arg = GuardedList.at(args, i);
+                    try analysis.useWholeAt(arg, current);
+                    if (i < 64 and (demand_mask & (@as(u64, 1) << @intCast(i))) != 0) analysis.demandOwned(arg);
+                }
                 try analysis.noteDef(stmt.target, current);
                 try stack.append(gpa, stmt.next);
             },
@@ -794,6 +1022,8 @@ pub fn compute(
         }
     }
 
+    analysis.closeOwnedDemand();
+
     // Second phase: verify the surviving candidates' read shapes and spines,
     // and build the output.
     var result = Dismantles{
@@ -803,12 +1033,19 @@ pub fn compute(
         .owned_only_takes = .empty,
         .owned_only_containers = .empty,
         .owned_only_param_benefits = &.{},
+        .take_bindings = &.{},
+        .owned_only_binding_roots = &.{},
+        .field_restitution_args = .empty,
         .projection_units = .empty,
         .complete_takes = .empty,
     };
     errdefer result.deinit();
     result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
     @memset(result.owned_only_param_benefits, 0);
+    result.take_bindings = try result.arena.allocator().alloc(bool, store.localCount());
+    @memset(result.take_bindings, false);
+    result.owned_only_binding_roots = try result.arena.allocator().alloc(u32, store.localCount());
+    @memset(result.owned_only_binding_roots, no_index);
 
     var read_kinds = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
     defer read_kinds.deinit(gpa);
@@ -819,8 +1056,8 @@ pub fn compute(
     const FlowFrame = struct { cursor: LIR.CFStmtId, state: FlowState };
     var flow_frames = std.ArrayList(FlowFrame).empty;
     defer flow_frames.deinit(gpa);
-    var exit_musts = std.ArrayList(u64).empty;
-    defer exit_musts.deinit(gpa);
+    var field_restitutions = std.ArrayList(FieldRestitution).empty;
+    defer field_restitutions.deinit(gpa);
 
     var it = analysis.candidates.iterator();
     candidates: while (it.next()) |entry| {
@@ -904,16 +1141,51 @@ pub fn compute(
         // definition over the control-flow graph: a consuming read is a take
         // only if the field cannot have been taken yet at that point, a
         // borrow of a taken field must run before every take that could
-        // reach it, and every exit the flow reaches must agree on the taken
-        // set so the residual release is the same on all paths. Loops poison
-        // themselves: a take inside one reaches itself as possibly-taken.
+        // reach it. Divergent residuals remain exact per path in ARC. Loops
+        // poison themselves: a take inside one reaches itself as
+        // possibly-taken.
         read_kinds.clearRetainingCapacity();
+        field_restitutions.clearRetainingCapacity();
         for (candidate.reads.items) |read| {
             const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (rc_mask & bit == 0) continue;
+            const consuming = !solution.isBorrowed(read.target) or analysis.owned_demand[@intFromEnum(read.target)];
             try read_kinds.put(gpa, read.stmt, .{
                 .bit = bit,
-                .consuming = read.consuming,
+                .consuming = consuming,
+            });
+
+            // Initial closed field-place restitution capability. The field
+            // binding must have exactly one operand read, and that read must
+            // be one represented owned position of a direct call whose
+            // result is refined by the explicit alias/discriminant/switch
+            // continuation. This is a total syntactic/metadata boundary:
+            // unsupported continuations simply keep the ordinary schedule.
+            if (!consuming or operand_read_counts[@intFromEnum(read.target)] != 1) continue;
+            const call_stmt_index = direct_call_stmt_by_arg[@intFromEnum(read.target)];
+            const position = direct_call_position_by_arg[@intFromEnum(read.target)];
+            if (call_stmt_index == no_index or position == std.math.maxInt(u8)) continue;
+            const call_stmt_id: LIR.CFStmtId = @enumFromInt(call_stmt_index);
+            const call_stmt = store.getCFStmt(call_stmt_id);
+            if (call_stmt != .assign_call) continue;
+            const args = store.getLocalSpan(call_stmt.assign_call.args);
+            if (position >= GuardedList.borrowLen(args) or GuardedList.at(args, position) != read.target) continue;
+            const callee_sig = solution.sigOf(call_stmt.assign_call.proc);
+            if (callee_sig.paramMode(position) != .owned) continue;
+            const outcomes = solution.availableOutcomeSpanOf(call_stmt.assign_call.proc);
+            const refinement = (try findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
+            const position_bit = arc_sig.paramBit(position).?;
+            var any_restitution = false;
+            for (solution.sigTable().outcomesOf(.{ .outcomes = outcomes })) |outcome| {
+                any_restitution = any_restitution or (outcome.restituted_params & position_bit) != 0;
+            }
+            if (!any_restitution) continue;
+            try field_restitutions.append(gpa, .{
+                .call_arg = .{ .stmt = call_stmt_id, .position = position },
+                .projection = read.stmt,
+                .switch_stmt = refinement,
+                .field_mask = bit,
+                .outcomes = outcomes,
             });
         }
         // A whole use behaves like a borrow of every field at once: no take
@@ -931,13 +1203,14 @@ pub fn compute(
 
         var candidate_mask: u64 = 0;
         for (candidate.reads.items) |read| {
-            if (read.consuming) candidate_mask |= @as(u64, 1) << @intCast(read.field_idx);
+            if (!solution.isBorrowed(read.target) or analysis.owned_demand[@intFromEnum(read.target)]) {
+                candidate_mask |= @as(u64, 1) << @intCast(read.field_idx);
+            }
         }
         candidate_mask &= rc_mask;
         if (candidate_mask == 0) continue;
 
         var poison: u64 = 0;
-        exit_musts.clearRetainingCapacity();
         join_bodies.clearRetainingCapacity();
         body_states.clearRetainingCapacity();
         flow_frames.clearRetainingCapacity();
@@ -978,8 +1251,16 @@ pub fn compute(
                     .switch_stmt => |stmt| {
                         const heads = store.getCFSwitchBranches(stmt.branches);
                         for (0..GuardedList.borrowLen(heads)) |i| {
-                            try flow_frames.append(gpa, .{ .cursor = GuardedList.at(heads, i).body, .state = state });
+                            const branch = GuardedList.at(heads, i);
+                            const restored = restoredFieldMaskForBranch(solution, field_restitutions.items, cursor, branch.value);
+                            try flow_frames.append(gpa, .{
+                                .cursor = branch.body,
+                                .state = .{ .may = state.may & ~restored, .must = state.must & ~restored },
+                            });
                         }
+                        const default_restored = restoredFieldMaskForDefault(solution, store, field_restitutions.items, cursor);
+                        state.may &= ~default_restored;
+                        state.must &= ~default_restored;
                         cursor = stmt.default_branch;
                     },
                     .jump => |stmt| {
@@ -991,8 +1272,11 @@ pub fn compute(
                         // return would. Reads living past it are never
                         // visited, which keeps their fields residual.
                         const body = join_bodies.get(@intFromEnum(stmt.target)) orelse {
-                            poison |= state.may & ~state.must;
-                            try exit_musts.append(gpa, state.must);
+                            // A back edge can execute this region again with
+                            // its taken fields absent. The current closed
+                            // analysis rejects those takes; ordinary retains
+                            // remain the sound schedule.
+                            poison |= state.may;
                             break :chain;
                         };
                         const slot = try body_states.getOrPut(gpa, body);
@@ -1026,11 +1310,7 @@ pub fn compute(
                         try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
-                    // Every exit the flow reaches must agree, so the death
-                    // point's residual is the same however it was reached.
                     .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {
-                        poison |= state.may & ~state.must;
-                        try exit_musts.append(gpa, state.must);
                         break :chain;
                     },
                 }
@@ -1044,52 +1324,65 @@ pub fn compute(
             if (!kind.visited) poison |= kind.bit;
         }
 
-        // One static residual serves every death point, so a field is taken
-        // only if every exit the flow reached agrees its take ran: an exit a
-        // taken field's take did not dominate would be under-released. Bits
-        // only ever leave the set, so this converges.
-        var taken_mask: u64 = candidate_mask & ~poison;
-        while (taken_mask != 0) {
-            var missing: u64 = 0;
-            for (exit_musts.items) |must| missing |= taken_mask & ~must;
-            if (missing == 0) break;
-            taken_mask &= ~missing;
-        }
+        const taken_mask: u64 = candidate_mask & ~poison;
         if (taken_mask == 0) continue;
 
-        // Accepted. Record the takes and the residual: every refcounted
-        // field that was not taken is released at the death point.
-        var residual = std.ArrayList(ResidualField).empty;
-        defer residual.deinit(gpa);
+        // Accepted. Record the exact committed field-place domain. ARC owns
+        // the path-sensitive residual mask and release normalization.
+        var fields = std.ArrayList(FieldPlace).empty;
+        defer fields.deinit(gpa);
         for (0..info.fields.len) |i| {
             const field = info.fields.get(@intCast(i));
-            const bit = @as(u64, 1) << @intCast(field.index);
-            if (taken_mask & bit != 0) continue;
             if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
-            try residual.append(gpa, .{ .field_idx = field.index, .layout_idx = field.layout });
+            try fields.append(gpa, .{ .field_idx = field.index, .layout_idx = field.layout });
         }
 
         // A parameter solved borrowed dismantles only in emissions whose
         // demand vector overrides it to owned; everything else applies to
         // every emission of its proc.
         const owned_only = solution.isBorrowed(local);
-        const stored_residual = try result.arena.allocator().dupe(ResidualField, residual.items);
+        const stored_fields = try result.arena.allocator().dupe(FieldPlace, fields.items);
         for (candidate.reads.items) |read| {
             const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (taken_mask & bit == 0) continue;
-            // Borrowing reads of a taken field stay plain borrows; only the
-            // consuming reads take the stored unit.
-            if (!read.consuming) continue;
+            if (solution.isBorrowed(read.target) and !analysis.owned_demand[@intFromEnum(read.target)]) continue;
+            const take = Take{ .root = local, .field_mask = bit };
             if (owned_only) {
-                try result.owned_only_takes.put(gpa, read.stmt, local);
+                try result.owned_only_takes.put(gpa, read.stmt, take);
+                const target_index = @intFromEnum(read.target);
+                const prior = result.owned_only_binding_roots[target_index];
+                if (prior != no_index and prior != @intFromEnum(local)) {
+                    dismantleInvariant("ARC owned-only field binding had conflicting parameter roots");
+                }
+                result.owned_only_binding_roots[target_index] = @intFromEnum(local);
             } else {
-                try result.takes.put(gpa, read.stmt, {});
+                try result.takes.put(gpa, read.stmt, take);
+                result.take_bindings[@intFromEnum(read.target)] = true;
+            }
+        }
+        for (field_restitutions.items) |receipt| {
+            if ((receipt.field_mask & taken_mask) == 0) continue;
+            const slot = try result.field_restitution_args.getOrPut(gpa, receipt.call_arg);
+            if (slot.found_existing) {
+                if (slot.value_ptr.place.root != local or
+                    slot.value_ptr.place.field_mask != receipt.field_mask or
+                    slot.value_ptr.projection != receipt.projection or
+                    slot.value_ptr.refinement != receipt.switch_stmt)
+                {
+                    dismantleInvariant("ARC field restitution call argument had conflicting committed places");
+                }
+            } else {
+                slot.value_ptr.* = .{
+                    .place = .{ .root = local, .field_mask = receipt.field_mask },
+                    .projection = receipt.projection,
+                    .refinement = receipt.switch_stmt,
+                };
             }
         }
         if (owned_only) {
-            try result.owned_only_containers.put(gpa, local, .{ .residual = stored_residual });
+            try result.owned_only_containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
         } else {
-            try result.containers.put(gpa, local, .{ .residual = stored_residual });
+            try result.containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
         }
     }
 
@@ -1270,6 +1563,17 @@ pub fn compute(
         const origin = places.get(edge.source) orelse continue;
         if (origin.root == ambiguous_index) continue;
         try result.complete_takes.put(gpa, @enumFromInt(edge.kind.projection), @enumFromInt(origin.root));
+
+        // A complete projection can move its root's exact unit in an owned
+        // parameter emission. Publish that mechanical capability to variant
+        // admission just like an ordinary field dismantle; the path solver
+        // remains responsible for proving whether the move is legal at this
+        // particular read (including outcome-conditioned restitution).
+        const source_info = param_info.get(origin.root) orelse continue;
+        if (source_info.proc == ambiguous_index) continue;
+        const source_proc: LIR.LirProcSpecId = @enumFromInt(source_info.proc);
+        if (solution.isPinnedProc(source_proc)) continue;
+        result.owned_only_param_benefits[source_info.proc] |= arc_sig.paramBit(source_info.position).?;
     }
 
     // A leaf procedure's ordinary field dismantle makes its parameter

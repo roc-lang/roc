@@ -57,13 +57,30 @@ pub fn handler(comptime ServerType: type) type {
             }
             const position_obj = position_value.object;
 
-            const line: u32 = blk: {
-                const v = position_obj.get("line") orelse break :blk 0;
-                break :blk if (std.meta.activeTag(v) == .integer) @intCast(v.integer) else 0;
+            const line_value = position_obj.get("line") orelse {
+                try self.sendError(id, .invalid_params, "missing line");
+                return;
             };
-            const character: u32 = blk: {
-                const v = position_obj.get("character") orelse break :blk 0;
-                break :blk if (std.meta.activeTag(v) == .integer) @intCast(v.integer) else 0;
+            if (std.meta.activeTag(line_value) != .integer) {
+                try self.sendError(id, .invalid_params, "line must be an integer");
+                return;
+            }
+            const line: u32 = std.math.cast(u32, line_value.integer) orelse {
+                try self.sendError(id, .invalid_params, "line must be a non-negative integer");
+                return;
+            };
+
+            const character_value = position_obj.get("character") orelse {
+                try self.sendError(id, .invalid_params, "missing character");
+                return;
+            };
+            if (std.meta.activeTag(character_value) != .integer) {
+                try self.sendError(id, .invalid_params, "character must be an integer");
+                return;
+            }
+            const character: u32 = std.math.cast(u32, character_value.integer) orelse {
+                try self.sendError(id, .invalid_params, "character must be a non-negative integer");
+                return;
             };
 
             // Get the document text from the store

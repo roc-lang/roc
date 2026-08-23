@@ -1367,6 +1367,100 @@ pub fn roc_builtins_box_prepare_update(
     return fresh;
 }
 
+/// Consume one box reference and move its payload into `out`.
+pub fn roc_builtins_box_unbox_owned(
+    out: ?[*]u8,
+    payload_ptr: ?[*]u8,
+    payload_size: usize,
+    payload_alignment: u32,
+    payload_has_refcounted_children: bool,
+    payload_incref: ?RcIncFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    if (payload_size == 0 or payload_ptr == null) return;
+    @memcpy(out.?[0..payload_size], payload_ptr.?[0..payload_size]);
+    if (utils.isUnique(payload_ptr, roc_ops)) {
+        utils.freeDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
+    } else {
+        if (payload_has_refcounted_children) {
+            (payload_incref orelse unreachable)(out, 1, roc_ops);
+        }
+        utils.decrefDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
+    }
+}
+
+const TestBoxPayload = extern struct { list: RocList };
+
+fn testBoxPayloadIncref(payload: ?[*]u8, count: isize, roc_ops: *RocOps) callconv(.c) void {
+    const value: *TestBoxPayload = @ptrCast(@alignCast(payload.?));
+    utils.increfDataPtrC(value.list.bytes, count, roc_ops);
+}
+
+fn testBoxPayloadDecref(payload: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
+    const value: *TestBoxPayload = @ptrCast(@alignCast(payload.?));
+    utils.decrefDataPtrC(value.list.bytes, @alignOf(u8), false, roc_ops);
+}
+
+test "owned Box.unbox frees flat and refcounted outer headers" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+
+    const flat = utils.allocateWithRefcountC(@sizeOf(u64), @alignOf(u64), false, ops);
+    @as(*u64, @ptrCast(@alignCast(flat))).* = 42;
+    var flat_out: u64 = 0;
+    roc_builtins_box_unbox_owned(@ptrCast(&flat_out), flat, @sizeOf(u64), @alignOf(u64), false, null, ops);
+    try std.testing.expectEqual(@as(u64, 42), flat_out);
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+
+    const child = RocList.fromSlice(u8, &.{ 1, 2, 3 }, false, ops);
+    const outer = utils.allocateWithRefcountC(@sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, ops);
+    @as(*TestBoxPayload, @ptrCast(@alignCast(outer))).* = .{ .list = child };
+    var out: TestBoxPayload = undefined;
+    roc_builtins_box_unbox_owned(@ptrCast(&out), outer, @sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, testBoxPayloadIncref, ops);
+    try std.testing.expectEqual(@as(usize, 1), env.getAllocationCount());
+    try std.testing.expect(utils.isUnique(out.list.bytes, ops));
+    utils.decrefDataPtrC(out.list.bytes, @alignOf(u8), false, ops);
+}
+
+test "owned Box.unbox preserves shared box and shared payload ownership" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+
+    const child = RocList.fromSlice(u8, &.{ 7, 8 }, false, ops);
+    const outer = utils.allocateWithRefcountC(@sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, ops);
+    @as(*TestBoxPayload, @ptrCast(@alignCast(outer))).* = .{ .list = child };
+    utils.increfDataPtrC(outer, 1, ops);
+
+    var out: TestBoxPayload = undefined;
+    roc_builtins_box_unbox_owned(@ptrCast(&out), outer, @sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, testBoxPayloadIncref, ops);
+    try std.testing.expect(!utils.isUnique(out.list.bytes, ops));
+    const replacement: u8 = 9;
+    var updated: RocList = undefined;
+    roc_builtins_list_set(&updated, out.list.bytes, out.list.length, out.list.capacity_or_alloc_ptr, @alignOf(u8), 0, @ptrCast(@constCast(&replacement)), @sizeOf(u8), false, null, null, .Immutable, ops);
+    try std.testing.expectEqual(@as(u8, 7), @as(*TestBoxPayload, @ptrCast(@alignCast(outer))).list.elements(u8).?[0]);
+    try std.testing.expectEqual(@as(u8, 9), updated.elements(u8).?[0]);
+    utils.decrefDataPtrC(updated.bytes, @alignOf(u8), false, ops);
+    roc_builtins_box_decref_with(outer, @alignOf(TestBoxPayload), testBoxPayloadDecref, ops);
+
+    const separately_shared = RocList.fromSlice(u8, &.{9}, false, ops);
+    utils.increfDataPtrC(separately_shared.bytes, 1, ops);
+    const unique_outer = utils.allocateWithRefcountC(@sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, ops);
+    @as(*TestBoxPayload, @ptrCast(@alignCast(unique_outer))).* = .{ .list = separately_shared };
+    roc_builtins_box_unbox_owned(@ptrCast(&out), unique_outer, @sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, testBoxPayloadIncref, ops);
+    try std.testing.expect(!utils.isUnique(out.list.bytes, ops));
+    utils.decrefDataPtrC(out.list.bytes, @alignOf(u8), false, ops);
+    utils.decrefDataPtrC(separately_shared.bytes, @alignOf(u8), false, ops);
+}
+
+test "owned Box.unbox accepts a null ZST box" {
+    var env = utils.TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    roc_builtins_box_unbox_owned(null, null, 0, 1, false, null, env.getOps());
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
 /// Decref a boxed payload and optionally run payload teardown when unique.
 pub fn roc_builtins_box_decref_with(
     payload_ptr: ?[*]u8,

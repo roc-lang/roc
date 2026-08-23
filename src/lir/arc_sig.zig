@@ -31,6 +31,29 @@ pub const Mode = enum(u1) {
     owned,
 };
 
+/// One normally returned top-level tag outcome of a direct procedure.
+///
+/// `restituted_params` names owned argument positions whose exact entry
+/// ownership units are present again after this discriminant. Rows are
+/// ARC-stage-local calling-convention facts; no runtime representation is
+/// added to the source result.
+pub const Outcome = struct {
+    discriminant: u16,
+    restituted_params: ParamMask,
+};
+
+/// Span of sorted, complete `Outcome` rows in `SigTable.outcomes`.
+pub const OutcomeSpan = extern struct {
+    start: u32 = 0,
+    len: u32 = 0,
+
+    pub const empty: OutcomeSpan = .{};
+
+    pub fn isEmpty(self: OutcomeSpan) bool {
+        return self.len == 0;
+    }
+};
+
 /// Solved ownership signature of one proc.
 ///
 /// Argument positions are indexed by position in the proc's `args` span.
@@ -55,6 +78,10 @@ pub const RcSig = struct {
     /// Only mode-specialized variants carry these bits; solved base
     /// signatures and pinned signatures are always zero.
     unique_params: ParamMask = 0,
+    /// Complete normally-returned discriminants and their exact argument
+    /// restitution masks. Empty means the proc has no conditional ownership
+    /// convention.
+    outcomes: OutcomeSpan = .empty,
 
     pub const all_owned: RcSig = .{};
 
@@ -75,6 +102,7 @@ pub const RcSig = struct {
 /// entry are all-owned, which is always a sound signature.
 pub const SigTable = struct {
     sigs: []const RcSig = &.{},
+    outcomes: []const Outcome = &.{},
 
     pub const all_owned: SigTable = .{};
 
@@ -82,6 +110,22 @@ pub const SigTable = struct {
         const idx = @intFromEnum(proc);
         if (idx >= self.sigs.len) return RcSig.all_owned;
         return self.sigs[idx];
+    }
+
+    pub fn outcomesOf(self: SigTable, sig: RcSig) []const Outcome {
+        const start: usize = @intCast(sig.outcomes.start);
+        const len: usize = @intCast(sig.outcomes.len);
+        if (start > self.outcomes.len or len > self.outcomes.len - start) {
+            if (@import("builtin").mode == .Debug) {
+                std.debug.panic("ARC signature outcome span exceeded its table", .{});
+            }
+            unreachable;
+        }
+        return self.outcomes[start..][0..len];
+    }
+
+    pub fn outcomesForProc(self: SigTable, proc: LIR.LirProcSpecId) []const Outcome {
+        return self.outcomesOf(self.get(proc));
     }
 };
 
@@ -94,6 +138,7 @@ test "all-owned signature reports owned for every position" {
     try std.testing.expectEqual(Mode.owned, sig.ret_mode);
     try std.testing.expectEqual(false, sig.ret_unique);
     try std.testing.expectEqual(@as(ParamMask, 0), sig.unique_params);
+    try std.testing.expect(sig.outcomes.isEmpty());
 }
 
 test "borrowed param bits round-trip" {
@@ -112,4 +157,20 @@ test "empty signature table answers all-owned" {
     try std.testing.expectEqual(Mode.owned, sig.ret_mode);
     try std.testing.expectEqual(false, sig.ret_unique);
     try std.testing.expectEqual(@as(ParamMask, 0), sig.unique_params);
+    try std.testing.expect(sig.outcomes.isEmpty());
+}
+
+test "outcome spans expose exact restitution rows" {
+    const sigs = [_]RcSig{.{ .outcomes = .{ .start = 1, .len = 2 } }};
+    const outcomes = [_]Outcome{
+        .{ .discriminant = 99, .restituted_params = 0 },
+        .{ .discriminant = 0, .restituted_params = 1 },
+        .{ .discriminant = 1, .restituted_params = 0 },
+    };
+    const table = SigTable{ .sigs = &sigs, .outcomes = &outcomes };
+    const rows = table.outcomesOf(sigs[0]);
+    try std.testing.expectEqual(@as(usize, 2), rows.len);
+    try std.testing.expectEqual(@as(u16, 0), rows[0].discriminant);
+    try std.testing.expectEqual(@as(ParamMask, 1), rows[0].restituted_params);
+    try std.testing.expectEqual(@as(u16, 1), rows[1].discriminant);
 }
