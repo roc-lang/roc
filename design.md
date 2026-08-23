@@ -1423,6 +1423,16 @@ adopting the redirect destination's descriptor and checked representative; it
 must not directly graft one storage root beneath another and recreate an
 unbounded chain.
 
+A solver savepoint runs only non-poisoning unification. Successful speculative
+relations may be committed in place, but a mismatch returns without poisoning
+either top-level operand so the savepoint owner can roll the relation back.
+Occurrence-directed mismatch poisoning is permanent recovery against the live
+equivalence classes; running it inside a savepoint would both do work whose
+result must be discarded and make correctness depend on the queried
+occurrence's current representative. The commit-probe API fixes the
+non-poisoning behavior for every relation it runs, and ordinary poisoning
+unification asserts that no savepoint is active.
+
 A failed unification is different from a successful class union. Its first
 operand can be one checked occurrence already connected to a shared binding;
 error recovery must poison that exact occurrence without making the binding or
