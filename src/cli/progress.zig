@@ -732,14 +732,14 @@ test "padName pads short names and leaves long names" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try aw.writer.print("[{f}]", .{padName("Parsing")});
-    try testing.expectEqualStrings("[Parsing                     ]", aw.written());
+    try testing.expectEqualStrings("[Parsing                              ]", aw.written());
 }
 
 test "full-width phase name remains separated from its duration" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try aw.writer.print("{f} {s}", .{ padName("arm64 Instruction Generation"), "4ms" });
-    try testing.expectEqualStrings("arm64 Instruction Generation 4ms", aw.written());
+    try testing.expectEqualStrings("arm64 Instruction Generation          4ms", aw.written());
 }
 
 fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
