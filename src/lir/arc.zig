@@ -3580,7 +3580,6 @@ const Inserter = struct {
     fn uniqueArgBlock(self: *const Inserter, args: anytype) UniqueBlock {
         if (args.local == args.target) return .self_target;
         if (!self.localContainsRefcounted(args.local)) return .not_refcounted;
-        if (!self.isLocalUniqueHere(args.local)) return .not_proven_unique;
         if ((args.rc_effect.consume_args & args.bit) == 0) return .not_consumed;
         if ((args.preserve_consumed_args & args.bit) != 0) return .preserved;
         if (!args.owned.contains(args.local)) return .not_owned;
@@ -3590,6 +3589,11 @@ const Inserter = struct {
         if (self.groupSharesOtherOperand(args.locals, args.position, args.local)) {
             return .group_shares_operand;
         }
+        // Tested last on purpose. Every condition above is specific to this
+        // statement, while this one is a whole-procedure verdict, so ordering
+        // it here reports how many positions the statement-local conditions
+        // already accept and only the flow-insensitive verdict withholds.
+        if (!self.isLocalUniqueHere(args.local)) return .not_proven_unique;
         return .elided;
     }
 

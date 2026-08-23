@@ -1079,8 +1079,19 @@ const NonUniqueCause = enum {
     /// Another holder of the value is live, so it is not unique even though
     /// it was born unique.
     destroyed,
-    /// A parameter whose join writes can never all be unique.
-    param_blocked,
+    /// A join parameter whose local already carried a definition or a foreign
+    /// origin before the join, so the join writes are not its only definition.
+    param_predefined,
+    /// A join parameter one of whose incoming values has another live holder.
+    param_write_destroyed,
+    /// A join parameter one of whose incoming values is outside the analysis.
+    param_write_untracked,
+    /// A join parameter with no incoming writes at all.
+    param_no_writes,
+    /// A join parameter that is not blocked but never settled, because an
+    /// incoming write's value stayed non-unique. The blame belongs to that
+    /// value, which this walk follows rather than stopping here.
+    param_unsettled,
     /// The value is a procedure parameter, so a caller may hold it too.
     foreign_param,
     /// The local is defined more than once, or aliases two different sources.
@@ -1111,7 +1122,56 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         _: *const std.bit_set.DynamicBitSetUnmanaged,
     ) void {}
 } else struct {
+    /// Which of the join-parameter settling conditions blocked a parameter.
+    /// Recomputed from the facts rather than recorded during solving, so the
+    /// breakdown costs nothing when the report is off. `destroyed` is fixed
+    /// before the fixpoint runs, so the answer matches what blocked it.
+    fn paramBlockCause(
+        solver: *Solver,
+        uniqueness: *const Uniqueness,
+        origins: *const UniqueOriginFacts,
+        param: u32,
+    ) NonUniqueCause {
+        if (origins.static_foreign.isSet(param) or origins.has_def.isSet(param)) {
+            return .param_predefined;
+        }
+        var writes: u32 = 0;
+        var destroyed_write = false;
+        var untracked_write = false;
+        for (solver.unique_facts.items) |fact| switch (fact) {
+            .param_write => |write| {
+                const index = solver.domain.indexOf(write.param) orelse continue;
+                if (index != param) continue;
+                writes += 1;
+                if (solver.domain.indexOf(write.value)) |value| {
+                    if (uniqueness.destroyed.isSet(value)) destroyed_write = true;
+                } else untracked_write = true;
+            },
+            else => {},
+        };
+        if (writes == 0) return .param_no_writes;
+        if (untracked_write) return .param_write_untracked;
+        if (destroyed_write) return .param_write_destroyed;
+        return .param_predefined;
+    }
+
+    /// The first incoming join-parameter write whose value is still not
+    /// unique, which is what kept the parameter from settling.
+    fn firstNonUniqueWrite(solver: *Solver, uniqueness: *const Uniqueness, param: u32) ?u32 {
+        for (solver.unique_facts.items) |fact| switch (fact) {
+            .param_write => |write| {
+                const index = solver.domain.indexOf(write.param) orelse continue;
+                if (index != param) continue;
+                const value = solver.domain.indexOf(write.value) orelse continue;
+                if (!uniqueness.unique.isSet(value)) return @intCast(value);
+            },
+            else => {},
+        };
+        return null;
+    }
+
     fn cause(
+        solver: *Solver,
         uniqueness: *const Uniqueness,
         origins: *const UniqueOriginFacts,
         param_blocked: []const bool,
@@ -1120,7 +1180,12 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         value: u32,
     ) NonUniqueCause {
         if (uniqueness.born_unique.isSet(value)) return .destroyed;
-        if (param_is_param.isSet(value) and param_blocked[value]) return .param_blocked;
+        if (param_is_param.isSet(value)) {
+            if (param_blocked[value]) return paramBlockCause(solver, uniqueness, origins, value);
+            // Not blocked, yet the fixpoint never settled it, so one of its
+            // incoming writes never became unique.
+            if (firstNonUniqueWrite(solver, uniqueness, value) != null) return .param_unsettled;
+        }
         if (origins.static_foreign.isSet(value)) {
             return if (is_param.isSet(value)) .foreign_param else .multi_definition;
         }
@@ -1134,6 +1199,7 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
     /// alias along the way. Bounded by the chain length; alias edges point at
     /// earlier definitions, so the walk terminates.
     fn rootCause(
+        solver: *Solver,
         uniqueness: *const Uniqueness,
         origins: *const UniqueOriginFacts,
         param_blocked: []const bool,
@@ -1144,13 +1210,14 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         var current = value;
         var depth: u32 = 0;
         while (depth < 64) {
-            const reason = cause(uniqueness, origins, param_blocked, param_is_param, is_param, current);
-            if (reason != .alias_source_nonunique) return .{ .cause = reason, .depth = depth };
-            const source = origins.alias_source[current];
-            if (source == no_local or source == current) {
-                return .{ .cause = .alias_source_nonunique, .depth = depth };
-            }
-            current = source;
+            const reason = cause(solver, uniqueness, origins, param_blocked, param_is_param, is_param, current);
+            const next = switch (reason) {
+                .alias_source_nonunique => origins.alias_source[current],
+                .param_unsettled => firstNonUniqueWrite(solver, uniqueness, current) orelse no_local,
+                else => return .{ .cause = reason, .depth = depth },
+            };
+            if (next == no_local or next == current) return .{ .cause = reason, .depth = depth };
+            current = next;
             depth += 1;
         }
         return .{ .cause = .alias_source_nonunique, .depth = depth };
@@ -1179,6 +1246,47 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
                 if (solver.domain.indexOf(GuardedList.at(params, i))) |index| is_param.set(index);
             }
         }
+        // Defining statement per value, so the report can say what kind of
+        // construct produces the values the solver cannot prove unique.
+        const stmt_tag_count = @typeInfo(@typeInfo(LIR.CFStmt).@"union".tag_type.?).@"enum".fields.len;
+        var def_kind = solver.allocator.alloc(u8, solver.domain.arc_to_local.len) catch return;
+        defer solver.allocator.free(def_kind);
+        @memset(def_kind, 255);
+        var set_mode = solver.allocator.alloc(u8, solver.domain.arc_to_local.len) catch return;
+        defer solver.allocator.free(set_mode);
+        @memset(set_mode, 255);
+        var mode_counts = [_]u64{0} ** @typeInfo(LIR.SetLocalWriteMode).@"enum".fields.len;
+        for (0..solver.store.procSpecCount()) |proc_index| {
+            for (solver.proc_stmts[proc_index].items) |stmt_id| {
+                const stmt = solver.store.getCFStmt(stmt_id);
+                const target: ?LIR.LocalId = switch (stmt) {
+                    .assign_ref => |a| a.target,
+                    .assign_literal => |a| a.target,
+                    .assign_call => |a| a.target,
+                    .assign_call_erased => |a| a.target,
+                    .assign_packed_erased_fn => |a| a.target,
+                    .assign_low_level => |a| a.target,
+                    .assign_list => |a| a.target,
+                    .assign_struct => |a| a.target,
+                    .assign_tag => |a| a.target,
+                    .set_local => |a| blk: {
+                        if (solver.domain.indexOf(a.target)) |index| {
+                            set_mode[index] = @intFromEnum(a.mode);
+                        }
+                        break :blk a.target;
+                    },
+                    else => null,
+                };
+                if (target) |local| {
+                    if (solver.domain.indexOf(local)) |index| {
+                        def_kind[index] = @intCast(@intFromEnum(std.meta.activeTag(stmt)));
+                    }
+                }
+            }
+        }
+        var def_counts = [_]u64{0} ** stmt_tag_count;
+        var undefined_defs: u64 = 0;
+
         const field_count = @typeInfo(NonUniqueCause).@"enum".fields.len;
         var counts = [_]u64{0} ** field_count;
         var total: u64 = 0;
@@ -1202,8 +1310,17 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
                     const value = solver.domain.indexOf(arg) orelse continue;
                     if (uniqueness.unique.isSet(value)) continue;
                     total += 1;
-                    const root = rootCause(uniqueness, origins, param_blocked, param_is_param, &is_param, value);
+                    const root = rootCause(solver, uniqueness, origins, param_blocked, param_is_param, &is_param, value);
                     counts[@intFromEnum(root.cause)] += 1;
+                    var blame = value;
+                    var hops: u32 = 0;
+                    while (hops < root.depth) : (hops += 1) {
+                        const next = origins.alias_source[blame];
+                        if (next == no_local) break;
+                        blame = next;
+                    }
+                    if (def_kind[blame] == 255) undefined_defs += 1 else def_counts[def_kind[blame]] += 1;
+                    if (set_mode[blame] != 255) mode_counts[set_mode[blame]] += 1;
                     if (root.depth > max_depth) max_depth = root.depth;
                     depth_sum += root.depth;
                 }
@@ -1216,6 +1333,16 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
             if (count != 0) std.debug.print("  {s: <24} {d}\n", .{ field.name, count });
         }
         std.debug.print("  alias chain depth: max {d}, mean {d}\n", .{ max_depth, depth_sum / total });
+        std.debug.print("  -- defining statement of the blamed value --\n", .{});
+        inline for (@typeInfo(@typeInfo(LIR.CFStmt).@"union".tag_type.?).@"enum".fields) |field| {
+            const count = def_counts[field.value];
+            if (count != 0) std.debug.print("  def:{s: <20} {d}\n", .{ field.name, count });
+        }
+        if (undefined_defs != 0) std.debug.print("  def:{s: <20} {d}\n", .{ "(no defining stmt)", undefined_defs });
+        inline for (@typeInfo(LIR.SetLocalWriteMode).@"enum".fields) |field| {
+            const count = mode_counts[field.value];
+            if (count != 0) std.debug.print("  mode:{s: <19} {d}\n", .{ field.name, count });
+        }
     }
 };
 
