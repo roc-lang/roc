@@ -1548,16 +1548,15 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
         .layout = packages_layout,
     });
 
-    if (platform) |platform_idx| {
-        return try self.store.addHeader(.{ .app = .{
-            .platform_idx = platform_idx,
-            .provides = provided.collection,
-            .packages = packages,
-            .roc_version = try self.takeRocVersionField(packages, platform_idx),
-            .region = .{ .start = start, .end = self.pos },
-        } });
-    }
-    return try self.pushMalformed(AST.Header.Idx, .no_platform, start);
+    // An app that names no platform gets the built-in Echo platform, the same
+    // one a headerless app gets; its packages are its own.
+    return try self.store.addHeader(.{ .app = .{
+        .platform_idx = platform,
+        .provides = provided.collection,
+        .packages = packages,
+        .roc_version = try self.takeRocVersionField(packages, platform),
+        .region = .{ .start = start, .end = self.pos },
+    } });
 }
 
 const RequiresEntriesResult = union(enum) {

@@ -90,6 +90,7 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
 } else @import("watch");
 
 const cli_args = @import("cli_args.zig");
+const default_app = @import("default_app.zig");
 const install_store = @import("install.zig");
 const host_symbols = @import("host_symbols.zig");
 const roc_target = @import("target.zig");
@@ -110,6 +111,7 @@ const renderProblem = cli_context.renderProblem;
 comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
+        std.testing.refAllDecls(default_app);
         std.testing.refAllDecls(progress);
         std.testing.refAllDecls(targets_validator);
         std.testing.refAllDecls(target_selection);
@@ -2776,16 +2778,17 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Check if this is a default_app (headerless file with main!) before
-    // linking the platform host shim.
-    if (try readDefaultAppSource(ctx, args.path, .default_app)) |source| {
-        // Headerless default apps never hot reload; they just run once. The shared-memory
+    // Check whether this is a default app—a headerless file with main!, or an
+    // app header naming no platform—before linking the platform host shim.
+    if (try stageDefaultApp(ctx, args.path, .default_app)) |staged| {
+        var owned_staged = staged;
+        // Default apps never hot reload; they just run once. The shared-memory
         // shim is the run mechanism where the default platform runtime exists (Linux native,
         // or any cross-target run); elsewhere we use the plain run-once path.
         if (useDefaultAppSharedMemoryShim(args)) {
-            return rocRunDefaultAppSharedMemoryShim(ctx, args, source);
+            return rocRunDefaultAppSharedMemoryShim(ctx, args, &owned_staged);
         }
-        return rocRunDefaultApp(ctx, args, source);
+        return rocRunDefaultApp(ctx, args, &owned_staged);
     }
 
     if (args.opt == .dev and args.no_cache and !args.watch) {
@@ -3561,30 +3564,15 @@ fn finishCompiledRun(
     return finishRunTermination(ctx, exe_path, classifyNativeRunTermination(term), diagnostics);
 }
 
-/// How to classify a headerless file that failed to parse. A syntax error such
-/// as an unbalanced paren swallows every declaration after it, `main!`
-/// included, so such a file cannot be classified reliably.
-const UnparsableHeaderless = enum {
-    /// Report it as not a default app. `roc check` and `roc build` use this:
-    /// their plain-module paths already report the syntax errors against the
-    /// user's own file.
-    not_default_app,
-    /// Claim it as a default app anyway. `roc run` uses this: its staged-app
-    /// path remaps diagnostics back to the user's file, whereas falling
-    /// through ends in a misleading "expected app header" about a file that
-    /// never had a header to begin with.
-    default_app,
-};
-
-/// Check if a file is a default_app (headerless file with a main! function).
-/// On success, returns the file source (caller owns the allocation).
-/// Returns null if the file is not a default_app; `unparsable` decides which
-/// answer a headerless file that failed to parse gets.
-fn readDefaultAppSource(
+/// Check whether a file is a default app: a headerless file with a `main!`
+/// function, or an `app` header that names no platform.
+/// On success, returns the staged app (caller owns it).
+/// Returns null if the file is not a default app.
+fn stageDefaultApp(
     ctx: *CliCtx,
     file_path: []const u8,
-    unparsable: UnparsableHeaderless,
-) std.mem.Allocator.Error!?[]const u8 {
+    unparsable: default_app.UnparsableHeaderless,
+) std.mem.Allocator.Error!?default_app.Staged {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
     const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -3624,70 +3612,29 @@ fn readDefaultAppSource(
         => return null,
     };
 
-    const module_name = base.module_path.getModuleNameAlloc(ctx.arena, file_path) catch |err| switch (err) {
-        error.OutOfMemory => {
-            ctx.gpa.free(source);
-            return error.OutOfMemory;
-        },
+    defer ctx.gpa.free(source);
+
+    // Relative package paths in the header are written relative to the user's
+    // file, so staging needs that directory as an absolute path: the staged
+    // copy it rewrites them for lives in a staging directory elsewhere.
+    const source_dir_abs = absolutePathFromCwd(ctx, std.fs.path.dirname(file_path) orelse ".") catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
     };
+    defer ctx.gpa.free(source_dir_abs);
 
-    var env = ModuleEnv.init(ctx.gpa, source) catch |err| switch (err) {
-        error.OutOfMemory => {
-            ctx.gpa.free(source);
-            return error.OutOfMemory;
-        },
-    };
-    defer env.deinit();
-    env.common.source = source;
-    env.module_name = module_name;
-
-    const ast = parse.file(ctx.gpa, &env.common) catch |err| switch (err) {
-        error.OutOfMemory => {
-            ctx.gpa.free(source);
-            return error.OutOfMemory;
-        },
-    };
-    defer ast.deinit();
-
-    const file = ast.store.getFile();
-    const header = ast.store.getHeader(file.header);
-
-    // Only headerless files (type_module) can be default apps
-    if (header != .type_module) {
-        ctx.gpa.free(source);
-        return null;
-    }
-
-    if (!ast.hasMainBangDecl()) {
-        const may_still_be_default_app = unparsable == .default_app and ast.hasErrors();
-        if (!may_still_be_default_app) {
-            ctx.gpa.free(source);
-            return null;
-        }
-    }
-
-    return source;
+    return default_app.stage(ctx.gpa, source_dir_abs, source, unparsable);
 }
 
-/// State for the CLI echo platform's virtual I/O context.
-/// Intercepts reads for the synthetic app source and embedded platform files.
-const default_app_run_header =
-    "app [main!] { pf: platform \"./.roc_echo_platform/main.roc\" }\n\n" ++
-    "import pf.Echo\n\n" ++
-    "echo! = |msg| Echo.line!(msg)\n\n";
-
-fn writeDefaultAppSyntheticRunSource(ctx: *CliCtx, app_path: []const u8, original_source: []const u8) CliMainError!void {
-    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ default_app_run_header, original_source });
-    defer ctx.gpa.free(synthetic_source);
-
-    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+fn writeDefaultAppSyntheticRunSource(ctx: *CliCtx, app_path: []const u8, staged: *const default_app.Staged) CliMainError!void {
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = staged.synthetic_source });
 }
 
-/// Run a default_app (headerless file with main! and echo platform).
-/// This compiles the app through checked artifacts and executes the resulting
-/// LIR image with the echo platform host function.
-fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) CliMainError!void {
-    defer ctx.gpa.free(original_source);
+/// Run a default app (a file that gets the echo platform) staged into a
+/// synthetic app. This compiles the app through checked artifacts and executes
+/// the resulting LIR image with the echo platform host function.
+fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, staged: *default_app.Staged) CliMainError!void {
+    defer staged.deinit(ctx.gpa);
 
     // Write synthetic app + echo platform files into a unique temp directory.
     // The coordinator reads platform/module files from disk, so the synthetic
@@ -3700,7 +3647,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     };
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
-    const platform_dir = std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" }) catch return error.OutOfMemory;
+    const platform_dir = std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name }) catch return error.OutOfMemory;
     std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir) catch |err| {
         ctx.io.stderr().print("error: failed to create platform dir {s}: {}\n", .{ platform_dir, err }) catch {};
         return err;
@@ -3710,7 +3657,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     const platform_main_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" }) catch return error.OutOfMemory;
     const echo_module_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" }) catch return error.OutOfMemory;
 
-    writeDefaultAppSyntheticRunSource(ctx, app_path, original_source) catch |err| {
+    writeDefaultAppSyntheticRunSource(ctx, app_path, staged) catch |err| {
         ctx.io.stderr().print("error: failed to write {s}: {}\n", .{ app_path, err }) catch {};
         return err;
     };
@@ -3731,7 +3678,12 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         ctx,
         app_path,
         original_source_dir,
-        .{ .original_path = args.path, .original_source = original_source },
+        .{
+            .original_path = args.path,
+            .original_source = staged.original_source,
+            .header_len = staged.header_len,
+            .header_lines = staged.header_lines,
+        },
         args.max_threads,
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
@@ -3769,8 +3721,8 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     exitOnWarnings(ctx, shm_result.diagnostics.warnings);
 }
 
-fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []const u8) CliMainError!void {
-    defer ctx.gpa.free(original_source);
+fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged: *default_app.Staged) CliMainError!void {
+    defer staged.deinit(ctx.gpa);
 
     const native_target = roc_target.host_cpu.nativeTarget();
     const default_target = defaultRunShimTarget(native_target);
@@ -3788,7 +3740,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
 
     if (selected_target.toOsTag() != .linux) {
         try ctx.io.stderr().print(
-            "Error: shared-memory dev runs for headerless default apps are currently supported only on Linux targets.\n",
+            "Error: shared-memory dev runs for default apps are currently supported only on Linux targets.\n",
             .{},
         );
         return error.UnsupportedTarget;
@@ -3847,14 +3799,14 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
     };
 
-    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
+    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
 
     const app_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "main.roc" });
     const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
     const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
 
-    try writeDefaultAppSyntheticRunSource(ctx, app_path, original_source);
+    try writeDefaultAppSyntheticRunSource(ctx, app_path, staged);
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.run_shim_platform_main_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
@@ -3868,7 +3820,12 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         .{ .dev_run_image = selected_target },
         app_path,
         original_source_dir,
-        .{ .original_path = args.path, .original_source = original_source },
+        .{
+            .original_path = args.path,
+            .original_source = staged.original_source,
+            .header_len = staged.header_len,
+            .header_lines = staged.header_lines,
+        },
         args.max_threads,
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
@@ -4001,7 +3958,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         };
     }
 
-    // Headerless default apps never hot reload—they compile through throwaway synthetic
+    // Default apps never hot reload—they compile through throwaway synthetic
     // source files, so there is nothing stable to reload. They just run once.
     const internal_static_data = successfulInternalStaticData(&lowered_result, "default app run");
     const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, false);
@@ -5995,7 +5952,7 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
         DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
 }
 
-/// The Linux target the headerless default app runs on, keeping the CPU level
+/// The Linux target the default app runs on, keeping the CPU level
 /// of the native target it came from.
 ///
 /// Default apps run on the freestanding default platform: raw syscalls, its own
@@ -6208,14 +6165,19 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         return error.InvalidSharedMemory;
     }
 
-    var original_source_owned: ?[]const u8 = null;
-    defer if (original_source_owned) |source| ctx.gpa.free(source);
+    var staged_owned: ?default_app.Staged = null;
+    defer if (staged_owned) |*staged| staged.deinit(ctx.gpa);
     const source_rewrite: ?HotReloadSourceRewrite = if (args.synthetic_source_path) |source_path| blk: {
         const synthetic_output_path = args.synthetic_output_path orelse return error.InvalidArguments;
         const source_dir_override = args.source_dir_override orelse return error.InvalidArguments;
-        const max_source_size = 256 * 1024 * 1024;
-        original_source_owned = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, source_path, ctx.gpa, .limited(max_source_size));
-        try writeDefaultAppSyntheticRunSource(ctx, synthetic_output_path, original_source_owned.?);
+        staged_owned = (try stageDefaultApp(ctx, source_path, .not_default_app)) orelse {
+            try ctx.io.stderr().print(
+                "Error: {s} no longer runs on the default platform; stop and restart the run.\n",
+                .{source_path},
+            );
+            return error.InvalidArguments;
+        };
+        try writeDefaultAppSyntheticRunSource(ctx, synthetic_output_path, &staged_owned.?);
         break :blk .{
             .source_path = source_path,
             .synthetic_app_path = synthetic_output_path,
@@ -6234,7 +6196,9 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         if (source_rewrite) |rewrite| rewrite.source_dir_override else null,
         if (source_rewrite) |rewrite| .{
             .original_path = rewrite.source_path,
-            .original_source = original_source_owned.?,
+            .original_source = staged_owned.?.original_source,
+            .header_len = staged_owned.?.header_len,
+            .header_lines = staged_owned.?.header_lines,
         } else null,
         args.max_threads,
         .dev,
@@ -6628,11 +6592,15 @@ fn evaluateLirImageEntrypoint(
     };
 }
 
-/// Source mapping for a headerless default app staged into a temp dir: the
+/// Source mapping for a default app staged into a temp dir: the
 /// core remaps diagnostics from the synthetic file back to the user's file.
 const SyntheticDefaultAppMapping = struct {
     original_path: []const u8,
     original_source: []const u8,
+    /// Bytes and lines the staging inserted before the user's body; see
+    /// `default_app.Staged`.
+    header_len: usize,
+    header_lines: u32,
 };
 
 const PlatformEntrypointArtifact = union(enum) {
@@ -6672,8 +6640,8 @@ fn lowerLirWithBuildEnv(
         build_env.setSyntheticRootSourceMappingWithLineOffset(
             mapping.original_path,
             mapping.original_source,
-            default_app_run_header.len,
-            countNewlines(default_app_run_header),
+            mapping.header_len,
+            mapping.header_lines,
         );
     }
 
@@ -8269,9 +8237,10 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         return error.UnsupportedTarget;
     }
 
-    // Headerless apps build through a synthetic default platform.
-    if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source| {
-        return rocBuildDefaultApp(ctx, args, source);
+    // Default apps build through a synthetic default platform.
+    if (try stageDefaultApp(ctx, args.path, .not_default_app)) |staged| {
+        var owned_staged = staged;
+        return rocBuildDefaultApp(ctx, args, &owned_staged);
     }
 
     // Select build path based on optimization level
@@ -8282,8 +8251,8 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 }
 
-fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: []const u8) CliMainError!BuildResult {
-    defer ctx.gpa.free(original_source);
+fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, staged: *default_app.Staged) CliMainError!BuildResult {
+    defer staged.deinit(ctx.gpa);
 
     if (defaultBuildTarget(args).toOsTag() == .openbsd) {
         return ctx.fail(.{ .unsupported_default_platform_target = .{
@@ -8305,7 +8274,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     }
     defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
-    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
+    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
 
     const app_filename = std.fs.path.basename(args.path);
@@ -8313,14 +8282,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
     const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
 
-    const header = default_app_run_header;
-    const normalized_original_source = try base.source_utils.normalizeLineEndingsAlloc(ctx.gpa, original_source);
-    defer if (normalized_original_source.allocated) ctx.gpa.free(normalized_original_source.data);
-
-    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ header, normalized_original_source.data });
-    defer ctx.gpa.free(synthetic_source);
-
-    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = staged.synthetic_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = defaultBuildPlatformSource(args) });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
@@ -8329,9 +8291,9 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     synthetic_args.synthetic_default_platform = true;
     synthetic_args.source_dir_override = std.fs.path.dirname(args.path) orelse ".";
     synthetic_args.synthetic_root_original_path = args.path;
-    synthetic_args.synthetic_root_original_source = normalized_original_source.data;
-    synthetic_args.synthetic_root_header_len = header.len;
-    synthetic_args.synthetic_root_header_lines = countNewlines(header);
+    synthetic_args.synthetic_root_original_source = staged.original_source;
+    synthetic_args.synthetic_root_header_len = staged.header_len;
+    synthetic_args.synthetic_root_header_lines = staged.header_lines;
     if (synthetic_args.output == null) {
         synthetic_args.output = args.synthetic_output_basename orelse try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
     }
@@ -16407,14 +16369,6 @@ const DrainedReport = struct {
     }
 };
 
-fn countNewlines(bytes: []const u8) u32 {
-    var count: u32 = 0;
-    for (bytes) |byte| {
-        if (byte == '\n') count += 1;
-    }
-    return count;
-}
-
 fn remapDefaultAppSourceRegion(
     allocator: Allocator,
     region: *reporting.SourceCodeDisplayRegion,
@@ -16422,9 +16376,12 @@ fn remapDefaultAppSourceRegion(
     original_source: []const u8,
     original_line_starts: []const u32,
     synthetic_header_lines: u32,
+    staged_app_path: ?[]const u8,
 ) Allocator.Error!void {
+    if (!defaultAppElementNamesStagedApp(region.filename, staged_app_path)) return;
     if (region.start_line <= synthetic_header_lines or region.end_line <= synthetic_header_lines) return;
     if (original_line_starts.len == 0) return;
+    if (region.end_line - synthetic_header_lines > original_line_starts.len) return;
 
     const original_start_line = region.start_line - synthetic_header_lines;
     const original_end_line = region.end_line - synthetic_header_lines;
@@ -16449,6 +16406,17 @@ fn remapDefaultAppSourceRegion(
     region.end_line = original_end_line;
 }
 
+/// Whether a report element belongs to the staged app: either the caller
+/// already matched the module it came from (`staged_app_path` is null), or the
+/// element names the staged file itself, which is how reports the workspace
+/// emitted before any module was registered—header parsing, dependency
+/// resolution—are attributed.
+fn defaultAppElementNamesStagedApp(filename: ?[]const u8, staged_app_path: ?[]const u8) bool {
+    const staged = staged_app_path orelse return true;
+    const named = filename orelse return false;
+    return std.mem.eql(u8, named, staged);
+}
+
 fn remapDefaultAppDocumentElement(
     allocator: Allocator,
     element: *reporting.DocumentElement,
@@ -16456,6 +16424,7 @@ fn remapDefaultAppDocumentElement(
     original_source: []const u8,
     original_line_starts: []const u32,
     synthetic_header_lines: u32,
+    staged_app_path: ?[]const u8,
 ) Allocator.Error!void {
     if (element.* == .source_code_region) {
         try remapDefaultAppSourceRegion(
@@ -16465,10 +16434,12 @@ fn remapDefaultAppDocumentElement(
             original_source,
             original_line_starts,
             synthetic_header_lines,
+            staged_app_path,
         );
     } else if (element.* == .source_code_with_underlines) {
         const underlines = &element.source_code_with_underlines;
         const old_start_line = underlines.display_region.start_line;
+        const old_filename_matched = defaultAppElementNamesStagedApp(underlines.display_region.filename, staged_app_path);
         try remapDefaultAppSourceRegion(
             allocator,
             &underlines.display_region,
@@ -16476,7 +16447,9 @@ fn remapDefaultAppDocumentElement(
             original_source,
             original_line_starts,
             synthetic_header_lines,
+            staged_app_path,
         );
+        if (!old_filename_matched) return;
         if (old_start_line <= synthetic_header_lines) return;
         for (underlines.underline_regions) |*underline| {
             if (underline.start_line > synthetic_header_lines) {
@@ -16488,6 +16461,7 @@ fn remapDefaultAppDocumentElement(
         }
     } else if (element.* == .source_location) {
         const location = &element.source_location;
+        if (!defaultAppElementNamesStagedApp(location.filename, staged_app_path)) return;
         if (location.line <= synthetic_header_lines) return;
 
         const filename = try allocator.dupe(u8, original_path);
@@ -16509,12 +16483,18 @@ fn remapDefaultAppCheckReports(
     defer original_line_starts.deinit(ctx.gpa);
 
     for (check_result.reports) |*module| {
-        if (!std.mem.eql(u8, module.file_path, synthetic_app_path)) continue;
+        const module_is_staged_app = std.mem.eql(u8, module.file_path, synthetic_app_path);
+        // A report the workspace emitted before any module was registered has
+        // no module path of its own; the file its regions name is what says
+        // whether it belongs to the staged app.
+        if (!module_is_staged_app and module.file_path.len != 0) continue;
 
-        const remapped_file_path = try ctx.gpa.dupe(u8, original_path);
-        errdefer ctx.gpa.free(remapped_file_path);
-        ctx.gpa.free(module.file_path);
-        module.file_path = remapped_file_path;
+        if (module_is_staged_app) {
+            const remapped_file_path = try ctx.gpa.dupe(u8, original_path);
+            errdefer ctx.gpa.free(remapped_file_path);
+            ctx.gpa.free(module.file_path);
+            module.file_path = remapped_file_path;
+        }
 
         for (module.reports) |*report| {
             for (report.document.elements.items) |*element| {
@@ -16525,6 +16505,7 @@ fn remapDefaultAppCheckReports(
                     original_source,
                     original_line_starts.items.items,
                     synthetic_header_lines,
+                    if (module_is_staged_app) null else synthetic_app_path,
                 );
             }
         }
@@ -17014,9 +16995,9 @@ fn writeDefaultAppCheckSourceFiles(
     ctx: *CliCtx,
     temp_dir: []const u8,
     original_path: []const u8,
-    original_source: []const u8,
+    staged: *const default_app.Staged,
 ) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!DefaultAppCheckSourceFiles {
-    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, ".roc_echo_platform" });
+    const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
 
     const app_filename = std.fs.path.basename(original_path);
@@ -17024,33 +17005,30 @@ fn writeDefaultAppCheckSourceFiles(
     const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
     const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
 
-    const synthetic_source = try std.mem.concat(ctx.gpa, u8, &.{ default_app_run_header, original_source });
-    defer ctx.gpa.free(synthetic_source);
-
-    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = synthetic_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = app_path, .data = staged.synthetic_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
     return .{
         .app_path = app_path,
-        .header_lines = countNewlines(default_app_run_header),
+        .header_lines = staged.header_lines,
     };
 }
 
 fn rocCheckDefaultApp(
     ctx: *CliCtx,
     args: cli_args.CheckArgs,
-    original_source: []const u8,
+    staged: *default_app.Staged,
     cache_config: CacheConfig,
 ) RocCheckError!CheckResult {
-    defer ctx.gpa.free(original_source);
+    defer staged.deinit(ctx.gpa);
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
-    const files = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, original_source);
+    const files = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, staged);
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
 
     var check_result = try checkFileWithBuildEnv(
@@ -17073,7 +17051,7 @@ fn rocCheckDefaultApp(
         &check_result,
         files.app_path,
         args.path,
-        original_source,
+        staged.original_source,
         files.header_lines,
     );
 
@@ -17092,18 +17070,18 @@ const DefaultAppCheckResultWithBuildEnv = struct {
 fn rocCheckDefaultAppPreserved(
     ctx: *CliCtx,
     args: cli_args.CheckArgs,
-    original_source: []const u8,
+    staged: *default_app.Staged,
     cache_config: CacheConfig,
     track_watch_inputs: bool,
 ) RocCheckError!DefaultAppCheckResultWithBuildEnv {
-    defer ctx.gpa.free(original_source);
+    defer staged.deinit(ctx.gpa);
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
-    const files = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, original_source);
+    const files = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, staged);
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
 
     var result_with_env = try checkFileWithBuildEnvPreserved(
@@ -17127,7 +17105,7 @@ fn rocCheckDefaultAppPreserved(
         &result_with_env.check_result,
         files.app_path,
         args.path,
-        original_source,
+        staged.original_source,
         files.header_lines,
     );
 
@@ -17187,11 +17165,12 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         var extra_buf: [2][]const u8 = undefined;
         const extra_paths = appendExtraWatchPaths(.{ .check = args }, &extra_buf);
 
-        if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source| {
+        if (try stageDefaultApp(ctx, args.path, .not_default_app)) |staged| {
+            var owned_staged = staged;
             var default_result = rocCheckDefaultAppPreserved(
                 ctx,
                 args,
-                source,
+                &owned_staged,
                 cache_config,
                 true,
             ) catch |err| {
@@ -17245,8 +17224,9 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         return finishRocCheck(ctx, args, stdout, stderr, timer_start_ns, check_result);
     }
 
-    var check_result = if (try readDefaultAppSource(ctx, args.path, .not_default_app)) |source|
-        rocCheckDefaultApp(ctx, args, source, cache_config) catch |err| {
+    var staged_check = try stageDefaultApp(ctx, args.path, .not_default_app);
+    var check_result = if (staged_check != null)
+        rocCheckDefaultApp(ctx, args, &staged_check.?, cache_config) catch |err| {
             reporter.fail();
             return handleProcessFileError(err, stderr, args.path);
         }

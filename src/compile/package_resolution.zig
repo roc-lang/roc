@@ -1500,22 +1500,27 @@ pub fn scanParsedHeader(
 
     const kind: HeaderKind = switch (header) {
         .app => |a| blk: {
-            const platform_field = ast.store.getRecordField(a.platform_idx);
-            if (platform_field.value) |value_expr| {
-                const platform_expr = ast.store.getExpr(value_expr);
-                if (platform_expr == .string) {
-                    const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
-                    try appendScannedDep(allocator, &deps, ast.resolve(platform_field.name), spec, true);
-                } else if (platform_expr == .ident) {
-                    const ident = platform_expr.ident;
-                    if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
-                    const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
-                    try appendCompilerOwnedScannedDep(allocator, &deps, ast.resolve(platform_field.name), platform);
+            // An app header with no platform entry names the built-in Echo
+            // platform, which the default-app staging supplies; there is no
+            // platform edge to scan here.
+            if (a.platform_idx) |platform_idx| {
+                const platform_field = ast.store.getRecordField(platform_idx);
+                if (platform_field.value) |value_expr| {
+                    const platform_expr = ast.store.getExpr(value_expr);
+                    if (platform_expr == .string) {
+                        const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
+                        try appendScannedDep(allocator, &deps, ast.resolve(platform_field.name), spec, true);
+                    } else if (platform_expr == .ident) {
+                        const ident = platform_expr.ident;
+                        if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
+                        const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
+                        try appendCompilerOwnedScannedDep(allocator, &deps, ast.resolve(platform_field.name), platform);
+                    } else {
+                        return error.HeaderParseFailed;
+                    }
                 } else {
                     return error.HeaderParseFailed;
                 }
-            } else {
-                return error.HeaderParseFailed;
             }
             // The packages collection includes the platform field, which is
             // already recorded above as the platform edge, and the compiler
