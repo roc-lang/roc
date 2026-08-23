@@ -4634,6 +4634,28 @@ pub fn build(b: *std.Build) void {
         build_wasm_str_concat_join_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_join_app.step);
 
+        const build_wasm_str_interp_leading_literal_app = b.addRunArtifact(roc_exe);
+        build_wasm_str_interp_leading_literal_app.addArgs(&.{
+            "build",
+            "test/wasm/str_interp_leading_literal_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/str_interp_leading_literal_static_lib_app.wasm",
+        });
+        build_wasm_str_interp_leading_literal_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_interp_leading_literal_app.step);
+
+        const build_wasm_str_concat_unique_reuse_app = b.addRunArtifact(roc_exe);
+        build_wasm_str_concat_unique_reuse_app.addArgs(&.{
+            "build",
+            "test/wasm/str_concat_unique_reuse_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/str_concat_unique_reuse_static_lib_app.wasm",
+        });
+        build_wasm_str_concat_unique_reuse_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_unique_reuse_app.step);
+
         // End-to-end cart gate for the minted-iterator `for`-loop drive. The
         // size build covers the LLVM cart path, and the dev build covers wasm
         // composite loop-state rebinding for recursive generated iterators.
@@ -4831,6 +4853,36 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_str_concat_join_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_join_test.step);
+
+            const run_wasm_str_interp_leading_literal_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_str_interp_leading_literal_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/str_interp_leading_literal_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                "--min-allocs",
+                "1",
+                "--max-allocs",
+                "2",
+            });
+            run_wasm_str_interp_leading_literal_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_interp_leading_literal_test.step);
+
+            const run_wasm_str_concat_unique_reuse_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_str_concat_unique_reuse_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/str_concat_unique_reuse_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                "--min-allocs",
+                "1",
+                "--max-allocs",
+                "1",
+            });
+            run_wasm_str_concat_unique_reuse_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_unique_reuse_test.step);
 
             // Boot-and-play the minted-iterator `for`-loop cart; "ok" means every
             // inlined `for` over append/map/concat/chained minted chains ran to
