@@ -45,6 +45,18 @@ pub const Kind = enum {
     platformless_app,
 };
 
+/// How to classify a headerless file that failed to parse. A syntax error can
+/// swallow every declaration after it, including `main!`, so such a file
+/// cannot always be classified from the parsed declarations alone.
+pub const UnparsableHeaderless = enum {
+    /// Report it as not a default app. The plain-module paths used by `check`
+    /// and `build` already report syntax errors against the user's file.
+    not_default_app,
+    /// Stage it as a default app. `run` needs the staged path so diagnostics
+    /// are remapped to the user's file instead of reporting a missing header.
+    default_app,
+};
+
 /// A staged default app: what the compiler compiles, plus what it takes to
 /// map its diagnostics back to the file the user wrote.
 pub const Staged = struct {
@@ -77,7 +89,12 @@ pub const Error = Allocator.Error;
 /// is built.
 ///
 /// Takes ownership of nothing; the returned `Staged` owns its own buffers.
-pub fn stage(gpa: Allocator, source_dir: []const u8, source: []const u8) Error!?Staged {
+pub fn stage(
+    gpa: Allocator,
+    source_dir: []const u8,
+    source: []const u8,
+    unparsable: UnparsableHeaderless,
+) Error!?Staged {
     const normalized = try base.source_utils.normalizeLineEndingsAlloc(gpa, source);
     const original_source = if (normalized.allocated) normalized.data else try gpa.dupe(u8, normalized.data);
     errdefer gpa.free(original_source);
@@ -94,13 +111,12 @@ pub fn stage(gpa: Allocator, source_dir: []const u8, source: []const u8) Error!?
 
     switch (header) {
         .type_module => {
-            if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
-                gpa.free(original_source);
-                return null;
-            }
             if (!ast.hasMainBangDecl()) {
-                gpa.free(original_source);
-                return null;
+                const has_errors = ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0;
+                if (unparsable != .default_app or !has_errors) {
+                    gpa.free(original_source);
+                    return null;
+                }
             }
             const synthetic_source = try std.mem.concat(gpa, u8, &.{ headerless_wiring, original_source });
             return .{
@@ -269,7 +285,7 @@ fn countNewlines(text: []const u8) u32 {
 const testing = std.testing;
 
 test "stage: a headerless file with main! gets the echo platform header" {
-    var staged = (try stage(testing.allocator, "/tmp", "main! = |_| echo!(\"hi\")\n")).?;
+    var staged = (try stage(testing.allocator, "/tmp", "main! = |_| echo!(\"hi\")\n", .not_default_app)).?;
     defer staged.deinit(testing.allocator);
 
     try testing.expectEqual(Kind.headerless, staged.kind);
@@ -278,7 +294,7 @@ test "stage: a headerless file with main! gets the echo platform header" {
 }
 
 test "stage: a file with no main! is not a default app" {
-    try testing.expect(try stage(testing.allocator, "/tmp", "x = 1\n") == null);
+    try testing.expect(try stage(testing.allocator, "/tmp", "x = 1\n", .not_default_app) == null);
 }
 
 test "stage: an app header naming a platform is not a default app" {
@@ -288,7 +304,7 @@ test "stage: an app header naming a platform is not a default app" {
         \\main! = |_| Ok({})
         \\
     ;
-    try testing.expect(try stage(testing.allocator, "/tmp", source) == null);
+    try testing.expect(try stage(testing.allocator, "/tmp", source, .not_default_app) == null);
 }
 
 test "stage: a platform-less app header gets the echo platform and keeps its packages" {
@@ -305,7 +321,7 @@ test "stage: a platform-less app header gets the echo platform and keeps its pac
         \\}
         \\
     ;
-    var staged = (try stage(testing.allocator, "/tmp", source)).?;
+    var staged = (try stage(testing.allocator, "/tmp", source, .not_default_app)).?;
     defer staged.deinit(testing.allocator);
 
     try testing.expectEqual(Kind.platformless_app, staged.kind);
@@ -330,7 +346,7 @@ test "stage: a relative package path is rewritten for the staging directory" {
         \\main! = |_| Ok({})
         \\
     ;
-    var staged = (try stage(testing.allocator, "/home/user/proj", source)).?;
+    var staged = (try stage(testing.allocator, "/home/user/proj", source, .not_default_app)).?;
     defer staged.deinit(testing.allocator);
 
     try testing.expect(std.mem.find(u8, staged.synthetic_source, "helper: \"/home/user/proj/helper/main.roc\"") != null);
@@ -343,7 +359,7 @@ test "stage: the platform alias avoids a package that already uses it" {
         \\main! = |_| Ok({})
         \\
     ;
-    var staged = (try stage(testing.allocator, "/tmp", source)).?;
+    var staged = (try stage(testing.allocator, "/tmp", source, .not_default_app)).?;
     defer staged.deinit(testing.allocator);
 
     try testing.expect(std.mem.startsWith(u8, staged.synthetic_source, "app [main!] { pf: \"https://example.com/pf.tar.zst\", pf2: platform "));

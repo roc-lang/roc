@@ -59,6 +59,10 @@ const Allocator = std.mem.Allocator;
 /// Errors that can occur while constructing the ARC solver's internal tables.
 pub const SolveError = std.mem.Allocator.Error;
 
+/// Debug-only count of exact per-resource outcome work rows, used to pin the
+/// polynomial state domain in scaling tests.
+pub var outcome_solver_iterations: u64 = 0;
+
 const no_local: u32 = std.math.maxInt(u32);
 
 /// Presence-bit condition guarding a payload local whose storage may not be
@@ -99,6 +103,16 @@ pub const Solution = struct {
     alias_source: []u32,
     /// Solved ownership signature per proc.
     sigs: []arc_sig.RcSig,
+    /// Flat complete outcome rows referenced by `RcSig.outcomes`.
+    outcomes: []arc_sig.Outcome,
+    /// Optional outcome-conditioned calling convention available for each
+    /// source proc. Base signatures remain unconditional; eligible direct
+    /// call sites explicitly demand one of these spans and therefore select
+    /// a separately emitted variant.
+    available_outcome_spans: []arc_sig.OutcomeSpan,
+    /// Entry-parameter units that escape through this exact return/jump
+    /// boundary under a proved outcome, indexed by ownership-neutral stmt.
+    restitution_params_by_stmt: []arc_sig.ParamMask,
     /// Parameter positions whose values can reach a consuming low-level
     /// runtime uniqueness check in this proc's ownership-neutral body.
     unique_seed_masks: []arc_sig.ParamMask,
@@ -150,6 +164,9 @@ pub const Solution = struct {
         self.allocator.free(self.leader);
         self.allocator.free(self.alias_source);
         self.allocator.free(self.sigs);
+        self.allocator.free(self.outcomes);
+        self.allocator.free(self.available_outcome_spans);
+        self.allocator.free(self.restitution_params_by_stmt);
         self.allocator.free(self.unique_seed_masks);
         self.allocator.free(self.join_body_offsets);
         self.allocator.free(self.join_body_lens);
@@ -254,17 +271,29 @@ pub const Solution = struct {
     }
 
     pub fn sigTable(self: *const Solution) arc_sig.SigTable {
-        return .{ .sigs = self.sigs };
+        return .{ .sigs = self.sigs, .outcomes = self.outcomes };
     }
 
     pub fn sigOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.RcSig {
         return self.sigTable().get(proc);
     }
 
+    pub fn availableOutcomeSpanOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
+        const index = @intFromEnum(proc);
+        if (index >= self.available_outcome_spans.len) return .empty;
+        return self.available_outcome_spans[index];
+    }
+
     pub fn uniqueSeedMaskOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.ParamMask {
         const index = @intFromEnum(proc);
         if (index >= self.unique_seed_masks.len) solveInvariant("ARC uniqueness-seed lookup exceeded the solved proc table");
         return self.unique_seed_masks[index];
+    }
+
+    pub fn restitutionParamsAt(self: *const Solution, stmt: LIR.CFStmtId) arc_sig.ParamMask {
+        const index = @intFromEnum(stmt);
+        if (index >= self.restitution_params_by_stmt.len) return 0;
+        return self.restitution_params_by_stmt[index];
     }
 
     pub fn joinBodiesOf(self: *const Solution, proc: LIR.LirProcSpecId) []const JoinBody {
@@ -515,6 +544,7 @@ const Solver = struct {
     store: *const LirStore,
     rc_local: []const bool,
     boxy_rc_descs: []const ?LIR.BoxyDescRef,
+    consume_dead_boxes: bool,
     domain: *const ArcLocalDomain,
     sigs: []arc_sig.RcSig,
     unique_seed_masks: []arc_sig.ParamMask,
@@ -570,13 +600,20 @@ const Solver = struct {
     stack: std.ArrayList(LIR.CFStmtId),
 };
 
+fn inferenceRcEffect(solver: *const Solver, op: anytype, declared: anytype) @TypeOf(declared) {
+    if (!solver.consume_dead_boxes and op == .box_unbox) return op.arcBorrowedResultVariant().?.rcEffect();
+    return op.arcInferenceRcEffect(declared);
+}
+
 /// Solves binding modes and proc signatures for every local in the store.
 pub fn solve(
     allocator: Allocator,
     store: *const LirStore,
+    layouts: *const layout_mod.Store,
     rc_local: []const bool,
     boxy_rc_descs: []const ?LIR.BoxyDescRef,
     roots: []const LIR.LirProcSpecId,
+    consume_dead_boxes: bool,
 ) SolveError!Solution {
     const local_count = store.localCount();
     const proc_count = store.procSpecCount();
@@ -592,6 +629,7 @@ pub fn solve(
         .store = store,
         .rc_local = rc_local,
         .boxy_rc_descs = boxy_rc_descs,
+        .consume_dead_boxes = consume_dead_boxes,
         .domain = &domain,
         .sigs = try allocator.alloc(arc_sig.RcSig, proc_count),
         .unique_seed_masks = try allocator.alloc(arc_sig.ParamMask, proc_count),
@@ -784,7 +822,7 @@ pub fn solve(
         if (dense_uniqueness.destroyed.isSet(arc_index)) unique_destroyed.set(local);
     }
     if (builtin.mode == .Debug) {
-        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null, null, null);
+        var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null, null, null, solver.consume_dead_boxes);
         defer independently_unique.deinit(allocator);
         if (!unique.eql(independently_unique.unique) or !unique_destroyed.eql(independently_unique.destroyed)) {
             solveInvariant("typed uniqueness facts disagreed with independent LIR analysis");
@@ -853,6 +891,9 @@ pub fn solve(
         .leader = leader,
         .alias_source = alias_source,
         .sigs = solver.sigs,
+        .outcomes = &.{},
+        .available_outcome_spans = try allocator.alloc(arc_sig.OutcomeSpan, proc_count),
+        .restitution_params_by_stmt = try allocator.alloc(arc_sig.ParamMask, store.cfStmtCount()),
         .unique_seed_masks = solver.unique_seed_masks,
         .join_body_offsets = join_body_offsets,
         .join_body_lens = join_body_lens,
@@ -871,6 +912,8 @@ pub fn solve(
         .unique_destroyed = unique_destroyed,
         .pinned = solver.pinned,
     };
+    @memset(solution.restitution_params_by_stmt, 0);
+    @memset(solution.available_outcome_spans, .empty);
     solver_sigs_kept = true;
     solver_join_indices_kept = true;
     errdefer {
@@ -879,6 +922,9 @@ pub fn solve(
         allocator.free(solution.leader);
         allocator.free(solution.alias_source);
         allocator.free(solution.sigs);
+        allocator.free(solution.outcomes);
+        allocator.free(solution.available_outcome_spans);
+        allocator.free(solution.restitution_params_by_stmt);
         allocator.free(solution.unique_seed_masks);
         allocator.free(solution.join_body_offsets);
         allocator.free(solution.join_body_lens);
@@ -898,7 +944,616 @@ pub fn solve(
         solution.pinned.deinit(allocator);
     }
 
+    try computeOutcomeRestitution(allocator, store, layouts, rc_local, consume_dead_boxes, &solution);
+
     return solution;
+}
+
+const OutcomeWalkState = struct {
+    stmt: u32,
+    present: bool,
+    discriminant: u32,
+};
+
+const OutcomeAccum = struct {
+    remaining_on_all_paths: arc_sig.ParamMask,
+};
+
+const OutcomeBitAccum = struct {
+    present_on_all_paths: bool,
+};
+
+/// Primary value binding written by one ownership-neutral statement. The
+/// outcome domain deliberately recognizes only `assign_tag` as a result
+/// discriminant witness; every other write to that returned local kills the
+/// witness before the statement transfer runs.
+fn outcomeBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
+    return switch (stmt) {
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .set_local,
+        => |binding| binding.target,
+        .store_struct => |store_stmt| store_stmt.dest,
+        .store_tag => |store_stmt| store_stmt.dest,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .boxy_tag_match,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        .loop_continue,
+        .loop_break,
+        => null,
+    };
+}
+
+fn outcomeLessThan(_: void, lhs: arc_sig.Outcome, rhs: arc_sig.Outcome) bool {
+    return lhs.discriminant < rhs.discriminant;
+}
+
+fn outcomeLocalIsParam(
+    solution: *const Solution,
+    param: LIR.LocalId,
+    local: LIR.LocalId,
+) bool {
+    // Outcome solving asks which exact entry value a pure same-value alias can
+    // move on this path, before emission chooses retain versus move. Follow
+    // the producer-authored alias relation even when the path-insensitive base
+    // binding is owned; the outcome mask then makes that path's final-use
+    // decision explicit to emission.
+    var index = @intFromEnum(local);
+    var steps: usize = 0;
+    while (index < solution.alias_source.len and solution.alias_source[index] != no_local) {
+        index = solution.alias_source[index];
+        steps += 1;
+        if (steps > solution.alias_source.len) solveInvariant("ARC outcome alias-source chain contained a cycle");
+    }
+    return index == @intFromEnum(param);
+}
+
+fn consumeOutcomeLocal(
+    solution: *const Solution,
+    param: LIR.LocalId,
+    present: *bool,
+    local: LIR.LocalId,
+) bool {
+    if (!outcomeLocalIsParam(solution, param, local)) return true;
+    if (!present.*) return false;
+    present.* = false;
+    return true;
+}
+
+fn consumeOutcomeSpan(
+    store: *const LirStore,
+    solution: *const Solution,
+    param: LIR.LocalId,
+    present: *bool,
+    span: LIR.LocalSpan,
+) bool {
+    const locals = store.getLocalSpan(span);
+    for (0..GuardedList.borrowLen(locals)) |index| {
+        if (!consumeOutcomeLocal(solution, param, present, GuardedList.at(locals, index))) return false;
+    }
+    return true;
+}
+
+fn consumeOutcomeTransfer(
+    solution: *const Solution,
+    param: LIR.LocalId,
+    present: *bool,
+    local: LIR.LocalId,
+    mode: LIR.BoxyTransferMode,
+) bool {
+    return switch (mode) {
+        .borrow, .copy => true,
+        .move => consumeOutcomeLocal(solution, param, present, local),
+    };
+}
+
+/// Derive the initial closed outcome-conditioned calling convention declared
+/// in design.md. This analysis is deliberately exact: one unsupported normal
+/// control/transfer shape rejects the whole proc and leaves its outcome span
+/// empty.
+fn computeOutcomeRestitution(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    rc_local: []const bool,
+    consume_dead_boxes: bool,
+    solution: *Solution,
+) SolveError!void {
+    var all_outcomes = std.ArrayList(arc_sig.Outcome).empty;
+    errdefer all_outcomes.deinit(allocator);
+
+    const escape_discriminants = try allocator.alloc(u32, store.cfStmtCount());
+    defer allocator.free(escape_discriminants);
+    const escape_masks = try allocator.alloc(arc_sig.ParamMask, store.cfStmtCount());
+    defer allocator.free(escape_masks);
+    const bit_escape_discriminants = try allocator.alloc(u32, store.cfStmtCount());
+    defer allocator.free(bit_escape_discriminants);
+    const bit_escape_present = try allocator.alloc(bool, store.cfStmtCount());
+    defer allocator.free(bit_escape_present);
+    const ambiguous_discriminant = no_local - 1;
+
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        if (solution.isPinnedProc(proc_id)) continue;
+        const proc = store.getProcSpec(proc_id);
+        const body = proc.body orelse continue;
+        if (layouts.getLayout(proc.ret_layout).tag != .tag_union) continue;
+
+        var proc_stmts = std.ArrayList(LIR.CFStmtId).empty;
+        defer proc_stmts.deinit(allocator);
+        try collectProcStatements(allocator, store, body, &proc_stmts);
+        var returned_local: ?LIR.LocalId = null;
+        var return_shape_valid = true;
+        for (proc_stmts.items) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt != .ret) continue;
+            const local = stmt.ret.value;
+            if (returned_local) |expected| {
+                if (local != expected) {
+                    return_shape_valid = false;
+                    break;
+                }
+            } else {
+                returned_local = local;
+            }
+        }
+        if (!return_shape_valid or returned_local == null) continue;
+        const ret_local = returned_local.?;
+        const ret_index = @intFromEnum(ret_local);
+        if (ret_index >= rc_local.len or !rc_local[ret_index]) continue;
+
+        @memset(escape_discriminants, no_local);
+        @memset(escape_masks, 0);
+        var initial: arc_sig.ParamMask = 0;
+        const params = store.getLocalSpan(proc.args);
+        for (0..GuardedList.borrowLen(params)) |position| {
+            const bit = arc_sig.paramBit(position) orelse break;
+            if (solution.sigs[proc_index].paramMode(position) != .owned) continue;
+            const param = GuardedList.at(params, position);
+            const local_index = @intFromEnum(param);
+            if (local_index >= rc_local.len or !rc_local[local_index]) continue;
+            initial |= bit;
+        }
+        if (initial == 0) continue;
+
+        var joins = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(allocator);
+        defer joins.deinit();
+        for (proc_stmts.items) |stmt_id| {
+            const stmt = store.getCFStmt(stmt_id);
+            if (stmt != .join) continue;
+            const join_point = stmt.join;
+            const entry = try joins.getOrPut(join_point.id);
+            if (entry.found_existing) solveInvariant("ARC outcome solve saw duplicate join ids");
+            entry.value_ptr.* = join_point.body;
+        }
+
+        var accum = std.AutoHashMap(u16, OutcomeAccum).init(allocator);
+        defer accum.deinit();
+        var valid = true;
+        var solved_param_count: usize = 0;
+        for (0..GuardedList.borrowLen(params)) |param_position| {
+            const param_bit = arc_sig.paramBit(param_position) orelse break;
+            if ((initial & param_bit) == 0) continue;
+            const active_param = GuardedList.at(params, param_position);
+            @memset(bit_escape_discriminants, no_local);
+            @memset(bit_escape_present, false);
+            var bit_accum = std.AutoHashMap(u16, OutcomeBitAccum).init(allocator);
+            defer bit_accum.deinit();
+            var stack = std.ArrayList(OutcomeWalkState).empty;
+            defer stack.deinit(allocator);
+            var seen = std.AutoHashMap(OutcomeWalkState, void).init(allocator);
+            defer seen.deinit();
+            try stack.append(allocator, .{
+                .stmt = @intFromEnum(body),
+                .present = true,
+                .discriminant = no_local,
+            });
+            while (stack.pop()) |walk| {
+                const seen_entry = try seen.getOrPut(walk);
+                if (seen_entry.found_existing) continue;
+                if (@import("builtin").mode == .Debug) outcome_solver_iterations += 1;
+                const current: LIR.CFStmtId = @enumFromInt(walk.stmt);
+                const stmt = store.getCFStmt(current);
+                var next_state = walk;
+                if (outcomeBindingTarget(stmt)) |target| {
+                    if (target == ret_local) next_state.discriminant = no_local;
+                }
+
+                const pushNext = struct {
+                    fn go(list: *std.ArrayList(OutcomeWalkState), alloc: Allocator, state: OutcomeWalkState, next: LIR.CFStmtId) Allocator.Error!void {
+                        var updated = state;
+                        updated.stmt = @intFromEnum(next);
+                        try list.append(alloc, updated);
+                    }
+                }.go;
+
+                switch (stmt) {
+                    .assign_ref => |assign| {
+                        if (assign.target == active_param) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_literal => |assign| try pushNext(&stack, allocator, next_state, assign.next),
+                    .init_uninitialized => |assign| {
+                        if (assign.target == active_param) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_call => |assign| {
+                        const callee_sig = solution.sigOf(assign.proc);
+                        const args = store.getLocalSpan(assign.args);
+                        for (0..GuardedList.borrowLen(args)) |position| {
+                            if (callee_sig.paramMode(position) != .owned) continue;
+                            if (!consumeOutcomeLocal(solution, active_param, &next_state.present, GuardedList.at(args, position))) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        if (!valid) break;
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_call_erased, .assign_call_dict => {
+                        valid = false;
+                        break;
+                    },
+                    .assign_packed_erased_fn => |assign| {
+                        if (assign.capture) |capture| {
+                            if (!consumeOutcomeLocal(solution, active_param, &next_state.present, capture)) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        if (assign.reuse) |reuse| {
+                            if (!consumeOutcomeLocal(solution, active_param, &next_state.present, reuse)) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_boxy_desc_ref => |assign| try pushNext(&stack, allocator, next_state, assign.next),
+                    .assign_boxy_dict_ref => |assign| try pushNext(&stack, allocator, next_state, assign.next),
+                    .assign_boxy_box => |assign| {
+                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.payload, assign.payload_mode)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_boxy_reuse_box => |assign| {
+                        if (!consumeOutcomeLocal(solution, active_param, &next_state.present, assign.source)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_boxy_unbox => |assign| {
+                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_boxy_adapt => |assign| {
+                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_boxy_inspect => |assign| {
+                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_boxy_eq => |assign| {
+                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.lhs, assign.source_mode) or
+                            !consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.rhs, assign.source_mode))
+                        {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_boxy_tag => |assign| {
+                        if (assign.payload) |payload| {
+                            if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, payload, assign.payload_mode)) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_boxy_tag_payload => |assign| {
+                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_low_level => |assign| {
+                        const effect = if (!consume_dead_boxes and assign.op == .box_unbox)
+                            assign.op.arcBorrowedResultVariant().?.rcEffect()
+                        else
+                            assign.op.arcInferenceRcEffect(assign.rc_effect);
+                        const args = store.getLocalSpan(assign.args);
+                        for (0..GuardedList.borrowLen(args)) |position| {
+                            if (position >= 64) {
+                                valid = false;
+                                break;
+                            }
+                            const bit = @as(u64, 1) << @as(u6, @intCast(position));
+                            if ((effect.consume_args & bit) == 0) continue;
+                            if (!consumeOutcomeLocal(solution, active_param, &next_state.present, GuardedList.at(args, position))) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        if (!valid) break;
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_list => |assign| {
+                        if (!consumeOutcomeSpan(store, solution, active_param, &next_state.present, assign.elems)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_struct => |assign| {
+                        if (!consumeOutcomeSpan(store, solution, active_param, &next_state.present, assign.fields)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .assign_tag => |assign| {
+                        if (assign.payload) |payload| {
+                            if (!consumeOutcomeLocal(solution, active_param, &next_state.present, payload)) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        if (assign.target == active_param) {
+                            valid = false;
+                            break;
+                        }
+                        if (assign.target == ret_local) next_state.discriminant = assign.discriminant;
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .store_struct => |assign| {
+                        if (!consumeOutcomeSpan(store, solution, active_param, &next_state.present, assign.fields)) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .store_tag => |assign| {
+                        if (assign.payload) |payload| {
+                            if (!consumeOutcomeLocal(solution, active_param, &next_state.present, payload)) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .set_local => |assign| {
+                        if (assign.target != assign.value and
+                            !consumeOutcomeLocal(solution, active_param, &next_state.present, assign.value))
+                        {
+                            valid = false;
+                            break;
+                        }
+                        if (assign.target == active_param) {
+                            valid = false;
+                            break;
+                        }
+                        try pushNext(&stack, allocator, next_state, assign.next);
+                    },
+                    .debug => |debug_stmt| try pushNext(&stack, allocator, next_state, debug_stmt.next),
+                    .expect => |expect_stmt| try pushNext(&stack, allocator, next_state, expect_stmt.next),
+                    .comptime_branch_taken => |marker| try pushNext(&stack, allocator, next_state, marker.next),
+                    .incref, .decref, .decref_if_initialized, .free => {
+                        valid = false;
+                        break;
+                    },
+                    .switch_stmt => |switch_stmt| {
+                        const branches = store.getCFSwitchBranches(switch_stmt.branches);
+                        for (0..GuardedList.borrowLen(branches)) |index| {
+                            try pushNext(&stack, allocator, next_state, GuardedList.at(branches, index).body);
+                        }
+                        try pushNext(&stack, allocator, next_state, switch_stmt.default_branch);
+                    },
+                    .switch_initialized_payload => |switch_stmt| {
+                        try pushNext(&stack, allocator, next_state, switch_stmt.initialized_branch);
+                        try pushNext(&stack, allocator, next_state, switch_stmt.uninitialized_branch);
+                    },
+                    .str_match => |str_match| {
+                        try pushNext(&stack, allocator, next_state, str_match.on_match);
+                        try pushNext(&stack, allocator, next_state, str_match.on_miss);
+                    },
+                    .str_match_set => |str_match_set| {
+                        const arms = store.getStrMatchArms(str_match_set.arms);
+                        for (0..GuardedList.borrowLen(arms)) |index| {
+                            try pushNext(&stack, allocator, next_state, GuardedList.at(arms, index).on_match);
+                        }
+                        try pushNext(&stack, allocator, next_state, str_match_set.on_miss);
+                    },
+                    .boxy_tag_match => |tag_match| {
+                        try pushNext(&stack, allocator, next_state, tag_match.on_match);
+                        try pushNext(&stack, allocator, next_state, tag_match.on_miss);
+                    },
+                    .join => |join_stmt| try pushNext(&stack, allocator, next_state, join_stmt.remainder),
+                    .jump => |jump_stmt| {
+                        const target = joins.get(jump_stmt.target) orelse {
+                            valid = false;
+                            break;
+                        };
+                        const target_stmt = store.getCFStmt(target);
+                        if (next_state.discriminant != no_local and
+                            !(target_stmt == .ret and target_stmt.ret.value == ret_local))
+                        {
+                            valid = false;
+                            break;
+                        }
+                        if (target_stmt == .ret and target_stmt.ret.value == ret_local and next_state.discriminant != no_local) {
+                            const stmt_index = @intFromEnum(current);
+                            const old = bit_escape_discriminants[stmt_index];
+                            if (old == no_local) {
+                                bit_escape_discriminants[stmt_index] = next_state.discriminant;
+                                bit_escape_present[stmt_index] = next_state.present;
+                            } else if (old == next_state.discriminant) {
+                                bit_escape_present[stmt_index] = bit_escape_present[stmt_index] and next_state.present;
+                            } else {
+                                bit_escape_discriminants[stmt_index] = ambiguous_discriminant;
+                                bit_escape_present[stmt_index] = false;
+                            }
+                        }
+                        try pushNext(&stack, allocator, next_state, target);
+                    },
+                    .ret => |ret_stmt| {
+                        if (ret_stmt.value != ret_local or next_state.discriminant == no_local) {
+                            valid = false;
+                            break;
+                        }
+                        const discriminant: u16 = @intCast(next_state.discriminant);
+                        const entry = try bit_accum.getOrPut(discriminant);
+                        if (entry.found_existing) {
+                            entry.value_ptr.present_on_all_paths = entry.value_ptr.present_on_all_paths and next_state.present;
+                        } else {
+                            entry.value_ptr.* = .{ .present_on_all_paths = next_state.present };
+                        }
+                        const stmt_index = @intFromEnum(current);
+                        const old = bit_escape_discriminants[stmt_index];
+                        if (old == no_local) {
+                            bit_escape_discriminants[stmt_index] = discriminant;
+                            bit_escape_present[stmt_index] = next_state.present;
+                        } else if (old == discriminant) {
+                            bit_escape_present[stmt_index] = bit_escape_present[stmt_index] and next_state.present;
+                        } else {
+                            bit_escape_discriminants[stmt_index] = ambiguous_discriminant;
+                            bit_escape_present[stmt_index] = false;
+                        }
+                    },
+                    .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .crash => {},
+                    .loop_continue, .loop_break => {
+                        valid = false;
+                        break;
+                    },
+                }
+                if (!valid) break;
+            }
+            if (!valid) break;
+
+            if (solved_param_count == 0) {
+                var bit_iter = bit_accum.iterator();
+                while (bit_iter.next()) |entry| {
+                    try accum.put(entry.key_ptr.*, .{
+                        .remaining_on_all_paths = if (entry.value_ptr.present_on_all_paths) param_bit else 0,
+                    });
+                }
+            } else {
+                if (bit_accum.count() != accum.count()) {
+                    valid = false;
+                    break;
+                }
+                var combined_iter = accum.iterator();
+                while (combined_iter.next()) |entry| {
+                    const bit_result = bit_accum.get(entry.key_ptr.*) orelse {
+                        valid = false;
+                        break;
+                    };
+                    if (bit_result.present_on_all_paths) entry.value_ptr.remaining_on_all_paths |= param_bit;
+                }
+                if (!valid) break;
+            }
+
+            for (bit_escape_discriminants, 0..) |discriminant, stmt_index| {
+                if (discriminant == no_local) continue;
+                const old = escape_discriminants[stmt_index];
+                if (old == no_local) {
+                    escape_discriminants[stmt_index] = discriminant;
+                } else if (old != discriminant) {
+                    escape_discriminants[stmt_index] = ambiguous_discriminant;
+                    escape_masks[stmt_index] = 0;
+                    continue;
+                }
+                if (discriminant != ambiguous_discriminant and bit_escape_present[stmt_index]) {
+                    escape_masks[stmt_index] |= param_bit;
+                }
+            }
+            solved_param_count += 1;
+        }
+
+        if (!valid or accum.count() == 0) {
+            continue;
+        }
+
+        const start = all_outcomes.items.len;
+        var iter = accum.iterator();
+        while (iter.next()) |entry| {
+            try all_outcomes.append(allocator, .{
+                .discriminant = entry.key_ptr.*,
+                .restituted_params = entry.value_ptr.remaining_on_all_paths,
+            });
+        }
+        std.mem.sort(arc_sig.Outcome, all_outcomes.items[start..], {}, outcomeLessThan);
+        if (start > std.math.maxInt(u32) or all_outcomes.items.len - start > std.math.maxInt(u32)) {
+            solveInvariant("ARC outcome table exceeded its span representation");
+        }
+        solution.available_outcome_spans[proc_index] = .{
+            .start = @intCast(start),
+            .len = @intCast(all_outcomes.items.len - start),
+        };
+        for (escape_discriminants, 0..) |discriminant, stmt_index| {
+            if (discriminant == no_local or discriminant == ambiguous_discriminant) continue;
+            const outcome = accum.get(@intCast(discriminant)) orelse
+                solveInvariant("ARC outcome escape named an unreturned discriminant");
+            solution.restitution_params_by_stmt[stmt_index] = escape_masks[stmt_index] & outcome.remaining_on_all_paths;
+        }
+    }
+
+    solution.outcomes = try all_outcomes.toOwnedSlice(allocator);
 }
 
 const BindingResult = struct {
@@ -1343,7 +1998,7 @@ fn liftProcStmtFacts(
             },
         }),
         .assign_low_level => |assign| {
-            const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
+            const rc_effect = inferenceRcEffect(solver, assign.op, assign.rc_effect);
             solver.unique_seed_masks[proc_index] |= lowLevelUniqueSeedMask(
                 solver.store,
                 proc_params,
@@ -2246,7 +2901,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try liftVisibilitySeed(solver, assign.target);
         },
         .assign_low_level => |assign| {
-            const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
+            const rc_effect = inferenceRcEffect(solver, assign.op, assign.rc_effect);
             const args = store.getLocalSpan(assign.args);
             const borrow_source = lowLevelBorrowSource(solver.domain, rc_effect, args);
             if (rc_effect.retain_result and borrow_source != no_local) {
@@ -3255,7 +3910,7 @@ const UniqueOriginFacts = struct {
     }
 };
 
-fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, stmt: LIR.CFStmt) SolveError!void {
+fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, stmt: LIR.CFStmt, consume_dead_boxes: bool) SolveError!void {
     switch (stmt) {
         .assign_ref => |assign| switch (assign.op) {
             .local => |source| try facts.noteAlias(assign.target, source),
@@ -3299,7 +3954,7 @@ fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, st
             if (assign.target_desc) |target_desc| facts.noteForeign(target_desc);
         },
         .assign_call_dict => |assign| facts.noteForeign(assign.target),
-        .assign_low_level => |assign| if (assign.op.arcInferenceRcEffect(assign.rc_effect).result_unique)
+        .assign_low_level => |assign| if ((if (!consume_dead_boxes and assign.op == .box_unbox) assign.op.arcBorrowedResultVariant().?.rcEffect() else assign.op.arcInferenceRcEffect(assign.rc_effect)).result_unique)
             facts.noteBirth(assign.target)
         else
             facts.noteForeign(assign.target),
@@ -3654,7 +4309,7 @@ pub fn computeUniqueness(
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, null);
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, null, true);
 }
 
 const ProcUniquenessDomain = struct {
@@ -3693,6 +4348,7 @@ pub fn computeProcUniqueness(
         proc,
         stmts,
         .{ .local_to_dense = local_to_dense, .count = dense_local_count },
+        true,
     );
 }
 
@@ -3706,6 +4362,7 @@ fn computeUniquenessDetailed(
     only_proc: ?LIR.LirProcSpecId,
     exact_stmts: ?[]const LIR.CFStmtId,
     proc_domain: ?ProcUniquenessDomain,
+    consume_dead_boxes: bool,
 ) SolveError!Uniqueness {
     const local_count = if (proc_domain) |domain| domain.count else store.localCount();
 
@@ -3889,7 +4546,7 @@ fn computeUniquenessDetailed(
             break :blk @intFromEnum(stmts[exact_stmt_index]);
         } else reachable_iter.next() orelse break;
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-        if (origin_facts) |facts| try collectUniqueOriginStmt(facts, store, stmt);
+        if (origin_facts) |facts| try collectUniqueOriginStmt(facts, store, stmt, consume_dead_boxes);
         switch (stmt) {
             .assign_ref => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
@@ -4129,7 +4786,10 @@ fn computeUniquenessDetailed(
                 }
             },
             .assign_low_level => |assign| {
-                const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
+                const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
+                    assign.op.arcBorrowedResultVariant().?.rcEffect()
+                else
+                    assign.op.arcInferenceRcEffect(assign.rc_effect);
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 if (rc_effect.result_unique) {
                     marks.noteBirth(&born, assign.target);

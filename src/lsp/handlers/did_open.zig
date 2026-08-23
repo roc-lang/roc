@@ -26,7 +26,7 @@ pub fn handler(comptime ServerType: type) type {
             const version_value = text_doc.get("version") orelse std.json.Value{ .integer = 0 };
             const version: i64 = if (std.meta.activeTag(version_value) == .integer)
                 version_value.integer
-            else if (std.meta.activeTag(version_value) == .float)
+            else if (std.meta.activeTag(version_value) == .float and std.math.isFinite(version_value.float) and version_value.float >= @as(f64, @floatFromInt(std.math.minInt(i64))) and version_value.float < @as(f64, @floatFromInt(std.math.maxInt(i64))))
                 @intFromFloat(version_value.float)
             else
                 0;

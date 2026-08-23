@@ -7892,8 +7892,8 @@ const Builder = struct {
 
     fn sameMonotype(self: *Builder, lhs: Type.TypeId, rhs: Type.TypeId) bool {
         if (lhs == rhs) return true;
-        const lhs_digest = self.program.types.typeDigest(&self.program.names, lhs);
-        const rhs_digest = self.program.types.typeDigest(&self.program.names, rhs);
+        const lhs_digest = self.program.types.equalityDigest(&self.program.names, lhs);
+        const rhs_digest = self.program.types.equalityDigest(&self.program.names, rhs);
         return std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
     }
 
