@@ -466,8 +466,10 @@ const FnPlan = struct {
 /// A pattern binder paired with the monomorphic type it was bound at. A single
 /// source binder is reused across every monomorphization of its binding, so the
 /// binder alone does not identify a value; the type digest completes the
-/// identity, matching the `(binder, type)` identity Monotype lowering uses for
-/// locals. See `Builder.sameLocalIdentity` in monotype/lower.zig.
+/// identity. This must use the digest of `typeEql`, not stored type identity:
+/// one monomorphization may carry distinct checked-node provenance or a
+/// transparent alias at equivalent local sites. See `Builder.sameLocalIdentity`
+/// in monotype/lower.zig.
 const BinderIdentity = struct {
     binder: check.CheckedModule.PatternBinderId,
     digest: names.TypeDigest,
@@ -4296,7 +4298,7 @@ const Subst = struct {
         const binder = local_data.binder orelse return null;
         return .{
             .binder = binder,
-            .digest = program.types.typeDigestCached(&program.names, local_data.ty, null),
+            .digest = program.types.equalityDigest(&program.names, local_data.ty),
         };
     }
 
@@ -13507,6 +13509,42 @@ test "whole-body normalization resolves binder-equivalent argument locals" {
         .hosted => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(argument, program.getExpr(cloned_body).data.local);
+}
+
+test "substitution resolves equivalent named types with distinct checked provenance" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try program.names.internTypeName("Nominal");
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const first_ty = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = def,
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+    } });
+    const second_ty = try program.types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .def = def,
+        .kind = .nominal,
+        .args = Type.Span.empty(),
+    } });
+    const binder: check.CheckedModule.PatternBinderId = @enumFromInt(1);
+    const first = try program.addLocalWithBinder(@enumFromInt(1), first_ty, binder);
+    const second = try program.addLocalWithBinder(@enumFromInt(2), second_ty, binder);
+    const replacement = try program.addLocal(@enumFromInt(3), first_ty);
+    const replacement_expr = try program.addExpr(.{ .ty = first_ty, .data = .{ .local = replacement } });
+    const second_expr = try program.addExpr(.{ .ty = second_ty, .data = .{ .local = second } });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    try cloner.subst.put(&program, first, .{ .expr = replacement_expr });
+    const cloned = try cloner.cloneExpr(second_expr);
+    try std.testing.expectEqual(replacement, program.getExpr(cloned).data.local);
 }
 
 test "known match fold aborts on undecidable branches and trips the invariant when every branch is excluded" {
