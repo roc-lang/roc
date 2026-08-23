@@ -1295,8 +1295,101 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
             }
             try appendStructuralSuccessors(solver.allocator, solver.store, &solver.stack, stmt);
         }
+        try widenUniqueSeedMask(solver, @intCast(proc_index), proc.args);
         for (stmts.items) |stmt| seen.unset(@intFromEnum(stmt));
     }
+}
+
+/// Widens a proc's uniqueness-seed mask to the parameters whose value *flows*
+/// into a runtime uniqueness check, rather than only those a check names
+/// outright. Lowering binds one alias per use, a loop carries its state
+/// through join parameters, and an in-place update hands back the same
+/// allocation, so a parameter is almost never the check's own argument: the
+/// identity test left the mask empty for every loop, and no call site ever
+/// demanded a unique variant. The mask decides only whether a
+/// mode-specialized variant could change the callee's runtime work, so
+/// following the value's flow costs at worst a variant that does not help.
+fn widenUniqueSeedMask(
+    solver: *Solver,
+    proc_index: u32,
+    params_span: LIR.LocalSpan,
+) SolveError!void {
+    const params = solver.store.getLocalSpan(params_span);
+    const tracked = @min(GuardedList.borrowLen(params), arc_sig.tracked_param_count);
+    if (tracked == 0) return;
+
+    const local_count = solver.store.localCount();
+    const reaches = try solver.allocator.alloc(arc_sig.ParamMask, local_count);
+    defer solver.allocator.free(reaches);
+    @memset(reaches, 0);
+    for (0..tracked) |position| {
+        const bit = arc_sig.paramBit(position) orelse continue;
+        reaches[@intFromEnum(GuardedList.at(params, position))] |= bit;
+    }
+
+    const stmts = solver.proc_stmts[proc_index].items;
+    var changed = true;
+    var rounds: usize = 0;
+    while (changed and rounds < unique_seed_flow_rounds) : (rounds += 1) {
+        changed = false;
+        for (stmts) |stmt_id| {
+            switch (solver.store.getCFStmt(stmt_id)) {
+                .assign_ref => |assign| {
+                    const source = switch (assign.op) {
+                        .local => |src| src,
+                        .nominal => |op| op.backing_ref,
+                        .list_reinterpret => |op| op.backing_ref,
+                        .discriminant, .field, .tag_payload, .tag_payload_struct => continue,
+                    };
+                    changed = flowSeedMask(reaches, source, assign.target) or changed;
+                },
+                .set_local => |assign| {
+                    changed = flowSeedMask(reaches, assign.value, assign.target) or changed;
+                },
+                .assign_low_level => |assign| {
+                    const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
+                    if (rc_effect.result_aliases_consumed_args == 0) continue;
+                    const args = solver.store.getLocalSpan(assign.args);
+                    for (0..GuardedList.borrowLen(args)) |position| {
+                        if (position >= 64) break;
+                        if ((rc_effect.result_aliases_consumed_args & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
+                        changed = flowSeedMask(reaches, GuardedList.at(args, position), assign.target) or changed;
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    for (stmts) |stmt_id| {
+        const stmt = solver.store.getCFStmt(stmt_id);
+        if (stmt != .assign_low_level) continue;
+        const assign = stmt.assign_low_level;
+        const rc_effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
+        const check_mask = rc_effect.may_runtime_uniqueness_check_args & rc_effect.consume_args;
+        if (check_mask == 0) continue;
+        const args = solver.store.getLocalSpan(assign.args);
+        for (0..GuardedList.borrowLen(args)) |position| {
+            if (position >= 64) break;
+            if ((check_mask & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
+            solver.unique_seed_masks[proc_index] |= reaches[@intFromEnum(GuardedList.at(args, position))];
+        }
+    }
+}
+
+/// Bound on the seed-flow fixpoint. The relation is a forward closure over
+/// same-allocation edges, so it settles in far fewer rounds than this on any
+/// real body; the bound only keeps a pathological one finite.
+const unique_seed_flow_rounds: usize = 64;
+
+fn flowSeedMask(reaches: []arc_sig.ParamMask, source: LIR.LocalId, target: LIR.LocalId) bool {
+    const from = reaches[@intFromEnum(source)];
+    if (from == 0) return false;
+    const before = reaches[@intFromEnum(target)];
+    const after = before | from;
+    if (after == before) return false;
+    reaches[@intFromEnum(target)] = after;
+    return true;
 }
 
 /// Projects facts whose identity includes the proc spec using a neutral body.
