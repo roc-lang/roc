@@ -250,8 +250,9 @@ pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
         lhs.mono_fn_ty == rhs.mono_fn_ty;
 }
 
-/// Compute a digest for a Monotype function template.
-pub fn fnTemplateDigest(template: FnTemplate, types: *const Type.Store, name_store: *const names.NameStore) names.TypeDigest {
+/// Compute a digest for a Monotype function template. Takes the type store
+/// mutable because type digests are computed through the store's cache.
+pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *const names.NameStore) names.TypeDigest {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeFnDef(&hasher, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);

@@ -3043,6 +3043,7 @@ const Pass = struct {
             .dec_to_f64,
             .box_box,
             .box_unbox,
+            .box_unbox_borrowed,
             .box_prepare_update,
             .erased_capture_load,
             .ptr_alloca,

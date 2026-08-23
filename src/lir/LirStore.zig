@@ -473,11 +473,17 @@ pub fn getU64Span(self: *const Self, span: U64Span) StoreSpanBorrow(u64, "u64s")
     return self.u64s.borrowSpan(span.start, span.len);
 }
 
-fn addU32Span(self: *Self, values: []const u32) Allocator.Error!U32Span {
+/// Stores u32 values and returns the corresponding flat-storage span.
+pub fn addU32Span(self: *Self, values: []const u32) Allocator.Error!U32Span {
     if (values.len == 0) return U32Span.empty();
     const start: u32 = @intCast(self.u32s.len());
     try self.u32s.appendSlice(self.allocator, values);
     return .{ .start = start, .len = @intCast(values.len) };
+}
+
+/// Resolves a u32 span to its stored slice.
+pub fn getU32Span(self: *const Self, span: U32Span) StoreSpanBorrow(u32, "u32s") {
+    return self.u32s.borrowSpan(span.start, span.len);
 }
 
 /// Intern the canonical erased-call argument layout for an ordered signature.

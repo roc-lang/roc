@@ -137,6 +137,9 @@ pub const ArtifactPublicationInputs = struct {
     hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
     problem_store: ?*check.problem.Store = null,
     ctfe_options: eval.CompileTimeFinalization.Options = .{},
+    /// How this module's compile-time roots were established. Part of the
+    /// checked-artifact cache identity. See `Can.Validation`.
+    validation: Can.Validation = .checking,
 };
 
 fn importedArtifactsCoverImportedEnvs(
@@ -546,10 +549,11 @@ pub fn canonicalizeModuleWithSiblings(
         },
         .imported_modules = &module_envs_map,
         .compiler_version = build_options.compiler_version,
+        .validation = validation,
     });
     czer.source_dir = root_dir;
     try czer.canonicalizeFile();
-    try validation.run(&czer);
+    try czer.runValidation();
     czer.deinit();
 }
 
@@ -569,6 +573,7 @@ pub fn typeCheckModule(
     platform_requirements: ?Check.PlatformRequirementInput,
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+    validation: Can.Validation,
     ctfe_options: eval.CompileTimeFinalization.Options,
     defer_publication: bool,
 ) TypeCheckModuleError!TypeCheckOutput {
@@ -606,6 +611,7 @@ pub fn typeCheckModule(
         module_builtin_ctx,
     );
     checker.platform_requirements = platform_requirements;
+    checker.validation = validation;
     checker.fixupTypeWriter();
     errdefer checker.deinit();
 
@@ -649,6 +655,7 @@ pub fn typeCheckModule(
             .available_artifacts = available_artifacts,
             .problem_store = &checker.problems,
             .ctfe_options = ctfe_options,
+            .validation = validation,
         },
     );
     errdefer checked_artifact.deinit(artifact_alloc);
@@ -720,6 +727,7 @@ pub fn publishFromPrebuiltModules(
             .hoisted_roots = publication.hoisted_roots,
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
             .problem_store = publication.problem_store,
+            .validation = publication.validation,
         },
     );
 }

@@ -683,6 +683,11 @@ pub const CFStmt = union(enum) {
     assign_ref: struct {
         target: LocalId,
         op: RefOp,
+        /// Semantic struct-field indices whose stored ownership units are
+        /// absent from a same-layout representation-shell alias. ARC writes
+        /// this exact path state; evaluators must not inspect those stale
+        /// field bytes as live values.
+        residual_shell_absent_fields: U32Span = .empty(),
         next: CFStmtId,
     },
     assign_literal: struct {

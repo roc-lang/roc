@@ -3751,10 +3751,13 @@ const Builder = struct {
         final_fn_ty: Type.TypeId,
     ) Allocator.Error!void {
         // The definition records the body's solved view of the root type.
-        // Call sites embed the requested type, which digests identically
-        // because digests are alias-transparent and a solved request
-        // determines every interface slot; root-class call sites adopt this
-        // recorded template directly.
+        // Call sites embed the requested type; a solved request determines
+        // every interface slot, and root-class call sites adopt this recorded
+        // template directly rather than recomputing an identity, so the two
+        // views never race. (Interface digests are alias-opaque, so a
+        // requested and a solved view that differ only by alias wrapping
+        // would be distinct identities—acceptable because only the recorded
+        // template is consulted.)
         var def_template = pending.fn_template;
         def_template.mono_fn_ty = switch (pending.signature_relation) {
             // An exact signature keeps the producer-authored request type. The
@@ -7889,8 +7892,8 @@ const Builder = struct {
 
     fn sameMonotype(self: *Builder, lhs: Type.TypeId, rhs: Type.TypeId) bool {
         if (lhs == rhs) return true;
-        const lhs_digest = self.program.types.typeDigest(&self.program.names, lhs);
-        const rhs_digest = self.program.types.typeDigest(&self.program.names, rhs);
+        const lhs_digest = self.program.types.equalityDigest(&self.program.names, lhs);
+        const rhs_digest = self.program.types.equalityDigest(&self.program.names, rhs);
         return std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
     }
 

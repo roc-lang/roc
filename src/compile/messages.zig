@@ -129,6 +129,10 @@ pub const TypeCheckTask = struct {
     platform_requirements: ?PlatformRequirementSurface = null,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
+    /// How this module's compile-time roots are established. Decides whether
+    /// an app root's entrypoint contract with its platform is enforced, and
+    /// participates in the checked-artifact cache identity.
+    validation: can.Can.Validation = .checking,
     /// True when this module is the platform root of an app build: its
     /// check-time publication is skipped so finalization publishes the
     /// relation-bearing platform root exactly once.

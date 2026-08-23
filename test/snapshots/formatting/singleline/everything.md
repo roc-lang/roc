@@ -65,12 +65,16 @@ You cannot define a where clause inside a type declaration.
 A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Hint: where clauses can only go on function type annotations.
+
 ── ✗ where clause not allowed in type declaration ──────────── everything.md:8:1
 
 You cannot define a where clause inside a type declaration.
 
 B(b) : b where [b.b1 : (b, b) -> Str, b.b2 : (b, b) -> Str]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Hint: where clauses can only go on function type annotations.
 
 ── ● unused variable ─────────────────────────────────────── everything.md:30:10
 

@@ -205,7 +205,9 @@ pub fn countReachableReads(store: *LirStore, body: CFStmtId) Allocator.Error!Rea
     return .{ .allocator = store.allocator, .counts = counts };
 }
 
-fn countStmtReads(store: *LirStore, counts: []u32, stmt: LIR.CFStmt) void {
+/// Add this statement's operand reads to an existing per-local count row.
+/// Definitions are deliberately excluded, matching `countReachableReads`.
+pub fn countStmtReads(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) void {
     switch (stmt) {
         .assign_ref => |s| switch (s.op) {
             .local => |source| noteRead(counts, source),
@@ -456,6 +458,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .assign_ref => |s| try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = try self.mapLocal(s.target),
                     .op = try self.mapRefOp(s.op),
+                    .residual_shell_absent_fields = s.residual_shell_absent_fields,
                     .next = try self.cloneStmt(s.next),
                 } }),
                 .assign_literal => |s| try self.store.addCFStmt(.{ .assign_literal = .{

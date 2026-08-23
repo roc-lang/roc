@@ -70,6 +70,8 @@ pub const ModuleInitContext = struct {
     /// which canonicalize for inspection—the snapshot tool above all—
     /// produce output that does not change with whichever compiler built them.
     compiler_version: ?[]const u8 = null,
+    /// How this module's compile-time roots are established. See `Validation`.
+    validation: Validation = .checking,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -273,6 +275,8 @@ placeholder_idents: std.AutoHashMapUnmanaged(Ident.Idx, PlaceholderInfo) = .{},
 /// Version of the compiler that is running, or null to skip checking the
 /// header's `roc` version pin. See `ModuleInitContext.compiler_version`.
 compiler_version: ?[]const u8 = null,
+/// How this module's compile-time roots are established. See `Validation`.
+validation: Validation = .checking,
 /// Platform provides declarations awaiting local-definition resolution after
 /// all top-level declarations have been canonicalized.
 pending_provides_entries: std.ArrayListUnmanaged(PendingProvidesEntry) = .empty,
@@ -719,6 +723,7 @@ fn initInternal(
         .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
+        .validation = if (maybe_context) |context| context.validation else .checking,
         .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
         .alias_cycle_references = std.AutoHashMapUnmanaged(AST.Statement.Idx, AST.Statement.Idx){},
         .alias_cycle_scopes = std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, void){},
@@ -4773,25 +4778,34 @@ fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?I
     return null;
 }
 
-/// Which post-canonicalization validation a module receives.
-pub const Validation = enum {
+/// How a module's compile-time roots are established, and with them whether
+/// the module's entrypoint contract with a platform is part of the
+/// compilation. Canonicalization applies the validation this selects, and
+/// checking enforces (or does not enforce) the entrypoint contract to match,
+/// so the two can never disagree about what the module is being compiled for.
+pub const Validation = enum(u8) {
     /// Roc's user-facing app/type-module validation: a headerless file must be
     /// either a type module whose nominal type matches the file name, or a
-    /// default app with a valid `main!`.
+    /// default app with a valid `main!`, and an app must supply every
+    /// definition its platform requires.
     checking,
     /// Validation for a module whose compile-time roots are requested
     /// explicitly rather than derived from an app entrypoint or a type module.
-    /// A headerless file that is neither of those becomes a plain module.
+    /// A headerless file that is neither of those becomes a plain module, and
+    /// an app's entrypoints are not required to exist: the platform's
+    /// requirement types still constrain the definitions the app does supply,
+    /// but a requirement with no matching definition is simply unbound.
     explicit_roots,
-
-    /// Run the validation this mode selects.
-    pub fn run(self: Validation, czer: *Self) std.mem.Allocator.Error!void {
-        switch (self) {
-            .checking => try czer.validateForChecking(),
-            .explicit_roots => try czer.validateForExplicitRoots(),
-        }
-    }
 };
+
+/// Run the post-canonicalization validation this module's `validation` mode
+/// selects.
+pub fn runValidation(self: *Self) std.mem.Allocator.Error!void {
+    switch (self.validation) {
+        .checking => try self.validateForChecking(),
+        .explicit_roots => try self.validateForExplicitRoots(),
+    }
+}
 
 /// Finalize a module that will be published through explicit checked-artifact
 /// root requests instead of Roc's user-facing `roc check` app/type-module
@@ -6059,6 +6073,17 @@ fn qualifiedExposedTypeExists(
 }
 
 fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
+    // An app header's exposed list is the app's entrypoint contract with its
+    // platform, not an ordinary public API, so a compilation whose roots are
+    // requested explicitly does not require those entrypoints to exist.
+    switch (self.validation) {
+        .checking => {},
+        .explicit_roots => switch (self.env.module_kind) {
+            .app, .default_app => return,
+            .type_module, .package, .platform, .hosted, .module, .malformed => {},
+        },
+    }
+
     // Check for remaining exposed identifiers
     var ident_iter = self.exposed_ident_texts.iterator();
     while (ident_iter.next()) |entry| {

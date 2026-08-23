@@ -295,6 +295,7 @@ pub const Store = struct {
     types: StoreList(Content, "types"),
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
+    equality_digests: StoreList(?names.TypeDigest, "equality_digests"),
     /// Newly reserved recursive slots may be referenced while their content is
     /// being built, but they are not observable types until filled. Filled
     /// nodes are immutable, which makes their cached digests permanently valid.
@@ -309,6 +310,15 @@ pub const Store = struct {
     iterator_interface_visited: std.ArrayList(TypeId),
     iterator_interface_visit_epochs: StoreList(u32, "iterator_interface_visit_epochs"),
     iterator_interface_visit_epoch: u32,
+    /// One-step unfoldings of every digested recursive-group position: the
+    /// hash of a member's node encoding with all children rendered as their
+    /// finalized digests, mapped to that member's group digest. An acyclic
+    /// node whose rendering matches an entry is a rolled-out prefix of the
+    /// same infinite type and adopts the member's digest, which keeps digests
+    /// independent of how deeply a recursive knot is tied—including across
+    /// separate digest calls. Keys and values are content-addressed, so
+    /// entries stay valid across `restore` truncations and need no rollback.
+    recursive_digest_unfoldings: std.AutoHashMap([32]u8, names.TypeDigest),
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     tags: StoreList(Tag, "tags"),
@@ -321,12 +331,14 @@ pub const Store = struct {
             .types = .empty,
             .type_digests = .empty,
             .specialization_digests = .empty,
+            .equality_digests = .empty,
             .constructing = .empty,
             .iterator_interface_cache = .empty,
             .iterator_interface_pending = .empty,
             .iterator_interface_visited = .empty,
             .iterator_interface_visit_epochs = .empty,
             .iterator_interface_visit_epoch = 0,
+            .recursive_digest_unfoldings = std.AutoHashMap([32]u8, names.TypeDigest).init(allocator),
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
@@ -340,11 +352,13 @@ pub const Store = struct {
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
+        self.recursive_digest_unfoldings.deinit();
         self.iterator_interface_visit_epochs.deinit(self.allocator);
         self.iterator_interface_visited.deinit(self.allocator);
         self.iterator_interface_pending.deinit(self.allocator);
         self.iterator_interface_cache.deinit(self.allocator);
         self.constructing.deinit(self.allocator);
+        self.equality_digests.deinit(self.allocator);
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
@@ -414,6 +428,8 @@ pub const Store = struct {
         errdefer _ = self.type_digests.pop();
         try self.specialization_digests.append(self.allocator, null);
         errdefer _ = self.specialization_digests.pop();
+        try self.equality_digests.append(self.allocator, null);
+        errdefer _ = self.equality_digests.pop();
         try self.constructing.append(self.allocator, false);
         errdefer _ = self.constructing.pop();
         try self.iterator_interface_cache.append(self.allocator, null);
@@ -594,6 +610,7 @@ pub const Store = struct {
         types_len: usize,
         type_digests_len: usize,
         specialization_digests_len: usize,
+        equality_digests_len: usize,
         constructing_len: usize,
         iterator_interface_cache_len: usize,
         iterator_interface_visit_epochs_len: usize,
@@ -608,6 +625,7 @@ pub const Store = struct {
             .types_len = self.types.len(),
             .type_digests_len = self.type_digests.len(),
             .specialization_digests_len = self.specialization_digests.len(),
+            .equality_digests_len = self.equality_digests.len(),
             .constructing_len = self.constructing.len(),
             .iterator_interface_cache_len = self.iterator_interface_cache.len(),
             .iterator_interface_visit_epochs_len = self.iterator_interface_visit_epochs.len(),
@@ -623,11 +641,15 @@ pub const Store = struct {
         self.types.restoreLen(mark_.types_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
+        self.equality_digests.restoreLen(mark_.equality_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
         self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
         // A surviving reserved slot may have been filled after the mark with
         // children that are now truncated and whose ids can be reused. Clear
         // every retained containment answer so those new children are walked.
+        // Digest caches need no equivalent clearing only because no caller
+        // digests a mid-transaction fill before its rollback decision; the
+        // unfolding index is content-addressed and stays valid regardless.
         @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
         self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
@@ -644,12 +666,14 @@ pub const Store = struct {
             .named => |named| if (named.builtin_owner) |owner|
                 .{ .builtin = owner }
             else if (named.kind == .alias)
-                // Aliases are transparent for static dispatch: the owner is the
-                // backing's owner, mirroring the alias-transparent digest path
-                // above. This unwraps alias-over-alias and alias-over-nominal
-                // uniformly (the backing of an alias-over-nominal is itself a
-                // `named` node carrying the nominal's owner). The recursion
-                // terminates because alias chains in checked output are finite.
+                // Aliases are transparent for static dispatch: the owner is
+                // the backing's owner. (Content digests keep aliases opaque;
+                // dispatch is a representation question, so it unwraps.) This
+                // handles alias-over-alias and alias-over-nominal uniformly
+                // (the backing of an alias-over-nominal is itself a `named`
+                // node carrying the nominal's owner). The recursion
+                // terminates because alias chains in checked output are
+                // finite.
                 (if (named.backing) |backing|
                     self.ownerHead(backing.ty)
                 else
@@ -660,20 +684,29 @@ pub const Store = struct {
         };
     }
 
-    pub fn typeDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
-        self.requireConstructed(ty);
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        var visiting = DigestVisiting{};
-        self.writeTypeDigest(name_store, &hasher, ty, &visiting, .full);
-        return .{ .bytes = hasher.finalResult() };
+    /// Full content-identity digest for `ty` (cached on first computation).
+    ///
+    /// Full digests answer "is this the same stored type?": every field that
+    /// deep structural comparison observes participates, and aliases digest
+    /// as opaque nodes rather than as their backing.
+    pub fn typeDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
+        return self.typeDigestCached(name_store, ty, null);
     }
 
-    pub fn specializationDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
-        self.requireConstructed(ty);
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        var visiting = DigestVisiting{};
-        self.writeTypeDigest(name_store, &hasher, ty, &visiting, .identity_only);
-        return .{ .bytes = hasher.finalResult() };
+    /// Public-interface specialization digest for `ty` (cached on first
+    /// computation). This intentionally omits exactly declared field order
+    /// and checked-public backing details, because it answers "may these two
+    /// types share a specialization?" rather than "are these the same stored
+    /// type?".
+    pub fn specializationDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
+        return self.specializationDigestCached(name_store, ty, null);
+    }
+
+    /// Digest of the exact equivalence relation implemented by `typeEql`.
+    /// Unlike the stored-identity digest, this unwraps aliases and omits
+    /// checked-node provenance that does not participate in type equality.
+    pub fn equalityDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
+        return self.computeDigest(name_store, ty, .equality, null) catch digestOutOfMemory();
     }
 
     pub const DigestStats = struct {
@@ -868,6 +901,9 @@ pub const Store = struct {
     }
 
     pub fn verify(self: *const Store, name_store: *const names.NameStore) ?VerifyError {
+        if (self.specialization_digests.len() != self.types.len() or self.equality_digests.len() != self.types.len()) {
+            return .type_digest_count_mismatch;
+        }
         return self.view().verify(name_store);
     }
 
@@ -875,33 +911,38 @@ pub const Store = struct {
         return self.specialization_digests.unsafeRawItemsForView();
     }
 
+    /// `typeDigest` with optional cache statistics.
     pub fn typeDigestCached(
         self: *Store,
         name_store: *const names.NameStore,
         ty: TypeId,
         stats: ?*DigestStats,
     ) names.TypeDigest {
-        var ctx = CachedDigestContext{};
-        return self.cachedDigestInner(name_store, ty, .full, &ctx, stats);
+        return self.computeDigest(name_store, ty, .full, stats) catch digestOutOfMemory();
     }
 
+    /// `specializationDigest` with optional cache statistics.
     pub fn specializationDigestCached(
         self: *Store,
         name_store: *const names.NameStore,
         ty: TypeId,
         stats: ?*DigestStats,
     ) names.TypeDigest {
-        var ctx = CachedDigestContext{};
-        return self.cachedDigestInner(name_store, ty, .identity_only, &ctx, stats);
+        return self.computeDigest(name_store, ty, .identity_only, stats) catch digestOutOfMemory();
     }
 
     /// Exact structural equality for closed Monotype types.
     ///
-    /// This mirrors the intentional identity rules used by `typeDigest`:
-    /// aliases with backing compare as their backing, non-alias named types
+    /// Aliases with backing compare as their backing, non-alias named types
     /// compare by named identity and arguments, and structural rows compare by
-    /// label text and ordered children. Unlike the digest, this is authoritative
-    /// and must be checked before one specialization can reuse another.
+    /// label text and ordered children. Equal full digests imply equality
+    /// here—the direction interning relies on. The converse can fail one way:
+    /// aliases digest as opaque nodes (deliberately), and the digest observes
+    /// identity fields this comparison does not (`named_type.ty`,
+    /// `tag.checked_name`, `type_name` under a `source_decl`, checked-public
+    /// backing content), which production constructs consistently for equal
+    /// types. This is the authoritative check before one specialization can
+    /// reuse another.
     pub fn typeEql(
         self: *const Store,
         name_store: *const names.NameStore,
@@ -922,26 +963,25 @@ pub const Store = struct {
         return try self.view().typeMatches(self.allocator, name_store, lhs, rhs, mode);
     }
 
-    /// Stack of types currently being digested. Recursive types reference a
-    /// type already on this stack; the digest encodes such a back reference by
-    /// stack position so cyclic content digests deterministically.
-    const DigestVisiting = struct {
-        items: [digest_visiting_max]TypeId = undefined,
-        len: usize = 0,
-    };
-
-    const digest_visiting_max = 256;
-
-    const CachedDigestContext = struct {
-        items: [digest_visiting_max]TypeId = undefined,
-        len: usize = 0,
-        cycle_count: u32 = 0,
-    };
-
+    /// Which digest question is being answered. The two modes are separate
+    /// versioned domains and must never produce byte-confusable answers.
     const NamedDigestMode = enum {
         full,
         identity_only,
+        equality,
     };
+
+    /// Versioned digest-domain prefix written at the start of every node
+    /// encoding. Digest bytes are serialized and compared across builds, so
+    /// changing a domain (or any encoding detail) is a specialization-cache
+    /// format change.
+    fn digestDomain(mode: NamedDigestMode) []const u8 {
+        return switch (mode) {
+            .full => "roc.monotype.type.identity.v1",
+            .identity_only => "roc.monotype.type.interface.v1",
+            .equality => "roc.monotype.type.equality.v1",
+        };
+    }
 
     fn assertMutable(self: *const Store) void {
         if (self.frozen) Common.invariant("frozen Monotype type store cannot be mutated");
@@ -1018,533 +1058,809 @@ pub const Store = struct {
         return null;
     }
 
-    fn cachedDigestInner(
-        self: *Store,
-        name_store: *const names.NameStore,
-        ty: TypeId,
-        named_mode: NamedDigestMode,
-        ctx: *CachedDigestContext,
-        stats: ?*DigestStats,
-    ) names.TypeDigest {
-        self.requireConstructed(ty);
-        for (ctx.items[0..ctx.len], 0..) |open_ty, position| {
-            if (open_ty == ty) {
-                ctx.cycle_count += 1;
-                return cycleDigest(@intCast(position));
-            }
-        }
-        if (self.openNamedCyclePosition(name_store, self.get(ty), ctx.items[0..ctx.len])) |position| {
-            ctx.cycle_count += 1;
-            return cycleDigest(@intCast(position));
-        }
-
+    /// Cache lookup for one digest mode. Filled nodes are immutable, so a
+    /// cached digest is permanently valid.
+    fn cachedDigest(self: *const Store, ty: TypeId, mode: NamedDigestMode) ?names.TypeDigest {
         const index = @intFromEnum(ty);
-        switch (named_mode) {
-            .full => {
-                if (self.type_digests.unsafeRawItemsForView()[index]) |digest| {
-                    if (stats) |s| s.cache_hits += 1;
-                    return digest;
-                }
-            },
-            .identity_only => {
-                if (self.specialization_digests.unsafeRawItemsForView()[index]) |digest| {
-                    if (stats) |s| s.cache_hits += 1;
-                    return digest;
-                }
-            },
-        }
-
-        if (stats) |s| {
-            s.cache_misses += 1;
-            s.nodes_visited += 1;
-        }
-
-        if (ctx.len == digest_visiting_max) {
-            ctx.cycle_count += 1;
-            return deepDigest(ty);
-        }
-
-        ctx.items[ctx.len] = ty;
-        ctx.len += 1;
-        const cycle_count_before = ctx.cycle_count;
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        self.writeCachedTypeDigest(name_store, &hasher, ty, named_mode, ctx, stats);
-        ctx.len -= 1;
-
-        const digest: names.TypeDigest = .{ .bytes = hasher.finalResult() };
-        if (ctx.cycle_count == cycle_count_before) {
-            switch (named_mode) {
-                .full => self.type_digests.set(index, digest),
-                .identity_only => self.specialization_digests.set(index, digest),
-            }
-        }
-        return digest;
+        return switch (mode) {
+            .full => self.type_digests.unsafeRawItemsForView()[index],
+            .identity_only => self.specialization_digests.unsafeRawItemsForView()[index],
+            .equality => self.equality_digests.unsafeRawItemsForView()[index],
+        };
     }
 
-    fn writeCachedChildDigest(
-        self: *Store,
-        name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
-        child: TypeId,
-        named_mode: NamedDigestMode,
-        ctx: *CachedDigestContext,
-        stats: ?*DigestStats,
-    ) void {
-        writeBytes(hasher, "type-digest");
-        const digest = self.cachedDigestInner(name_store, child, named_mode, ctx, stats);
-        hasher.update(&digest.bytes);
-    }
-
-    fn writeCachedTypeSpanDigest(
-        self: *Store,
-        name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
-        span_: Span,
-        named_mode: NamedDigestMode,
-        ctx: *CachedDigestContext,
-        stats: ?*DigestStats,
-    ) void {
-        const values = self.span(span_);
-        writeU32(hasher, @intCast(values.len));
-        for (0..values.len) |index| {
-            const child = GuardedList.at(values, index);
-            self.writeCachedChildDigest(name_store, hasher, child, named_mode, ctx, stats);
+    /// Sole writer of the digest caches. Digests are content-addressed, so a
+    /// re-write must agree with the existing entry.
+    fn setCachedDigest(self: *Store, ty: TypeId, mode: NamedDigestMode, digest: names.TypeDigest) void {
+        if (self.cachedDigest(ty, mode)) |existing| {
+            std.debug.assert(std.mem.eql(u8, &existing.bytes, &digest.bytes));
+        }
+        const index = @intFromEnum(ty);
+        switch (mode) {
+            .full => self.type_digests.set(index, digest),
+            .identity_only => self.specialization_digests.set(index, digest),
+            .equality => self.equality_digests.set(index, digest),
         }
     }
 
-    fn writeCachedTypeDigest(
+    fn digestType(self: *const Store, raw_ty: TypeId, mode: NamedDigestMode) TypeId {
+        if (mode != .equality) return raw_ty;
+        var ty = raw_ty;
+        while (true) {
+            const content = self.get(ty);
+            if (content != .named or content.named.kind != .alias) return ty;
+            const backing = content.named.backing orelse return ty;
+            ty = backing.ty;
+        }
+    }
+
+    /// One digest implementation for every mode: serve the request from the
+    /// cache or reduce the uncached reachable subgraph and cache every digest
+    /// it settles.
+    fn computeDigest(
         self: *Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
         ty: TypeId,
-        named_mode: NamedDigestMode,
-        ctx: *CachedDigestContext,
+        mode: NamedDigestMode,
         stats: ?*DigestStats,
-    ) void {
+    ) std.mem.Allocator.Error!names.TypeDigest {
+        self.requireConstructed(ty);
+        if (self.cachedDigest(ty, mode)) |digest| {
+            if (stats) |s| s.cache_hits += 1;
+            return digest;
+        }
+        var engine = DigestEngine.init(self, name_store, stats);
+        defer engine.deinit();
+        return try engine.run(ty, mode);
+    }
+
+    /// The digest byte encoding of one type node in one digest mode.
+    ///
+    /// This is the single source of digest bytes: graph discovery,
+    /// recursive-group reduction, and final digest rendering all replay this
+    /// encoding with different child-reference sinks, so no consumer can
+    /// observe two byte encodings for the same mode. Every node starts with
+    /// its versioned digest domain, then a content-kind discriminator, every
+    /// non-reference value the mode observes, and its ordered typed edges via
+    /// `sink.child`.
+    ///
+    /// Aliases are opaque named nodes rather than digesting as their backing.
+    /// `def.type_name` text is always hashed (also when `source_decl` is
+    /// present), `named_type.ty` is hashed because it survives into
+    /// `ConstStore`, and `tag.checked_name` is hashed in addition to
+    /// `tag.name`. The interface mode omits exactly declared field order and
+    /// checked-public backing details; backing children always digest in full
+    /// mode because a backing is a stored type identity, not an interface.
+    fn encodeTypeNode(
+        self: *const Store,
+        name_store: *const names.NameStore,
+        sink: anytype,
+        ty: TypeId,
+        mode: NamedDigestMode,
+    ) std.mem.Allocator.Error!void {
+        try sink.writeBytes(digestDomain(mode));
         switch (self.get(ty)) {
             .primitive => |primitive| {
-                writeBytes(hasher, "primitive");
-                writeBytes(hasher, @tagName(primitive));
+                try sink.writeBytes("primitive");
+                try sink.writeBytes(@tagName(primitive));
             },
             .named => |named| {
-                if (named.kind == .alias) {
-                    const backing = named.backing orelse {
-                        writeBytes(hasher, "alias-without-backing");
-                        return;
-                    };
-                    self.writeCachedChildDigest(name_store, hasher, backing.ty, named_mode, ctx, stats);
-                    return;
+                try sink.writeBytes("named");
+                try sink.writeBytes(&named.named_type.module.bytes);
+                if (mode != .equality) try sink.writeU32(@intFromEnum(named.named_type.ty));
+                try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
+                try sinkOptionalU32(sink, named.def.source_decl);
+                if (mode != .equality or named.def.source_decl == null) {
+                    try sink.writeBytes(name_store.typeNameText(named.def.type_name));
                 }
-                writeBytes(hasher, "named");
-                hasher.update(&named.named_type.module.bytes);
-                writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
-                writeOptionalU32(hasher, named.def.source_decl);
-                if (named.def.source_decl == null) {
-                    writeBytes(hasher, name_store.typeNameText(named.def.type_name));
-                }
-                writeOptionalDigest(hasher, named.def.generated);
-                writeBytes(hasher, @tagName(named.def.iterator_representation));
-                writeBytes(hasher, @tagName(named.def.iterator_kind));
-                writeU32(hasher, named.def.iterator_depth);
-                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
-                writeBytes(hasher, @tagName(named.kind));
+                try sinkOptionalDigest(sink, named.def.generated);
+                try sink.writeBytes(@tagName(named.def.iterator_representation));
+                try sink.writeBytes(@tagName(named.def.iterator_kind));
+                try sink.writeU32(named.def.iterator_depth);
+                try sinkIteratorTopology(sink, name_store, named.def.iterator_topology);
+                try sink.writeBytes(@tagName(named.kind));
                 if (named.builtin_owner) |owner| {
-                    writeBytes(hasher, "builtin");
-                    writeBytes(hasher, @tagName(owner));
+                    try sink.writeBytes("builtin");
+                    try sink.writeBytes(@tagName(owner));
                 } else {
-                    writeBytes(hasher, "not-builtin");
+                    try sink.writeBytes("not-builtin");
                 }
-                self.writeCachedTypeSpanDigest(name_store, hasher, named.args, named_mode, ctx, stats);
-                if (named_mode == .full) {
-                    self.writeCachedNamedBackingDigest(name_store, hasher, named.backing, ctx, stats);
-                    self.writeCachedDeclaredOrderDigest(name_store, hasher, named.declared_order, ctx, stats);
-                } else if (specializationUsesBacking(named.backing)) {
-                    writeBytes(hasher, "specialization-generated-backing");
-                    self.writeCachedNamedBackingDigest(name_store, hasher, named.backing, ctx, stats);
-                } else {
-                    writeBytes(hasher, "specialization-named-identity");
+                try self.encodeTypeSpan(sink, named.args, mode);
+                switch (mode) {
+                    .full => {
+                        try encodeNamedBacking(sink, named.backing);
+                        try self.encodeDeclaredOrder(name_store, sink, named.declared_order);
+                    },
+                    .identity_only => if (specializationUsesBacking(named.backing)) {
+                        try sink.writeBytes("specialization-generated-backing");
+                        try encodeNamedBacking(sink, named.backing);
+                    } else {
+                        try sink.writeBytes("specialization-named-identity");
+                    },
+                    .equality => if (specializationUsesBacking(named.backing)) {
+                        try sink.writeBytes("equality-generated-backing");
+                        const backing = named.backing orelse unreachable;
+                        try sink.writeBytes(@tagName(backing.use));
+                        try sink.writeBytes(@tagName(backing.authority));
+                        try sink.child(backing.ty, .equality);
+                    } else {
+                        try sink.writeBytes("equality-named-identity");
+                    },
                 }
             },
             .record => |fields| {
-                writeBytes(hasher, "record");
+                try sink.writeBytes("record");
                 const field_slice = self.fieldSpan(fields);
-                writeU32(hasher, @intCast(field_slice.len));
+                try sink.writeU32(@intCast(field_slice.len));
                 for (0..field_slice.len) |index| {
                     const field = GuardedList.at(field_slice, index);
-                    writeBytes(hasher, name_store.recordFieldLabelText(field.name));
-                    writeFieldDefaultDigest(name_store, hasher, field.default);
-                    writeBytes(hasher, @tagName(field.kind_state));
+                    try sink.writeBytes(name_store.recordFieldLabelText(field.name));
+                    try sinkFieldDefault(sink, name_store, field.default);
+                    try sink.writeBytes(@tagName(field.kind_state));
                     if (field.value_ty) |value_ty| {
-                        writeBytes(hasher, "field-optional-value");
-                        self.writeCachedChildDigest(name_store, hasher, value_ty, named_mode, ctx, stats);
+                        try sink.writeBytes("field-optional-value");
+                        try sink.child(value_ty, mode);
                     } else {
-                        writeBytes(hasher, "field-inline-value");
+                        try sink.writeBytes("field-inline-value");
                     }
-                    self.writeCachedChildDigest(name_store, hasher, field.ty, named_mode, ctx, stats);
+                    try sink.child(field.ty, mode);
                 }
             },
             .tuple => |items| {
-                writeBytes(hasher, "tuple");
-                self.writeCachedTypeSpanDigest(name_store, hasher, items, named_mode, ctx, stats);
+                try sink.writeBytes("tuple");
+                try self.encodeTypeSpan(sink, items, mode);
             },
             .tag_union => |tags| {
-                writeBytes(hasher, "tag_union");
+                try sink.writeBytes("tag_union");
                 const tag_slice = self.tagSpan(tags);
-                writeU32(hasher, @intCast(tag_slice.len));
+                try sink.writeU32(@intCast(tag_slice.len));
                 for (0..tag_slice.len) |index| {
                     const tag = GuardedList.at(tag_slice, index);
-                    writeBytes(hasher, name_store.tagLabelText(tag.name));
-                    self.writeCachedTypeSpanDigest(name_store, hasher, tag.payloads, named_mode, ctx, stats);
+                    try sink.writeBytes(name_store.tagLabelText(tag.name));
+                    if (mode != .equality) try sink.writeBytes(name_store.tagLabelText(tag.checked_name));
+                    try self.encodeTypeSpan(sink, tag.payloads, mode);
                 }
             },
             .list => |elem| {
-                writeBytes(hasher, "list");
-                self.writeCachedChildDigest(name_store, hasher, elem, named_mode, ctx, stats);
+                try sink.writeBytes("list");
+                try sink.child(elem, mode);
             },
             .box => |elem| {
-                writeBytes(hasher, "box");
-                self.writeCachedChildDigest(name_store, hasher, elem, named_mode, ctx, stats);
+                try sink.writeBytes("box");
+                try sink.child(elem, mode);
             },
             .func => |function| {
-                writeBytes(hasher, "func");
-                self.writeCachedTypeSpanDigest(name_store, hasher, function.args, named_mode, ctx, stats);
-                self.writeCachedChildDigest(name_store, hasher, function.ret, named_mode, ctx, stats);
+                try sink.writeBytes("func");
+                try self.encodeTypeSpan(sink, function.args, mode);
+                try sink.child(function.ret, mode);
             },
             .erased => |erased| {
-                writeBytes(hasher, "erased");
-                hasher.update(&erased.bytes);
+                try sink.writeBytes("erased");
+                try sink.writeBytes(&erased.bytes);
             },
-            .zst => writeBytes(hasher, "zst"),
+            .zst => try sink.writeBytes("zst"),
         }
     }
 
-    fn writeCachedNamedBackingDigest(
-        self: *Store,
-        name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
-        backing: ?NamedBacking,
-        ctx: *CachedDigestContext,
-        stats: ?*DigestStats,
-    ) void {
-        writeBytes(hasher, "backing");
-        if (backing) |named_backing| {
-            writeBytes(hasher, @tagName(named_backing.use));
-            writeBytes(hasher, @tagName(named_backing.authority));
-            self.writeCachedChildDigest(name_store, hasher, named_backing.ty, .full, ctx, stats);
-        } else {
-            writeBytes(hasher, "none");
+    fn encodeTypeSpan(
+        self: *const Store,
+        sink: anytype,
+        span_: Span,
+        mode: NamedDigestMode,
+    ) std.mem.Allocator.Error!void {
+        const values = self.span(span_);
+        try sink.writeU32(@intCast(values.len));
+        for (0..values.len) |index| {
+            try sink.child(GuardedList.at(values, index), mode);
         }
     }
 
-    fn writeCachedDeclaredOrderDigest(
-        self: *Store,
+    fn encodeDeclaredOrder(
+        self: *const Store,
         name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+        sink: anytype,
         declared_order: Span,
-        ctx: *CachedDigestContext,
-        stats: ?*DigestStats,
-    ) void {
-        writeBytes(hasher, "declared_order");
+    ) std.mem.Allocator.Error!void {
+        try sink.writeBytes("declared_order");
         const entries = self.declaredFieldSpan(declared_order);
-        writeU32(hasher, @intCast(entries.len));
+        try sink.writeU32(@intCast(entries.len));
         for (0..entries.len) |index| {
-            const entry = GuardedList.at(entries, index);
-            switch (entry) {
+            switch (GuardedList.at(entries, index)) {
                 .named => |field_name| {
-                    writeBytes(hasher, "named");
-                    writeBytes(hasher, name_store.recordFieldLabelText(field_name));
+                    try sink.writeBytes("named");
+                    try sink.writeBytes(name_store.recordFieldLabelText(field_name));
                 },
                 .padding => |padding_ty| {
-                    writeBytes(hasher, "padding");
-                    self.writeCachedChildDigest(name_store, hasher, padding_ty, .full, ctx, stats);
+                    try sink.writeBytes("padding");
+                    try sink.child(padding_ty, .full);
                 },
             }
         }
     }
 
-    /// Hash the fields that identify which named type this node is, excluding
-    /// its arguments and backing. Two nodes agreeing here and on their
-    /// arguments denote the same named type, because a named type's backing is
-    /// a function of its declaration and arguments.
-    fn writeNamedIdentityHead(
-        name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
-        named: NamedContent,
-    ) void {
-        hasher.update(&named.named_type.module.bytes);
-        writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
-        writeOptionalU32(hasher, named.def.source_decl);
-        if (named.def.source_decl == null) {
-            writeBytes(hasher, name_store.typeNameText(named.def.type_name));
-        }
-        writeOptionalDigest(hasher, named.def.generated);
-        writeBytes(hasher, @tagName(named.def.iterator_representation));
-        writeBytes(hasher, @tagName(named.def.iterator_kind));
-        writeU32(hasher, named.def.iterator_depth);
-        writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
-        writeBytes(hasher, @tagName(named.kind));
-        if (named.builtin_owner) |owner| {
-            writeBytes(hasher, "builtin");
-            writeBytes(hasher, @tagName(owner));
-        } else {
-            writeBytes(hasher, "not-builtin");
-        }
-    }
-
-    fn namedIdentityHead(
-        name_store: *const names.NameStore,
-        named: NamedContent,
-    ) [32]u8 {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        writeNamedIdentityHead(name_store, &hasher, named);
-        return hasher.finalResult();
-    }
-
-    /// Whether two named nodes denote the same named type at the same
-    /// arguments. Equal argument ids already prove the arguments equal, so that
-    /// check runs first and settles the common case without hashing; arguments
-    /// whose ids differ are decided by their digests, which is the exact
-    /// comparison this store needs because it admits duplicate ids per type.
-    fn namedIdentityMatches(
-        self: *const Store,
-        name_store: *const names.NameStore,
-        lhs: NamedContent,
-        rhs: NamedContent,
-        rhs_head: [32]u8,
-    ) bool {
-        const lhs_args = self.span(lhs.args);
-        const rhs_args = self.span(rhs.args);
-        if (lhs_args.len != rhs_args.len) return false;
-        if (!std.mem.eql(u8, &namedIdentityHead(name_store, lhs), &rhs_head)) return false;
-        for (0..lhs_args.len) |index| {
-            const lhs_arg = GuardedList.at(lhs_args, index);
-            const rhs_arg = GuardedList.at(rhs_args, index);
-            if (lhs_arg == rhs_arg) continue;
-            // Both sides digest through the uncached walk even when the caller
-            // is the cached one. The two walks hash by different constructions,
-            // so mixing them here would let the cached and uncached callers
-            // reach different fold decisions and disagree about which types are
-            // the same.
-            const lhs_digest = self.typeDigest(name_store, lhs_arg);
-            const rhs_digest = self.typeDigest(name_store, rhs_arg);
-            if (!std.mem.eql(u8, &lhs_digest.bytes, &rhs_digest.bytes)) return false;
-        }
-        return true;
-    }
-
-    /// Position of an already-open named node denoting the same named type, if
-    /// any. Folding the walk here rather than only on id equality is what makes
-    /// a recursive type's digest independent of how deep its knot is tied: a
-    /// node whose recursive occurrence is a separate but equal node digests the
-    /// same as one whose occurrence is the node itself.
-    fn openNamedCyclePosition(
-        self: *const Store,
-        name_store: *const names.NameStore,
-        node: Content,
-        open: []const TypeId,
-    ) ?usize {
-        if (open.len == 0) return null;
-        if (node != .named) return null;
-        const named = node.named;
-        if (named.kind == .alias) return null;
-        const head = namedIdentityHead(name_store, named);
-        for (open, 0..) |open_ty, position| {
-            const open_content = self.get(open_ty);
-            if (open_content != .named) continue;
-            const open_named = open_content.named;
-            if (open_named.kind == .alias) continue;
-            if (self.namedIdentityMatches(name_store, open_named, named, head)) return position;
-        }
-        return null;
-    }
-
-    fn writeTypeDigest(
-        self: *const Store,
-        name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
+    /// One digest-request node: a store type digested under one mode. The
+    /// interface mode reaches full-mode nodes through generated backings, so
+    /// the pair is the graph key, not the type id alone.
+    const DigestNode = struct {
         ty: TypeId,
-        visiting: *DigestVisiting,
-        named_mode: NamedDigestMode,
-    ) void {
-        self.requireConstructed(ty);
-        for (visiting.items[0..visiting.len], 0..) |open_ty, position| {
-            if (open_ty == ty) {
-                writeBytes(hasher, "cycle");
-                writeU32(hasher, @intCast(position));
+        mode: NamedDigestMode,
+        link_start: u32 = 0,
+        link_len: u32 = 0,
+        digest: names.TypeDigest = undefined,
+        resolved: bool = false,
+    };
+
+    /// A child reference during digesting: either an already-finalized digest
+    /// or a node of the currently discovered graph. Whether a child arrived as
+    /// a cache hit or as a discovered-then-resolved node must never influence
+    /// digest bytes or partitioning, so every consumer of a `ChildLink` treats
+    /// a resolved node and an external digest identically.
+    const ChildLink = union(enum) {
+        external: names.TypeDigest,
+        node: u32,
+    };
+
+    /// Graph-reducing digest computation for one requested type.
+    ///
+    /// Discovery walks the uncached reachable subgraph iteratively, pruning
+    /// at children whose digest for the required mode is already cached.
+    /// Iterative Tarjan SCC discovery then resolves the condensation in
+    /// reverse topological order: an acyclic node hashes its encoding with
+    /// finalized child digests, and each cyclic SCC is reduced by
+    /// bisimulation refinement, linearized by the minimum-over-entry-points
+    /// rotation with group-relative back-references, and digested per reduced
+    /// position. Every settled digest is cached unconditionally, and each
+    /// reduced position's one-step unfolding enters the store's unfolding
+    /// index so later rolled-out prefixes of the same group fold to the same
+    /// digests.
+    ///
+    /// Known conservative incompleteness: per-SCC reduction cannot identify
+    /// an in-SCC position with an equivalent position outside its own SCC, so
+    /// a knot entangled with a separately tied equivalent knot digests apart
+    /// from it (see the "entangled equivalent knots" test). Equal digests
+    /// still always imply structural equality; the miss only costs reuse.
+    const DigestEngine = struct {
+        store: *Store,
+        name_store: *const names.NameStore,
+        gpa: std.mem.Allocator,
+        stats: ?*DigestStats,
+        nodes: std.ArrayList(DigestNode),
+        node_lookup: std.AutoHashMap(u64, u32),
+        link_pool: std.ArrayList(ChildLink),
+        render_buf: std.ArrayList(u8),
+
+        const no_scc_position = std.math.maxInt(u32);
+        const unvisited = std.math.maxInt(u32);
+
+        fn init(store: *Store, name_store: *const names.NameStore, stats: ?*DigestStats) DigestEngine {
+            return .{
+                .store = store,
+                .name_store = name_store,
+                .gpa = store.allocator,
+                .stats = stats,
+                .nodes = .empty,
+                .node_lookup = std.AutoHashMap(u64, u32).init(store.allocator),
+                .link_pool = .empty,
+                .render_buf = .empty,
+            };
+        }
+
+        fn deinit(self: *DigestEngine) void {
+            self.render_buf.deinit(self.gpa);
+            self.link_pool.deinit(self.gpa);
+            self.node_lookup.deinit();
+            self.nodes.deinit(self.gpa);
+        }
+
+        fn run(self: *DigestEngine, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!names.TypeDigest {
+            const root = try self.internNode(self.store.digestType(ty, mode), mode);
+            std.debug.assert(root == 0);
+            var next: usize = 0;
+            while (next < self.nodes.items.len) : (next += 1) {
+                try self.collectNode(@intCast(next));
+            }
+            try self.resolveSccs();
+            const root_node = self.nodes.items[root];
+            std.debug.assert(root_node.resolved);
+            return root_node.digest;
+        }
+
+        fn nodeKey(ty: TypeId, mode: NamedDigestMode) u64 {
+            return (@as(u64, @intFromEnum(ty)) << 2) | @as(u64, @intFromEnum(mode));
+        }
+
+        fn internNode(self: *DigestEngine, raw_ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!u32 {
+            const ty = self.store.digestType(raw_ty, mode);
+            const gop = try self.node_lookup.getOrPut(nodeKey(ty, mode));
+            if (gop.found_existing) return gop.value_ptr.*;
+            const index: u32 = @intCast(self.nodes.items.len);
+            gop.value_ptr.* = index;
+            try self.nodes.append(self.gpa, .{ .ty = ty, .mode = mode });
+            if (self.stats) |s| {
+                s.cache_misses += 1;
+                s.nodes_visited += 1;
+            }
+            return index;
+        }
+
+        /// Classify one child reference during discovery: already-cached
+        /// children participate as finalized digests, everything else becomes
+        /// a node of the discovered graph.
+        fn childLink(self: *DigestEngine, raw_ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!ChildLink {
+            const ty = self.store.digestType(raw_ty, mode);
+            self.store.requireConstructed(ty);
+            if (self.store.cachedDigest(ty, mode)) |digest| return .{ .external = digest };
+            return .{ .node = try self.internNode(ty, mode) };
+        }
+
+        /// `childLink` for rendering passes after discovery: never grows the
+        /// graph, and nodes this engine already finalized may resolve through
+        /// the store cache with identical bytes.
+        fn resolvedChildLink(self: *DigestEngine, raw_ty: TypeId, mode: NamedDigestMode) ChildLink {
+            const ty = self.store.digestType(raw_ty, mode);
+            if (self.store.cachedDigest(ty, mode)) |digest| return .{ .external = digest };
+            return .{
+                .node = self.node_lookup.get(nodeKey(ty, mode)) orelse
+                    Common.invariant("Monotype digest rendering reached a child that discovery never visited"),
+            };
+        }
+
+        fn collectNode(self: *DigestEngine, index: u32) std.mem.Allocator.Error!void {
+            const ty = self.nodes.items[index].ty;
+            const mode = self.nodes.items[index].mode;
+            const link_start: u32 = @intCast(self.link_pool.items.len);
+            const sink = CollectSink{ .engine = self };
+            try self.store.encodeTypeNode(self.name_store, sink, ty, mode);
+            const node = &self.nodes.items[index];
+            node.link_start = link_start;
+            node.link_len = @intCast(self.link_pool.items.len - link_start);
+        }
+
+        fn linksOf(self: *const DigestEngine, index: u32) []const ChildLink {
+            const node = self.nodes.items[index];
+            return self.link_pool.items[node.link_start..][0..node.link_len];
+        }
+
+        /// Discovery sink: collects the node's ordered child references while
+        /// expanding the graph. Scalars are ignored here; they participate
+        /// through the rendering sinks once the graph shape is known.
+        const CollectSink = struct {
+            engine: *DigestEngine,
+
+            fn writeBytes(_: CollectSink, _: []const u8) std.mem.Allocator.Error!void {}
+
+            fn writeU32(_: CollectSink, _: u32) std.mem.Allocator.Error!void {}
+
+            fn child(self: CollectSink, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!void {
+                const ref = try self.engine.childLink(ty, mode);
+                if (ref == .external) {
+                    if (self.engine.stats) |s| s.cache_hits += 1;
+                }
+                try self.engine.link_pool.append(self.engine.gpa, ref);
+            }
+        };
+
+        /// Initial-partition sink for one cyclic SCC: hashes the member's
+        /// full encoding with every out-of-SCC child rendered as its
+        /// finalized digest and every in-SCC child as a bare positional
+        /// marker. In-SCC identities are refined afterwards; folding them
+        /// into this label would bake discovery order into the partition.
+        const SccLabelSink = struct {
+            engine: *DigestEngine,
+            hasher: *std.crypto.hash.sha2.Sha256,
+            member_pos_of_node: []const u32,
+
+            fn writeBytes(self: SccLabelSink, bytes: []const u8) std.mem.Allocator.Error!void {
+                hashBytes(self.hasher, bytes);
+            }
+
+            fn writeU32(self: SccLabelSink, value: u32) std.mem.Allocator.Error!void {
+                hashU32(self.hasher, value);
+            }
+
+            fn child(self: SccLabelSink, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!void {
+                switch (self.engine.resolvedChildLink(ty, mode)) {
+                    .external => |digest| {
+                        hashBytes(self.hasher, "type-digest");
+                        self.hasher.update(&digest.bytes);
+                    },
+                    .node => |node_index| {
+                        if (self.member_pos_of_node[node_index] != no_scc_position) {
+                            hashBytes(self.hasher, "in-scc");
+                            return;
+                        }
+                        const node = self.engine.nodes.items[node_index];
+                        std.debug.assert(node.resolved);
+                        hashBytes(self.hasher, "type-digest");
+                        self.hasher.update(&node.digest.bytes);
+                    },
+                }
+            }
+        };
+
+        /// Group-relative reference context while rendering one cyclic SCC.
+        const SccRenderContext = struct {
+            /// Member position within the SCC per engine node, or
+            /// `no_scc_position` for nodes outside the SCC.
+            member_pos_of_node: []const u32,
+            blocks: []const u32,
+            order_of_block: []const u32,
+        };
+
+        /// Rendering sink: writes the encoding into a byte buffer, resolving
+        /// children to their finalized digests, or to group-relative
+        /// back-references inside a cyclic SCC.
+        const RenderSink = struct {
+            engine: *DigestEngine,
+            out: *std.ArrayList(u8),
+            scc: ?*const SccRenderContext,
+
+            fn writeBytes(self: RenderSink, bytes: []const u8) std.mem.Allocator.Error!void {
+                try renderBytes(self.engine.gpa, self.out, bytes);
+            }
+
+            fn writeU32(self: RenderSink, value: u32) std.mem.Allocator.Error!void {
+                try renderU32(self.engine.gpa, self.out, value);
+            }
+
+            fn child(self: RenderSink, ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!void {
+                switch (self.engine.resolvedChildLink(ty, mode)) {
+                    .external => |digest| try self.emitDigest(digest),
+                    .node => |node_index| {
+                        if (self.scc) |ctx| {
+                            const member_pos = ctx.member_pos_of_node[node_index];
+                            if (member_pos != no_scc_position) {
+                                try renderBytes(self.engine.gpa, self.out, "group-ref");
+                                try renderU32(self.engine.gpa, self.out, ctx.order_of_block[ctx.blocks[member_pos]]);
+                                return;
+                            }
+                        }
+                        const node = self.engine.nodes.items[node_index];
+                        std.debug.assert(node.resolved);
+                        try self.emitDigest(node.digest);
+                    },
+                }
+            }
+
+            fn emitDigest(self: RenderSink, digest: names.TypeDigest) std.mem.Allocator.Error!void {
+                try renderBytes(self.engine.gpa, self.out, "type-digest");
+                try renderBytes(self.engine.gpa, self.out, &digest.bytes);
+            }
+        };
+
+        /// Iterative Tarjan SCC discovery. SCCs pop in reverse topological
+        /// order of the condensation, so every edge leaving a popped SCC
+        /// already points at finalized digests and it can resolve on the spot.
+        fn resolveSccs(self: *DigestEngine) std.mem.Allocator.Error!void {
+            const node_count = self.nodes.items.len;
+            const visit_index = try self.gpa.alloc(u32, node_count);
+            defer self.gpa.free(visit_index);
+            @memset(visit_index, unvisited);
+            const low_link = try self.gpa.alloc(u32, node_count);
+            defer self.gpa.free(low_link);
+            const on_stack = try self.gpa.alloc(bool, node_count);
+            defer self.gpa.free(on_stack);
+            @memset(on_stack, false);
+
+            var scc_stack: std.ArrayList(u32) = .empty;
+            defer scc_stack.deinit(self.gpa);
+            const Frame = struct { node: u32, edge_cursor: u32 };
+            var frames: std.ArrayList(Frame) = .empty;
+            defer frames.deinit(self.gpa);
+            var scc_members: std.ArrayList(u32) = .empty;
+            defer scc_members.deinit(self.gpa);
+
+            var next_visit: u32 = 0;
+            for (0..node_count) |start| {
+                if (visit_index[start] != unvisited) continue;
+                visit_index[start] = next_visit;
+                low_link[start] = next_visit;
+                next_visit += 1;
+                try scc_stack.append(self.gpa, @intCast(start));
+                on_stack[start] = true;
+                try frames.append(self.gpa, .{ .node = @intCast(start), .edge_cursor = 0 });
+
+                while (frames.items.len > 0) {
+                    const frame = &frames.items[frames.items.len - 1];
+                    const v = frame.node;
+                    const refs = self.linksOf(v);
+                    if (frame.edge_cursor < refs.len) {
+                        const ref = refs[frame.edge_cursor];
+                        frame.edge_cursor += 1;
+                        const w = switch (ref) {
+                            .external => continue,
+                            .node => |node_index| node_index,
+                        };
+                        if (visit_index[w] == unvisited) {
+                            visit_index[w] = next_visit;
+                            low_link[w] = next_visit;
+                            next_visit += 1;
+                            try scc_stack.append(self.gpa, w);
+                            on_stack[w] = true;
+                            try frames.append(self.gpa, .{ .node = w, .edge_cursor = 0 });
+                        } else if (on_stack[w]) {
+                            low_link[v] = @min(low_link[v], visit_index[w]);
+                        }
+                        continue;
+                    }
+                    _ = frames.pop();
+                    if (frames.items.len > 0) {
+                        const parent = frames.items[frames.items.len - 1].node;
+                        low_link[parent] = @min(low_link[parent], low_link[v]);
+                    }
+                    if (low_link[v] != visit_index[v]) continue;
+                    scc_members.clearRetainingCapacity();
+                    while (true) {
+                        const w = scc_stack.pop() orelse
+                            Common.invariant("Monotype digest SCC stack underflowed");
+                        on_stack[w] = false;
+                        try scc_members.append(self.gpa, w);
+                        if (w == v) break;
+                    }
+                    try self.resolveScc(scc_members.items);
+                }
+            }
+        }
+
+        fn resolveScc(self: *DigestEngine, members: []const u32) std.mem.Allocator.Error!void {
+            if (members.len == 1 and !self.hasSelfEdge(members[0])) {
+                try self.resolveAcyclicNode(members[0]);
                 return;
             }
+            try self.resolveCyclicScc(members);
         }
-        if (self.openNamedCyclePosition(name_store, self.get(ty), visiting.items[0..visiting.len])) |position| {
-            writeBytes(hasher, "cycle");
-            writeU32(hasher, @intCast(position));
-            return;
+
+        fn hasSelfEdge(self: *const DigestEngine, index: u32) bool {
+            for (self.linksOf(index)) |ref| {
+                switch (ref) {
+                    .external => {},
+                    .node => |target| if (target == index) return true,
+                }
+            }
+            return false;
         }
-        if (visiting.len == digest_visiting_max) {
-            // Deeper nesting than the stack tracks cannot contain an
-            // unrecorded cycle shorter than the stack, so digest the type's
-            // identity instead of recursing further.
-            writeBytes(hasher, "deep");
-            writeU32(hasher, @intFromEnum(ty));
-            return;
+
+        fn resolveAcyclicNode(self: *DigestEngine, index: u32) std.mem.Allocator.Error!void {
+            self.render_buf.clearRetainingCapacity();
+            const sink = RenderSink{ .engine = self, .out = &self.render_buf, .scc = null };
+            const node = self.nodes.items[index];
+            try self.store.encodeTypeNode(self.name_store, sink, node.ty, node.mode);
+            var digest: names.TypeDigest = .{ .bytes = sha256Of(self.render_buf.items) };
+            // An acyclic store node whose one-step rendering matches a known
+            // recursive-group unfolding is a rolled-out prefix of the same
+            // infinite type: same label, and children digest-equal to the
+            // member's children. It adopts the member's digest so knot depth
+            // cannot influence identity.
+            if (self.store.recursive_digest_unfoldings.get(digest.bytes)) |member_digest| {
+                digest = member_digest;
+            }
+            self.finalizeNode(index, digest);
         }
-        visiting.items[visiting.len] = ty;
-        visiting.len += 1;
-        defer visiting.len -= 1;
-        switch (self.get(ty)) {
-            .primitive => |primitive| {
-                writeBytes(hasher, "primitive");
-                writeBytes(hasher, @tagName(primitive));
-            },
-            .named => |named| {
-                // Aliases are transparent: their digest is their backing's.
-                if (named.kind == .alias) {
-                    const backing = named.backing orelse {
-                        writeBytes(hasher, "alias-without-backing");
-                        return;
+
+        fn finalizeNode(self: *DigestEngine, index: u32, digest: names.TypeDigest) void {
+            const node = &self.nodes.items[index];
+            std.debug.assert(!node.resolved);
+            node.digest = digest;
+            node.resolved = true;
+            self.store.setCachedDigest(node.ty, node.mode, digest);
+        }
+
+        /// Reduce one cyclic SCC by bisimulation refinement, linearize the
+        /// reduced graph with the minimum-over-entry-points rotation, and
+        /// digest every member as its reduced position.
+        fn resolveCyclicScc(self: *DigestEngine, members: []const u32) std.mem.Allocator.Error!void {
+            const member_count = members.len;
+            const member_pos_of_node = try self.gpa.alloc(u32, self.nodes.items.len);
+            defer self.gpa.free(member_pos_of_node);
+            @memset(member_pos_of_node, no_scc_position);
+            for (members, 0..) |node_index, pos| {
+                member_pos_of_node[node_index] = @intCast(pos);
+            }
+
+            // Refine to the stable bisimulation partition. The initial
+            // partition renders every member with its finalized out-of-SCC
+            // child digests—computed now, not at discovery, so whether a
+            // child arrived cached or was resolved in this run cannot split
+            // bisimilar members. Refinement then splits by the partition
+            // identities reached by every ordered in-SCC reference.
+            var blocks = try self.gpa.alloc(u32, member_count);
+            defer self.gpa.free(blocks);
+            var next_blocks = try self.gpa.alloc(u32, member_count);
+            defer self.gpa.free(next_blocks);
+            var block_count: u32 = 0;
+            {
+                var by_label = std.AutoHashMap([32]u8, u32).init(self.gpa);
+                defer by_label.deinit();
+                for (members, 0..) |node_index, pos| {
+                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    const sink = SccLabelSink{
+                        .engine = self,
+                        .hasher = &hasher,
+                        .member_pos_of_node = member_pos_of_node,
                     };
-                    self.writeTypeDigest(name_store, hasher, backing.ty, visiting, named_mode);
-                    return;
-                }
-                writeBytes(hasher, "named");
-                hasher.update(&named.named_type.module.bytes);
-                writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
-                writeOptionalU32(hasher, named.def.source_decl);
-                if (named.def.source_decl == null) {
-                    writeBytes(hasher, name_store.typeNameText(named.def.type_name));
-                }
-                writeOptionalDigest(hasher, named.def.generated);
-                writeBytes(hasher, @tagName(named.def.iterator_representation));
-                writeBytes(hasher, @tagName(named.def.iterator_kind));
-                writeU32(hasher, named.def.iterator_depth);
-                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
-                writeBytes(hasher, @tagName(named.kind));
-                if (named.builtin_owner) |owner| {
-                    writeBytes(hasher, "builtin");
-                    writeBytes(hasher, @tagName(owner));
-                } else {
-                    writeBytes(hasher, "not-builtin");
-                }
-                self.writeTypeSpanDigest(name_store, hasher, named.args, visiting, named_mode);
-                if (named_mode == .full) {
-                    self.writeNamedBackingDigest(name_store, hasher, named.backing, visiting);
-                    self.writeDeclaredOrderDigest(name_store, hasher, named.declared_order, visiting);
-                } else if (specializationUsesBacking(named.backing)) {
-                    writeBytes(hasher, "specialization-generated-backing");
-                    self.writeNamedBackingDigest(name_store, hasher, named.backing, visiting);
-                } else {
-                    writeBytes(hasher, "specialization-named-identity");
-                }
-            },
-            .record => |fields| {
-                writeBytes(hasher, "record");
-                const field_slice = self.fieldSpan(fields);
-                writeU32(hasher, @intCast(field_slice.len));
-                for (0..field_slice.len) |index| {
-                    const field = GuardedList.at(field_slice, index);
-                    writeBytes(hasher, name_store.recordFieldLabelText(field.name));
-                    writeFieldDefaultDigest(name_store, hasher, field.default);
-                    writeBytes(hasher, @tagName(field.kind_state));
-                    if (field.value_ty) |value_ty| {
-                        writeBytes(hasher, "field-optional-value");
-                        self.writeTypeDigest(name_store, hasher, value_ty, visiting, named_mode);
-                    } else {
-                        writeBytes(hasher, "field-inline-value");
+                    const node = self.nodes.items[node_index];
+                    try self.store.encodeTypeNode(self.name_store, sink, node.ty, node.mode);
+                    const gop = try by_label.getOrPut(hasher.finalResult());
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = block_count;
+                        block_count += 1;
                     }
-                    self.writeTypeDigest(name_store, hasher, field.ty, visiting, named_mode);
+                    blocks[pos] = gop.value_ptr.*;
                 }
-            },
-            .tuple => |items| {
-                writeBytes(hasher, "tuple");
-                self.writeTypeSpanDigest(name_store, hasher, items, visiting, named_mode);
-            },
-            .tag_union => |tags| {
-                writeBytes(hasher, "tag_union");
-                const tag_slice = self.tagSpan(tags);
-                writeU32(hasher, @intCast(tag_slice.len));
-                for (0..tag_slice.len) |index| {
-                    const tag = GuardedList.at(tag_slice, index);
-                    writeBytes(hasher, name_store.tagLabelText(tag.name));
-                    self.writeTypeSpanDigest(name_store, hasher, tag.payloads, visiting, named_mode);
+            }
+            while (true) {
+                var by_signature = std.AutoHashMap([32]u8, u32).init(self.gpa);
+                defer by_signature.deinit();
+                var next_count: u32 = 0;
+                for (members, 0..) |node_index, pos| {
+                    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                    hashU32(&hasher, blocks[pos]);
+                    for (self.linksOf(node_index)) |ref| {
+                        const target = switch (ref) {
+                            .external => continue,
+                            .node => |node_target| node_target,
+                        };
+                        const target_pos = member_pos_of_node[target];
+                        if (target_pos == no_scc_position) continue;
+                        hashU32(&hasher, blocks[target_pos]);
+                    }
+                    const gop = try by_signature.getOrPut(hasher.finalResult());
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = next_count;
+                        next_count += 1;
+                    }
+                    next_blocks[pos] = gop.value_ptr.*;
                 }
-            },
-            .list => |elem| {
-                writeBytes(hasher, "list");
-                self.writeTypeDigest(name_store, hasher, elem, visiting, named_mode);
-            },
-            .box => |elem| {
-                writeBytes(hasher, "box");
-                self.writeTypeDigest(name_store, hasher, elem, visiting, named_mode);
-            },
-            .func => |function| {
-                writeBytes(hasher, "func");
-                self.writeTypeSpanDigest(name_store, hasher, function.args, visiting, named_mode);
-                self.writeTypeDigest(name_store, hasher, function.ret, visiting, named_mode);
-            },
-            .erased => |erased| {
-                writeBytes(hasher, "erased");
-                hasher.update(&erased.bytes);
-            },
-            .zst => writeBytes(hasher, "zst"),
-        }
-    }
+                const stable = next_count == block_count;
+                std.mem.swap([]u32, &blocks, &next_blocks);
+                block_count = next_count;
+                if (stable) break;
+            }
 
-    fn writeTypeSpanDigest(
-        self: *const Store,
-        name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
-        span_: Span,
-        visiting: *DigestVisiting,
-        named_mode: NamedDigestMode,
-    ) void {
-        const values = self.span(span_);
-        writeU32(hasher, @intCast(values.len));
-        for (0..values.len) |index| {
-            const child = GuardedList.at(values, index);
-            self.writeTypeDigest(name_store, hasher, child, visiting, named_mode);
-        }
-    }
+            // Quotient graph: one representative and its ordered in-SCC block
+            // edges per block. The partition is stable, so any member
+            // represents its block.
+            const block_rep = try self.gpa.alloc(u32, block_count);
+            defer self.gpa.free(block_rep);
+            {
+                const filled = try self.gpa.alloc(bool, block_count);
+                defer self.gpa.free(filled);
+                @memset(filled, false);
+                for (members, 0..) |node_index, pos| {
+                    const block = blocks[pos];
+                    if (!filled[block]) {
+                        filled[block] = true;
+                        block_rep[block] = node_index;
+                    }
+                }
+            }
+            var block_edges_pool: std.ArrayList(u32) = .empty;
+            defer block_edges_pool.deinit(self.gpa);
+            const block_edge_start = try self.gpa.alloc(u32, block_count);
+            defer self.gpa.free(block_edge_start);
+            const block_edge_len = try self.gpa.alloc(u32, block_count);
+            defer self.gpa.free(block_edge_len);
+            for (0..block_count) |block| {
+                const start: u32 = @intCast(block_edges_pool.items.len);
+                for (self.linksOf(block_rep[block])) |ref| {
+                    const target = switch (ref) {
+                        .external => continue,
+                        .node => |node_target| node_target,
+                    };
+                    const target_pos = member_pos_of_node[target];
+                    if (target_pos == no_scc_position) continue;
+                    try block_edges_pool.append(self.gpa, blocks[target_pos]);
+                }
+                block_edge_start[block] = start;
+                block_edge_len[block] = @intCast(block_edges_pool.items.len - start);
+            }
 
-    fn writeNamedBackingDigest(
-        self: *const Store,
-        name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
-        backing: ?NamedBacking,
-        visiting: *DigestVisiting,
-    ) void {
-        writeBytes(hasher, "backing");
-        if (backing) |named_backing| {
-            writeBytes(hasher, @tagName(named_backing.use));
-            writeBytes(hasher, @tagName(named_backing.authority));
-            self.writeTypeDigest(name_store, hasher, named_backing.ty, visiting, .full);
-        } else {
-            writeBytes(hasher, "none");
-        }
-    }
+            // Deterministic order: preorder DFS from every entry block,
+            // keeping the lexicographically smallest rendering. The reduced
+            // graph has no two equivalent positions, so the minimum is
+            // unique.
+            const order_of_block = try self.gpa.alloc(u32, block_count);
+            defer self.gpa.free(order_of_block);
+            const best_order = try self.gpa.alloc(u32, block_count);
+            defer self.gpa.free(best_order);
+            const DfsFrame = struct { block: u32, edge_cursor: u32 };
+            var dfs: std.ArrayList(DfsFrame) = .empty;
+            defer dfs.deinit(self.gpa);
+            var candidate_order: std.ArrayList(u32) = .empty;
+            defer candidate_order.deinit(self.gpa);
+            var candidate_buf: std.ArrayList(u8) = .empty;
+            defer candidate_buf.deinit(self.gpa);
+            var best_buf: std.ArrayList(u8) = .empty;
+            defer best_buf.deinit(self.gpa);
+            var have_best = false;
 
-    fn writeDeclaredOrderDigest(
-        self: *const Store,
-        name_store: *const names.NameStore,
-        hasher: *std.crypto.hash.sha2.Sha256,
-        declared_order: Span,
-        visiting: *DigestVisiting,
-    ) void {
-        writeBytes(hasher, "declared_order");
-        const entries = self.declaredFieldSpan(declared_order);
-        writeU32(hasher, @intCast(entries.len));
-        for (0..entries.len) |index| {
-            const entry = GuardedList.at(entries, index);
-            switch (entry) {
-                .named => |field_name| {
-                    writeBytes(hasher, "named");
-                    writeBytes(hasher, name_store.recordFieldLabelText(field_name));
-                },
-                .padding => |padding_ty| {
-                    writeBytes(hasher, "padding");
-                    self.writeTypeDigest(name_store, hasher, padding_ty, visiting, .full);
-                },
+            for (0..block_count) |entry| {
+                @memset(order_of_block, no_scc_position);
+                candidate_order.clearRetainingCapacity();
+                dfs.clearRetainingCapacity();
+                order_of_block[entry] = 0;
+                try candidate_order.append(self.gpa, @intCast(entry));
+                try dfs.append(self.gpa, .{ .block = @intCast(entry), .edge_cursor = 0 });
+                while (dfs.items.len > 0) {
+                    const frame = &dfs.items[dfs.items.len - 1];
+                    const edges = block_edges_pool.items[block_edge_start[frame.block]..][0..block_edge_len[frame.block]];
+                    if (frame.edge_cursor >= edges.len) {
+                        _ = dfs.pop();
+                        continue;
+                    }
+                    const target = edges[frame.edge_cursor];
+                    frame.edge_cursor += 1;
+                    if (order_of_block[target] != no_scc_position) continue;
+                    order_of_block[target] = @intCast(candidate_order.items.len);
+                    try candidate_order.append(self.gpa, target);
+                    try dfs.append(self.gpa, .{ .block = target, .edge_cursor = 0 });
+                }
+                if (candidate_order.items.len != block_count) {
+                    Common.invariant("Monotype digest SCC quotient was not strongly connected");
+                }
+
+                candidate_buf.clearRetainingCapacity();
+                const ctx = SccRenderContext{
+                    .member_pos_of_node = member_pos_of_node,
+                    .blocks = blocks,
+                    .order_of_block = order_of_block,
+                };
+                const sink = RenderSink{ .engine = self, .out = &candidate_buf, .scc = &ctx };
+                for (candidate_order.items) |block| {
+                    const rep = self.nodes.items[block_rep[block]];
+                    try self.store.encodeTypeNode(self.name_store, sink, rep.ty, rep.mode);
+                }
+
+                if (have_best) {
+                    // Two entry points rendering identical bytes would be
+                    // bisimilar, contradicting the reduced partition.
+                    std.debug.assert(!std.mem.eql(u8, candidate_buf.items, best_buf.items));
+                }
+                if (!have_best or std.mem.order(u8, candidate_buf.items, best_buf.items) == .lt) {
+                    std.mem.swap(std.ArrayList(u8), &candidate_buf, &best_buf);
+                    @memcpy(best_order, order_of_block);
+                    have_best = true;
+                }
+            }
+
+            // Every reduced position digests as its index in the minimum
+            // group encoding; every original member adopts its position's
+            // digest.
+            const block_digest = try self.gpa.alloc(names.TypeDigest, block_count);
+            defer self.gpa.free(block_digest);
+            for (0..block_count) |block| {
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                hashBytes(&hasher, "recursive-member");
+                hashU32(&hasher, best_order[block]);
+                hashBytes(&hasher, best_buf.items);
+                block_digest[block] = .{ .bytes = hasher.finalResult() };
+            }
+            for (members, 0..) |node_index, pos| {
+                self.finalizeNode(node_index, block_digest[blocks[pos]]);
+            }
+
+            // Record each reduced position's one-step unfolding in the
+            // store's unfolding index so later rolled-out prefixes of this
+            // group fold to the same digests. Members are finalized, so a
+            // plain rendering resolves in-SCC children to their new group
+            // digests.
+            for (0..block_count) |block| {
+                self.render_buf.clearRetainingCapacity();
+                const sink = RenderSink{ .engine = self, .out = &self.render_buf, .scc = null };
+                const rep = self.nodes.items[block_rep[block]];
+                try self.store.encodeTypeNode(self.name_store, sink, rep.ty, rep.mode);
+                const unfolding = sha256Of(self.render_buf.items);
+                const gop = try self.store.recursive_digest_unfoldings.getOrPut(unfolding);
+                if (gop.found_existing) {
+                    // Reduced-group digests are intrinsic, so an equivalent
+                    // group digested earlier must agree.
+                    std.debug.assert(std.mem.eql(u8, &gop.value_ptr.bytes, &block_digest[block].bytes));
+                } else {
+                    gop.value_ptr.* = block_digest[block];
+                }
             }
         }
-    }
+    };
 };
 
 /// How `typeMatches` compares its two sides.
@@ -2550,18 +2866,12 @@ fn assertNoDuplicateTags(name_store: *const names.NameStore, tags_: []const Tag)
     }
 }
 
-fn cycleDigest(position: u32) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "cycle");
-    writeU32(&hasher, position);
-    return .{ .bytes = hasher.finalResult() };
-}
-
-fn deepDigest(ty: TypeId) names.TypeDigest {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "deep");
-    writeU32(&hasher, @intFromEnum(ty));
-    return .{ .bytes = hasher.finalResult() };
+/// Digest queries back deep comparison predicates whose call chains carry no
+/// error path, so allocation failure while building digest traversal state
+/// stops the build with a defined abort in every build mode rather than
+/// threading `OutOfMemory` through every type comparison.
+fn digestOutOfMemory() noreturn {
+    std.debug.panic("out of memory while digesting a Monotype type", .{});
 }
 
 fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
@@ -2578,40 +2888,88 @@ fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     hasher.update(std.mem.asBytes(&little));
 }
 
-fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
-    const present: u8 = if (value == null) 0 else 1;
-    hasher.update(std.mem.asBytes(&present));
-    if (value) |v| writeU32(hasher, v);
+// Digest sinks define `writeBytes`/`writeU32` methods, which shadow the
+// file-scope hasher helpers inside their bodies; these aliases keep the
+// helpers reachable there.
+const hashBytes = writeBytes;
+const hashU32 = writeU32;
+
+fn sha256Of(bytes: []const u8) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(bytes);
+    return hasher.finalResult();
 }
 
-fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeDigest) void {
-    if (value) |digest| {
-        writeBytes(hasher, "digest");
-        hasher.update(&digest.bytes);
+fn renderU32(gpa: std.mem.Allocator, out: *std.ArrayList(u8), value: u32) std.mem.Allocator.Error!void {
+    const little = std.mem.nativeToLittle(u32, value);
+    try out.appendSlice(gpa, std.mem.asBytes(&little));
+}
+
+fn renderBytes(gpa: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) std.mem.Allocator.Error!void {
+    try renderU32(gpa, out, @intCast(bytes.len));
+    try out.appendSlice(gpa, bytes);
+}
+
+fn sinkOptionalU32(sink: anytype, value: ?u32) std.mem.Allocator.Error!void {
+    if (value) |v| {
+        try sink.writeBytes("some-u32");
+        try sink.writeU32(v);
     } else {
-        writeBytes(hasher, "no-digest");
+        try sink.writeBytes("no-u32");
     }
 }
 
-fn writeIteratorTopology(
-    hasher: *std.crypto.hash.sha2.Sha256,
+fn sinkOptionalDigest(sink: anytype, value: ?names.TypeDigest) std.mem.Allocator.Error!void {
+    if (value) |digest| {
+        try sink.writeBytes("digest");
+        try sink.writeBytes(&digest.bytes);
+    } else {
+        try sink.writeBytes("no-digest");
+    }
+}
+
+fn sinkIteratorTopology(
+    sink: anytype,
     name_store: *const names.NameStore,
     topology: ?IteratorTopology,
-) void {
+) std.mem.Allocator.Error!void {
     const value = topology orelse {
-        writeBytes(hasher, "no-iterator-topology");
+        try sink.writeBytes("no-iterator-topology");
         return;
     };
-    writeBytes(hasher, "iterator-topology");
-    writeBytes(hasher, name_store.recordFieldLabelText(value.len_field));
-    writeBytes(hasher, name_store.recordFieldLabelText(value.step_field));
-    writeBytes(hasher, name_store.tagLabelText(value.known_tag));
-    writeBytes(hasher, name_store.tagLabelText(value.unknown_tag));
-    writeBytes(hasher, name_store.tagLabelText(value.done_tag));
-    writeBytes(hasher, name_store.tagLabelText(value.one_tag));
-    writeBytes(hasher, name_store.tagLabelText(value.skip_tag));
-    writeBytes(hasher, name_store.recordFieldLabelText(value.item_field));
-    writeBytes(hasher, name_store.recordFieldLabelText(value.rest_field));
+    try sink.writeBytes("iterator-topology");
+    try sink.writeBytes(name_store.recordFieldLabelText(value.len_field));
+    try sink.writeBytes(name_store.recordFieldLabelText(value.step_field));
+    try sink.writeBytes(name_store.tagLabelText(value.known_tag));
+    try sink.writeBytes(name_store.tagLabelText(value.unknown_tag));
+    try sink.writeBytes(name_store.tagLabelText(value.done_tag));
+    try sink.writeBytes(name_store.tagLabelText(value.one_tag));
+    try sink.writeBytes(name_store.tagLabelText(value.skip_tag));
+    try sink.writeBytes(name_store.recordFieldLabelText(value.item_field));
+    try sink.writeBytes(name_store.recordFieldLabelText(value.rest_field));
+}
+
+/// A named backing is a stored type identity, never an interface, so its
+/// child always digests in full mode regardless of the enclosing mode.
+fn encodeNamedBacking(sink: anytype, backing: ?NamedBacking) std.mem.Allocator.Error!void {
+    try sink.writeBytes("backing");
+    if (backing) |named_backing| {
+        try sink.writeBytes(@tagName(named_backing.use));
+        try sink.writeBytes(@tagName(named_backing.authority));
+        try sink.child(named_backing.ty, .full);
+    } else {
+        try sink.writeBytes("none");
+    }
+}
+
+fn sinkFieldDefault(sink: anytype, name_store: *const names.NameStore, default: ?FieldDefault) std.mem.Allocator.Error!void {
+    if (default) |field_default| {
+        try sink.writeBytes("field-default");
+        try sink.writeBytes(name_store.moduleIdentityBytes(field_default.module));
+        try sink.writeU32(field_default.expr_node);
+    } else {
+        try sink.writeBytes("field-no-default");
+    }
 }
 
 fn optionalDigestEql(lhs: ?names.TypeDigest, rhs: ?names.TypeDigest) bool {
@@ -2731,7 +3089,11 @@ test "monotype type interner preserves tag payload order" {
     try std.testing.expectEqual(second, GuardedList.at(stored_payloads, 1));
 }
 
-test "monotype type interner checks exact equality after digest match" {
+test "monotype backing-less aliases digest by their own identity" {
+    // Backing-less aliases used to be the one theoretical digest collision:
+    // every one of them digested as "alias-without-backing". Aliases are now
+    // opaque named nodes, so differently named backing-less aliases carry
+    // distinct digests and stay distinct interner entries.
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -2757,7 +3119,7 @@ test "monotype type interner checks exact equality after digest match" {
 
     const first_digest = interner.typeDigest(first);
     const second_digest = interner.typeDigest(second);
-    try std.testing.expectEqualSlices(u8, first_digest.bytes[0..], second_digest.bytes[0..]);
+    try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
     try std.testing.expect(first != second);
 }
 
@@ -2968,9 +3330,9 @@ test "monotype recursive nominal digest ignores how deep the knot is tied" {
 }
 
 test "monotype recursive nominal digest still separates different arguments" {
-    // The unrolling-insensitive fold keys on the nominal's declaration *and*
-    // arguments, so a non-uniformly recursive occurrence at different arguments
-    // must not be folded into its parent.
+    // Unrolling insensitivity must key on the nominal's declaration *and*
+    // arguments: a non-uniformly recursive occurrence at different arguments
+    // is a different type and must not collapse into its parent.
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -3280,7 +3642,11 @@ test "monotype type equality accepts isomorphic recursive structural types" {
     try std.testing.expect(!try store.typeEql(&name_store, rec_a, rec_c));
 }
 
-test "monotype digest treats aliases as their backing" {
+test "monotype digest keeps aliases opaque" {
+    // Aliases survive into later IR as observable nodes, so their digests are
+    // their own: a nickname is not the same stored identity as its backing,
+    // and not the same as an equally named nominal either. Structural
+    // equality still unwraps aliases; only the content identity is opaque.
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -3310,8 +3676,27 @@ test "monotype digest treats aliases as their backing" {
     const str_digest = store.typeDigest(&name_store, str);
     const alias_digest = store.typeDigest(&name_store, aliased);
     const nominal_digest = store.typeDigest(&name_store, nominal);
-    try std.testing.expect(std.mem.eql(u8, str_digest.bytes[0..], alias_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, str_digest.bytes[0..], alias_digest.bytes[0..]));
     try std.testing.expect(!std.mem.eql(u8, str_digest.bytes[0..], nominal_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, alias_digest.bytes[0..], nominal_digest.bytes[0..]));
+
+    // Alias-over-nominal is likewise distinct from the nominal it wraps.
+    const alias_over_nominal = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .alias,
+        .args = Span.empty(),
+        .backing = .{ .ty = nominal, .use = .inspectable },
+    } });
+    const alias_over_nominal_digest = store.typeDigest(&name_store, alias_over_nominal);
+    try std.testing.expect(!std.mem.eql(u8, alias_over_nominal_digest.bytes[0..], nominal_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, alias_over_nominal_digest.bytes[0..], alias_digest.bytes[0..]));
+
+    // Structural equality still unwraps aliases; only content identity is
+    // opaque, so alias-vs-backing is the deliberate one-way exception to
+    // "structurally equal implies digest equal".
+    try std.testing.expect(try store.typeEql(&name_store, str, aliased));
+    try std.testing.expect(try store.typeEql(&name_store, nominal, alias_over_nominal));
 }
 
 test "monotype type equality treats aliases as their backing" {
@@ -3343,6 +3728,8 @@ test "monotype type equality treats aliases as their backing" {
 
     try std.testing.expect(try store.typeEql(&name_store, str, aliased));
     try std.testing.expect(!try store.typeEql(&name_store, str, nominal));
+    try std.testing.expectEqual(store.equalityDigest(&name_store, str), store.equalityDigest(&name_store, aliased));
+    try std.testing.expect(!std.meta.eql(store.equalityDigest(&name_store, str), store.equalityDigest(&name_store, nominal)));
 }
 
 test "monotype type equality compares exact types across stores" {
@@ -3406,7 +3793,7 @@ test "monotype type equality compares exact types across stores" {
     try std.testing.expect(!try typeEqlAcrossStores(allocator, &name_store, current.view(), current_fn, loaded_durable, loaded_record));
 }
 
-test "monotype type equality rejects digest-equal aliases without backing" {
+test "monotype type equality and digests separate aliases without backing" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
@@ -3434,7 +3821,7 @@ test "monotype type equality rejects digest-equal aliases without backing" {
 
     const first_digest = store.typeDigest(&name_store, first);
     const second_digest = store.typeDigest(&name_store, second);
-    try std.testing.expect(std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
     try std.testing.expect(!try store.typeEql(&name_store, first, second));
 }
 
@@ -3649,6 +4036,246 @@ test "monotype named type digest includes declared field order" {
     const ab_digest = store.typeDigest(&name_store, named_ab);
     const ba_digest = store.typeDigest(&name_store, named_ba);
     try std.testing.expect(!std.mem.eql(u8, ab_digest.bytes[0..], ba_digest.bytes[0..]));
+
+    // The interface digest intentionally omits declared field order: both
+    // orders may share a specialization.
+    const ab_spec = store.specializationDigest(&name_store, named_ab);
+    const ba_spec = store.specializationDigest(&name_store, named_ba);
+    try std.testing.expect(std.mem.eql(u8, ab_spec.bytes[0..], ba_spec.bytes[0..]));
+}
+
+test "monotype digest folds a recursive knot beyond depth 300 into its unrolling" {
+    // A cycle of 350 box nodes and a self-box denote the same infinite type.
+    // The deleted depth-256 slot-index digest would have made the long
+    // cycle's digest depend on its ids; graph reduction collapses both to the
+    // same one-node quotient.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    var chain: [350]TypeId = undefined;
+    for (&chain) |*id| id.* = try store.reserveSlot();
+    for (chain, 0..) |id, index| {
+        store.fillReservedSlot(id, .{ .box = chain[(index + 1) % chain.len] });
+    }
+    const knot = try store.reserveSlot();
+    store.fillReservedSlot(knot, .{ .box = knot });
+
+    const chain_digest = store.typeDigest(&name_store, chain[0]);
+    const knot_digest = store.typeDigest(&name_store, knot);
+    try std.testing.expectEqualSlices(u8, chain_digest.bytes[0..], knot_digest.bytes[0..]);
+    // Every position of the long cycle is equivalent to every other.
+    const mid_digest = store.typeDigest(&name_store, chain[137]);
+    try std.testing.expectEqualSlices(u8, chain_digest.bytes[0..], mid_digest.bytes[0..]);
+}
+
+test "monotype digest equates bisimilar recursive graphs of different sizes" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const x = try store.reserveSlot();
+    const y = try store.reserveSlot();
+    store.fillReservedSlot(x, .{ .list = y });
+    store.fillReservedSlot(y, .{ .list = x });
+    const z = try store.reserveSlot();
+    store.fillReservedSlot(z, .{ .list = z });
+
+    const x_digest = store.typeDigest(&name_store, x);
+    const z_digest = store.typeDigest(&name_store, z);
+    try std.testing.expectEqualSlices(u8, x_digest.bytes[0..], z_digest.bytes[0..]);
+
+    // Equivalent positions inside one SCC receive equal digests.
+    const y_digest = store.typeDigest(&name_store, y);
+    try std.testing.expectEqualSlices(u8, x_digest.bytes[0..], y_digest.bytes[0..]);
+
+    // A rolled-out prefix built after the knot's digest was cached folds to
+    // the member digest through the store's unfolding index.
+    const prefix = try store.add(.{ .list = z });
+    const prefix_digest = store.typeDigest(&name_store, prefix);
+    try std.testing.expectEqualSlices(u8, z_digest.bytes[0..], prefix_digest.bytes[0..]);
+}
+
+test "monotype digest ignores child cachedness inside a recursive group" {
+    // k1 and k2 are equivalent positions of one knot, but k1 references a str
+    // leaf whose digest was cached before the knot was digested while k2
+    // references an uncached duplicate leaf. Whether a child arrived as a
+    // cache hit must not influence the reduced partition: both members share
+    // one digest, equal to an independently tied one-node knot over a third
+    // duplicate leaf.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const cached_str = try store.add(.{ .primitive = .str });
+    _ = store.typeDigest(&name_store, cached_str);
+    const fresh_str = try store.add(.{ .primitive = .str });
+
+    const k1 = try store.reserveSlot();
+    const k2 = try store.reserveSlot();
+    store.fillReservedSlot(k1, .{ .tuple = try store.addSpan(&.{ k2, cached_str }) });
+    store.fillReservedSlot(k2, .{ .tuple = try store.addSpan(&.{ k1, fresh_str }) });
+
+    const k1_digest = store.typeDigest(&name_store, k1);
+    const k2_digest = store.typeDigest(&name_store, k2);
+    try std.testing.expectEqualSlices(u8, k1_digest.bytes[0..], k2_digest.bytes[0..]);
+
+    const third_str = try store.add(.{ .primitive = .str });
+    const solo = try store.reserveSlot();
+    store.fillReservedSlot(solo, .{ .tuple = try store.addSpan(&.{ solo, third_str }) });
+    const solo_digest = store.typeDigest(&name_store, solo);
+    try std.testing.expectEqualSlices(u8, k1_digest.bytes[0..], solo_digest.bytes[0..]);
+}
+
+test "monotype digest keeps entangled equivalent knots conservatively distinct" {
+    // b1/b2 tie a knot that also points into c, a separately tied knot of the
+    // same infinite type. Per-SCC reduction cannot identify an in-SCC
+    // position with an equivalent position outside its own SCC, so the
+    // members digest apart from c even though all three are structurally
+    // equal. This pins a KNOWN conservative incompleteness: equal digests
+    // still imply structural equality (the direction interning relies on),
+    // and a future whole-graph reduction may intentionally flip the
+    // inequality assertions below.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const c = try store.reserveSlot();
+    store.fillReservedSlot(c, .{ .tuple = try store.addSpan(&.{ c, c }) });
+    const b1 = try store.reserveSlot();
+    const b2 = try store.reserveSlot();
+    store.fillReservedSlot(b1, .{ .tuple = try store.addSpan(&.{ b2, b1 }) });
+    store.fillReservedSlot(b2, .{ .tuple = try store.addSpan(&.{ b1, c }) });
+
+    try std.testing.expect(try store.typeEql(&name_store, b1, c));
+    try std.testing.expect(try store.typeEql(&name_store, b2, c));
+
+    const c_digest = store.typeDigest(&name_store, c);
+    const b1_digest = store.typeDigest(&name_store, b1);
+    const b2_digest = store.typeDigest(&name_store, b2);
+    try std.testing.expect(!std.mem.eql(u8, b1_digest.bytes[0..], c_digest.bytes[0..]));
+    try std.testing.expect(!std.mem.eql(u8, b2_digest.bytes[0..], c_digest.bytes[0..]));
+
+    // Digests stay stable on repeat queries.
+    const b1_again = store.typeDigest(&name_store, b1);
+    try std.testing.expectEqualSlices(u8, b1_digest.bytes[0..], b1_again.bytes[0..]);
+}
+
+test "monotype digest separates tag unions by checked name" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const runtime_name = try name_store.internTagLabel("Runtime");
+    const first_checked = try name_store.internTagLabel("FirstChecked");
+    const second_checked = try name_store.internTagLabel("SecondChecked");
+
+    const first = try store.add(.{ .tag_union = try store.addTags(&.{
+        .{ .name = runtime_name, .checked_name = first_checked, .payloads = Span.empty() },
+    }) });
+    const second = try store.add(.{ .tag_union = try store.addTags(&.{
+        .{ .name = runtime_name, .checked_name = second_checked, .payloads = Span.empty() },
+    }) });
+
+    const first_digest = store.typeDigest(&name_store, first);
+    const second_digest = store.typeDigest(&name_store, second);
+    try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
+    const first_spec = store.specializationDigest(&name_store, first);
+    const second_spec = store.specializationDigest(&name_store, second);
+    try std.testing.expect(!std.mem.eql(u8, first_spec.bytes[0..], second_spec.bytes[0..]));
+}
+
+test "monotype digest separates named types by checked type id" {
+    // `named_type.ty` survives into `ConstStore` and is later used to
+    // re-enter the checked store, so it is part of the identity.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const type_name = try name_store.internTypeName("Reentrant");
+
+    const first = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+    } });
+    const second = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .args = Span.empty(),
+    } });
+
+    const first_digest = store.typeDigest(&name_store, first);
+    const second_digest = store.typeDigest(&name_store, second);
+    try std.testing.expect(!std.mem.eql(u8, first_digest.bytes[0..], second_digest.bytes[0..]));
+    const first_spec = store.specializationDigest(&name_store, first);
+    const second_spec = store.specializationDigest(&name_store, second);
+    try std.testing.expect(!std.mem.eql(u8, first_spec.bytes[0..], second_spec.bytes[0..]));
+}
+
+test "monotype full and interface digests use separate domains" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const unit = try store.add(.zst);
+    const full = store.typeDigest(&name_store, unit);
+    const interface = store.specializationDigest(&name_store, unit);
+    try std.testing.expect(!std.mem.eql(u8, full.bytes[0..], interface.bytes[0..]));
+}
+
+test "monotype digests are independent of allocation order" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var first = Store.init(std.testing.allocator);
+    defer first.deinit();
+    var second = Store.init(std.testing.allocator);
+    defer second.deinit();
+
+    // First store: knot filled forward, root tuple built directly.
+    const first_str = try first.add(.{ .primitive = .str });
+    const first_x = try first.reserveSlot();
+    const first_y = try first.reserveSlot();
+    first.fillReservedSlot(first_x, .{ .list = first_y });
+    first.fillReservedSlot(first_y, .{ .list = first_x });
+    const first_root = try first.add(.{ .tuple = try first.addSpan(&.{ first_x, first_str }) });
+
+    // Second store: junk ids first, the knot filled in the opposite order,
+    // and the equivalent cycle entered at the other position.
+    _ = try second.add(.{ .primitive = .i64 });
+    _ = try second.add(.zst);
+    const second_y = try second.reserveSlot();
+    const second_x = try second.reserveSlot();
+    second.fillReservedSlot(second_y, .{ .list = second_x });
+    second.fillReservedSlot(second_x, .{ .list = second_y });
+    const second_str = try second.add(.{ .primitive = .str });
+    const second_root = try second.add(.{ .tuple = try second.addSpan(&.{ second_x, second_str }) });
+
+    const first_root_digest = first.typeDigest(&name_store, first_root);
+    const second_root_digest = second.typeDigest(&name_store, second_root);
+    try std.testing.expectEqualSlices(u8, first_root_digest.bytes[0..], second_root_digest.bytes[0..]);
+
+    const first_spec = first.specializationDigest(&name_store, first_root);
+    const second_spec = second.specializationDigest(&name_store, second_root);
+    try std.testing.expectEqualSlices(u8, first_spec.bytes[0..], second_spec.bytes[0..]);
 }
 
 test "monotype named type digest includes padding backing" {
