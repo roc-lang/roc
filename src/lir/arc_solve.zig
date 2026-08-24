@@ -1256,7 +1256,12 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         return false;
     }
 
-    fn destroyMechanismOf(solver: *Solver, origins: *const UniqueOriginFacts, value: u32) DestroyMechanism {
+    fn destroyMechanismOf(
+        solver: *Solver,
+        uniqueness: *const Uniqueness,
+        origins: *const UniqueOriginFacts,
+        value: u32,
+    ) DestroyMechanism {
         // The verdict propagates along alias edges, so the mechanism may sit
         // at any point of the chain rather than at the value the emission
         // side named. Test every hop and report the first that explains it.
@@ -1264,18 +1269,22 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         var hops: u32 = 0;
         while (hops < 64) : (hops += 1) {
             var borrowed = false;
+            // An owned call argument is consumed directly rather than through
+            // a consume fact, so both sources have to be counted together:
+            // the solve marks a value destroyed on its second consume from
+            // either one.
+            var consumes: u32 = 0;
             for (solver.unique_calls.items) |call| {
                 const sig = solver.sigs[@intFromEnum(call.callee)];
                 const args = solver.store.getLocalSpan(call.args);
                 for (0..GuardedList.borrowLen(args)) |position| {
                     const arg = solver.domain.indexOf(GuardedList.at(args, position)) orelse continue;
                     if (arg != current) continue;
-                    if (sig.paramMode(position) != .owned) borrowed = true;
+                    if (sig.paramMode(position) == .owned) consumes += 1 else borrowed = true;
                 }
             }
             if (borrowed) return .call_borrowed_arg;
 
-            var consumes: u32 = 0;
             for (solver.unique_facts.items) |fact| switch (fact) {
                 .consume => |local| {
                     const index = solver.domain.indexOf(local) orelse continue;
@@ -1290,7 +1299,11 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
                 return .multi_def_alias;
             }
 
-            const source = origins.alias_source[current];
+            // The propagation records which source each destroyed value
+            // inherited from, which reaches further than the single alias
+            // source kept per local.
+            const blamed = if (uniqueness.destroy_blame) |slots| slots[current] else no_local;
+            const source = if (blamed != no_local) blamed else origins.alias_source[current];
             if (source == no_local or source == current) return .alias_graph_propagated;
             current = source;
         }
@@ -1426,6 +1439,16 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         var def_counts = [_]u64{0} ** stmt_tag_count;
         var destroy_counts = [_]u64{0} ** @typeInfo(DestroyOrigin).@"enum".fields.len;
         var mechanism_counts = [_]u64{0} ** @typeInfo(DestroyMechanism).@"enum".fields.len;
+        var site_counts = [_]u64{0} ** 7;
+        const site_names = [_][]const u8{
+            "destroy fact",
+            "borrowed call arg",
+            "second consume",
+            "multi-def alias target",
+            "alias propagation",
+            "(not recorded)",
+            "alias consumed its source",
+        };
         var undefined_defs: u64 = 0;
 
         const field_count = @typeInfo(NonUniqueCause).@"enum".fields.len;
@@ -1470,7 +1493,21 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
                         if (destroyOriginOf(solver, culprit)) |origin| {
                             destroy_counts[@intFromEnum(origin)] += 1;
                         }
-                        mechanism_counts[@intFromEnum(destroyMechanismOf(solver, origins, culprit))] += 1;
+                        mechanism_counts[@intFromEnum(destroyMechanismOf(solver, uniqueness, origins, culprit))] += 1;
+                        if (uniqueness.destroy_site) |tags| {
+                            // Walk the propagation blame to the value whose
+                            // destroyed bit was set by something other than
+                            // propagation; that is the one worth naming.
+                            var origin = culprit;
+                            var steps: u32 = 0;
+                            while (steps < 64 and tags[origin] == 4) : (steps += 1) {
+                                const next = if (uniqueness.destroy_blame) |slots| slots[origin] else no_local;
+                                if (next == no_local or next == origin) break;
+                                origin = next;
+                            }
+                            const tag = tags[origin];
+                            site_counts[if (tag == 255) 5 else tag] += 1;
+                        }
                     }
                     if (root.depth > max_depth) max_depth = root.depth;
                     depth_sum += root.depth;
@@ -1501,6 +1538,9 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         inline for (@typeInfo(DestroyMechanism).@"enum".fields) |field| {
             const count = mechanism_counts[field.value];
             if (count != 0) std.debug.print("  how:{s: <20} {d}\n", .{ field.name, count });
+        }
+        for (site_counts, 0..) |count, index| {
+            if (count != 0) std.debug.print("  site:{s: <22} {d}\n", .{ site_names[index], count });
         }
     }
 };
@@ -3393,6 +3433,16 @@ fn verifyAliasesWithinPartition(
 
 /// Result of the born-unique analysis, one bit triple per local.
 pub const Uniqueness = struct {
+    /// For each local the propagation marked destroyed, the alias source it
+    /// inherited that from. Allocated only when the uniqueness diagnostic is
+    /// on: it exists to name the value actually responsible, which the alias
+    /// source recorded per local cannot, because the propagation walks a
+    /// wider graph.
+    destroy_blame: ?[]u32 = null,
+    /// Which code path set each local's destroyed bit, recorded where it
+    /// happens rather than inferred afterwards from the surrounding state.
+    destroy_site: ?[]u8 = null,
+
     /// Bit set => every definition of the local binds a value whose
     /// outermost allocation originated at a unique birth: a fresh aggregate
     /// or non-static literal assignment, a low-level op whose `RcEffect` marks its
@@ -3413,6 +3463,8 @@ pub const Uniqueness = struct {
 
     /// Frees all three bit sets.
     pub fn deinit(self: *Uniqueness, allocator: Allocator) void {
+        if (self.destroy_blame) |blame| allocator.free(blame);
+        if (self.destroy_site) |sites| allocator.free(sites);
         self.born_unique.deinit(allocator);
         self.unique.deinit(allocator);
         self.destroyed.deinit(allocator);
@@ -3612,6 +3664,31 @@ fn computeUniquenessFromFacts(
     solver: *const Solver,
     origins: *UniqueOriginFacts,
 ) SolveError!Uniqueness {
+    // Blame slots exist only for the diagnostic; the solve never reads them.
+    const blame: ?[]u32 = if (builtin.os.tag == .freestanding)
+        null
+    else if (std.c.getenv("ROC_ARC_UNIQUE_DIAG") == null)
+        null
+    else blk: {
+        const slots = try allocator.alloc(u32, solver.domain.arc_to_local.len);
+        @memset(slots, no_local);
+        break :blk slots;
+    };
+    errdefer if (blame) |slots| allocator.free(slots);
+    const sites: ?[]u8 = if (blame == null) null else blk: {
+        const tags = try allocator.alloc(u8, solver.domain.arc_to_local.len);
+        @memset(tags, 255);
+        break :blk tags;
+    };
+    errdefer if (sites) |tags| allocator.free(tags);
+    const mark = struct {
+        fn go(tags: ?[]u8, index: u32, tag: u8) void {
+            if (tags) |slots| {
+                if (slots[index] == 255) slots[index] = tag;
+            }
+        }
+    }.go;
+
     const domain = solver.domain;
     const local_count = domain.arc_to_local.len;
     var born = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
@@ -3675,7 +3752,11 @@ fn computeUniquenessFromFacts(
                 origins.noteForeign(alias.target);
                 continue;
             };
-            Marks.consume(&consumed, &destroyed, source);
+            {
+                const was = destroyed.isSet(source);
+                Marks.consume(&consumed, &destroyed, source);
+                if (!was and destroyed.isSet(source)) mark(sites, source, 6);
+            }
             if (source == target) {
                 foreign.set(target);
             } else if (alias_source[target] == no_local) {
@@ -3686,8 +3767,15 @@ fn computeUniquenessFromFacts(
             }
             try origins.noteAlias(alias.target, alias.source);
         },
-        .consume => |local| if (domain.indexOf(local)) |index| Marks.consume(&consumed, &destroyed, index),
-        .destroy => |destroy| if (domain.indexOf(destroy.local)) |index| destroyed.set(index),
+        .consume => |local| if (domain.indexOf(local)) |index| {
+            const was = destroyed.isSet(index);
+            Marks.consume(&consumed, &destroyed, index);
+            if (!was and destroyed.isSet(index)) mark(sites, index, 2);
+        },
+        .destroy => |destroy| if (domain.indexOf(destroy.local)) |index| {
+            destroyed.set(index);
+            mark(sites, index, 0);
+        },
         .read => |local| if (domain.indexOf(local)) |index| read.set(index),
         .join_param => |local| if (domain.indexOf(local)) |index| param_set.set(index),
         .param_write => |write| if (domain.indexOf(write.param)) |param_index| {
@@ -3712,9 +3800,12 @@ fn computeUniquenessFromFacts(
         for (0..GuardedList.borrowLen(args)) |position| {
             const arg = domain.indexOf(GuardedList.at(args, position)) orelse continue;
             if (sig.paramMode(position) == .owned) {
+                const was = destroyed.isSet(arg);
                 Marks.consume(&consumed, &destroyed, arg);
+                if (!was and destroyed.isSet(arg)) mark(sites, arg, 2);
             } else {
                 destroyed.set(arg);
+                mark(sites, arg, 1);
             }
         }
     }
@@ -3725,7 +3816,10 @@ fn computeUniquenessFromFacts(
     while (multi_iter.next()) |index| born.unset(index);
     for (alias_targets.items) |target| {
         born.unset(target);
-        if (multi_def.isSet(target)) destroyed.set(target);
+        if (multi_def.isSet(target)) {
+            destroyed.set(target);
+            mark(sites, target, 3);
+        }
     }
 
     const alias_lens = try allocator.alloc(u32, local_count);
@@ -3778,6 +3872,8 @@ fn computeUniquenessFromFacts(
             }
             if (!destroyed.isSet(target) and (destroyed.isSet(source) or read.isSet(source))) {
                 destroyed.set(target);
+                if (blame) |slots| slots[target] = source;
+                mark(sites, target, 4);
                 changed = true;
             }
             if (changed) try enqueue(allocator, &work, &queued, target);
@@ -3820,6 +3916,8 @@ fn computeUniquenessFromFacts(
                 }
                 if (!destroyed.isSet(target) and (destroyed.isSet(source) or read.isSet(source))) {
                     destroyed.set(target);
+                    if (blame) |slots| slots[target] = source;
+                    mark(sites, target, 4);
                     changed = true;
                 }
                 if (changed) try enqueue(allocator, &work, &queued, target);
@@ -3831,7 +3929,7 @@ fn computeUniquenessFromFacts(
     errdefer unique.deinit(allocator);
     var destroyed_iter = destroyed.iterator(.{});
     while (destroyed_iter.next()) |index| unique.unset(index);
-    return .{ .born_unique = born, .unique = unique, .destroyed = destroyed };
+    return .{ .born_unique = born, .unique = unique, .destroyed = destroyed, .destroy_blame = blame, .destroy_site = sites };
 }
 
 /// Marks every local whose value's outermost allocation provably has count 1

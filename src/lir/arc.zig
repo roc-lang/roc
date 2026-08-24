@@ -240,6 +240,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .store = store,
         .layouts = layouts,
         .unique_diag = UniqueDiag.init(),
+        .seed_diag = SeedDiag.init(),
     };
     var local_contains_refcounted = try store.allocator.alloc(bool, store.localCount());
     defer store.allocator.free(local_contains_refcounted);
@@ -457,6 +458,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 
     inserter.unique_diag.report();
+    inserter.seed_diag.report();
 }
 
 const VariantSelector = struct {
@@ -1010,12 +1012,80 @@ const UniqueDiag = if (builtin.os.tag == .freestanding) struct {
     }
 };
 
+/// Why a call site did not ask for a variant whose parameter arrives unique.
+/// Only positions whose callee parameter actually reaches a runtime
+/// uniqueness check are counted, so the histogram measures missed
+/// opportunities rather than every argument.
+const SeedBlock = enum {
+    /// The site asked for the variant.
+    demanded,
+    /// Mode specialization is switched off entirely.
+    specialization_disabled,
+    /// The callee has no body, so there is nothing to specialize.
+    callee_bodyless,
+    /// The callee is a hosted function.
+    callee_hosted,
+    /// The callee is reached through an erased callable.
+    callee_erased,
+    /// The callee is an entry point, or its address is taken somewhere, so
+    /// its signature is fixed.
+    callee_root_or_address_taken,
+    /// The caller does not hold this value's ownership unit here.
+    not_owned_here,
+    /// The value's group is read after the call, so the caller keeps it.
+    used_after_call,
+    /// The caller cannot prove its own argument unique.
+    caller_value_not_unique,
+    /// Another operand of the call shares this value's borrow group.
+    group_shares_operand,
+};
+
+/// Histogram of the above. Off unless `ROC_ARC_UNIQUE_DIAG` is set, and
+/// absent on targets without an environment.
+const SeedDiag = if (builtin.os.tag == .freestanding) struct {
+    fn init() @This() {
+        return .{};
+    }
+
+    fn record(_: *@This(), _: SeedBlock) void {}
+
+    fn report(_: *const @This()) void {}
+} else struct {
+    const slot_count = @typeInfo(SeedBlock).@"enum".fields.len;
+
+    on: bool = false,
+    counts: [slot_count]u64 = [_]u64{0} ** slot_count,
+
+    fn init() @This() {
+        return .{ .on = std.c.getenv("ROC_ARC_UNIQUE_DIAG") != null };
+    }
+
+    fn record(self: *@This(), reason: SeedBlock) void {
+        if (!self.on) return;
+        self.counts[@intFromEnum(reason)] += 1;
+    }
+
+    fn report(self: *const @This()) void {
+        if (!self.on) return;
+        var total: u64 = 0;
+        for (self.counts) |count| total += count;
+        if (total == 0) return;
+        std.debug.print("=== ARC unique-parameter demands ({d}) ===\n", .{total});
+        inline for (@typeInfo(SeedBlock).@"enum".fields) |field| {
+            const count = self.counts[field.value];
+            if (count != 0) std.debug.print("  seed:{s: <22} {d}\n", .{ field.name, count });
+        }
+    }
+};
+
 const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
     /// Why runtime uniqueness checks survived, when the diagnostic is on.
     /// Read from the environment in `insert`, which cannot happen at comptime.
     unique_diag: UniqueDiag = .{},
+    /// Why call sites did not ask for unique-parameter variants.
+    seed_diag: SeedDiag = .{},
     local_contains_refcounted: []const bool = &.{},
     solution: *const arc_solve.Solution = undefined,
     /// Field takes solved against the ownership-neutral bodies; consulted by
@@ -3625,6 +3695,35 @@ const Inserter = struct {
         return false;
     }
 
+    /// The first condition that kept a call site from asking for a variant
+    /// whose parameter arrives unique. Mirrors the demand conditions in the
+    /// order they are tested, so the histogram and the emitted demand agree.
+    fn seedBlock(
+        self: *const Inserter,
+        unique_demand: bool,
+        callee: ?LIR.LirProcSpecId,
+        owns_unit: bool,
+        used_after_call: bool,
+        local: LIR.LocalId,
+        locals: anytype,
+        position: usize,
+    ) SeedBlock {
+        if (!unique_demand) {
+            if (!self.variants.enabled) return .specialization_disabled;
+            const direct = callee orelse return .callee_erased;
+            const spec = self.store.getProcSpec(direct);
+            if (spec.body == null) return .callee_bodyless;
+            if (spec.hosted != null) return .callee_hosted;
+            if (spec.abi == .erased_callable) return .callee_erased;
+            return .callee_root_or_address_taken;
+        }
+        if (!owns_unit) return .not_owned_here;
+        if (used_after_call) return .used_after_call;
+        if (!self.isLocalUniqueHere(local)) return .caller_value_not_unique;
+        if (self.groupSharesOtherOperand(locals, position, local)) return .group_shares_operand;
+        return .demanded;
+    }
+
     fn procParamCanUseUniqueSeed(
         self: *const Inserter,
         proc_id: LIR.LirProcSpecId,
@@ -3663,9 +3762,21 @@ const Inserter = struct {
                 const used_after_call = local != target and try self.groupUsedInPath(next, local, loop_keep);
                 const owner = self.solution.unitLocalOf(local);
                 const can_transfer = owned.contains(owner) and !used_after_call;
+                // Hoisted above the transfer test so a position whose callee
+                // parameter could use a unique seed is classified even when
+                // the caller cannot hand its ownership over.
+                const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
+                if (seed_can_reach_check) self.seed_diag.record(self.seedBlock(
+                    unique_demand,
+                    callee,
+                    owned.contains(owner),
+                    used_after_call,
+                    local,
+                    locals,
+                    position,
+                ));
                 if (!can_transfer) continue;
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
-                const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
                 const seeds_unique_param = unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local);
                 const enables_field_take = if (callee) |direct|
@@ -3698,6 +3809,15 @@ const Inserter = struct {
                     const direct = callee orelse break :blk false;
                     break :blk self.procParamCanUseUniqueSeed(direct, position);
                 } else false;
+                if (seed_can_reach_check) self.seed_diag.record(self.seedBlock(
+                    unique_demand,
+                    callee,
+                    true,
+                    false,
+                    local,
+                    locals,
+                    position,
+                ));
                 if (unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local))
                 {
