@@ -2129,7 +2129,12 @@ pub const InstGraph = struct {
                     try self.containment_pending.append(self.allocator, row.ext);
                 },
                 .record => |row| {
-                    for (row.fields) |field| try self.containment_pending.append(self.allocator, field.ty);
+                    for (row.fields) |field| {
+                        try self.containment_pending.append(self.allocator, field.ty);
+                        if (field.value_ty) |value_ty| {
+                            try self.containment_pending.append(self.allocator, value_ty);
+                        }
+                    }
                     try self.containment_pending.append(self.allocator, row.ext);
                 },
                 .named => |named| {
@@ -4894,6 +4899,9 @@ pub const InstGraph = struct {
     /// returned graph-owned scratch TypeId must not be emitted as output.
     pub fn provisionalTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
         self.requireRelationProduction();
+        if (self.types.hasSpeculativeConstruction()) {
+            Common.compilerBug("provisional Monotype snapshot requested inside a type transaction");
+        }
         if (self.imported_monos.get(node)) |imported| return imported;
         if (try self.typeIsResolved(node)) return try self.monoFor(node);
         var snapshot = GraphTypeFinals.initProvisionalSnapshot(self);
@@ -4907,6 +4915,9 @@ pub const InstGraph = struct {
     /// live field-kind cells remain open for subsequent graph relations.
     pub fn specializationTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
         self.requireRelationProduction();
+        if (self.types.hasSpeculativeConstruction()) {
+            Common.compilerBug("specialization Monotype snapshot requested inside a type transaction");
+        }
         if (try self.typeIsResolved(node)) return try self.monoFor(node);
         if (!try self.typeIsSpecializationDefaultable(node)) {
             Common.invariant("specialization type view requested for a graph type with non-field-kind unresolved evidence");
@@ -4923,6 +4934,9 @@ pub const InstGraph = struct {
     /// not be written to completed Monotype output.
     pub fn activeTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
         self.requireRelationProduction();
+        if (self.types.hasSpeculativeConstruction()) {
+            Common.compilerBug("active Monotype snapshot requested inside a type transaction");
+        }
         self.countDiagnostic("active_type_requests");
         if (self.imported_monos.get(node)) |imported| {
             self.countDiagnostic("active_type_imported_hits");
@@ -5014,6 +5028,9 @@ pub const InstGraph = struct {
                 for (0..field_span.len) |index| {
                     const field = GuardedList.at(field_span, index);
                     if (try self.typeContainsActiveSnapshot(field.ty, seen)) break :blk true;
+                    if (field.value_ty) |value_ty| {
+                        if (try self.typeContainsActiveSnapshot(value_ty, seen)) break :blk true;
+                    }
                 }
                 break :blk false;
             },
@@ -5099,6 +5116,7 @@ pub const GraphTypeFinals = struct {
     mode: Mode,
     sealed: collections.DenseMap(NodeId, Type.TypeId),
     sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
+    active_transaction: ?Type.Store.Transaction,
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
         graph.requireFrozenRelations();
@@ -5126,6 +5144,7 @@ pub const GraphTypeFinals = struct {
             .mode = mode,
             .sealed = collections.DenseMap(NodeId, Type.TypeId).init(graph.allocator),
             .sealed_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(graph.allocator),
+            .active_transaction = null,
         };
     }
 
@@ -5143,13 +5162,31 @@ pub const GraphTypeFinals = struct {
             }
         }
         if (try self.typeHasActiveSnapshots(ty)) return try self.sealStoreType(ty);
+        if (!try self.graph.types.isInterned(self.graph.name_store, ty)) return try self.sealStoreType(ty);
         return ty;
     }
 
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
         const node = self.graph.find(raw_node);
         if (self.sealed.get(node)) |existing| return existing;
+        if (self.mode != .final) return try self.sealNodeSpeculative(node);
+        if (self.active_transaction != null) return try self.sealNodeSpeculative(node);
+        if (self.graph.types.hasSpeculativeConstruction()) return try self.sealNodeSpeculative(node);
 
+        const transaction = self.graph.types.beginTransaction();
+        self.active_transaction = transaction;
+        defer self.active_transaction = null;
+        errdefer transaction.abort(self.graph.types);
+
+        const speculative = try self.sealNodeSpeculative(node);
+        var result = try self.graph.types.commitTransaction(self.graph.name_store, transaction, speculative);
+        defer result.deinit();
+        self.remapSealedTypes(result);
+        return result.root;
+    }
+
+    fn sealNodeSpeculative(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.TypeId {
+        if (self.sealed.get(node)) |existing| return existing;
         const Context = struct {
             sealer: *GraphTypeFinals,
             node: NodeId,
@@ -5160,6 +5197,17 @@ pub const GraphTypeFinals = struct {
             }
         };
         return try self.graph.types.addRecursive(Context{ .sealer = self, .node = node }, Context.fill);
+    }
+
+    fn remapSealedTypes(self: *GraphTypeFinals, result: Type.Store.TransactionResult) void {
+        var sealed = self.sealed.valueIterator();
+        while (sealed.next()) |ty| {
+            ty.* = result.remapType(ty.*);
+        }
+        var sealed_types = self.sealed_types.valueIterator();
+        while (sealed_types.next()) |ty| {
+            ty.* = result.remapType(ty.*);
+        }
     }
 
     fn sealContent(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.Content {
@@ -5207,7 +5255,24 @@ pub const GraphTypeFinals = struct {
 
     fn sealStoreType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.sealed_types.get(ty)) |existing| return existing;
+        if (self.mode != .final) return try self.sealStoreTypeSpeculative(ty);
+        if (self.active_transaction != null) return try self.sealStoreTypeSpeculative(ty);
+        if (self.graph.types.hasSpeculativeConstruction()) return try self.sealStoreTypeSpeculative(ty);
 
+        const transaction = self.graph.types.beginTransaction();
+        self.active_transaction = transaction;
+        defer self.active_transaction = null;
+        errdefer transaction.abort(self.graph.types);
+
+        const speculative = try self.sealStoreTypeSpeculative(ty);
+        var result = try self.graph.types.commitTransaction(self.graph.name_store, transaction, speculative);
+        defer result.deinit();
+        self.remapSealedTypes(result);
+        return result.root;
+    }
+
+    fn sealStoreTypeSpeculative(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        if (self.sealed_types.get(ty)) |existing| return existing;
         const Context = struct {
             sealer: *GraphTypeFinals,
             ty: Type.TypeId,
@@ -6589,6 +6654,75 @@ test "final sealing does not mutate an earlier active snapshot" {
     try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed_field.ty));
 }
 
+test "final sealing follows active snapshots stored only in field value types" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const field_name = try name_store.internRecordFieldLabel("optional");
+    const value_node = try graph.newNode(.{ .primitive = .u64 });
+    const value_snapshot = try graph.activeTypeViewForNode(value_node);
+    const slot_ty = try type_store.add(.zst);
+    const wrapper = try type_store.add(.{ .record = try type_store.addRecordFields(&name_store, &.{
+        .{
+            .name = field_name,
+            .ty = slot_ty,
+            .value_ty = value_snapshot,
+            .kind_state = .resolved,
+            .default = null,
+        },
+    }) });
+
+    try std.testing.expect(try graph.typeHasActiveSnapshots(wrapper));
+    try graph.setContent(value_node, .{ .primitive = .str });
+
+    try graph.freezeRelations();
+    var finals = GraphTypeFinals.init(graph);
+    defer finals.deinit();
+    const sealed = try finals.sealType(wrapper);
+
+    try std.testing.expect(sealed != wrapper);
+    const original_field = GuardedList.at(type_store.fieldSpan(type_store.get(wrapper).record), 0);
+    const sealed_field = GuardedList.at(type_store.fieldSpan(type_store.get(sealed).record), 0);
+    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(original_field.value_ty.?));
+    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed_field.value_ty.?));
+    try std.testing.expect(!(try graph.typeHasActiveSnapshots(sealed)));
+}
+
+test "final sealing interns raw types without active snapshots" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const unit = try type_store.internZst(&name_store);
+    const raw_list = try type_store.add(.{ .list = unit });
+    try std.testing.expect(!(try type_store.isInterned(&name_store, raw_list)));
+
+    try graph.freezeRelations();
+    var finals = GraphTypeFinals.init(graph);
+    defer finals.deinit();
+    const sealed = try finals.sealType(raw_list);
+
+    try std.testing.expect(try type_store.isInterned(&name_store, sealed));
+    const types_len = type_store.view().types.len;
+    try std.testing.expectEqual(sealed, try type_store.internList(&name_store, unit));
+    try std.testing.expectEqual(types_len, type_store.view().types.len);
+}
+
 test "final graph function recursively replaces active snapshots" {
     const gpa = std.testing.allocator;
 
@@ -6794,6 +6928,48 @@ test "generated-private traversal scratch handles cycles and epoch rollover" {
     try std.testing.expectEqual(@as(u64, 2), diagnostics.generated_private_nodes_visited);
 }
 
+test "generated-private containment follows optional field value types" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x47} ** 32));
+    const type_name = try name_store.internTypeName("PrivateValue");
+    const private_value = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(31) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .inspectable,
+            .authority = .generated_private,
+        },
+    } });
+    const slot = try graph.newNode(.zst);
+    const field_name = try name_store.internRecordFieldLabel("optional");
+    const fields = try graph.arena().dupe(InstField, &.{.{
+        .name = field_name,
+        .ty = slot,
+        .value_ty = private_value,
+        .kind = .optional,
+        .default = null,
+    }});
+    const record = try graph.newNode(.{ .record = .{
+        .fields = fields,
+        .ext = try graph.newNode(.empty_record),
+    } });
+
+    try std.testing.expect(try graph.containsGeneratedPrivate(record));
+}
+
 test "iterator-interface containment caches exact graph dependencies" {
     const gpa = std.testing.allocator;
 
@@ -6919,6 +7095,21 @@ test "iterator-interface containment agrees between Monotype and graph" {
                     .args = try self.graph.arena().dupe(NodeId, &.{leaf}),
                     .backing = .{ .node = u64_node, .use = .inspectable },
                 } }),
+                // An optional record slot reaching the leaf only through its
+                // retained source value type.
+                9 => blk: {
+                    const fields = try self.graph.arena().dupe(InstField, &.{.{
+                        .name = self.field_name,
+                        .ty = u64_node,
+                        .value_ty = leaf,
+                        .kind = .optional,
+                        .default = null,
+                    }});
+                    break :blk try self.graph.newNode(.{ .record = .{
+                        .fields = fields,
+                        .ext = try self.graph.newNode(.empty_record),
+                    } });
+                },
                 else => unreachable,
             };
         }
@@ -6931,7 +7122,7 @@ test "iterator-interface containment agrees between Monotype and graph" {
         .tag_name = tag_name,
     };
 
-    const position_count = 9;
+    const position_count = 10;
     const case_count = position_count * 2;
     var roots: [case_count]NodeId = undefined;
     var graph_answers: [case_count]bool = undefined;
