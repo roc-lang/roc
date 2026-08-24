@@ -1628,6 +1628,32 @@ test "post-check IR stores append spans through one implementation" {
     try expectContains(@embedFile("common.zig"), "pub fn appendNonemptySpan(");
 }
 
+test "const restoration has one implementation per shape" {
+    // `Builder` and `BodyContext` emit into different stores and different
+    // expression-data types, but which const shape maps to which expression
+    // form, and the length invariants relating a stored aggregate to its
+    // checked type, are one set of rules. Two copies could come to disagree
+    // about, say, whether a stored record's length is checked against the
+    // checked type at all.
+    const source = @embedFile("monotype/lower.zig");
+    const shapes = [_][]const u8{
+        "constRestoreData",
+        "constRestoreListData",
+        "constRestoreList",
+        "constRestoreTuple",
+        "constRestoreRecord",
+        "constRestoreTagPayloads",
+    };
+    inline for (shapes) |name| {
+        try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
+    }
+    // The scope-local copies these replaced must not come back.
+    try expectNotContains(source, "    fn restoreConstData(");
+    try expectNotContains(source, "    fn restoreConstRecord(");
+    try expectNotContains(source, "    fn restoreConstTuple(");
+    try expectNotContains(source, "    fn restoreConstTagPayloads(");
+}
+
 test "post-check invariant helper is failure-only" {
     const fn_info = @typeInfo(@TypeOf(Common.invariant)).@"fn";
     try std.testing.expect(fn_info.return_type.? == noreturn);

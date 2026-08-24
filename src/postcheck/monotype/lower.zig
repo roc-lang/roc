@@ -2219,6 +2219,28 @@ const Builder = struct {
     /// builder.
     evidence_arena: std.heap.ArenaAllocator,
 
+    /// The store this scope emits restored const expressions into.
+    fn constEmit(self: *Builder) *Ast.Program {
+        return self.program;
+    }
+
+    /// The type-store owner the shared const restoration queries.
+    fn constBuilder(self: *Builder) *Builder {
+        return self;
+    }
+
+    /// This scope's expression-data type for restored const values.
+    const ConstExprData = Ast.ExprData;
+    const ConstExprId = Ast.ExprId;
+    const ConstExprSpan = Ast.Span(Ast.ExprId);
+    const ConstFieldExpr = Ast.FieldExpr;
+    const ConstFieldExprSpan = Ast.Span(Ast.FieldExpr);
+
+    /// This scope's mapping from a stored scalar to expression data.
+    fn constScalarData(_: *Builder, scalar: checked.ConstScalar) ConstExprData {
+        return restoreScalar(scalar);
+    }
+
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         const counters = options.specialization_counters orelse
             if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
@@ -8566,157 +8588,10 @@ const Builder = struct {
             },
             .pending, .zst, .scalar, .str, .list, .box, .crash => {},
         }
-        const data = try self.restoreConstData(store_view, type_view, value, ty, static_data_const_locator);
+        const data = try constRestoreData(self, store_view, type_view, value, ty, static_data_const_locator);
         const expr = try self.program.addExpr(.{ .ty = ty, .data = data });
         if (static_data_const_locator == null) try self.const_expr_cache.put(address, expr);
         return expr;
-    }
-
-    fn restoreConstData(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        value: checked.ConstValue,
-        ty: Type.TypeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.ExprData {
-        return switch (value) {
-            .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
-            .zst => .unit,
-            .scalar => |scalar| restoreScalar(scalar),
-            .str => |str| .{ .str_lit = try self.program.addStringView(
-                store_view.const_store.blobData(str.data),
-                str.offset,
-                str.len,
-            ) },
-            .crash => |str| .{ .crash = try self.program.addStringView(
-                store_view.const_store.blobData(str.data),
-                str.offset,
-                str.len,
-            ) },
-            .list => |list| try self.restoreConstListData(store_view, type_view, ty, list, static_data_const_locator),
-            .box => |payload| blk: {
-                const child = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, self.constBoxPayloadType(ty), static_data_const_locator);
-                break :blk .{ .low_level = .{
-                    .op = .box_box,
-                    .args = try self.program.addExprSpan(&.{child}),
-                } };
-            },
-            .tuple => |items| .{ .tuple = try self.restoreConstTuple(store_view, type_view, ty, items, static_data_const_locator) },
-            .record => |items| .{ .record = try self.restoreConstRecord(store_view, type_view, ty, items, static_data_const_locator) },
-            .tag => |tag| .{ .tag = .{
-                .name = try self.program.names.internTagLabel(tag.tag_name),
-                .payloads = try self.restoreConstTagPayloads(store_view, type_view, ty, tag, static_data_const_locator),
-            } },
-            .nominal => |nominal| .{ .nominal = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, nominal.backing, self.namedBackingType(ty) orelse ty, static_data_const_locator) },
-            .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
-        };
-    }
-
-    fn restoreConstList(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const elem_ty = self.constListElemType(ty);
-        const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
-        }
-        return try self.program.addExprSpan(lowered);
-    }
-
-    fn restoreConstListData(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        list: checked.ConstList,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.ExprData {
-        return switch (list) {
-            .nodes => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
-            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
-                .literal = try self.program.addStringView(
-                    store_view.const_store.blobData(scalar_bytes.bytes.data),
-                    scalar_bytes.bytes.offset,
-                    scalar_bytes.bytes.len,
-                ),
-                .len = scalar_bytes.len,
-                .element = scalar_bytes.element,
-            } },
-        };
-    }
-
-    fn restoreConstTuple(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const item_span = self.tupleItemSpan(ty);
-        const item_count: usize = @intCast(item_span.len);
-        if (item_count != items.len) Common.invariant("ConstStore tuple length differs from checked type");
-        const lowered = try self.allocator.alloc(Ast.ExprId, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            const item_tys = self.program.types.span(item_span);
-            const item_ty = GuardedList.at(item_tys, index);
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, item_ty, static_data_const_locator);
-        }
-        return try self.program.addExprSpan(lowered);
-    }
-
-    fn restoreConstRecord(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.Span(Ast.FieldExpr) {
-        const field_span = self.recordFieldsSpan(ty);
-        const field_count: usize = @intCast(field_span.len);
-        if (field_count != items.len) Common.invariant("ConstStore record length differs from checked type");
-        const lowered = try self.allocator.alloc(Ast.FieldExpr, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            const fields = self.program.types.fieldSpan(field_span);
-            const field = GuardedList.at(fields, index);
-            lowered[index] = .{
-                .name = field.name,
-                .value = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, field.ty, static_data_const_locator),
-            };
-        }
-        return try self.program.addFieldExprSpan(lowered);
-    }
-
-    fn restoreConstTagPayloads(
-        self: *Builder,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        tag: anytype,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!Ast.Span(Ast.ExprId) {
-        const mono_tag_name = try self.program.names.internTagLabel(tag.tag_name);
-        const payload_span = self.tagPayloadSpan(ty, mono_tag_name);
-        const payload_count: usize = @intCast(payload_span.len);
-        if (payload_count != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
-        const lowered = try self.allocator.alloc(Ast.ExprId, tag.payloads.len);
-        defer self.allocator.free(lowered);
-        for (tag.payloads, 0..) |payload, index| {
-            const payload_tys = self.program.types.span(payload_span);
-            const payload_ty = GuardedList.at(payload_tys, index);
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, payload_ty, static_data_const_locator);
-        }
-        return try self.program.addExprSpan(lowered);
     }
 
     fn constListElemType(self: *Builder, ty: Type.TypeId) Type.TypeId {
@@ -12946,6 +12821,28 @@ const BodyContext = struct {
             self.locals.deinit(allocator);
         }
     };
+
+    /// The store this scope emits restored const expressions into.
+    fn constEmit(self: *BodyContext) *BodyContext {
+        return self;
+    }
+
+    /// The type-store owner the shared const restoration queries.
+    fn constBuilder(self: *BodyContext) *Builder {
+        return self.builder;
+    }
+
+    /// This scope's expression-data type for restored const values.
+    const ConstExprData = BodyExprData;
+    const ConstExprId = DraftExprId;
+    const ConstExprSpan = DraftSpan(DraftExprId);
+    const ConstFieldExpr = DraftFieldExpr;
+    const ConstFieldExprSpan = DraftSpan(DraftFieldExpr);
+
+    /// This scope's mapping from a stored scalar to expression data.
+    fn constScalarData(_: *BodyContext, scalar: checked.ConstScalar) ConstExprData {
+        return restoreScalarBody(scalar);
+    }
 
     fn parserPlanKey(self: *BodyContext, shape_ty: Type.TypeId) names.TypeDigest {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
@@ -28870,7 +28767,7 @@ const BodyContext = struct {
             .fn_value => |fn_id| try self.restoreConstFn(store_view, fn_id, ty, static_data_const_locator),
             .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal => try self.addExpr(.{
                 .ty = ty,
-                .data = try self.restoreConstData(store_view, type_view, value, ty, static_data_const_locator),
+                .data = try constRestoreData(self, store_view, type_view, value, ty, static_data_const_locator),
             }),
         };
         const materialized = try self.finishConstNodeBinding(store_view, node, representation, cell, lowered);
@@ -29255,153 +29152,6 @@ const BodyContext = struct {
                 try self.graph.tagConstructionPayloadNode(request_node, mono_tag_name, index),
                 static_data_const_locator,
             );
-        }
-        return try self.addExprSpan(lowered);
-    }
-
-    fn restoreConstData(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        value: checked.ConstValue,
-        ty: Type.TypeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!BodyExprData {
-        return switch (value) {
-            .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
-            .zst => .unit,
-            .scalar => |scalar| restoreScalarBody(scalar),
-            .str => |str| .{ .str_lit = try self.addStringView(
-                store_view.const_store.blobData(str.data),
-                str.offset,
-                str.len,
-            ) },
-            .crash => |str| .{ .crash = try self.addStringView(
-                store_view.const_store.blobData(str.data),
-                str.offset,
-                str.len,
-            ) },
-            .list => |list| try self.restoreConstListData(store_view, type_view, ty, list, static_data_const_locator),
-            .box => |payload| blk: {
-                const child = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, self.constBoxPayloadType(ty), static_data_const_locator);
-                break :blk .{ .low_level = .{
-                    .op = .box_box,
-                    .args = try self.addExprSpan(&.{child}),
-                } };
-            },
-            .tuple => |items| .{ .tuple = try self.restoreConstTuple(store_view, type_view, ty, items, static_data_const_locator) },
-            .record => |items| .{ .record = try self.restoreConstRecord(store_view, type_view, ty, items, static_data_const_locator) },
-            .tag => |tag| .{ .tag = .{
-                .name = try self.builder.program.names.internTagLabel(tag.tag_name),
-                .payloads = try self.restoreConstTagPayloads(store_view, type_view, ty, tag, static_data_const_locator),
-            } },
-            .nominal => |nominal| .{ .nominal = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, nominal.backing, self.builder.namedBackingType(ty) orelse ty, static_data_const_locator) },
-            .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
-        };
-    }
-
-    fn restoreConstList(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        const elem_ty = self.constListElemType(ty);
-        const lowered = try self.allocator.alloc(DraftExprId, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
-        }
-        return try self.addExprSpan(lowered);
-    }
-
-    fn restoreConstListData(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        list: checked.ConstList,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!BodyExprData {
-        return switch (list) {
-            .nodes => |items| .{ .list = try self.restoreConstList(store_view, type_view, ty, items, static_data_const_locator) },
-            .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
-                .literal = try self.addStringView(
-                    store_view.const_store.blobData(scalar_bytes.bytes.data),
-                    scalar_bytes.bytes.offset,
-                    scalar_bytes.bytes.len,
-                ),
-                .len = scalar_bytes.len,
-                .element = scalar_bytes.element,
-            } },
-        };
-    }
-
-    fn restoreConstTuple(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        const item_span = self.builder.tupleItemSpan(ty);
-        const item_count: usize = @intCast(item_span.len);
-        if (item_count != items.len) Common.invariant("ConstStore tuple length differs from checked type");
-        const lowered = try self.allocator.alloc(DraftExprId, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            const item_tys = self.builder.program.types.span(item_span);
-            const item_ty = GuardedList.at(item_tys, index);
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, item_ty, static_data_const_locator);
-        }
-        return try self.addExprSpan(lowered);
-    }
-
-    fn restoreConstRecord(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        items: []const checked.ConstNodeId,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftFieldExpr) {
-        const field_span = self.builder.recordFieldsSpan(ty);
-        const field_count: usize = @intCast(field_span.len);
-        if (field_count != items.len) Common.invariant("ConstStore record length differs from checked type");
-        const lowered = try self.allocator.alloc(DraftFieldExpr, items.len);
-        defer self.allocator.free(lowered);
-        for (items, 0..) |item, index| {
-            const fields = self.builder.program.types.fieldSpan(field_span);
-            const field = GuardedList.at(fields, index);
-            lowered[index] = .{
-                .name = field.name,
-                .value = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, field.ty, static_data_const_locator),
-            };
-        }
-        return try self.addFieldExprSpan(lowered);
-    }
-
-    fn restoreConstTagPayloads(
-        self: *BodyContext,
-        store_view: ModuleView,
-        type_view: ModuleView,
-        ty: Type.TypeId,
-        tag: anytype,
-        static_data_const_locator: ?checked.ConstLocator,
-    ) Allocator.Error!DraftSpan(DraftExprId) {
-        const mono_tag_name = try self.builder.program.names.internTagLabel(tag.tag_name);
-        const payload_span = self.builder.tagPayloadSpan(ty, mono_tag_name);
-        const payload_count: usize = @intCast(payload_span.len);
-        if (payload_count != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
-        const lowered = try self.allocator.alloc(DraftExprId, tag.payloads.len);
-        defer self.allocator.free(lowered);
-        for (tag.payloads, 0..) |payload, index| {
-            const payload_tys = self.builder.program.types.span(payload_span);
-            const payload_ty = GuardedList.at(payload_tys, index);
-            lowered[index] = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, payload_ty, static_data_const_locator);
         }
         return try self.addExprSpan(lowered);
     }
@@ -49793,6 +49543,183 @@ fn moduleView(view: checked.ImportedModuleView) ModuleView {
 
 fn moduleViewIdentityMatches(view: ModuleView, origin_hash: *const [32]u8) bool {
     return base.ModuleIdentity.eql(&view.module_identity.stable_hash, origin_hash);
+}
+
+/// Restore a `ConstStore` value into one lowering scope's expression data.
+///
+/// `Builder` and `BodyContext` emit into different stores and different
+/// expression-data types, but the restoration itself is one set of rules:
+/// which const shapes map to which expression forms, plus the length
+/// invariants relating a stored aggregate to its checked type. `restorer` is
+/// scope is emitting; it supplies its own store through `constEmit()`, its data
+/// type through `ConstExprData`, its scalar mapping through `constScalarData`,
+/// the type-store queries through `constBuilder()`, and the recursive descent
+/// through `restoreConstNodeAtTypeWithStaticRoot`, which genuinely differs
+/// between the two.
+fn constRestoreData(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    value: checked.ConstValue,
+    ty: Type.TypeId,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
+    const emit = restorer.constEmit();
+    return switch (value) {
+        .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
+        .zst => .unit,
+        .scalar => |scalar| restorer.constScalarData(scalar),
+        .str => |str| .{ .str_lit = try emit.addStringView(
+            store_view.const_store.blobData(str.data),
+            str.offset,
+            str.len,
+        ) },
+        .crash => |str| .{ .crash = try emit.addStringView(
+            store_view.const_store.blobData(str.data),
+            str.offset,
+            str.len,
+        ) },
+        .box => |node| blk: {
+            const child = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, restorer.constBoxPayloadType(ty), static_data_const_locator);
+            break :blk .{ .low_level = .{
+                .op = .box_box,
+                .args = try emit.addExprSpan(&.{child}),
+            } };
+        },
+        .list => |list| try constRestoreListData(restorer, store_view, type_view, ty, list, static_data_const_locator),
+        .tuple => |items| .{ .tuple = try constRestoreTuple(restorer, store_view, type_view, ty, items, static_data_const_locator) },
+        .record => |items| .{ .record = try constRestoreRecord(restorer, store_view, type_view, ty, items, static_data_const_locator) },
+        .tag => |tag| .{ .tag = .{
+            .name = try restorer.constBuilder().program.names.internTagLabel(tag.tag_name),
+            .payloads = try constRestoreTagPayloads(restorer, store_view, type_view, ty, tag, static_data_const_locator),
+        } },
+        .nominal => |nominal| .{ .nominal = try restorer.restoreConstNodeAtTypeWithStaticRoot(
+            store_view,
+            type_view,
+            nominal.backing,
+            restorer.constBuilder().namedBackingType(ty) orelse ty,
+            static_data_const_locator,
+        ) },
+        .fn_value => Common.invariant("ConstStore function value must be restored as an expression"),
+    };
+}
+
+/// Restore a stored list, which is either restored nodes or packed scalar bytes.
+fn constRestoreListData(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    ty: Type.TypeId,
+    list: checked.ConstList,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprData {
+    return switch (list) {
+        .nodes => |items| .{ .list = try constRestoreList(restorer, store_view, type_view, ty, items, static_data_const_locator) },
+        .scalar_bytes => |scalar_bytes| .{ .bytes_lit = .{
+            .literal = try restorer.constEmit().addStringView(
+                store_view.const_store.blobData(scalar_bytes.bytes.data),
+                scalar_bytes.bytes.offset,
+                scalar_bytes.bytes.len,
+            ),
+            .len = scalar_bytes.len,
+            .element = scalar_bytes.element,
+        } },
+    };
+}
+
+/// Restore each element of a stored list at the checked element type.
+fn constRestoreList(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    ty: Type.TypeId,
+    items: []const checked.ConstNodeId,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprSpan {
+    const Emitted = @TypeOf(restorer.*).ConstExprId;
+    const elem_ty = restorer.constListElemType(ty);
+    const lowered = try restorer.allocator.alloc(Emitted, items.len);
+    defer restorer.allocator.free(lowered);
+    for (items, 0..) |item, index| {
+        lowered[index] = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, elem_ty, static_data_const_locator);
+    }
+    return try restorer.constEmit().addExprSpan(lowered);
+}
+
+/// Restore each element of a stored tuple at its checked element type.
+fn constRestoreTuple(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    ty: Type.TypeId,
+    items: []const checked.ConstNodeId,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprSpan {
+    const Emitted = @TypeOf(restorer.*).ConstExprId;
+    const builder = restorer.constBuilder();
+    const item_span = builder.tupleItemSpan(ty);
+    const item_count: usize = @intCast(item_span.len);
+    if (item_count != items.len) Common.invariant("ConstStore tuple length differs from checked type");
+    const lowered = try restorer.allocator.alloc(Emitted, items.len);
+    defer restorer.allocator.free(lowered);
+    for (items, 0..) |item, index| {
+        const item_tys = builder.program.types.span(item_span);
+        const item_ty = GuardedList.at(item_tys, index);
+        lowered[index] = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, item_ty, static_data_const_locator);
+    }
+    return try restorer.constEmit().addExprSpan(lowered);
+}
+
+/// Restore each field of a stored record at its checked field type.
+fn constRestoreRecord(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    ty: Type.TypeId,
+    items: []const checked.ConstNodeId,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstFieldExprSpan {
+    const Field = @TypeOf(restorer.*).ConstFieldExpr;
+    const builder = restorer.constBuilder();
+    const field_span = builder.recordFieldsSpan(ty);
+    const field_count: usize = @intCast(field_span.len);
+    if (field_count != items.len) Common.invariant("ConstStore record length differs from checked type");
+    const lowered = try restorer.allocator.alloc(Field, items.len);
+    defer restorer.allocator.free(lowered);
+    for (items, 0..) |item, index| {
+        const fields = builder.program.types.fieldSpan(field_span);
+        const field = GuardedList.at(fields, index);
+        lowered[index] = .{
+            .name = field.name,
+            .value = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, item, field.ty, static_data_const_locator),
+        };
+    }
+    return try restorer.constEmit().addFieldExprSpan(lowered);
+}
+
+/// Restore each payload of a stored tag at its checked payload type.
+fn constRestoreTagPayloads(
+    restorer: anytype,
+    store_view: ModuleView,
+    type_view: ModuleView,
+    ty: Type.TypeId,
+    tag: anytype,
+    static_data_const_locator: ?checked.ConstLocator,
+) Allocator.Error!@TypeOf(restorer.*).ConstExprSpan {
+    const Emitted = @TypeOf(restorer.*).ConstExprId;
+    const builder = restorer.constBuilder();
+    const mono_tag_name = try builder.program.names.internTagLabel(tag.tag_name);
+    const payload_span = builder.tagPayloadSpan(ty, mono_tag_name);
+    const payload_count: usize = @intCast(payload_span.len);
+    if (payload_count != tag.payloads.len) Common.invariant("ConstStore tag payload count differs from checked type");
+    const lowered = try restorer.allocator.alloc(Emitted, tag.payloads.len);
+    defer restorer.allocator.free(lowered);
+    for (tag.payloads, 0..) |payload, index| {
+        const payload_tys = builder.program.types.span(payload_span);
+        const payload_ty = GuardedList.at(payload_tys, index);
+        lowered[index] = try restorer.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, payload, payload_ty, static_data_const_locator);
+    }
+    return try restorer.constEmit().addExprSpan(lowered);
 }
 
 fn restoreScalar(scalar: checked.ConstScalar) Ast.ExprData {
