@@ -43,18 +43,30 @@ weaker copy was dead and has been deleted rather than merged. Three
 implementations remain, and the audit's original claim that inspect
 behavior depended on which context derived it was wrong.
 
-**Structural equality and hashing—two implementations.**
-`solved_lir_lower.zig:4882` (`lowerStructuralEqInto`), `:4891`
-(`lowerStructuralHashInto`), `:4903` (`lowerHashLocalsInto`), `:4925`
-(`lowerPrimitiveHashLocalsInto`), `:6986` (`lowerEqLocalsInto`),
-`:7002` / `:7074` / `:7090` / `:7130` / `:7149` / `:7182` / `:7239`
-(the primitive/bool/record/tuple/field/tag-union/tag-payload arms)
-are each mirrored in `boxy/lower.zig` at `:28406`, `:28957`,
-`:29032`, `:28614`, `:28713`, `:28736`, `:28765`, `:28794`, `:28832`,
-`:28892`. Normalized-body similarity across those pairs ranges from
-0.96 (`lowerBoolEqLocalsInto`, still in sync) down to 0.18
-(`lowerTagPayloadEqVariant`, already diverged). These define what `==`
-and `hash` *mean* for aggregates.
+**Structural equality and hashing—two implementations that currently
+agree.** The `lowerEqLocalsInto` / `lowerHashLocalsInto` families in
+`solved_lir_lower.zig` are mirrored arm for arm in `boxy/lower.zig`:
+primitive, bool, record, tuple, field-step, tag-union, tag-payload, and
+the hash counterparts. Roughly 20 function pairs define what `==` and
+`hash` *mean* for aggregates, in two places.
+
+An earlier draft of this doc called several of those pairs "already
+diverged", citing normalized-body similarity as low as 0.18. That was
+wrong, and the way it was wrong is worth recording: the metric was
+measuring receiver plumbing (`self.result.store` versus
+`self.parent.result.store`), helper choice (`assignRefRead` versus an
+inlined `assign_ref`), and `if`-chains expanded into exhaustive
+switches. Reading the pairs shows the same algorithm on both sides—the
+same right-to-left AND fold over a shared `failed` target, the same
+ZST skip, the same SIMD-to-`u128` bit comparison, the same op tables.
+The genuine differences are forced by the input: LSS walks a monotype
+span, `.boxy` walks `RepChild` roles.
+
+So this is duplication without present divergence: a standing drift
+risk across ~20 pairs, not a live bug. It should still be single-sourced
+by step 5, but it does not carry the urgency the `Inspect` or
+`match` items do. **Text similarity is not semantic divergence**—check
+by reading, and check reachability, before filing a pair as diverged.
 
 **`match`—the shared decision-tree compiler has one user, not two.**
 `src/postcheck/mod.zig:37` documents `match_tree.zig` as the
