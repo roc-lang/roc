@@ -15,7 +15,7 @@ const OutputOs = enum { windows, macos, wasm, other };
 
 fn outputOs(target: RocTarget) OutputOs {
     return switch (target) {
-        .x64win, .x64v1win, .arm64win, .arm64v1win => .windows,
+        .x64win, .x64v1win, .x64mingw, .x64v1mingw, .arm64win, .arm64v1win, .arm64mingw, .arm64v1mingw => .windows,
         .x64mac, .x64v1mac, .arm64mac => .macos,
         .wasm32, .wasm32v1 => .wasm,
         .x64freebsd,
@@ -101,6 +101,47 @@ fn hasIncompatibleHostCpu(target: RocTarget, host_cpu_level: CpuLevel) bool {
     return target.matchesHostOsAndArch() and !runsOnHostCpu(target, host_cpu_level);
 }
 
+/// Whether this target is the host's own OS, architecture, and ABI, in either
+/// CPU-level spelling.
+///
+/// `matchesHostOsAndArch` deliberately ignores the ABI, so on a machine whose
+/// native ABI is mingw both `x64win` and `x64mingw` match it. This one does
+/// not: `defaultCpuTarget` folds a `v1` twin onto the target it is the
+/// baseline of, leaving a comparison of OS, architecture, and ABI alone.
+fn matchesNativeAbi(target: RocTarget) bool {
+    const native = comptime RocTarget.detectNative().defaultCpuTarget();
+    return target.defaultCpuTarget() == native;
+}
+
+/// Whether the platform lists a target for this exact machine, ABI included.
+///
+/// A platform can list several targets that share this machine's OS and
+/// architecture but differ in ABI (`x64win` and `x64mingw`, say). Those are not
+/// interchangeable: the interpreter backend only builds for the native target,
+/// so defaulting to whichever the platform happened to list first would reject
+/// the build outright. When this answers true, the host targets in the other
+/// ABI stop being default candidates.
+///
+/// `runsOnHostCpu` still narrows the two CPU-level spellings, so a machine
+/// below the default level looks for the `v1` twin of its native ABI, not the
+/// exact native target it cannot execute.
+fn hasNativeAbiTarget(config: TargetsConfig, host_cpu_level: CpuLevel, require_exe: bool) bool {
+    for (config.getSupportedTargets()) |link_spec| {
+        if (require_exe and link_spec.output != .exe) continue;
+        if (matchesNativeAbi(link_spec.target) and runsOnHostCpu(link_spec.target, host_cpu_level)) return true;
+    }
+    return false;
+}
+
+/// Whether a native-ABI target elsewhere in the platform rules this one out.
+///
+/// Only host targets are displaced: wasm and other cross targets are picked for
+/// reasons that have nothing to do with this machine's ABI, so the platform's
+/// listing order still decides among them.
+fn displacedByNativeAbi(target: RocTarget, has_native_abi: bool) bool {
+    return has_native_abi and target.matchesHostOsAndArch() and !matchesNativeAbi(target);
+}
+
 fn selectExplicitBuildTarget(config: TargetsConfig, target: RocTarget) SelectionResult {
     if (config.getLinkSpec(target)) |link_spec| {
         return .{ .selected = .{
@@ -116,7 +157,11 @@ fn selectExplicitBuildTarget(config: TargetsConfig, target: RocTarget) Selection
 
 fn selectDefaultBuildTarget(config: TargetsConfig, host_cpu_level: CpuLevel) SelectionResult {
     var incompatible_cpu: ?RocTarget = null;
+
+    const has_native_abi = hasNativeAbiTarget(config, host_cpu_level, false);
+
     for (config.getSupportedTargets()) |link_spec| {
+        if (displacedByNativeAbi(link_spec.target, has_native_abi)) continue;
         if (isBuildDefaultTarget(link_spec.target, host_cpu_level)) {
             return .{ .selected = .{
                 .target = link_spec.target,
@@ -194,8 +239,14 @@ pub fn selectRunTarget(config: TargetsConfig, target_arg: ?[]const u8, host_cpu_
 
     var default_non_executable: ?SelectedTarget = null;
     var incompatible_cpu: ?RocTarget = null;
+
+    const has_native_abi = hasNativeAbiTarget(config, host_cpu_level, true);
+
     for (config.getSupportedTargets()) |link_spec| {
-        if (link_spec.output == .exe and isRunnableOnHost(link_spec.target, host_cpu_level)) {
+        if (link_spec.output == .exe and
+            !displacedByNativeAbi(link_spec.target, has_native_abi) and
+            isRunnableOnHost(link_spec.target, host_cpu_level))
+        {
             return .{ .selected = .{
                 .target = link_spec.target,
                 .output = .exe,
@@ -447,4 +498,84 @@ test "a platform without a v1 target reports its incompatible CPU floor" {
         SelectionResult{ .incompatible_cpu = native },
         selectRunTarget(config, native.toName(), .v1),
     );
+}
+
+/// The native target's sibling under the other Windows C runtime ABI.
+///
+/// Used by the tests below to build a platform that lists an ABI this machine
+/// cannot use before the one it can. Non-Windows hosts have no such sibling.
+fn otherWindowsAbiSibling(target: RocTarget) ?RocTarget {
+    const abi = target.windowsAbi() orelse return null;
+    for (std.enums.values(RocTarget)) |candidate| {
+        const candidate_abi = candidate.windowsAbi() orelse continue;
+        if (candidate_abi != abi and
+            candidate.toCpuArch() == target.toCpuArch() and
+            candidate.cpuLevel() == target.cpuLevel()) return candidate;
+    }
+    return null;
+}
+
+test "default build target prefers the native ABI over an OS-and-arch match" {
+    // Both spellings pass `matchesHostOsAndArch`, which ignores the ABI, so
+    // without the ABI tie-break the platform's listing order would decide—and
+    // the interpreter backend refuses anything but the native target.
+    const native = RocTarget.detectNative();
+    const sibling = otherWindowsAbiSibling(native) orelse return error.SkipZigTest;
+
+    const config = TargetsConfig{
+        .inputs_dir = null,
+        .targets = &.{
+            .{ .target = sibling, .output = .exe, .items = &.{.app} },
+            .{ .target = native, .output = .exe, .items = &.{.app} },
+        },
+    };
+
+    const built = try expectSelected(selectBuildTarget(config, null, .default));
+    try std.testing.expectEqual(native, built.target);
+
+    const run = try expectSelected(selectRunTarget(config, null, .default));
+    try std.testing.expectEqual(native, run.target);
+    try std.testing.expectEqual(OutputKind.exe, run.output);
+}
+
+test "a host below the default CPU level takes its own ABI's v1 twin" {
+    // The v1 case the strict-equality tie-break missed: the exact native target
+    // fails `runsOnHostCpu` here, so only the ABI comparison keeps the
+    // selection off the other ABI's v1 target listed ahead of it.
+    const native = RocTarget.detectNative();
+    const sibling = otherWindowsAbiSibling(native) orelse return error.SkipZigTest;
+    const native_v1 = native.baselineCpuTarget() orelse return error.SkipZigTest;
+    const sibling_v1 = sibling.baselineCpuTarget() orelse return error.SkipZigTest;
+
+    const config = TargetsConfig{
+        .inputs_dir = null,
+        .targets = &.{
+            .{ .target = sibling_v1, .output = .exe, .items = &.{.app} },
+            .{ .target = native_v1, .output = .exe, .items = &.{.app} },
+        },
+    };
+
+    const built = try expectSelected(selectBuildTarget(config, null, .v1));
+    try std.testing.expectEqual(native_v1, built.target);
+
+    const run = try expectSelected(selectRunTarget(config, null, .v1));
+    try std.testing.expectEqual(native_v1, run.target);
+}
+
+test "the ABI tie-break does not steal a run target from a non-exe listing" {
+    // A shared-library listing for the native target must still report
+    // `requires_executable` rather than being selected by the tie-break.
+    const native = RocTarget.detectNative();
+    if (!native.isExecutableOnHost()) return error.SkipZigTest;
+
+    const config = TargetsConfig{
+        .inputs_dir = null,
+        .targets = &.{
+            .{ .target = native, .output = .shared, .items = &.{.app} },
+        },
+    };
+
+    const selected = try expectRequiresExecutable(selectRunTarget(config, null, .default));
+    try std.testing.expectEqual(native, selected.target);
+    try std.testing.expectEqual(OutputKind.shared, selected.output);
 }
