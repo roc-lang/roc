@@ -387,7 +387,7 @@ pub const Store = struct {
 
     pub fn freeze(self: *Store) void {
         if (self.hasSpeculativeConstruction()) {
-            Common.invariant("cannot freeze Monotype types with an unfinished construction owner");
+            Common.compilerBug("cannot freeze Monotype types with an unfinished construction owner");
         }
         self.frozen = true;
     }
@@ -497,7 +497,9 @@ pub const Store = struct {
         }
         self.types.set(index, content);
         self.constructing.set(index, false);
-        std.debug.assert(self.unfinished_type_count != 0);
+        if (self.unfinished_type_count == 0) {
+            Common.compilerBug("filled a Monotype slot without an unfinished construction");
+        }
         self.unfinished_type_count -= 1;
         self.iterator_interface_cache.set(index, null);
     }
@@ -3553,6 +3555,11 @@ test "monotype type store recursive transaction preserves captured side-pool row
     try std.testing.expectEqual(unit, GuardedList.at(args, 0));
 
     // Sealing an equal knot again must land on the same interned nodes.
+    const committed_types_len = store.types.len();
+    const committed_spans_len = store.spans.len();
+    const committed_fields_len = store.fields.len();
+    const committed_tags_len = store.tags.len();
+    const committed_declared_len = store.declared_fields.len();
     const second = store.beginTransaction();
     const second_record = try second.reserve(&store);
     const second_variants = try second.reserve(&store);
@@ -3572,13 +3579,14 @@ test "monotype type store recursive transaction preserves captured side-pool row
         .declared_order = Span.empty(),
     } });
 
-    const types_len = store.types.len();
-    const spans_len = store.spans.len();
     var second_result = try store.commitTransaction(&name_store, second, second_record);
     defer second_result.deinit();
     try std.testing.expectEqual(result.root, second_result.root);
-    try std.testing.expectEqual(types_len - 3, store.types.len());
-    try std.testing.expect(store.spans.len() < spans_len);
+    try std.testing.expectEqual(committed_types_len, store.types.len());
+    try std.testing.expectEqual(committed_spans_len, store.spans.len());
+    try std.testing.expectEqual(committed_fields_len, store.fields.len());
+    try std.testing.expectEqual(committed_tags_len, store.tags.len());
+    try std.testing.expectEqual(committed_declared_len, store.declared_fields.len());
 }
 
 test "monotype type store aborted transaction leaves no speculative state" {
