@@ -156,9 +156,6 @@ already diverged in behavior, not just in text.
 - [small/erased-ownership-as-lir-data.md](small/erased-ownership-as-lir-data.md)—
   the lowerer records erased ownership and the certifier re-derives it
   with a copy of the rule; `.boxy` has no producer at all.
-- [small/lir-call-result-fusion-framework.md](small/lir-call-result-fusion-framework.md)—
-  `return_slot` and `str_append` are the same pass twice, sharing a
-  byte-identical liveness guard that nothing keeps in sync.
 - [small/postcheck-ir-store-boilerplate.md](small/postcheck-ir-store-boilerplate.md)—
   the four post-check IR stores share 57 and 44 byte-identical
   function bodies of flat-store mechanics.
@@ -186,6 +183,18 @@ lacked that carve-out, so lowering could refuse an unwrap the planner
 had planned. It also separated two predicates a shared name had blurred:
 exact-role equality and `sameChildRoleKind`, which answers false for
 every role carrying a payload.
+
+One call-result fusion machinery has landed: `return_slot` and
+`str_append` were the same pass twice, and the walk, the single-use
+liveness guard, and the variant clone now live once in `body_clone.zig`,
+whose charter already named them. Each pass keeps only what is genuinely
+its rule—which consumer statement it matches, and how it rewrites the
+variant's returns. The merge fixed a silent drop: `str_append`'s variant
+clone did not carry `erased_reuse_arg` through, so a fused
+erased-callable proc lost it. `box_reuse` adopted the shared
+eligibility predicate; `loop_append_promote` deliberately did not,
+because its gate is a genuinely different one (it admits non-Roc ABI
+procs), which is recorded here rather than papered over.
 
 Within the rest of this batch, the two `big` projects compose in either
 order. The rest are independent.
