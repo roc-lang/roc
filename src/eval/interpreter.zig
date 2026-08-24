@@ -7834,7 +7834,7 @@ pub const Interpreter = struct {
         };
         if (builtin.mode == .Debug and entry.mode == .proven_cannot_overflow) {
             if (try self.integerOperationOverflows(a, b, arg_layout, entry.operation)) {
-                std.debug.panic("range prover emitted {s} for overflowing operands", .{@tagName(low_level)});
+                return self.invariantFailedError("range prover emitted {s} for overflowing operands", .{@tagName(low_level)});
             }
         }
         const checked_op: ?LIR.LowLevel = if (entry.mode == .crash_on_overflow) low_level else null;
