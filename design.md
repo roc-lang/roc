@@ -3504,6 +3504,7 @@ Solved-to-LIR lowering only substitutes arguments and dumbly lowers a selected
 body at its unique call site. The existing wrapper eligibility remains available
 for proven small call-through and low-level wrappers even when they have multiple
 direct uses.
+
 Each post-lift capture operand explicitly names the callee capture slot it
 supplies. Capture finalization preserves that key while rewriting the operand
 value and never infers the target slot from the value's own capture identity.
