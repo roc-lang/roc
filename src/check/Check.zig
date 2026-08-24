@@ -24499,7 +24499,8 @@ fn structureHasPendingOpenLiteralForDerivedParse(
 ) Allocator.Error!bool {
     return switch (structure) {
         .nominal_type => |nominal| try self.nominalHasPendingOpenLiteralForDerivedParse(nominal, env, visited),
-        .record => |record| try self.recordHasPendingOpenLiteralForDerivedParse(record.fields, env, visited),
+        .record => |record| try self.recordHasPendingOpenLiteralForDerivedParse(record.fields, env, visited) or
+            try self.varHasPendingOpenLiteralForDerivedParse(record.ext, env, visited),
         .record_unbound => |fields| try self.recordHasPendingOpenLiteralForDerivedParse(fields, env, visited),
         .tag_union => |tag_union| try self.tagUnionHasPendingOpenLiteralForDerivedParse(tag_union, env, visited),
         .tuple => |tuple| blk: {
@@ -24616,7 +24617,8 @@ fn structureHasPendingOpenLiteralForDerivedEncode(
 ) Allocator.Error!bool {
     return switch (structure) {
         .nominal_type => |nominal| try self.nominalHasPendingOpenLiteralForDerivedEncode(nominal, env, visited),
-        .record => |record| try self.recordHasPendingOpenLiteralForDerivedEncode(record.fields, env, visited),
+        .record => |record| try self.recordHasPendingOpenLiteralForDerivedEncode(record.fields, env, visited) or
+            try self.varHasPendingOpenLiteralForDerivedEncode(record.ext, env, visited),
         .record_unbound => |fields| try self.recordHasPendingOpenLiteralForDerivedEncode(fields, env, visited),
         .tag_union => |tag_union| try self.tagUnionHasPendingOpenLiteralForDerivedEncode(tag_union, env, visited),
         .tuple => |tuple| blk: {

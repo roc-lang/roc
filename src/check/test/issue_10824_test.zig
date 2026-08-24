@@ -5,17 +5,16 @@ const TestEnv = @import("./TestEnv.zig");
 test "issue 10824: inferred encoder record row closes at quiescence" {
     const source =
         \\encode_count = |record| {
-        \\    count : U64
-        \\    count = record.count
-        \\    Json.to_str({ ..record, count })
+        \\    _count : U64
+        \\    _count = record.count
+        \\    Json.to_str(record)
         \\}
-        \\out = encode_count({ count: 1 })
     ;
 
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try test_env.assertDefType("encode_count", "{ count: U64 } -> Str");
 }
 
 test "issue 10824: derived encoder rejects a rigid open record row" {
