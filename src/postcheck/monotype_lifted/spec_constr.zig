@@ -13009,6 +13009,19 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
         try pass.cloneFnBodyInPlace(@enumFromInt(@as(u32, @intCast(index))));
     }
 
+    const rewritten_body = switch (program.getFn(callee).body) {
+        .roc => |body| body,
+        .hosted => return error.TestUnexpectedResult,
+    };
+    const inline_source = pass.inlineSourceBody(callee) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(inline_source.expr != rewritten_body);
+    const source_work = inline_source.size.exactValue() orelse return error.TestUnexpectedResult;
+    const rewritten_work = switch (exprBodySizeWithin(&program, rewritten_body, Cloner.inline_body_work_budget)) {
+        .exact => |size| size,
+        .over_limit => return error.TestUnexpectedResult,
+    };
+    try std.testing.expect(rewritten_work > source_work);
+
     const root_call = try program.addExpr(.{ .ty = result_ty, .data = .{ .call_proc = .{
         .callee = .{ .lifted = callee },
         .args = try program.addExprSpan(&.{pair_expr}),
