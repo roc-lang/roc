@@ -408,10 +408,23 @@ const CollectReferencesContext = struct {
         }
         return .continue_traversal;
     }
+};
+
+/// Context for collecting the places that declare a specific pattern.
+const CollectDeclarationsContext = struct {
+    store: *const NodeStore,
+    module_env: *const ModuleEnv,
+    target_pattern: CIR.Pattern.Idx,
+    allocator: std.mem.Allocator,
+    results: *std.ArrayList(LspRange),
+
+    /// Records an OOM that occurred inside a visit callback, for the same
+    /// reason as `CollectReferencesContext.oom`.
+    oom: ?std.mem.Allocator.Error = null,
 
     /// Pre-visit callback for statements, picking up the name written on a
     /// block-level annotation that binds the target pattern.
-    fn visitStmtPre(ctx: *CollectReferencesContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+    fn visitStmtPre(ctx: *CollectDeclarationsContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
         const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
         if (@intFromEnum(pattern_idx) != @intFromEnum(ctx.target_pattern)) return .continue_traversal;
 
@@ -427,7 +440,7 @@ const CollectReferencesContext = struct {
     ///
     /// A named annotation is merged into the def it annotates, so its name
     /// token is reachable only through `Annotation.name_region`.
-    fn appendAnnotationName(ctx: *CollectReferencesContext, anno_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
+    fn appendAnnotationName(ctx: *CollectDeclarationsContext, anno_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
         const annotation = ctx.store.getAnnotation(anno_idx);
         const name_region = annotation.name_region orelse return;
         const range = regionToRange(ctx.module_env, name_region) orelse return;
@@ -641,22 +654,12 @@ pub fn collectLookupReferences(
 
     var visitor = CirVisitor(CollectReferencesContext).init(&ctx, .{
         .visit_expr_pre = CollectReferencesContext.visitExprPre,
-        .visit_stmt_pre = CollectReferencesContext.visitStmtPre,
     });
 
     // Walk all top-level definitions
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
-
-        // A top-level annotation is merged into its def, so the name written on
-        // the annotation line is only reachable from the def itself.
-        if (@intFromEnum(def.pattern) == @intFromEnum(target_pattern)) {
-            if (def.annotation) |anno_idx| {
-                try ctx.appendAnnotationName(anno_idx);
-            }
-        }
-
         visitor.walkExpr(&module_env.store, def.expr);
         if (visitor.stopped) break;
     }
@@ -667,6 +670,67 @@ pub fn collectLookupReferences(
     }
 
     // Re-raise any OOM that was stashed by a visit callback.
+    if (ctx.oom) |err| return err;
+
+    return results;
+}
+
+/// Collect the places that declare `target_pattern`.
+///
+/// That is the binding itself and, when it is annotated, the name written on
+/// its type annotation. The annotation name has no CIR node of its own —
+/// canonicalization merges a matching annotation into the def it annotates —
+/// so it is read from `Annotation.name_region`.
+///
+/// Kept separate from `collectLookupReferences` because LSP asks for the two
+/// separately: `textDocument/references` can be told to leave the declaration
+/// out.
+pub fn collectDeclarationRegions(
+    module_env: *ModuleEnv,
+    target_pattern: CIR.Pattern.Idx,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!std.ArrayList(LspRange) {
+    var results: std.ArrayList(LspRange) = .empty;
+    errdefer results.deinit(allocator);
+
+    // The binding site itself.
+    const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(target_pattern));
+    if (regionToRange(module_env, module_env.store.getRegionAt(pattern_node_idx))) |range| {
+        try results.append(allocator, range);
+    }
+
+    var ctx = CollectDeclarationsContext{
+        .store = &module_env.store,
+        .module_env = module_env,
+        .target_pattern = target_pattern,
+        .allocator = allocator,
+        .results = &results,
+    };
+
+    var visitor = CirVisitor(CollectDeclarationsContext).init(&ctx, .{
+        .visit_stmt_pre = CollectDeclarationsContext.visitStmtPre,
+    });
+
+    // A top-level annotation is merged into its def, so its name is reachable
+    // only from the def; annotations inside blocks are reached by the walk.
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+
+        if (@intFromEnum(def.pattern) == @intFromEnum(target_pattern)) {
+            if (def.annotation) |anno_idx| {
+                try ctx.appendAnnotationName(anno_idx);
+            }
+        }
+
+        visitor.walkExpr(&module_env.store, def.expr);
+        if (visitor.stopped) break;
+    }
+
+    if (!visitor.stopped) {
+        visitor.walkModule(&module_env.store, module_env.all_statements);
+    }
+
     if (ctx.oom) |err| return err;
 
     return results;

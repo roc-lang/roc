@@ -293,6 +293,8 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "rename handler refuses a name that changes what it means", .run = renameHandlerRefusesMeaningChangingName },
     .{ .name = "rename handler refuses a document that does not compile", .run = renameHandlerRefusesUncompilableDocument },
     .{ .name = "prepare rename reports the occurrence under the cursor", .run = prepareRenameReportsOccurrenceUnderCursor },
+    .{ .name = "references handler honours includeDeclaration", .run = referencesHandlerHonoursIncludeDeclaration },
+    .{ .name = "references handler respects shadowing", .run = referencesHandlerRespectsShadowing },
     .{ .name = "definition handler finds local variable definition", .run = definitionHandlerFindsLocalVariableDefinition },
     .{ .name = "definition handler returns null for undefined symbol", .run = definitionHandlerReturnsNullForUndefinedSymbol },
     .{ .name = "hover handler handles type annotation request", .run = hoverHandlerReturnsTypeInfoForTypeAnnotation },
@@ -1054,6 +1056,165 @@ pub fn prepareRenameReportsOccurrenceUnderCursor() integration_spec.SpecError!vo
     var refused = try responseById(allocator, responses, 3);
     defer refused.deinit();
     try std.testing.expect((try refused.result()) == .null);
+}
+
+/// Whether the locations contain one covering exactly this range.
+fn hasLocation(
+    locations: std.json.Value,
+    uri: []const u8,
+    line: i64,
+    start_character: i64,
+    end_character: i64,
+) integration_spec.SpecError!bool {
+    if (locations != .array) return error.TestUnexpectedResult;
+    for (locations.array.items) |location| {
+        const location_uri = try objectField(location, "uri");
+        if (location_uri != .string) return error.TestUnexpectedResult;
+        if (!std.mem.eql(u8, location_uri.string, uri)) continue;
+        const range = try objectField(location, "range");
+        const start = try objectField(range, "start");
+        const end = try objectField(range, "end");
+        if ((try integerField(start, "line")) == line and
+            (try integerField(start, "character")) == start_character and
+            (try integerField(end, "line")) == line and
+            (try integerField(end, "character")) == end_character)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Verifies references reports the uses of a symbol, and that
+/// `includeDeclaration` controls whether the binding and its annotation name
+/// come along.
+pub fn referencesHandlerHonoursIncludeDeclaration() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "references_decl.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\double : I64 -> I64
+        \\double = |n| n * 2
+        \\
+        \\main = double(double(21))
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const with_declaration = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":2}},"context":{{"includeDeclaration":true}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(with_declaration);
+    const without_declaration = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/references","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":2}},"context":{{"includeDeclaration":false}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(without_declaration);
+    // Asking from a use must answer the same as asking from the binding.
+    const from_use = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":4,"method":"textDocument/references","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":5,"character":10}},"context":{{"includeDeclaration":false}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(from_use);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{ with_declaration, without_declaration, from_use });
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Declaration, annotation name, and both call sites.
+    var full = try responseById(allocator, responses, 2);
+    defer full.deinit();
+    const all_locations = try full.result();
+    try std.testing.expect(all_locations == .array);
+    try std.testing.expectEqual(@as(usize, 4), all_locations.array.items.len);
+    try std.testing.expect(try hasLocation(all_locations, fixture.uri, 2, 0, 6));
+    try std.testing.expect(try hasLocation(all_locations, fixture.uri, 3, 0, 6));
+    try std.testing.expect(try hasLocation(all_locations, fixture.uri, 5, 7, 13));
+    try std.testing.expect(try hasLocation(all_locations, fixture.uri, 5, 14, 20));
+
+    // Only the call sites; the annotation name is part of the declaration.
+    var uses_only = try responseById(allocator, responses, 3);
+    defer uses_only.deinit();
+    const use_locations = try uses_only.result();
+    try std.testing.expect(use_locations == .array);
+    try std.testing.expectEqual(@as(usize, 2), use_locations.array.items.len);
+    try std.testing.expect(try hasLocation(use_locations, fixture.uri, 5, 7, 13));
+    try std.testing.expect(try hasLocation(use_locations, fixture.uri, 5, 14, 20));
+
+    var asked_from_use = try responseById(allocator, responses, 4);
+    defer asked_from_use.deinit();
+    const same_locations = try asked_from_use.result();
+    try std.testing.expect(same_locations == .array);
+    try std.testing.expectEqual(@as(usize, 2), same_locations.array.items.len);
+}
+
+/// Verifies references resolves through scope rather than matching text.
+///
+/// Both lambdas below bind `n`. Only the queried binding's uses may be
+/// reported, and a position that names no binding must answer null.
+pub fn referencesHandlerRespectsShadowing() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "references_shadow.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\f = |n| n + 1
+        \\
+        \\g = |n| n + 2
+        \\
+        \\main = f(1) + g(2)
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // The use of `n` inside `f`, one column past its binding.
+    const in_f = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":8}},"context":{{"includeDeclaration":true}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(in_f);
+    // The `+` operator names no binding.
+    const on_operator = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/references","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":10}},"context":{{"includeDeclaration":true}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(on_operator);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{ in_f, on_operator });
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var scoped = try responseById(allocator, responses, 2);
+    defer scoped.deinit();
+    const locations = try scoped.result();
+    try std.testing.expect(locations == .array);
+    try std.testing.expectEqual(@as(usize, 2), locations.array.items.len);
+    try std.testing.expect(try hasLocation(locations, fixture.uri, 2, 5, 6));
+    try std.testing.expect(try hasLocation(locations, fixture.uri, 2, 8, 9));
+    // `g`'s own `n` lives on line 4 and must not appear.
+    try std.testing.expect(!try hasLocation(locations, fixture.uri, 4, 5, 6));
+    try std.testing.expect(!try hasLocation(locations, fixture.uri, 4, 8, 9));
+
+    var nothing = try responseById(allocator, responses, 3);
+    defer nothing.deinit();
+    try std.testing.expect((try nothing.result()) == .null);
 }
 
 /// Verifies goto definition locates a local variable definition.

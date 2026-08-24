@@ -2204,23 +2204,74 @@ pub const SyntaxChecker = struct {
         module_env: *ModuleEnv,
         target_pattern: CIR.Pattern.Idx,
     ) Allocator.Error![]LspRange {
-        var regions: std.ArrayList(LspRange) = .empty;
+        var regions = try cir_queries.collectDeclarationRegions(module_env, target_pattern, self.allocator);
         errdefer regions.deinit(self.allocator);
 
-        // Add the definition itself
-        const def_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(target_pattern));
-        const def_region = module_env.store.getRegionAt(def_node_idx);
-        if (cir_queries.regionToRange(module_env, def_region)) |range| {
-            try regions.append(self.allocator, range);
-        }
-
-        // Find all lookups that reference this pattern, plus the name written
-        // on the binding's type annotation.
         var lookup_regions = try cir_queries.collectLookupReferences(module_env, target_pattern, self.allocator);
         defer lookup_regions.deinit(self.allocator);
         try regions.appendSlice(self.allocator, lookup_regions.items);
 
         return regions.toOwnedSlice(self.allocator);
+    }
+
+    /// Every place a symbol is written, split the way LSP asks for it.
+    pub const ReferencesResult = struct {
+        regions: []LspRange,
+
+        pub fn deinit(self: ReferencesResult, allocator: std.mem.Allocator) void {
+            allocator.free(self.regions);
+        }
+    };
+
+    /// Find every occurrence of the symbol at the given position.
+    ///
+    /// Unlike rename, this reports rather than rewrites, so it is not limited
+    /// to plain `assign` bindings: any pattern the cursor resolves to can have
+    /// its uses listed.
+    ///
+    /// When `include_declaration` is false the binding site and its annotation
+    /// name are left out, keeping only the places the symbol is read.
+    pub fn getReferencesAtPosition(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        line: u32,
+        character: u32,
+        include_declaration: bool,
+    ) QueryError!?ReferencesResult {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        var build = try self.prepareDocumentBuild(uri, override_text);
+        defer build.deinit();
+
+        self.logDebug(.build, "references: document {s} reused={}", .{ build.absolute_path, build.reused });
+
+        if (!build.build_succeeded) {
+            self.logDebug(.build, "references: build unavailable for {s}", .{build.absolute_path});
+            return null;
+        }
+
+        const module_env = build.getModuleEnv() orelse return null;
+        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const target_pattern = cir_queries.resolveSymbolAtOffset(module_env, target_offset) orelse return null;
+
+        var regions: std.ArrayList(LspRange) = .empty;
+        errdefer regions.deinit(self.allocator);
+
+        if (include_declaration) {
+            var declarations = try cir_queries.collectDeclarationRegions(module_env, target_pattern, self.allocator);
+            defer declarations.deinit(self.allocator);
+            try regions.appendSlice(self.allocator, declarations.items);
+        }
+
+        var lookups = try cir_queries.collectLookupReferences(module_env, target_pattern, self.allocator);
+        defer lookups.deinit(self.allocator);
+        try regions.appendSlice(self.allocator, lookups.items);
+
+        return ReferencesResult{
+            .regions = try regions.toOwnedSlice(self.allocator),
+        };
     }
 
     /// What checking a new name against the surrounding scopes established.

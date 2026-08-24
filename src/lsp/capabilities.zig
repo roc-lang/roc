@@ -33,6 +33,7 @@ pub const ServerCapabilities = struct {
     selectionRangeProvider: bool = false,
     documentHighlightProvider: bool = false,
     completionProvider: ?CompletionOptions = null,
+    referencesProvider: bool = false,
     renameProvider: ?RenameOptions = null,
 
     pub const TextDocumentSyncOptions = struct {
@@ -91,6 +92,7 @@ pub fn buildCapabilities() ServerCapabilities {
         .selectionRangeProvider = true,
         .documentHighlightProvider = true,
         .completionProvider = .{},
+        .referencesProvider = true,
         .renameProvider = .{},
     };
 }

@@ -10,6 +10,7 @@ The following requests are handled:
 - `textDocument/completion`
 - `textDocument/documentSymbol`
 - `textDocument/documentHighlight`
+- `textDocument/references`
 - `textDocument/formatting`
 - `textDocument/foldingRange`
 - `textDocument/selectionRange`
@@ -22,6 +23,20 @@ The following notifications are handled:
 - `didChange` (same as `didOpen`, and supports incremental changes)
 
 Diagnostics are pushed as `textDocument/publishDiagnostics` when a document is opened or changed.
+
+### References
+
+`textDocument/references` reports every place a symbol is written in the requested document.
+Occurrences come from the CIR, so a reference resolves to the binding it actually names rather
+than to matching text, and a same-named binding in another scope is not reported. Unlike rename
+it only reports, so it is not limited to plain bindings — a destructured field can have its uses
+listed even though renaming one is refused.
+
+`includeDeclaration` controls whether the binding site and the name on its type annotation are
+included; both count as the declaration. A client that omits the field gets everything.
+
+Only the requested document is searched, so a short result is not proof that a symbol is unused
+across a project — see the cross-module note below.
 
 ### Rename
 
@@ -40,9 +55,11 @@ silently breaks the program. It refuses when:
 - another binding of the new name is live where the renamed one is, which would capture a
   reference or shadow a binding
 
-Cross-module rename does not exist yet. A binding that other modules import is still renamed
-locally, so renaming an exported name will break its importers — the editor cannot warn about
-this, so it is on the author to check.
+### Cross-module limits
+
+Neither references nor rename looks past the requested document. References will miss uses in
+other modules, and rename edits only the one file, so renaming an exported name breaks its
+importers. The editor cannot warn about either, so it is on the author to check.
 
 
 ## How to implement new LSP capabilities
