@@ -11174,6 +11174,12 @@ fn buildCliTestPlan(
     }
 
     for (modules, 0..) |module, module_index| {
+        // `roc test` runs the `expect`s the developer wrote. A dependency the
+        // build downloaded, and the platforms embedded in the compiler, carry
+        // tests belonging to whoever published them, so their roots are not
+        // part of this run. Dependencies reached through filesystem paths are
+        // the developer's own sources and are tested alongside the root.
+        if (module.package_origin != .local_path) continue;
         const artifact = module.semantic.checked_artifact orelse continue;
         const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
         errdefer ctx.gpa.free(test_roots);

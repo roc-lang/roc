@@ -453,6 +453,8 @@ const CustomCase = enum {
     glue_try_box_model_unknown_payload,
     glue_unresolved_by_value_errors,
     glue_c_tests,
+    roc_test_skips_url_dependency_expects,
+    roc_test_caches_local_dependency_expects,
 };
 
 const Skip = union(enum) {
@@ -1172,6 +1174,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10730: expects inside associated blocks run as tests", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/Issue10730AssociatedBlockExpects.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (5) tests passed" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "failed" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10730: a failing expect inside an associated block fails roc test", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/Issue10730AssociatedBlockExpectFails.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "Issue10730AssociatedBlockExpectFails.roc:5:2" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "transparent alias locals satisfy alias and backing requests", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/TransparentAliasLocalRequests.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "related local and request had no exact nominal backing path" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test skips a downloaded dependency's expects", .body = .{ .custom = .roc_test_skips_url_dependency_expects } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test runs a path dependency's expects and caches them by source", .body = .{ .custom = .roc_test_caches_local_dependency_expects } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test runs an app's expects without its platform entrypoint", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/AppWithoutEntrypoint.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "exposed but not defined" }, .{ .stream = .stderr, .text = "missing platform required definition" }, .{ .stream = .stderr, .text = "compile time crash" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check still requires the platform entrypoint roc test does not", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/AppWithoutEntrypoint.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "exposed but not defined" }, .{ .stream = .stderr, .text = "missing platform required definition" }, .{ .stream = .stderr, .text = "main!" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test lowers opaque generic Try function wrappers", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/OpaqueTryFunction.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -2795,6 +2799,8 @@ fn runCustomCase(
         .glue_try_box_model_unknown_payload => customGlueTryBoxModelUnknownPayload(io, allocator, &env, &timer, timeout_ms),
         .glue_unresolved_by_value_errors => customGlueUnresolvedByValueErrors(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
+        .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
+        .roc_test_caches_local_dependency_expects => customRocTestCachesLocalDependencyExpects(io, allocator, &env, &timer, timeout_ms),
     };
 
     if (result) |failure| {
@@ -7129,7 +7135,13 @@ fn customIssue10015UrlRandomTestSize(
         \\
         \\main! = |_args| Ok({})
         \\
-        \\expect True
+        \\# The app owns this expect, so `roc test` runs it and the downloaded
+        \\# package's code has to link into the optimized test image, which is
+        \\# what regressed in issue 10015.
+        \\expect {
+        \\    generation = Random.step(Random.seed(0), Random.static(5))
+        \\    generation.value == 5
+        \\}
         \\
     ;
 
@@ -8564,6 +8576,193 @@ fn customGlueDylibCacheHit(io: std.Io, allocator: Allocator, env: *const CaseEnv
         return customFailure(allocator, timer, "expected no staged glue dylib temp entries to remain, found {d}", .{cache_counts.temps});
     }
 
+    return null;
+}
+
+/// A package the developer downloaded ships with its publisher's tests, and
+/// `roc test` must leave those alone. The dependency here is staged straight
+/// into the isolated package cache under the hash its URL names, so no network
+/// is involved, and its `expect`s are written to fail loudly if they ever run.
+fn customRocTestSkipsUrlDependencyExpects(
+    io: std.Io,
+    allocator: Allocator,
+    env: *CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    // Any base58 name works: a cache hit is looked up by the URL's filename
+    // and never re-verified against the directory's contents.
+    const dep_hash = "3Fw8gN1qsy7Zc4kR6vTbEuXhLm2pDoAj5YWnQrKtVxSz";
+
+    const cache_package_dir = std.fs.path.join(allocator, &.{ env.dirs.roc_cache_dir, "roc", "packages", dep_hash }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate downloaded dependency cache path: {}", .{err});
+    defer allocator.free(cache_package_dir);
+    std.Io.Dir.cwd().createDirPath(io, cache_package_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create downloaded dependency cache dir: {}", .{err});
+
+    if (writeCaseFile(io, allocator, timer, cache_package_dir, "main.roc", "package [Greeting] {}\n")) |failure| return failure;
+    if (writeCaseFile(io, allocator, timer, cache_package_dir, "Greeting.roc",
+        \\Greeting := [].{
+        \\    greet : Str -> Str
+        \\    greet = |name| "Hello, ${name}!"
+        \\}
+        \\
+        \\# These belong to whoever published this package. If `roc test` ever runs
+        \\# them the case fails on the test count and on the failure itself.
+        \\expect Greeting.greet("Roc") == "Hello, Roc!"
+        \\expect Bool.False
+        \\
+    )) |failure| return failure;
+
+    const app_source = std.fmt.allocPrint(allocator,
+        \\app [main!] {{
+        \\    dep: "https://example.com/greeting/releases/download/0.1.0/{s}.tar.zst",
+        \\}}
+        \\
+        \\import dep.Greeting
+        \\
+        \\expect Greeting.greet("World") == "Hello, World!"
+        \\
+        \\main! = |_| Ok({{}})
+        \\
+    , .{dep_hash}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to render downloaded-dependency app source: {}", .{err});
+    defer allocator.free(app_source);
+
+    if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "app_with_url_dep.roc", app_source)) |failure| return failure;
+
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "app_with_url_dep.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate downloaded-dependency app path: {}", .{err});
+    defer allocator.free(app_path);
+
+    return runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", "--no-cache" },
+        .roc_file = app_path,
+        .exit = .success,
+        // Exactly the app's own expect: the dependency contributes none.
+        .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }},
+        .not_contains = &.{
+            .{ .stream = .stdout, .text = "failed" },
+            .{ .stream = .stderr, .text = "failed" },
+            .{ .stream = .stderr, .text = "panic" },
+        },
+    });
+}
+
+/// A dependency reached through a filesystem path is the developer's own code,
+/// so its `expect`s run alongside the root's. They also have to stop running
+/// once nothing has changed: results are cached against a hash of the source
+/// that produced them, so a second run reports them without executing any.
+fn customRocTestCachesLocalDependencyExpects(
+    io: std.Io,
+    allocator: Allocator,
+    env: *CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const dep_dir = createWorkSubdir(io, allocator, env, "greeting_pkg") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create path dependency dir: {}", .{err});
+    defer allocator.free(dep_dir);
+
+    if (writeCaseFile(io, allocator, timer, dep_dir, "main.roc", "package [Greeting] {}\n")) |failure| return failure;
+
+    const dep_module_source =
+        \\Greeting := [].{
+        \\    greet : Str -> Str
+        \\    greet = |name| "Hello, ${name}!"
+        \\}
+        \\
+        \\expect Greeting.greet("Roc") == "Hello, Roc!"
+        \\expect Greeting.greet("") == "Hello, !"
+        \\
+    ;
+    if (writeCaseFile(io, allocator, timer, dep_dir, "Greeting.roc", dep_module_source)) |failure| return failure;
+
+    if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "app_with_path_dep.roc",
+        \\app [main!] {
+        \\    dep: "./greeting_pkg/main.roc",
+        \\}
+        \\
+        \\import dep.Greeting
+        \\
+        \\expect Greeting.greet("World") == "Hello, World!"
+        \\
+        \\main! = |_| Ok({})
+        \\
+    )) |failure| return failure;
+
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "app_with_path_dep.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate path-dependency app path: {}", .{err});
+    defer allocator.free(app_path);
+
+    // The app's one expect plus the dependency's two.
+    const all_three_passed: OutputNeedle = .{ .stream = .stdout, .text = "All (3) tests passed" };
+    const cached_marker: OutputNeedle = .{ .stream = .stdout, .text = "(cached)" };
+    const ran_tests: []const OutputNeedle = &.{
+        .{ .stream = .stdout, .text = "failed" },
+        .{ .stream = .stderr, .text = "panic" },
+        .{ .stream = .stdout, .text = "(cached)" },
+    };
+    const reused_results: []const OutputNeedle = &.{
+        .{ .stream = .stdout, .text = "failed" },
+        .{ .stream = .stderr, .text = "panic" },
+    };
+
+    // First run: nothing is cached, so every root actually runs.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{"test"},
+        .roc_file = app_path,
+        .exit = .success,
+        .contains = &.{all_three_passed},
+        .not_contains = ran_tests,
+    })) |failure| return failure;
+
+    // Second run: same sources, so the stored results answer every root and no
+    // test executes.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{"test"},
+        .roc_file = app_path,
+        .exit = .success,
+        .contains = &.{ all_three_passed, cached_marker },
+        .not_contains = reused_results,
+    })) |failure| return failure;
+
+    // Editing the dependency changes its source hash, which must invalidate the
+    // entry it keys and send those roots back through execution.
+    if (writeCaseFile(io, allocator, timer, dep_dir, "Greeting.roc", "# edited\n" ++ dep_module_source)) |failure| return failure;
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{"test"},
+        .roc_file = app_path,
+        .exit = .success,
+        .contains = &.{all_three_passed},
+        .not_contains = ran_tests,
+    })) |failure| return failure;
+
+    // And the edited sources cache in turn.
+    return runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{"test"},
+        .roc_file = app_path,
+        .exit = .success,
+        .contains = &.{ all_three_passed, cached_marker },
+        .not_contains = reused_results,
+    });
+}
+
+/// Write one file of a case's fixture, reporting the path in any failure.
+fn writeCaseFile(
+    io: std.Io,
+    allocator: Allocator,
+    timer: *harness.Timer,
+    dir: []const u8,
+    name: []const u8,
+    data: []const u8,
+) ?TestResult {
+    const path = std.fs.path.join(allocator, &.{ dir, name }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate path for {s}: {}", .{ name, err });
+    defer allocator.free(path);
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = data }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ path, err });
     return null;
 }
 
