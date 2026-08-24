@@ -66,7 +66,7 @@ comptime {
 }
 
 /// Test platform directories that need host libraries built
-const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive", "alloc-count" };
+const all_test_platform_dirs = [_][]const u8{ "str", "int", "fx", "fx-open", "dylib", "archive", "alloc-count", "box-model-uniqueness" };
 const glibc_test_platform_dirs = [_][]const u8{ "str", "int", "dylib", "archive" };
 
 fn mustUseLlvm(target: ResolvedTarget) bool {
@@ -88,6 +88,17 @@ fn testHostNeedsCompilerRt(target: ResolvedTarget) bool {
     return target.result.os.tag == .linux or
         mustUseLlvm(target) or
         (target.result.os.tag == .windows and target.result.cpu.arch == .aarch64);
+}
+
+/// Every executable that links the whole compiler emits more `.text` than an
+/// ARM32 branch can reach. LLD places range-extension thunks *between* input
+/// sections, so a monolithic `.text` leaves it nowhere to put one and the link
+/// fails with "InputSection too large for range extension thunk". Splitting per
+/// function and per datum gives LLD those insertion points, and lets the final
+/// link discard unused compiler code on every target.
+fn splitCompilerSections(step: *Step.Compile) void {
+    step.link_function_sections = true;
+    step.link_data_sections = true;
 }
 
 fn configureBackend(step: *Step.Compile, target: ResolvedTarget) void {
@@ -117,7 +128,7 @@ const TestHostOptions = struct {
 };
 
 fn testPlatformUsesStackHandler(platform_dir: []const u8) bool {
-    return std.mem.eql(u8, platform_dir, "fx");
+    return std.mem.eql(u8, platform_dir, "fx") or std.mem.eql(u8, platform_dir, "fx-open");
 }
 
 fn testPlatformRequiresSectionDceHost(platform_dir: []const u8) bool {
@@ -2161,6 +2172,13 @@ fn createTestPlatformHostLib(
     }
     if (options.uses_stack_handler) {
         lib.root_module.addImport("base", roc_modules.base);
+        const crash_handlers = b.createModule(.{
+            .root_source_file = b.path("test/host_crash_handlers.zig"),
+            .target = host_target,
+            .optimize = optimize,
+        });
+        crash_handlers.addImport("base", roc_modules.base);
+        lib.root_module.addImport("host_crash_handlers", crash_handlers);
     }
     lib.root_module.addImport("builtins", roc_modules.builtins);
     lib.root_module.addImport("build_options", roc_modules.build_options);
@@ -2342,6 +2360,40 @@ fn buildAndCopyWasmHostObject(
     const copy_step = b.addUpdateSourceFiles();
     copy_step.addCopyFileToSource(obj.getEmittedBin(), dest_path);
 
+    return &copy_step.step;
+}
+
+/// Build a wasm host which owns a compiler-rt-spelled symbol with strong
+/// binding, as stable Rust hosts must when they implement an intrinsic by
+/// hand. Roc's sealed object must not expose or resolve against this symbol.
+fn buildAndCopyStrongIntrinsicWasmHostObject(
+    b: *std.Build,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    strip: bool,
+    omit_frame_pointer: ?bool,
+) *Step {
+    const obj = b.addObject(.{
+        .name = "strong_intrinsic_host",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/wasm/issue_10827_strong_intrinsic_host/platform/wasm_host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    configureBackend(obj, target);
+    obj.link_function_sections = true;
+    obj.link_data_sections = true;
+    obj.bundle_compiler_rt = false;
+
+    const copy_step = b.addUpdateSourceFiles();
+    copy_step.addCopyFileToSource(
+        obj.getEmittedBin(),
+        "test/wasm/issue_10827_strong_intrinsic_host/platform/targets/wasm32/host.wasm",
+    );
     return &copy_step.step;
 }
 
@@ -2592,18 +2644,18 @@ fn setupTestPlatforms(
             );
             clear_cache_step.dependOn(copy_step);
 
-            // test/alloc-count declares fx's musl runtime objects (crt1.o,
-            // libc.a) as link inputs; copy them alongside its host library
+            // Allocation-sensitive test platforms declare fx's musl runtime
+            // objects as link inputs; copy them alongside their host library
             // rather than committing more copies of the same binaries.
-            if (std.mem.eql(u8, platform_dir, "alloc-count") and std.mem.endsWith(u8, cross_target.name, "musl")) {
+            if ((std.mem.eql(u8, platform_dir, "alloc-count") or std.mem.eql(u8, platform_dir, "box-model-uniqueness")) and std.mem.endsWith(u8, cross_target.name, "musl")) {
                 const copy_musl_runtime = b.addUpdateSourceFiles();
                 copy_musl_runtime.addCopyFileToSource(
                     b.path(b.pathJoin(&.{ "test/fx/platform/targets", cross_target.name, "crt1.o" })),
-                    b.pathJoin(&.{ "test/alloc-count/platform/targets", cross_target.name, "crt1.o" }),
+                    b.pathJoin(&.{ "test", platform_dir, "platform/targets", cross_target.name, "crt1.o" }),
                 );
                 copy_musl_runtime.addCopyFileToSource(
                     b.path(b.pathJoin(&.{ "test/fx/platform/targets", cross_target.name, "libc.a" })),
-                    b.pathJoin(&.{ "test/alloc-count/platform/targets", cross_target.name, "libc.a" }),
+                    b.pathJoin(&.{ "test", platform_dir, "platform/targets", cross_target.name, "libc.a" }),
                 );
                 clear_cache_step.dependOn(&copy_musl_runtime.step);
             }
@@ -2665,6 +2717,13 @@ fn setupTestPlatforms(
         omit_frame_pointer,
     );
     clear_cache_step.dependOn(wasm_host_step);
+    clear_cache_step.dependOn(buildAndCopyStrongIntrinsicWasmHostObject(
+        b,
+        wasm_target,
+        optimize,
+        strip,
+        omit_frame_pointer,
+    ));
 
     b.getInstallStep().dependOn(clear_cache_step);
     build_test_hosts_step.dependOn(clear_cache_step);
@@ -3886,6 +3945,7 @@ pub fn build(b: *std.Build) void {
             .valgrind = valgrind_support,
         }),
     });
+    splitCompilerSections(snapshot_exe);
     configureBackend(snapshot_exe, target);
     roc_modules.addAll(snapshot_exe);
     snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -4634,6 +4694,28 @@ pub fn build(b: *std.Build) void {
         build_wasm_str_concat_join_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_join_app.step);
 
+        const build_wasm_str_interp_leading_literal_app = b.addRunArtifact(roc_exe);
+        build_wasm_str_interp_leading_literal_app.addArgs(&.{
+            "build",
+            "test/wasm/str_interp_leading_literal_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/str_interp_leading_literal_static_lib_app.wasm",
+        });
+        build_wasm_str_interp_leading_literal_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_interp_leading_literal_app.step);
+
+        const build_wasm_str_concat_unique_reuse_app = b.addRunArtifact(roc_exe);
+        build_wasm_str_concat_unique_reuse_app.addArgs(&.{
+            "build",
+            "test/wasm/str_concat_unique_reuse_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/str_concat_unique_reuse_static_lib_app.wasm",
+        });
+        build_wasm_str_concat_unique_reuse_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_unique_reuse_app.step);
+
         // End-to-end cart gate for the minted-iterator `for`-loop drive. The
         // size build covers the LLVM cart path, and the dev build covers wasm
         // composite loop-state rebinding for recursive generated iterators.
@@ -4733,6 +4815,17 @@ pub fn build(b: *std.Build) void {
         build_wasm_boxed_model_update_app.step.dependOn(build_test_hosts_step);
         build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_boxed_model_update_app.step);
 
+        const build_wasm_issue_10836_app = b.addRunArtifact(roc_exe);
+        build_wasm_issue_10836_app.addArgs(&.{
+            "build",
+            "test/wasm/issue_10836_boxed_low_alignment_static_lib_app.roc",
+            "--opt=dev",
+            "--target=wasm32",
+            "--output=test/wasm/issue_10836_boxed_low_alignment_static_lib_app.wasm",
+        });
+        build_wasm_issue_10836_app.step.dependOn(build_test_hosts_step);
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10836_app.step);
+
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
             .root_module = b.createModule(.{
@@ -4831,6 +4924,36 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_str_concat_join_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_join_test.step);
+
+            const run_wasm_str_interp_leading_literal_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_str_interp_leading_literal_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/str_interp_leading_literal_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                "--min-allocs",
+                "1",
+                "--max-allocs",
+                "2",
+            });
+            run_wasm_str_interp_leading_literal_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_interp_leading_literal_test.step);
+
+            const run_wasm_str_concat_unique_reuse_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_str_concat_unique_reuse_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/str_concat_unique_reuse_static_lib_app.wasm",
+                "--expected",
+                "ok",
+                "--assert-alloc-balanced",
+                "--min-allocs",
+                "1",
+                "--max-allocs",
+                "1",
+            });
+            run_wasm_str_concat_unique_reuse_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_unique_reuse_test.step);
 
             // Boot-and-play the minted-iterator `for`-loop cart; "ok" means every
             // inlined `for` over append/map/concat/chained minted chains ran to
@@ -4942,6 +5065,16 @@ pub fn build(b: *std.Build) void {
             });
             run_wasm_boxed_model_update_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_boxed_model_update_test.step);
+
+            const run_wasm_issue_10836_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_issue_10836_test.addArgs(&.{
+                "--wasm-path",
+                "test/wasm/issue_10836_boxed_low_alignment_static_lib_app.wasm",
+                "--expected",
+                "7,9;11,13;Inc(42)",
+            });
+            run_wasm_issue_10836_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10836_test.step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
@@ -6775,8 +6908,8 @@ fn buildBoxyRuntimeObject(
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
             // Native runtime objects can participate in shared-library links.
-            // Wasm uses direct data-symbol relocations so a prepared host can
-            // retain its app-specific Boxy sidecar references across `-r`.
+            // Wasm uses direct data-symbol relocations so compiler-only
+            // relocatable composition can bind its app-specific Boxy sidecar.
             .pic = target.result.cpu.arch != .wasm32,
         }),
     });
@@ -6856,12 +6989,7 @@ fn addMainExe(
     // SetUnhandledExceptionFilter stack-overflow handler before the interpreter
     // can catch the overflow itself. Reserve 64 MiB to match eval-test-runner.
     exe.stack_size = 64 * 1024 * 1024;
-    // Keep functions and data in independent sections. Besides allowing the
-    // final linker to discard unused compiler code, this is required on ARM32:
-    // LLD cannot place range-extension thunks inside the monolithic .text
-    // section Zig otherwise emits for Roc's large debug executable.
-    exe.link_function_sections = true;
-    exe.link_data_sections = true;
+    splitCompilerSections(exe);
     configureBackend(exe, target);
     exe.root_module.addImport("llvm_codegen", llvm_codegen_module);
     linkWatchPlatformLibs(exe, target);
@@ -7187,9 +7315,9 @@ fn addMainExe(
         cross_builtins_obj.bundle_compiler_rt = false;
         configureBackend(cross_builtins_obj, cross_resolved_target);
 
-        const cross_builtins_bin = if (cross_is_wasm) blk: {
+        const cross_wasm32_compiler_rt_obj: ?*Step.Compile = if (cross_is_wasm) blk: {
             const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
-            const cross_wasm32_compiler_rt_obj = b.addObject(.{
+            const compiler_rt_obj = b.addObject(.{
                 .name = "compiler_rt_wasm32",
                 .root_module = b.createModule(.{
                     .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
@@ -7200,14 +7328,17 @@ fn addMainExe(
                     .pic = true,
                 }),
             });
-            cross_wasm32_compiler_rt_obj.bundle_compiler_rt = false;
-            configureBackend(cross_wasm32_compiler_rt_obj, cross_resolved_target);
+            compiler_rt_obj.bundle_compiler_rt = false;
+            configureBackend(compiler_rt_obj, cross_resolved_target);
+            break :blk compiler_rt_obj;
+        } else null;
 
+        const cross_builtins_bin = if (cross_wasm32_compiler_rt_obj) |compiler_rt_obj| blk: {
             const link_cross_wasm32_builtins = b.addSystemCommand(&.{ b.graph.zig_exe, "wasm-ld", "-r" });
             link_cross_wasm32_builtins.addArg("-o");
             const merged_cross_wasm32_builtins = link_cross_wasm32_builtins.addOutputFileArg("roc_builtins.o");
             link_cross_wasm32_builtins.addFileArg(cross_builtins_obj.getEmittedBin());
-            link_cross_wasm32_builtins.addFileArg(cross_wasm32_compiler_rt_obj.getEmittedBin());
+            link_cross_wasm32_builtins.addFileArg(compiler_rt_obj.getEmittedBin());
             break :blk merged_cross_wasm32_builtins;
         } else cross_builtins_obj.getEmittedBin();
 
@@ -7220,6 +7351,19 @@ fn addMainExe(
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
         );
         exe.step.dependOn(&copy_cross_builtins.step);
+
+        // Standalone wasm builds compose compiler-rt into the Roc-owned object
+        // and localize it before the platform link. Keep it separate from the
+        // extern builtins object so compiler support is never a public archive
+        // member or a platform-resolvable global.
+        if (cross_wasm32_compiler_rt_obj) |compiler_rt_obj| {
+            const copy_cross_compiler_rt = b.addUpdateSourceFiles();
+            copy_cross_compiler_rt.addCopyFileToSource(
+                compiler_rt_obj.getEmittedBin(),
+                b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_compiler_rt.o" }),
+            );
+            exe.step.dependOn(&copy_cross_compiler_rt.step);
+        }
 
         // Extern-symbol-mode builtins object for this target (the symbol ABI).
         const cross_builtins_extern_obj = b.addObject(.{

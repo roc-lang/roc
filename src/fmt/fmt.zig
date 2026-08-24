@@ -2818,10 +2818,13 @@ const Formatter = struct {
                 }
                 const packages = fmt.ast.store.getCollection(a.packages);
                 const packages_multiline = fmt.collectionWillBeMultiline(AST.RecordField.Idx, a.packages);
+                // An app that names no platform and no packages writes `{}`,
+                // with nothing to separate from the braces.
+                const packages_empty = packages.span.len == 0;
                 try fmt.push('{');
                 if (packages_multiline) {
                     fmt.curr_indent += 1;
-                } else {
+                } else if (!packages_empty) {
                     try fmt.push(' ');
                 }
 
@@ -2829,9 +2832,11 @@ const Formatter = struct {
                 var package_fields_list = try std.array_list.Managed(AST.RecordField.Idx).initCapacity(fmt.ast.store.gpa, 10);
                 const packages_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
                 for (packages_slice) |package_idx| {
-                    if (package_idx == a.platform_idx) {
-                        platform_field = package_idx;
-                        continue;
+                    if (a.platform_idx) |header_platform_idx| {
+                        if (package_idx == header_platform_idx) {
+                            platform_field = package_idx;
+                            continue;
+                        }
                     }
                     try package_fields_list.append(package_idx);
                 }
@@ -2883,7 +2888,7 @@ const Formatter = struct {
                     fmt.curr_indent -= 1;
                     try fmt.ensureNewline();
                     try fmt.pushIndent();
-                } else {
+                } else if (!packages_empty) {
                     try fmt.push(' ');
                 }
 

@@ -4326,6 +4326,18 @@ pub const InstGraph = struct {
                     try fields.appendSlice(self.allocator, tail.fields);
                     ext = self.find(tail.ext);
                 },
+                .named => |named| {
+                    const declared_backing = named.backing orelse
+                        Common.invariant("instantiation record row extended into a named type without backing");
+                    if (declared_backing.use != .inspectable) {
+                        Common.invariant("instantiation record row extended into a non-inspectable named type");
+                    }
+                    const backing = try self.structuralBackingNode(declared_backing.node, named);
+                    if (backing.recursive) {
+                        Common.invariant("instantiation record row extended into a recursive named type");
+                    }
+                    ext = self.find(backing.node);
+                },
                 .unresolved, .empty_record => break,
                 .redirect,
                 .primitive,
@@ -4335,7 +4347,6 @@ pub const InstGraph = struct {
                 .func,
                 .tag_union,
                 .empty_tag_union,
-                .named,
                 .erased,
                 .zst,
                 => Common.invariant("instantiation record row extended into a non-record type"),
@@ -7581,6 +7592,47 @@ test "named type relation to its own backing preserves the backing edge" {
     try std.testing.expectEqual(backing, retained.node);
     try std.testing.expectEqual(Type.BackingUse.runtime_layout_only, retained.use);
     try std.testing.expectEqual(@as(usize, 1), (try graph.recordConstructionNodes(named)).fields.len);
+}
+
+test "record row follows an inspectable nominal record extension" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x29} ** 32));
+    const type_name = try name_store.internTypeName("Vec2");
+    const x = try name_store.internRecordFieldLabel("x");
+    const y = try name_store.internRecordFieldLabel("y");
+    const z = try name_store.internRecordFieldLabel("z");
+    const f32_node = try graph.newNode(.{ .primitive = .f32 });
+    const empty = try graph.newNode(.empty_record);
+    const backing_fields = try graph.arena().dupe(InstField, &.{
+        .{ .name = x, .ty = f32_node, .default = null },
+        .{ .name = y, .ty = f32_node, .default = null },
+    });
+    const backing = try graph.newNode(.{ .record = .{ .fields = backing_fields, .ext = empty } });
+    const nominal = try graph.newNode(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{ .node = backing, .use = .inspectable },
+    } });
+    const outer_fields = try graph.arena().dupe(InstField, &.{.{ .name = z, .ty = f32_node, .default = null }});
+    const outer = try graph.newNode(.{ .record = .{ .fields = outer_fields, .ext = nominal } });
+
+    const flattened = try graph.flattenRecordRow(outer);
+
+    try std.testing.expectEqual(@as(usize, 3), flattened.fields.len);
+    try std.testing.expectEqual(empty, flattened.ext);
 }
 
 test "opaque interface relation preserves forced-dynamic iterator identity" {

@@ -126,6 +126,21 @@
               "--system"
               "${finalAttrs.deps}"
             ];
+            # The Zig setup hook's install phase runs `zig build install`, and
+            # `install` is the step that builds every artifact build.zig
+            # defines: the wasm playground, the eval test runner, the REPL and
+            # echo wasm modules, the snapshot tool, the test platform hosts.
+            # This package ships bin/roc, and the playground's Debug wasm
+            # compile peaks above 4 GiB by itself, so one compile per core runs
+            # the builder out of memory. The `roc` step installs the compiler
+            # into the prefix on its own, and `zigBuildFlags` already names it,
+            # so run the same flags without the default step.
+            dontUseZigInstall = true;
+            installPhase = ''
+              runHook preInstall
+              TERM=dumb zig build -j"$NIX_BUILD_CORES" $zigBuildFlags $zigDefaultCpuFlag $zigDefaultOptimizeFlag --prefix "$out" --verbose
+              runHook postInstall
+            '';
             env.ZIG_GLOBAL_CACHE_DIR="$TMPDIR";
             meta = {
               broken = pkgs.stdenv.hostPlatform.isDarwin; # Currently this package only builds on Linux

@@ -95,10 +95,14 @@ pub fn parseAppHeader(
     if (header != .app) return error.NotAnAppHeader;
     const app = header.app;
 
-    const platform_field = ast.store.getRecordField(app.platform_idx);
+    const platform_field = if (app.platform_idx) |platform_idx|
+        ast.store.getRecordField(platform_idx)
+    else
+        null;
 
     const platform_ref: PlatformRef = blk: {
-        const value_expr = platform_field.value orelse break :blk .none;
+        const field = platform_field orelse break :blk .none;
+        const value_expr = field.value orelse break :blk .none;
         break :blk platformRefFromExpr(ast, value_expr, arena) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.ExpectedPlatformRef => .none,
@@ -110,7 +114,8 @@ pub fn parseAppHeader(
     };
 
     const platform_qualifier: ?[]const u8 = blk: {
-        const key_region = ast.tokens.resolve(platform_field.name);
+        const field = platform_field orelse break :blk null;
+        const key_region = ast.tokens.resolve(field.name);
         const q = source[key_region.start.offset..key_region.end.offset];
         if (q.len == 0) break :blk null;
         break :blk try arena.dupe(u8, q);

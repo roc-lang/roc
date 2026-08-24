@@ -284,6 +284,14 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // A speculative caller owns rollback and any diagnostic/recovery after the
+    // store is pristine again. Requiring the non-poisoning mode at entry makes
+    // that contract independent of whether this particular relation happens to
+    // mismatch or whether its first operand is a checked representative.
+    if (opts.on_mismatch == .poison_to_err) {
+        env.types.assertNoSavepointActive();
+    }
+
     // First reset the scratch store
     env.unify_scratch.reset();
 

@@ -707,7 +707,7 @@ pub const BuildEnv = struct {
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
         return switch (header) {
-            .app => .app,
+            .app => |a| if (a.platform_idx == null) .default_app else .app,
             .package => .package,
             .platform => .platform,
             .module => .module,
@@ -776,12 +776,10 @@ pub const BuildEnv = struct {
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
 
-        const is_executable = header_info.kind == .app or header_info.kind == .default_app;
-        // Allow all module types: app, module, type_module, package, platform
-        // Package and platform modules can also be tested
-        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module and header_info.kind != .package and header_info.kind != .platform) {
-            return error.UnsupportedHeader;
-        }
+        // Every header kind names a module this build can root at: apps and
+        // default apps produce programs, and the rest are compiled for their own
+        // definitions and `expect`s. A file whose header parsed into none of them
+        // already failed in `parseHeaderDeps`.
 
         // Create package entry keyed by stable package identity. Real roots use
         // their canonical path; URL-launched roots use their bundle URL because
@@ -1268,8 +1266,10 @@ pub const BuildEnv = struct {
         errdefer info.deinit(self.gpa);
 
         switch (header) {
-            .app => {
-                info.kind = .app;
+            .app => |a| {
+                // An app that names no platform gets the built-in Echo
+                // platform, which is what a default app is.
+                info.kind = if (a.platform_idx == null) .default_app else .app;
             },
             .package => |p| {
                 info.kind = .package;
@@ -1949,18 +1949,20 @@ pub const BuildEnv = struct {
         if (self.syntheticRootDisplayPath(filename) == null) return;
 
         const header_lines = self.synthetic_root_header_lines;
-        if (header_lines == 0) {
+        if (region.start_line <= header_lines or region.end_line <= header_lines) return;
+
+        const original_start_line = region.start_line - header_lines;
+        const original_end_line = region.end_line - header_lines;
+        // A region past the last line of the user's source points at wiring
+        // the staging appended, which is not the user's code; that region
+        // keeps its own text and only its file name maps back.
+        if (original_line_starts.len == 0 or original_end_line > original_line_starts.len) {
             const owned_filename = try allocator.dupe(u8, original_path);
             if (region.filename) |old_filename| allocator.free(old_filename);
             region.filename = owned_filename;
             return;
         }
 
-        if (region.start_line <= header_lines or region.end_line <= header_lines) return;
-        if (original_line_starts.len == 0) return;
-
-        const original_start_line = region.start_line - header_lines;
-        const original_end_line = region.end_line - header_lines;
         const region_info = base.RegionInfo{
             .start_line_idx = original_start_line - 1,
             .start_col_idx = region.start_column - 1,
@@ -2037,17 +2039,6 @@ pub const BuildEnv = struct {
 
     fn remapSyntheticRootReport(self: *BuildEnv, report: *Report) Allocator.Error!void {
         if (self.synthetic_root_original_path == null or self.synthetic_root_original_source == null) return;
-
-        if (self.synthetic_root_header_lines == 0) {
-            for (report.document.elements.items) |*element| {
-                try self.remapSyntheticRootDocumentElement(
-                    report.document.allocator,
-                    element,
-                    &.{},
-                );
-            }
-            return;
-        }
 
         var original_line_starts = try base.RegionInfo.findLineStarts(self.gpa, self.synthetic_root_original_source.?);
         defer original_line_starts.deinit(self.gpa);

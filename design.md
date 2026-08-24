@@ -1423,6 +1423,16 @@ adopting the redirect destination's descriptor and checked representative; it
 must not directly graft one storage root beneath another and recreate an
 unbounded chain.
 
+A solver savepoint runs only non-poisoning unification. Successful speculative
+relations may be committed in place, but a mismatch returns without poisoning
+either top-level operand so the savepoint owner can roll the relation back.
+Occurrence-directed mismatch poisoning is permanent recovery against the live
+equivalence classes; running it inside a savepoint would both do work whose
+result must be discarded and make correctness depend on the queried
+occurrence's current representative. The commit-probe API fixes the
+non-poisoning behavior for every relation it runs, and ordinary poisoning
+unification asserts that no savepoint is active.
+
 A failed unification is different from a successful class union. Its first
 operand can be one checked occurrence already connected to a shared binding;
 error recovery must poison that exact occurrence without making the binding or
@@ -6625,6 +6635,15 @@ callable identity, method scope, exact evidence topology, and exact structural
 equality of the closed Monotype function type. Digest collisions are therefore
 harmless.
 
+Checked callable type ids inside dispatch evidence are relation-replay payload,
+not specialization identity: separate generalized scheme uses deliberately
+contain distinct identity-bearing roots. Evidence hashing and exact topology
+equality use each callable root's producer-authored checked type key instead. The
+owning checked module remains part of the identity, and the raw root id remains
+alongside the key solely so Monotype can replay the exact checked relation.
+Thus instantiations with the same checked identity-variable topology
+reuse one specialization, while different callable shapes remain distinct.
+
 The identity is immutable: it is written once when the record is reserved and
 never rewritten, so no structure that indexes by identity ever needs a rekey or
 a second synchronized entry. Later refinements are data on the record. The
@@ -8263,31 +8282,17 @@ reaching `assign_boxy_adapt` is never treated as unsupported.
 
 Machine-code backends lower the complete Boxy statement surface to the shared
 `roc_boxy_*` C ABI. Native LLVM links the target's standalone Boxy runtime
-object and an object containing the serialized sidecar. Optimized Wasm links
-the relocatable Boxy runtime object and a static-data module containing that
-same sidecar into the emitted app object, then resolves the complete app and
-host link with Wasm LLD. When standalone Wasm dev LIR explicitly requires
-Boxy, the build prepares each distinct host through a content-addressed
-relocatable LLD link with the builtins object and relocatable Boxy runtime
-object. Later builds load that cached prepared-host variant and surgically
-merge only the generated app code and its exact sidecar. Non-Boxy dev builds
-directly use the fast surgical merge because no runtime object needs LLD
-symbol resolution. The cache identity includes every ordered input's bytes;
-changing any input produces a different prepared host. The cached object
-preserves only the platform's original function exports, leaving builtins and
-Boxy runtime functions internal and eligible for dead-code elimination during
-the surgical link. Preparation is serialized per content identity across
-compiler processes and remains available when the checked module cache and
-generated app-object cache are disabled: it is the exact prepared platform
-link output, not a cached app result. The
-standalone Wasm runtime uses direct
-data-symbol relocations rather than PIC GOT
-globals, so the partial link preserves its unresolved sidecar references for
-the later surgical merge. Entrypoint wrappers initialize the embedded runtime
-before calling Roc code. Dictionary worker thunks and erased-callable
-registrations expose only the proc ids, layouts, descriptor sources, and
-ownership metadata already present in LIR; backend code does not derive any of
-them from procedure bodies.
+object and an object containing the serialized sidecar. Both dev and optimized
+Wasm compose generated app code, builtins, the relocatable Boxy runtime, its
+exact static-data sidecar, and compiler-rt into the compiler-only object
+described by the Sealed Roc Object Boundary. Platform objects never participate
+in that composition. The standalone Wasm runtime uses direct data-symbol
+relocations rather than PIC GOT globals so the relocatable composition binds
+its app-specific sidecar references before the object is sealed. Entrypoint
+wrappers initialize the embedded runtime before calling Roc code. Dictionary
+worker thunks and erased-callable registrations expose only the proc ids,
+layouts, descriptor sources, and ownership metadata already present in LIR;
+backend code does not derive any of them from procedure bodies.
 
 In-process test invocation context is also an explicit execution ABI input. It
 is threaded through ordinary procedures, Boxy dictionary calls and their
@@ -8926,6 +8931,25 @@ generates constraints per statement:
   to supply that consumed unit. Every post-ARC statement therefore contains
   the exact concrete operation and effect the backend executes. The variant
   mapping is static low-level-op data, and only ARC may select from it.
+  `Box.unbox` is the ownership-transfer case: its neutral operation is solved
+  conservatively as consuming so the payload has an ownership place distinct
+  from the outer allocation. Emission selects the ARC-only borrowing variant
+  when another use or alias keeps the box lender live. An owned selection is
+  normalized before the backend boundary into the borrowing payload copy,
+  followed by an explicit payload `incref` and outer-box `decref`. If the box
+  is unique, its decref frees the outer allocation and drops the stored payload
+  unit, cancelling the explicit incref; if it is shared, the outer decref does
+  not drop children and the explicit incref is the unboxed value's new unit.
+  Thus both paths leave the payload count unchanged relative to the ownership
+  result, without any backend reading an RC header or choosing a path. Flat
+  and zero-sized payload helpers are no-ops; a null zero-sized box is neither
+  dereferenced nor freed. Post-ARC LIR may not contain the consuming
+  `box_unbox` operation: the certifier and every backend see only the borrowed
+  copy and explicit RC statements.
+  The allocation-faithful compiled pipeline enables this selection. The
+  interpreter's value model explicitly selects the borrowing variant because
+  it does not model transfer of an outer allocation independently from erased
+  recursive payload ownership.
 - `join` / `jump`: each join parameter's resources get modes and lifetime
   relations like an intra-proc signature. `set_local` with
   `initialize_join_param` followed by `jump` is a flow edge from the
@@ -9266,17 +9290,195 @@ added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,
 not by the theoretical vector space.
 
-A build without mode specialization is the same worklist with every demand
-vector forced to the solved `RcSig`, which yields exactly one variant per
-proc. Dev builds (`--opt=dev`) and compile-time evaluation use that
-single-variant form, because solving is the only new compile-time cost they
-accept. Interpreter builds (`--opt=interpreter`) also use the single-variant
-form. `--opt=speed` and `--opt=size` both enable full specialization;
-specialization clones proc bodies, but each variant carries fewer RC
-statements, and variant counts are bounded by realized demand vectors. All
-forms run the identical solver; they differ only in which demand vectors get
-a variant, so build modes can never disagree about observable program
-results—only RC statement placement and proc count differ.
+A build without optional mode specialization suppresses general cost-only
+demand vectors, but it does not force every call to the solved base `RcSig`.
+Two exact ownership schedules remain mandatory in every ARC run: an owned
+field-take variant when a complete stored unit must move out of an aggregate,
+and an outcome-restitution variant when the caller proved the explicit result
+refinement declared below. The base convention cannot represent either
+schedule without manufacturing an ownership unit or dropping a conditionally
+returned one, so these are correctness-preserving ARC forms rather than
+optional code-growth optimization. Dev builds, compile-time evaluation, and
+interpreter LIR all admit those exact demanded variants even when their target
+sets general specialization to disabled. The value-model interpreter follows
+their emitted LIR ownership statements mechanically; it does not infer the
+variant from runtime counts. `--opt=speed` and `--opt=size` additionally enable
+general mode specialization. All forms run the identical solver and therefore
+may differ only in optional RC placement and proc count, never observable
+program results.
+
+### Outcome-Conditioned Argument Restitution
+
+An owned direct-call argument may be returned to its caller as an ownership
+unit without appearing in the procedure's source-level result. This happens
+when the procedure consumes the argument on some result outcomes but leaves
+the exact entry unit untouched on others. Checked consuming wrappers are the
+representative example: the success outcome moves an input collection into the
+result, while the failure outcome returns only an error value and must restore
+the still-unchanged input unit to the caller.
+
+Restitution is an ARC calling-convention declaration, not a source tag convention and
+not a runtime value. A solved source procedure keeps its ordinary
+unconditional base `RcSig`; a separate available-outcome span may be demanded
+only by a proved call site, selecting an opt-in procedure variant. `RcSig`
+carries that span only on the selected variant. Each row contains
+one committed top-level result discriminant and a mask of owned parameter
+positions whose exact entry units are present again after that outcome. The
+rows cover every normally returned discriminant admitted by the signature;
+an absent or incomplete span means that the procedure has no restitution
+capability. Pinned, hosted, erased, dictionary-dispatched, bodyless, and
+address-escaping procedures never carry restitution rows.
+
+The initial closed capability is deliberately exact and total. It applies only
+to a direct Roc procedure whose committed return layout is a top-level tag
+union whose committed representation contains RC state (so the certifier can
+track the result value), whose every normal return is reached with one
+statically known `assign_tag` discriminant for the current binding of the
+returned local, and whose ownership-neutral
+control-flow graph can account mechanically for every ownership-moving
+statement on every path. The solver propagates one bit per represented owned
+entry parameter. A consuming call position, consuming low-level argument,
+aggregate operand, tag payload, store operand, moving Boxy operand, or returned
+same-value alias clears that entry bit. Borrowing reads leave it set. At each
+normal return, the bits still set are intersected with every other path that
+returns the same discriminant. A loop is the ordinary finite fixed point over
+the per-resource rows below.
+
+The analysis is a polynomial product of independent finite resource states, not
+an enumeration of parameter subsets. For each represented entry parameter
+`p`, it solves the two-point ownership row `present_p < spent_p` over
+`(statement, known-result-discriminant)`: a consumption changes `present_p` to
+`spent_p`, a second consumption rejects the capability, and control-flow joins
+meet the row independently for `p`. Outcome masks are assembled only after all
+parameter rows converge. The result-discriminant witness is one shared finite
+control state; it is never multiplied by a full parameter subset. Complexity is
+therefore polynomial in statements, represented parameters, and committed
+result variants. A work item or visited key containing the complete remaining
+parameter mask is forbidden, because independent branches can otherwise
+materialize every subset of sixteen parameters.
+
+Every write to the returned local first kills the current discriminant witness;
+only an `assign_tag` to that exact binding establishes a replacement. Thus an
+alias, `set_local`, call result, store, or other rebind between tag construction
+and return rejects the capability rather than reusing stale tag information.
+The initial join rule carries a known witness only across a jump whose body is
+the exact `ret` of that returned local; any other join-carried witness is
+unsupported. The capability is rejected as a whole, rather than weakened or
+guessed, when any normal return lacks a current witness; a returned
+discriminant is not covered; the procedure or an invoked ownership operation
+falls outside the declared transfer rules; a same-value origin is ambiguous or
+rebound; or the control-flow graph contains an edge for which the exact
+ownership state cannot be represented by this domain. Rejection selects the
+ordinary unconditional owned convention. This is a closed ARC capability boundary
+for the staged feature, not a fallback that later stages may compensate for.
+Expanding the boundary requires declaring the additional transfer equation
+here first and pinning both its accepted and rejected cases with tests.
+
+A caller uses restitution only when the result-control relation is explicit in
+LIR. Until that proof succeeds the call continues to target the unconditional
+base procedure, which releases every unreturned owned argument itself. The
+direct call result may pass through pure same-value aliases, then one
+explicit discriminant read must feed a switch. Each explicit switch arm is
+matched by its integer value; the default arm denotes exactly the signature's
+outcome rows not named by explicit arms. For an argument position, an arm may
+restore the unit only when every outcome reaching that arm carries the bit.
+The caller proves that no occurrence of the argument's ownership place exists
+between the call and refinement or on an arm where the bit is absent. Uses
+after a shared continuation therefore reject the transfer unless every outcome
+reaching that continuation restores it. No source symbol, tag name, function
+name, source pattern, range proof, or backend behavior participates in this
+decision.
+
+The initial caller domain also requires every potentially restitutable
+argument position to name a distinct representation-transparent ownership
+place. Passing the same local twice, or passing it together with a same-value
+alias, rejects the outcome variant and uses the unconditional base convention;
+the must-owned set cannot yet represent two independently returned units at
+one place. After ARC materialization, explicit `incref`, `decref`, conditional
+`decref`, and `free` bookkeeping may appear between the discriminant read and
+its switch. These statements cannot rebind the scalar discriminant relation,
+so certification preserves its explicit provenance across them while still
+validating their balance effects against the exact restitution receipt. Every
+other intervening statement kills the refinement provenance.
+
+When the proof holds, call transfer removes the argument unit exactly as for
+an ordinary owned call and targets the outcome-specialized variant. The
+matching switch edge places that same unit back in the must-owned state. On
+the variant's callee side, a return carrying the signature's bit omits the
+parameter's terminal release; the base procedure and all other outcomes
+consume or release it normally. These are compile-time ownership-state transitions only. The
+post-ARC program contains ordinary calls, switches, `incref`, and `decref`
+statements, and backends continue to follow those statements without knowing
+about conditional ownership.
+
+An outcome span is one atomic calling convention for a call. If any argument
+requires that convention, every owned parameter position named by any row in
+the span must transfer an exact distinct ownership place and register its
+receipt at the same result-refinement switch. This includes a returned unit
+whose only caller action is path-local release: omitting that receipt would
+make the callee return ownership that the caller state cannot represent. ARC
+admits the span only after checking all named positions without mutating the
+call-entry state, then applies all transfers and registrations together. If
+any named position is unavailable, aliased, live on a non-restituting edge, or
+otherwise lacks the exact receipt, the call retains the unconditional base
+convention; a partial set of receipts must never select the complete span.
+Fixed-point revisits replace or clear the whole call-position receipt set
+before recording a new atomic decision.
+
+Ownership places compose with restitution. If an ownership-complete field or
+tag-payload read moves a dying aggregate's stored unit into a checked call, a
+restored outcome places the root ownership-place unit back before that
+outcome's later field or tag-payload read. Consequently the success path may
+mutate the read value in place while the
+failure path may still use the unchanged aggregate, without manufacturing a
+second unit. The field-take rules remain responsible for proving the complete
+field or tag-payload read; restitution never guesses aggregate structure.
+For a partial committed struct field, the initial closed capability additionally
+requires the field-read binding's only operand read to be that direct call.
+Dismantle analysis records `(call statement, argument position) -> (root,
+field identity, refinement switch)` as explicit producer data. The caller ARC
+solver consumes that record together with the exact call-entry state. When the
+aggregate resource is still present as a residual shell, a restituting edge
+refills exactly that field in the root residual mask. When the aggregate
+resource has already ended after its last take, the field-read binding is the
+unit's carrier instead, so the restituting edge restores that standalone
+binding for ordinary path-local release. A structurally ownership-complete
+field or tag-payload read transfers only the root unit; dismantle analysis must
+not record a partial-field receipt for the same call position. Thus absent root,
+empty residual shell, and spent field remain distinct without manufacturing an
+aggregate value after its lifetime.
+
+Each result-refinement switch carries at most one active receipt per call
+argument position. The structured ownership fixed point replaces or clears
+that receipt whenever revisiting the call changes whether the exact argument
+unit transfers; registrations are not an append-only side table. A switch edge
+applies only the converged active receipts, so an earlier optimistic visit
+cannot restore a unit that the final call schedule retained. Every other edge
+leaves the active place absent. Any additional
+field-read-binding use, ambiguous call position, unsupported result
+continuation, or non-owned callee position rejects this field-place capability
+and keeps the unconditional schedule. Emission never rescans the call
+continuation to reconstruct the field or refinement.
+
+Range proving composes by deleting unreachable result outcomes or their
+switch arms before ARC, which may make the ordinary unconditional transfer
+sufficient. It is neither a premise nor a substitute for restitution: the
+unproved checked path must have the same uniqueness behavior. Interpreter and
+compile-time LIR runs consume the same explicit mandatory outcome variants and
+RC statements; neither reconstructs this ARC-only calling convention from
+runtime reference counts.
+
+The debug certifier derives the outcome relation independently from emitted
+procedure control flow. On a restituting callee return it accepts an otherwise
+live owned parameter only when that exact return discriminant's row carries the
+bit, and requires the unit to remain the parameter's unchanged entry unit. At
+each direct call it treats an owned argument as spent until the explicit result
+switch, restores it only on arms whose complete signature outcome set carries
+the bit, and rejects any intervening or non-restored use. It also verifies that
+every signature row has a reachable matching return and that every normal
+return is covered. Signature claims and caller refinement must both certify;
+there is no trusted emission-side side table and no incomplete certification
+path.
 
 ### In-Place Mutation Interaction
 
@@ -9286,7 +9488,8 @@ succeed by deleting increfs that would otherwise hold refcounts above 1
 during read phases, and early drop placement returns counts to 1 before
 mutation points.
 
-One interaction is accepted and documented rather than solved here: a borrow
+One interaction remains accepted and documented rather than solved generally:
+a borrow
 whose lifetime extends past a uniqueness-checked mutation of its lender's
 allocation forces the runtime copy path for that mutation. The solution is
 still sound and still RC-minimal under the constraint system; it is the
@@ -9294,6 +9497,9 @@ constraint system itself that does not yet weigh mutation points. Extending
 the flow analysis to account for `may_runtime_uniqueness_check_args`
 positions when choosing between a borrow and an owned move is future design
 work and must be added to the equations, not patched in emission.
+Dead `Box` lenders are the explicit exception already modeled by the
+consuming/borrowing `Box.unbox` operation pair; they do not extend a borrow
+through the mutation merely because control flow separates unbox and re-box.
 
 ### Field Takes From Dying Aggregates
 
@@ -9336,12 +9542,48 @@ Ownership-complete aggregate reads and borrowed pure aliases form explicit
 ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
 If the final read result binds owned, that read moves the unit only when the
-root unit is present and the root's liveness group has no later use on that
-path; otherwise it retains exactly as an ordinary read would. A borrowed result
+root unit is present and the ownership place has no later RC-bearing use on
+that path; otherwise it retains exactly as an ordinary read would. A pure
+same-value alias followed only by non-refcounted field reads is
+representation-only: an inline struct's scalar bytes remain available after
+its stored RC units move or are released, so such reads do not keep the
+ownership place live. The certifier represents this state explicitly as a
+struct representation shell. A shell may cross a join, may be copied only by
+a same-layout pure local alias, and may be used only as the source of a
+non-refcounted field read. It cannot be consumed, released again, passed to a
+call, or used for an RC-bearing field or payload read. Thus backends still see
+ordinary field reads and explicit RC statements, while certification keeps
+representation availability distinct from ownership-unit availability. A
+materialized same-layout alias of a shell carries the exact committed-layout
+RC-field indices that are absent in LIR. ARC derives that list directly from the
+path's solved residual mask; it is not reconstructed from nearby retains or
+field reads. Debug evaluators use the list only to avoid interpreting the stale
+bytes of moved fields as live values while still validating every remaining
+field. An outcome receipt that restores a field changes the solved residual
+mask before successor materialization, so aliases on that successor omit the
+restored field from their absent list. Backends need no ownership behavior for
+this validation metadata. Certification checks that every listed index names a
+distinct refcounted field and that a fully dead representation lists every such
+field. It does not compare a partial list to its field-claim state: claims
+settle lazily when field reads are consumed and are shared by an alias set, so
+they are not a path-local snapshot of one binding. The later consumption and
+terminal balance checks independently prove those transfers. A borrowed result
 keeps the root unit key until a later consuming operation makes the same
 path-sensitive decision. This applies to ordinary owned locals and to owned
 join parameters; join parameters are not themselves assigned one global place
 origin because each incoming edge defines the join cell independently.
+
+Ownership-complete root transfer and committed struct-field transfer are two
+exact alternatives at one read, not cumulative decisions. If the root unit
+moves, no residual field transition is applied. If root transfer is unavailable
+because the path keeps the aggregate ownership place live, but dismantle
+analysis independently committed the read's field identity and that field is
+present in the incoming residual mask, the read instead takes that one field:
+`R'(a) = R(a) - {f}`. The aggregate remains as a representation shell for the
+later uses admitted by the field-take rules. If neither resource is present,
+the result pays its ordinary retain. Suppressing that retain without applying
+exactly one of these transfers is invalid: it would leave both the residual
+release and the read result claiming the same stored unit.
 
 On another control-flow path where the aggregate read did not run, the root
 still holds the unit and receives its ordinary whole release. Consequently no
@@ -9372,15 +9614,14 @@ where the field cannot have been taken yet—a take where it may already be
 gone would double-consume its unit on that path. A borrow of the field, and
 any whole use of the container, must likewise run where no take can have
 happened: after a take, the container's bytes for that field can alias the
-taker's mutation rather than the original value. Every exit the flow reaches—
-returns, crashes, and jumps that leave the region, such as a loop's back
-edge—must agree on the taken set (`may == must`), so the residual release
-is the same however the death point was reached. Merges meet pointwise, and
-a loop poisons its own takes: a take inside one reaches itself as
-possibly-taken. Consuming reads on exclusive branches thereby take exactly
-when every path through the branching takes the field exactly once—the
-success and fallback arms of a checked mutation are the archetype—and
-a read the flow never reaches keeps its field residual. A field that fails
+taker's mutation rather than the original value. An explicit outcome field
+receipt changes the matching edge state from taken back to available before
+that edge is walked; this is the only transition that can clear a
+`may-taken` bit. Merges meet pointwise, and a loop poisons its own takes: a
+take inside one reaches itself as possibly-taken unless an exact receipt
+dominates every repeated entry. Exclusive branches may leave different
+residual masks; the ARC join equations below normalize their exact
+differences. A read the flow never reaches keeps its field residual. A field that fails
 any rule simply stays residual—its reads keep their retains and its stored
 unit is released at the death point—and a container whose take set comes
 out empty keeps today's whole release exactly.
@@ -9432,12 +9673,83 @@ container is independently relevant, the read stays borrowed. Restoration of
 the remaining read chains happens only after all representatives exist, so
 correctness is independent of local numbering.
 
-Partial dismantling across diverging paths -- a field consumed in one switch
-arm and not another -- is future work: it needs per-path residual masks, and
-the spine rule above is precisely what makes the residual global. Until then,
-the record-update lowering's spread-read hoisting is what keeps conditional
-consumers in-place, by ending the container's liveness before the mutation
-rather than dismantling it.
+#### Per-edge aggregate residuals
+
+Field ownership is not a property of a container local for its whole lifetime.
+It is a property of one ownership state on one control-flow edge. For every
+eligible aggregate resource `a`, committed layout supplies a finite ordered set
+`F(a)` of its directly stored refcounted field places. An ARC ownership state
+therefore carries `R(a) subseteq F(a)`: the exact stored units still owned by
+`a` on that path. An absent aggregate resource and `R(a) = empty` are distinct:
+the former has no usable value, while the latter is a representation shell
+whose non-refcounted bytes may still be read under the shell rules above. The
+initial state of an owned binding is `R(a) = F(a)`.
+
+The transfer equations use committed field identities, never statement shape
+or source names:
+
+- taking field `f` requires `f in R(a)` and produces the field result's owned
+  unit while updating `R'(a) = R(a) - {f}`
+- borrowing or retaining field `f` requires `f in R(a)` and leaves `R(a)`
+  unchanged
+- a whole move, whole release, call argument, aggregate insertion, or return
+  requires `R(a) = F(a)`; it removes the aggregate resource exactly as before
+- dismantling a residual `S` emits one field read and release for every
+  `f in S`, then leaves `R'(a) = empty`
+- rebinding a name first settles its exact residual state; it cannot silently
+  replace a nonempty `R(a)`
+
+Switch and join summaries carry these residual masks as part of their ordinary
+ownership state. For incoming states `R_i(a)`, the common state is the greatest
+state that every incoming edge can supply without inventing ownership:
+`R_join(a) = intersection_i R_i(a)`. Each edge is normalized explicitly by a
+plan-owned dismantle decision for `R_i(a) - R_join(a)` before entering the
+continuation. Consequently every field unit is either carried by the common
+aggregate resource, moved to another explicitly owned local, or released on
+that edge. Merely intersecting masks without emitting those difference
+releases is invalid. A resource missing on any incoming edge has an empty
+common residual; present incoming edges must settle all of their residual
+fields and all paths enter with the same representation-shell state when the
+continuation still reads scalar bytes. Join parameters remain independently
+owned cells: their incoming values are checked and normalized at each jump,
+not unified with an unrelated aggregate local because their layouts happen to
+match.
+
+Loop headers use the same finite descending fixed point. The header residual
+starts from the entry state and meets every reachable back edge by
+intersection; whenever it shrinks, all affected entry and back-edge plans are
+recomputed and normalize their exact differences. A take in a loop is admitted
+only when its field is present in the converged header state at every execution
+that reaches it. Thus a take that can reach itself with the field absent is
+rejected; no runtime drop flag or optimistic first-iteration schedule is
+introduced.
+
+`ArcPlan` snapshots store the full residual state used to make their decisions,
+and `ReleaseDecision` distinguishes a whole local release from an explicit
+aggregate residual release carrying the exact committed field mask. Plan
+materialization follows those decisions mechanically. Outcome-conditioned
+argument restitution carries the same resource-place state: a failure receipt
+restores exactly the argument places named by that outcome row, including the
+residual mask that existed at the call boundary. It may not refill a field
+already transferred before the call or coalesce two argument positions that
+name the same ownership place. Normal and outcome-refined continuations are
+joined only after their receipts have produced ordinary exact ownership
+states, so outcome specialization composes with branch residuals without a
+second ownership mechanism.
+
+The certifier derives residual ownership independently from emitted LIR. Its
+state records the outstanding committed field claims for every aggregate
+representative. A field take removes exactly one claim; a residual dismantle is
+certified as the corresponding sequence of field claims and releases; whole
+uses require the full claim set; and shell-only uses require the empty claim
+set. Join summaries include exact claim masks and accept an edge only after its
+emitted releases make the edge state equal to the summary state. Loop summaries
+iterate those same exact masks to a fixed point. The certifier rejects a
+post-take whole use, a second take of one field, a missing or extra edge
+normalization, a receipt that restores a spent field, and any merge that would
+have to union or guess ownership. Neither ARC nor certification consults a
+backend, mutation name, source pattern, or runtime uniqueness check to recover
+this ownership state.
 
 ### Debug Borrow Certifier
 
@@ -9757,6 +10069,11 @@ region. It follows only explicit `next` edges from `box_unbox` to the terminal
 proc-wide operand counts to prove that the consumed input box and returned box
 have no consumers outside the rewrite. Control-flow regions or additional box
 consumers are rejected rather than classified from source shape or names.
+Payload layouts that themselves own collection or aggregate RC units use the
+consuming-unbox path instead of `reuse_box`: keeping the outer allocation live
+would keep those nested units logically stored during a uniqueness-checked
+mutation. Flat payloads and existing scalar box-reuse cases retain the direct
+allocation-reuse rewrite.
 
 `reuse_erased_callable` is the erased-callable counterpart. Erased callables are
 not ordinary `Box(T)` payloads; their allocation stores a callable entry, an
@@ -10539,9 +10856,11 @@ function. `output:` is one of:
 ```text
 Exe:     linked executable binary. For wasm32, a command module (has an
          entry).
-Archive: one static archive (.a, .lib) containing the declared host inputs,
-         the compiled app, and the builtins, with input archives flattened
-         in. Archive keeps its inputs because the host must provide
+Archive: one static archive (.a, .lib) containing the declared host inputs
+         and one sealed compiled-app object, with input archives flattened
+         in. The sealed object already contains every reachable compiler-owned
+         implementation (builtins, runtime support, and compiler-rt) with local
+         binding. Archive keeps its inputs because the host must provide
          roc_alloc and the other runtime symbols; the consumer receives a
          single self-contained archive and performs the final link in their
          own build, which extracts members lazily by symbol reference.
@@ -10608,6 +10927,63 @@ symbols stay distinct because the platform header that assigns those symbols
 is the data that separates them. `provides` follows the same rule: the
 exported symbol set is part of the platform relation, and two exports remain
 two exports even when they name the same Roc function.
+
+### Sealed Roc Object Boundary
+
+Before any platform object participates in symbol resolution, every compiled
+backend must produce one **sealed Roc object**. The checked platform relation is
+the complete authority for its external symbol contract:
+
+- the sealed object's globally-bound definitions are exactly the function and
+  data symbols named by `provides`;
+- its globally-bound undefined function symbols are exactly the `hosted`
+  symbols and the fixed runtime set described below;
+- every compiler-owned definition other than `provides` has local binding;
+- no compiler-owned undefined symbol remains.
+
+Compiler-owned definitions include generated Roc procedures and data, builtin
+wrappers, Boxy runtime functions and sidecars, reference-counting helpers,
+backend support, and compiler-rt implementations. Hidden visibility is not
+sufficient: a hidden global still participates in static symbol resolution and
+can collide with or satisfy a platform reference. Local binding is required.
+After relocations have been bound to local symbol indices, non-debug output
+removes the textual names of compiler-owned local symbols wherever the object
+format permits it.
+
+The compiler constructs the sealed object in a Roc-only composition phase.
+Platform inputs are categorically forbidden from that phase. Compiler-owned
+support is selected from explicit backend-produced requirements, merged,
+resolved, dead-stripped from the `provides` roots, and localized. A verifier
+then compares the resulting defined and undefined global symbol sets with the
+checked platform contract. An unexpected definition, an unresolved builtin or
+compiler-rt call, or an undeclared host requirement is a compiler error; it is
+never passed through to the platform linker as a best-effort import.
+
+Every object-format address embedded in compiler-owned code or data remains a
+relocation through this boundary. In particular, Wasm function pointers are
+relocations against their function symbols, never raw indices into the
+compiler object's current table: the final linker may reserve null slots or
+concatenate platform table-initializer segments before the sealed object's segment. The
+same rule applies to code constants, static data, Boxy registrations, erased
+callables, and runtime callback tables. Sealing changes symbol binding in place
+without decoding and re-encoding code, data, table-initializer, COMDAT, or relocation
+sections, so it adds no whole-object rewrite and preserves the linker's exact
+layout metadata.
+
+Only after sealing may the compiler link the object with the platform inputs.
+Consequently a platform may define a strong symbol whose spelling matches any
+compiler implementation detail—including a compiler-rt name such as
+`__multi3`—without collision or interposition: platform relocations bind the
+platform's global definition, while Roc relocations are already bound to the
+sealed object's local definition.
+
+An Archive output contains the sealed object as one member rather than separate
+app, builtins, runtime, sidecar, or compiler-rt members. The archive symbol
+index therefore advertises only the platform's `provides` definitions from
+Roc-owned code. `Shared` and `Exe` outputs pass only the sealed object to
+the platform linker. Final runtime exports are selected exclusively from the
+platform target's `exports` field. An absent or empty field exports no
+functions; object symbol discovery must never enlarge that set.
 
 Compiled Roc code references each hosted symbol (and the fixed runtime set:
 roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed)
@@ -10713,12 +11089,12 @@ reachable only from unused host functions are absent from the final binary
 (by symbol table inspection and by content-pattern absence), and present when
 actually used.
 
-Shared-library output uses the same symbol ABI: the host objects and app
+Shared-library output uses the same symbol ABI: the host objects and sealed app
 object are linked into one library, app/host resolution happens inside that
-link, and dead-strip roots are the exported symbols. Internal `roc_*` symbols
-must be hidden in shared libraries—on ELF, default-visibility exports are
-preemptible, and two Roc-built libraries loaded into one process would
-otherwise interpose each other's runtime symbols.
+link, and dead-strip roots are the exported symbols. The sealed-object boundary
+means compiler-owned symbols already have local binding before this link; they
+cannot be preempted or interposed when two Roc-built libraries are loaded into
+one process.
 
 Interpreter execution (the default `roc` command, embedded interpreter builds,
 REPL, compile-time constants, glue evaluation) keeps the same host objects: a

@@ -111,6 +111,10 @@ const Transform = struct {
         const unbox_args = self.store.getLocalSpan(unbox_stmt.args);
         if (unbox_args.len != 1) return false;
         const boxed = GuardedList.at(unbox_args, 0);
+        const boxed_layout = self.layouts.getLayout(self.store.getLocal(boxed).layout_idx);
+        if (boxed_layout.tag == .box and payloadNeedsOwnedUnbox(self.layouts, boxed_layout.getIdx())) {
+            return false;
+        }
 
         if (try self.rewriteDirectBoxAt(unbox_stmt_id, unbox_stmt, boxed)) return true;
         return try self.rewriteJoinedBoxAt(unbox_stmt_id, unbox_stmt, boxed);
@@ -164,6 +168,7 @@ const Transform = struct {
         const box_layout_value = self.layouts.getLayout(box_layout);
         if (box_layout_value.tag != .box) return false;
         const payload_layout = box_layout_value.getIdx();
+        if (payloadNeedsOwnedUnbox(self.layouts, payload_layout)) return false;
         if (self.store.getLocal(unbox_stmt.target).layout_idx != payload_layout) return false;
         if (self.store.getLocal(payload_value).layout_idx != payload_layout) return false;
 
@@ -270,6 +275,7 @@ const Transform = struct {
         const box_layout_value = self.layouts.getLayout(box_layout);
         if (box_layout_value.tag != .box) return false;
         const payload_layout = box_layout_value.getIdx();
+        if (payloadNeedsOwnedUnbox(self.layouts, payload_layout)) return false;
         if (self.store.getLocal(unbox_stmt.target).layout_idx != payload_layout) return false;
         if (self.store.getLocal(prelude.value).layout_idx != payload_layout) return false;
         if (self.store.getLocal(call_prelude.value).layout_idx != payload_layout) return false;
@@ -376,6 +382,7 @@ const Transform = struct {
         const box_layout_value = self.layouts.getLayout(box_layout);
         if (box_layout_value.tag != .box) return false;
         const payload_layout = box_layout_value.getIdx();
+        if (payloadNeedsOwnedUnbox(self.layouts, payload_layout)) return false;
         if (self.store.getLocal(unbox_stmt.target).layout_idx != payload_layout) return false;
         if (self.store.getLocal(call_prelude.value).layout_idx != payload_layout) return false;
         if (self.store.getLocal(join_payload).layout_idx != payload_layout) return false;
@@ -640,6 +647,15 @@ const Transform = struct {
         };
     }
 };
+
+fn payloadNeedsOwnedUnbox(layouts: *const layout_mod.Store, payload_layout: layout_mod.Idx) bool {
+    const payload = layouts.getLayout(payload_layout);
+    if (!layouts.layoutContainsRcErasedBox(payload)) return false;
+    return switch (payload.tag) {
+        .list, .struct_, .tag_union, .closure, .erased_callable => true,
+        .scalar, .list_of_zst, .box, .box_of_zst, .zst, .ptr => false,
+    };
+}
 
 fn spanHasLocal(locals: anytype, needle: LocalId) bool {
     for (0..locals.len) |index| {

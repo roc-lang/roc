@@ -25,9 +25,6 @@ const BoxySidecar = lir.LirImage.BoxySidecar;
 
 /// Host operations resolve through linker-provided symbols.
 pub const roc_host_call_mode: builtins.host_abi.HostCallMode = .extern_symbols;
-/// The wasm builtins object owns compiler-rt symbols in standalone programs.
-/// Suppress the duplicate exports pulled in through `compiler_rt_128` here.
-pub const roc_omit_wasm_compiler_rt_exports = true;
 /// This object is linked into the programs roc produces, not into the compiler,
 /// so it carries no tracy instrumentation.
 pub const roc_disable_tracy = true;

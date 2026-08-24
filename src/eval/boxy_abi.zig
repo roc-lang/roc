@@ -1013,9 +1013,10 @@ fn prepareErasedInvocationArgs(
 /// layout. When the callable is a registered Roc worker whose actual return
 /// layout differs from `expected_layout`, the worker writes into a scratch
 /// buffer of its own layout and the result is materialized into the caller's
-/// layout through the target descriptor. When the callable is unregistered (a
-/// host-provided callable) or its actual layout already equals the expected
-/// layout, the callable writes the caller's buffer directly.
+/// layout through the target descriptor. When the callable is unregistered or
+/// its actual layout already equals the expected layout, the callable writes
+/// the caller's buffer directly. `in_process` selects the ABI the callable was
+/// compiled against and applies on every one of those paths.
 pub fn roc_boxy_call_erased(
     ops: *RocOps,
     test_context: ?*anyopaque,
@@ -1035,14 +1036,13 @@ pub fn roc_boxy_call_erased(
     arg_layouts_len: u32,
 ) callconv(.c) void {
     const raw = fn_ptr orelse @panic("boxy erased call with null function pointer");
-    const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(raw));
     const expected = layoutIdx(expected_layout);
 
     // Without an installed runtime there are no registered erased procs, so
     // every erased result already uses the caller's exact layout.
     const g = currentRuntime() orelse {
         var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
-        callable(ops, ret, args, capture, reuse, &returned_desc);
+        invokeErasedCallable(raw, in_process, test_context, ops, ret, args, capture, reuse, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     };
@@ -1050,7 +1050,7 @@ pub fn roc_boxy_call_erased(
     const actual = g.erased_procs.get(@intFromPtr(raw));
     if (actual == null) {
         var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
-        callable(g.runtime.roc_ops, ret, args, capture, reuse, &returned_desc);
+        invokeErasedCallable(raw, in_process, test_context, g.runtime.roc_ops, ret, args, capture, reuse, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
@@ -1079,7 +1079,7 @@ pub fn roc_boxy_call_erased(
     );
     if (actual.?.ret_layout == expected and result_desc == null) {
         var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
-        callRegisteredErased(raw, in_process, test_context, g.runtime.roc_ops, ret, invocation_args, invocation_capture, reuse, &returned_desc);
+        invokeErasedCallable(raw, in_process, test_context, g.runtime.roc_ops, ret, invocation_args, invocation_capture, reuse, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
@@ -1088,7 +1088,7 @@ pub fn roc_boxy_call_erased(
     const actual_size = g.runtime.helper.sizeOf(actual_layout);
     const worker_result = hooks(g).allocValue(actual_layout) catch abiCrash(g, "erased call result buffer");
     var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
-    callRegisteredErased(raw, in_process, test_context, g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, reuse, &returned_desc);
+    invokeErasedCallable(raw, in_process, test_context, g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, reuse, &returned_desc);
     const actual_desc: ?*const BoxyTypeDesc = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
     const materialized = g.runtime.materializeCallResult(
         hooks(g),
@@ -1112,7 +1112,10 @@ const InProcessErasedCallableFn = *const fn (
     out_desc: *?*const anyopaque,
 ) callconv(.c) void;
 
-fn callRegisteredErased(
+/// Invoke an erased callable through whichever ABI it was compiled against:
+/// backends that emit in-process callables pass the test-invocation context as
+/// a second parameter, everything else uses the plain public erased ABI.
+fn invokeErasedCallable(
     raw: *const anyopaque,
     in_process: bool,
     test_context: ?*anyopaque,

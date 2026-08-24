@@ -326,6 +326,10 @@ current_expect_effect_slot: ?ExpectEffectSlotId,
 top_level_ptrns: std.ArrayListUnmanaged(?DefProcessed),
 /// Read-only platform requirement surface used only when checking an app root.
 platform_requirements: ?PlatformRequirementInput,
+/// How this module's compile-time roots are established, which decides
+/// whether an app root's entrypoint contract with its platform is enforced
+/// here. See `can.Can.Validation`.
+validation: can.Can.Validation = .checking,
 /// App defs constrained by platform requirements before their bodies are checked.
 platform_required_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, PlatformRequiredDef),
 /// One row per platform requirement that resolved to an exported app def, in
@@ -4699,17 +4703,22 @@ fn fieldPresenceRelationForContext(
     return if (row_width_relation == .exact) .committed_value else .ordinary;
 }
 
-/// Unify two types with a context for error reporting.
-fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+fn unifyOptionsForContext(ctx: problem.Context, on_mismatch: unifier.MismatchBehavior) unifier.Options {
     const row_width_relation: unifier.RowWidthRelation = if (std.meta.activeTag(ctx) == .platform_requirement)
         .exact
     else
         .construction;
-    return self.runUnify(a, b, env, .{
+    return .{
         .context = ctx,
+        .on_mismatch = on_mismatch,
         .row_width_relation = row_width_relation,
         .field_presence_relation = fieldPresenceRelationForContext(ctx, row_width_relation),
-    });
+    };
+}
+
+/// Unify two types with a context for error reporting.
+fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.runUnify(a, b, env, unifyOptionsForContext(ctx, .poison_to_err));
 }
 
 fn exprIsFreshRecordConstruction(self: *const Self, expr_idx: CIR.Expr.Idx) bool {
@@ -10949,6 +10958,11 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
         defer if (identity_vars_owned) self.gpa.free(instantiated.identity_vars);
 
         const def_idx = self.exposedAppDefByIdent(required_ident) orelse {
+            // Without the entrypoint contract, an unsupplied requirement is
+            // simply unbound: the requirements that the app does supply still
+            // constrain those definitions.
+            if (self.validation == .explicit_roots) continue;
+
             const top_level_def = self.topLevelDefByIdent(required_ident);
             const app_region = if (top_level_def) |def_idx|
                 self.defPatternRegion(def_idx)
@@ -11951,7 +11965,14 @@ fn collectAnnotationTypeAnnos(
                     }
                     try pending.append(allocator, method.ret);
                 },
-                .w_alias, .w_malformed => {},
+                // A where alias reference's arguments are generated in place
+                // (`generateWhereAliasReferenceArgs`), so its node tree must be
+                // reset like any other. This matters when an argument's rigid
+                // var occurs nowhere else in the annotation: its node is the
+                // primary occurrence, and a stale rigid left behind here fails
+                // to re-unify on the body pass.
+                .w_alias => |alias| try pending.append(allocator, alias.alias),
+                .w_malformed => {},
             }
         }
     }
@@ -16250,7 +16271,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     var commit_probe = try self.beginCommitProbe(env);
                     var committed = false;
                     defer if (!committed) commit_probe.rollback();
-                    const result = try self.unify(expected_copy, seed_list_var, env);
+                    const result = try commit_probe.unify(expected_copy, seed_list_var);
                     if (!result.isEstablished()) break :seed null;
                     committed = true;
                     commit_probe.commit();
@@ -22363,13 +22384,12 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
 /// throwaway problem/snapshot stores precisely because they never survive), a
 /// commit-probe runs its unifications through the REAL `runUnify` wrapper—full
 /// bookkeeping: fresh vars ranked into the caller env's var pool, regions
-/// stamped, and deferred dispatch constraints copied out. A caller that owns its
-/// mismatch diagnostic uses `.write_no_report`, because occurrence-directed
-/// mismatch poisoning cannot run under a type-store savepoint. On failure the
+/// stamped, and deferred dispatch constraints copied out. Its unification
+/// methods hardcode `.write_no_report`: a failed speculative relation is rolled
+/// back before its caller reports or poisons anything. The ordinary poisoning
+/// wrappers assert if called while this savepoint is active. On failure the
 /// probe must rewind everything that bookkeeping grew:
-///   - problems / snapshots recorded by failed in-probe unifications (the
-///     store savepoint already un-poisons the `.err`-merged vars themselves;
-///     this drops the reports, restoring the throwaway-store behavior);
+///   - problems / snapshots recorded by any other in-probe operation;
 ///   - the caller env's var-pool rank lists (entries for vars the savepoint
 ///     rollback just discarded would dangle into the generalizer);
 ///   - the caller env's deferred dispatch constraints (their receivers and
@@ -22382,6 +22402,14 @@ const CommitProbe = struct {
     extra_strings_len: usize,
     missing_patterns_len: usize,
     snapshots_mark: SnapshotStore.Mark,
+
+    fn unify(self: *CommitProbe, a: Var, b: Var) std.mem.Allocator.Error!unifier.Result {
+        return self.check.runUnify(a, b, self.env, .{ .on_mismatch = .write_no_report });
+    }
+
+    fn unifyInContext(self: *CommitProbe, a: Var, b: Var, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
+        return self.check.runUnify(a, b, self.env, unifyOptionsForContext(ctx, .write_no_report));
+    }
 
     fn rollback(self: *CommitProbe) void {
         std.debug.assert(self.check.commit_probe_active);
@@ -23573,7 +23601,7 @@ fn commitLiteralGroupDefault(self: *Self, drivers: []const Var, component_fits: 
                 .quote, .interpolation => try self.freshStr(env, self.getRegionAt(driver)),
             };
             try self.literal_defaulting_candidate_vars.append(self.gpa, candidate_var);
-            const unify_result = try self.unify(driver, candidate_var, env);
+            const unify_result = try commit_probe.unify(driver, candidate_var);
             if (!unify_result.isEstablished()) continue :candidate;
         }
 
@@ -24821,7 +24849,7 @@ fn quoteDefaultSatisfiesConstraints(
     defer commit_probe.rollback();
 
     const candidate_var = try self.freshStr(env, self.getRegionAt(literal_var));
-    const unify_result = try self.unify(literal_var, candidate_var, env);
+    const unify_result = try commit_probe.unify(literal_var, candidate_var);
     if (!unify_result.isEstablished()) return false;
     return try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env);
 }
@@ -25052,7 +25080,7 @@ fn tryCommitNumeralCandidate(
         env,
         self.getRegionAt(literal_var),
     );
-    const unify_result = try self.unify(literal_var, candidate_var, env);
+    const unify_result = try commit_probe.unify(literal_var, candidate_var);
     if (!unify_result.isEstablished()) return null;
 
     if (!try self.candidateSatisfiesRangeConstraints(&commit_probe, constraint_range, candidate_var, env)) return null;
@@ -25091,12 +25119,11 @@ fn literalInfoAcceptsBuiltinNumKind(lit: StaticDispatchConstraint.LiteralInfo, n
 /// way or the other.
 fn staticDispatchConstraintAcceptsCandidate(
     self: *Self,
-    _: *CommitProbe,
+    probe: *CommitProbe,
     constraint: StaticDispatchConstraint,
     candidate_var: Var,
     env: *Env,
 ) Allocator.Error!bool {
-    // Scope-proof token only; not otherwise consulted.
     const candidate_resolved = self.types.resolveVar(candidate_var);
     const nominal_type = candidate_resolved.desc.content.unwrapNominalType() orelse return false;
     const owner_env, _ = self.ownerEnvForOriginModule(
@@ -25125,7 +25152,7 @@ fn staticDispatchConstraintAcceptsCandidate(
     // path this merge (and its rank/region/deferred-constraint bookkeeping) is
     // kept. The probe owns failure, so a mismatch must not run occurrence-directed
     // poisoning while the store savepoint is active.
-    const result = try self.runUnify(method_var, constraint.fn_var, env, .{ .on_mismatch = .write_no_report });
+    const result = try probe.unify(method_var, constraint.fn_var);
     return result.isEstablished();
 }
 
@@ -26855,7 +26882,15 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         },
                     };
                     const fn_result = fn_result: {
-                        if (self.probe_depth != 0 or !self.varIsConflictedDefaultLiteral(deferred_constraint.var_)) {
+                        if (self.probe_depth != 0) {
+                            break :fn_result try self.runUnify(
+                                method_var,
+                                constraint.fn_var,
+                                env,
+                                unifyOptionsForContext(fn_ctx, .write_no_report),
+                            );
+                        }
+                        if (!self.varIsConflictedDefaultLiteral(deferred_constraint.var_)) {
                             break :fn_result try self.unifyInContext(method_var, constraint.fn_var, env, fn_ctx);
                         }
                         // This receiver's type is the documented head default,
@@ -26870,10 +26905,9 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         // never runs under an active savepoint; the problem
                         // and snapshots it records live outside the type store
                         // and survive the rollback. Success commits—a default
-                        // target that satisfies a constraint is real. (Inside
-                        // an enclosing probe the ordinary path is fine: the
-                        // outer speculation never commits a nested dispatch
-                        // failure.)
+                        // target that satisfies a constraint is real. An
+                        // enclosing probe takes the explicit non-poisoning path
+                        // above instead of nesting another savepoint.
                         self.probe_var_pool_lens.clearRetainingCapacity();
                         const rank_count = @intFromEnum(env.rank()) + 1;
                         try self.probe_var_pool_lens.ensureTotalCapacity(self.gpa, rank_count);
@@ -27528,7 +27562,7 @@ fn constrainInterpolationPartToStr(self: *Self, part: InterpolationPartMetadata,
 
         // Keep successful writes for the commit path, but leave mismatch
         // reporting and recovery to this function after the probe rolls back.
-        const result = try self.runUnify(expected_str_var, part.var_, env, .{ .on_mismatch = .write_no_report });
+        const result = try probe.unify(expected_str_var, part.var_);
         if (!result.isEstablished()) break :blk false;
         if (!try self.interpolationPartConstraintsAcceptBuiltinStr(&probe, constraints_range, expected_str_var, env)) {
             break :blk false;
@@ -30782,10 +30816,12 @@ fn generatedStructuralCodecBackingVar(
         method_ident,
     ) orelse return null;
     if (!isGeneratedStructuralCodecMethodBinding(method, kind)) return null;
-    if (try self.takeDerivedCodecBackingWalk(walk, nominal) != .walk_backing) return null;
-    // A declaration the checker already rejected has no shape to walk; the
-    // nominal validation this falls back to reports that rejection.
+    // Open the shape before recording the application: a declaration the
+    // checker already rejected has no shape to walk, and the nominal
+    // validation this falls back to has to see an unrecorded application to
+    // report that rejection.
     const backing_var = (try self.openNominalBackingForApp(nominal, env, region)) orelse return null;
+    if (try self.takeDerivedCodecBackingWalk(walk, nominal) != .walk_backing) return null;
     // The rest of this constraint is spent inside this backing.
     walk.nominal_backing_depth += 1;
     return backing_var;
@@ -31887,6 +31923,11 @@ fn derivedCodecTypesEql(
     if (b.desc.content == .alias) {
         return try self.derivedCodecTypesEql(a.var_, self.types.getAliasBackingVar(b.desc.content.alias), assumed);
     }
+    // A solved field kind is a small enumeration, so two copies of one kind are
+    // the same kind; `defaulted` carries the identity of one written default.
+    if (a.desc.content == .field_presence and b.desc.content == .field_presence) {
+        return std.meta.eql(a.desc.content.field_presence, b.desc.content.field_presence);
+    }
     if (a.desc.content != .structure or b.desc.content != .structure) return false;
 
     if ((try assumed.getOrPut(.{ .a = a.var_, .b = b.var_ })).found_existing) return true;
@@ -31950,12 +31991,8 @@ fn derivedCodecVarsEql(
     assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
 ) Allocator.Error!bool {
     if (a_vars.len != b_vars.len) return false;
-    // Both lists point into the types store, which the comparison reads through.
-    const pairs = try self.gpa.alloc(DerivedCodecVarPair, a_vars.len);
-    defer self.gpa.free(pairs);
-    for (pairs, a_vars, b_vars) |*pair, a_var, b_var| pair.* = .{ .a = a_var, .b = b_var };
-    for (pairs) |pair| {
-        if (!try self.derivedCodecTypesEql(pair.a, pair.b, assumed)) return false;
+    for (a_vars, b_vars) |a_var, b_var| {
+        if (!try self.derivedCodecTypesEql(a_var, b_var, assumed)) return false;
     }
     return true;
 }
@@ -31972,12 +32009,13 @@ fn derivedCodecRecordFieldsEql(
     for (a_fields.items(.name), b_fields.items(.name)) |a_name, b_name| {
         if (!a_name.eql(b_name)) return false;
     }
-    // A field whose kind is still a variable is left as "different": the kind
-    // is its own axis and this walk has no reason to decide it.
     for (a_fields.items(.presence), b_fields.items(.presence)) |a_presence, b_presence| {
-        if (a_presence.presenceVar() != null or b_presence.presenceVar() != null) return false;
-    }
-    for (a_fields.items(.presence), b_fields.items(.presence)) |a_presence, b_presence| {
+        const a_kind = a_presence.presenceVar();
+        const b_kind = b_presence.presenceVar();
+        if ((a_kind == null) != (b_kind == null)) return false;
+        if (a_kind) |a_kind_var| {
+            if (!try self.derivedCodecTypesEql(a_kind_var, b_kind.?, assumed)) return false;
+        }
         if (!try self.derivedCodecTypesEql(a_presence.typeVar(), b_presence.typeVar(), assumed)) return false;
     }
     return true;
@@ -31999,6 +32037,98 @@ fn derivedCodecTagsEql(
         if (!try self.derivedCodecVarsEql(self.types.sliceVars(a_args), self.types.sliceVars(b_args), assumed)) return false;
     }
     return true;
+}
+
+/// Whether this declaration's derived codec would need a different shape at
+/// every level: somewhere in its backing template it applies a declaration at
+/// an argument that properly contains one of its own formals, so following the
+/// applications substitutes a strictly bigger type each time around. This is a
+/// property of the declaration, read off the template where the formals are
+/// still visible, not of any one application.
+fn derivedCodecDeclGrowsItsFormals(self: *Self, decl_idx: types_mod.NominalDecl.Idx) Allocator.Error!bool {
+    const decl = self.types.getNominalDecl(decl_idx);
+    if (!decl.isValid()) return false;
+    const formals = try self.gpa.dupe(Var, self.types.sliceVars(decl.formals));
+    defer self.gpa.free(formals);
+    if (formals.len == 0) return false;
+    for (formals) |*formal| formal.* = self.types.resolveVar(formal.*).var_;
+
+    var pending = std.ArrayList(Var).empty;
+    defer pending.deinit(self.gpa);
+    var seen = std.AutoHashMap(Var, void).init(self.gpa);
+    defer seen.deinit();
+    try pending.append(self.gpa, decl.backing);
+
+    while (pending.pop()) |candidate| {
+        const resolved = self.types.resolveVar(candidate);
+        if ((try seen.getOrPut(resolved.var_)).found_existing) continue;
+        if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+            const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(resolved.desc.content.structure.nominal_type));
+            defer self.gpa.free(args);
+            for (args) |arg| {
+                if (try self.derivedCodecArgGrowsAFormal(arg, formals)) return true;
+            }
+        }
+        try self.pushDerivedCodecComponents(&pending, resolved.var_);
+    }
+    return false;
+}
+
+/// Whether `arg` is built from a formal rather than being one: a formal passed
+/// straight through leaves the application the same size, while a formal under
+/// a constructor makes it bigger.
+fn derivedCodecArgGrowsAFormal(self: *Self, arg: Var, formals: []const Var) Allocator.Error!bool {
+    const arg_root = self.types.resolveVar(arg).var_;
+    for (formals) |formal| {
+        if (formal == arg_root) return false;
+    }
+
+    var pending = std.ArrayList(Var).empty;
+    defer pending.deinit(self.gpa);
+    var seen = std.AutoHashMap(Var, void).init(self.gpa);
+    defer seen.deinit();
+    try self.pushDerivedCodecComponents(&pending, arg_root);
+
+    while (pending.pop()) |candidate| {
+        const root = self.types.resolveVar(candidate).var_;
+        if ((try seen.getOrPut(root)).found_existing) continue;
+        for (formals) |formal| {
+            if (formal == root) return true;
+        }
+        try self.pushDerivedCodecComponents(&pending, root);
+    }
+    return false;
+}
+
+/// The components a type is built from, one level down.
+fn pushDerivedCodecComponents(self: *Self, pending: *std.ArrayList(Var), var_: Var) Allocator.Error!void {
+    switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+            .record => |record| {
+                const fields = self.types.getRecordFieldsSlice(record.fields);
+                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+                try pending.append(self.gpa, record.ext);
+            },
+            .record_unbound => |field_range| {
+                const fields = self.types.getRecordFieldsSlice(field_range);
+                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+            },
+            .tag_union => |tag_union| {
+                const tags = self.types.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| try pending.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                try pending.append(self.gpa, tag_union.ext);
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                try pending.append(self.gpa, func.ret);
+            },
+            .empty_record, .empty_tag_union => {},
+        },
+        .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
+        .flex, .rigid, .err, .field_presence => {},
+    }
 }
 
 /// Whether this nominal application's derived-codec backing still needs
@@ -32028,18 +32158,21 @@ fn takeDerivedCodecBackingWalk(
     var assumed = std.AutoHashMap(DerivedCodecVarPair, void).init(self.gpa);
     defer assumed.deinit();
 
+    var seen_decl = false;
     for (walk.walked_apps.items) |app| {
-        if (app.decl != decl_idx or app.args_len != args.len) continue;
+        if (app.decl != decl_idx) continue;
+        seen_decl = true;
+        if (app.args_len != args.len) continue;
         assumed.clearRetainingCapacity();
         if (try self.derivedCodecVarsEql(walk.appArgs(app), args, &assumed)) return .accounted_for;
-
-        // The same declaration at an argument that contains what an earlier
-        // level was given is a declaration applying itself at a bigger type.
-        // Its codec would need a different shape at every level, so there is
-        // no finite set of derivations to check and none to lower either.
-        assumed.clearRetainingCapacity();
-        if (try self.derivedCodecArgsGrew(walk.appArgs(app), args, &assumed)) return .unbounded;
     }
+
+    // Reaching one declaration again at a shape the walk has not accounted for
+    // is only finite when the declaration passes its formals through. One that
+    // grows them has no last level to reach, so there is no finite set of
+    // obligations to check and none to lower either.
+    if (seen_decl and try self.derivedCodecDeclGrowsItsFormals(decl_idx)) return .unbounded;
+
     try walk.recordApp(decl_idx, args);
     return .walk_backing;
 }
@@ -32050,81 +32183,12 @@ const DerivedCodecBackingWalk = enum {
     /// Nothing to do: an application of this shape is already accounted for,
     /// or the type is a builtin whose codec is the format protocol.
     accounted_for,
-    /// The declaration applies itself at an ever-larger argument, so its
-    /// derived codec can never be monomorphized.
+    /// The declaration grows its own formals, so its derived codec can never
+    /// be monomorphized.
     unbounded,
     /// Walk the backing shape.
     walk_backing,
 };
-
-/// Whether `args` contains what `earlier_args` was given, at the same
-/// positions and strictly somewhere.
-fn derivedCodecArgsGrew(
-    self: *Self,
-    earlier_args: []const Var,
-    args: []const Var,
-    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
-) Allocator.Error!bool {
-    var grew = false;
-    for (earlier_args, args) |earlier_arg, arg| {
-        assumed.clearRetainingCapacity();
-        if (try self.derivedCodecTypesEql(earlier_arg, arg, assumed)) continue;
-        if (!try self.derivedCodecTypeContains(arg, earlier_arg, assumed)) return false;
-        grew = true;
-    }
-    return grew;
-}
-
-/// Whether some component of `haystack` is the same shape as `needle`.
-fn derivedCodecTypeContains(
-    self: *Self,
-    haystack: Var,
-    needle: Var,
-    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
-) Allocator.Error!bool {
-    var pending = std.ArrayList(Var).empty;
-    defer pending.deinit(self.gpa);
-    var seen = std.AutoHashMap(Var, void).init(self.gpa);
-    defer seen.deinit();
-
-    try self.pushDerivedCodecComponents(&pending, haystack);
-    while (pending.pop()) |candidate| {
-        const root = self.types.resolveVar(candidate).var_;
-        if ((try seen.getOrPut(root)).found_existing) continue;
-        assumed.clearRetainingCapacity();
-        if (try self.derivedCodecTypesEql(root, needle, assumed)) return true;
-        try self.pushDerivedCodecComponents(&pending, root);
-    }
-    return false;
-}
-
-fn pushDerivedCodecComponents(self: *Self, pending: *std.ArrayList(Var), var_: Var) Allocator.Error!void {
-    switch (self.types.resolveVar(var_).desc.content) {
-        .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
-            .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
-            .record => |record| {
-                const fields = self.types.getRecordFieldsSlice(record.fields);
-                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
-            },
-            .record_unbound => |field_range| {
-                const fields = self.types.getRecordFieldsSlice(field_range);
-                for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
-            },
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                for (tags.items(.args)) |tag_args| try pending.appendSlice(self.gpa, self.types.sliceVars(tag_args));
-            },
-            .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
-                try pending.append(self.gpa, func.ret);
-            },
-            .empty_record, .empty_tag_union => {},
-        },
-        .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
-        .flex, .rigid, .err, .field_presence => {},
-    }
-}
 
 fn validateDerivedParseVar(
     self: *Self,
@@ -33449,7 +33513,7 @@ fn checkFlexVarConstraintCompatibility(
             // The mismatch is reported below, after the rollback, against the
             // pristine relation—occurrence-directed poisoning must not run
             // under the savepoint.
-            const result = try self.runUnify(method_var, constraint.fn_var, env, .{ .on_mismatch = .write_no_report });
+            const result = try commit_probe.unify(method_var, constraint.fn_var);
             if (!result.isEstablished()) break :accepted false;
 
             committed = true;
@@ -33616,7 +33680,7 @@ fn checkBranchBodyAgainstExpected(
         var committed = false;
         defer if (!committed) commit_probe.rollback();
 
-        const result = try self.unifyInContext(body_var, acc, env, ctx);
+        const result = try commit_probe.unifyInContext(body_var, acc, ctx);
         if (result.isEstablished()) {
             committed = true;
             commit_probe.commit();

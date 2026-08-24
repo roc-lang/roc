@@ -157,6 +157,8 @@ A(a) : a
         ) -> Str,
     ]
 
+Hint: where clauses can only go on function type annotations.
+
 ── ✗ where clause not allowed in type declaration ─────────── everything.md:24:1
 
 You cannot define a where clause inside a type declaration.
@@ -172,6 +174,8 @@ B(b) : b
             b,
         ) -> Str,
     ]
+
+Hint: where clauses can only go on function type annotations.
 
 ── ● unused variable ──────────────────────────────────────── everything.md:98:5
 

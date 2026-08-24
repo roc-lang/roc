@@ -78,18 +78,35 @@ pub fn handler(comptime ServerType: type) type {
 
             for (positions.items) |pos_value| {
                 if (std.meta.activeTag(pos_value) != .object) {
-                    try results.append(self.allocator, null);
-                    continue;
+                    try self.sendError(id, .invalid_params, "position must be an object");
+                    return;
                 }
                 const pos_obj = pos_value.object;
 
-                const line: u32 = blk: {
-                    const v = pos_obj.get("line") orelse break :blk 0;
-                    break :blk if (std.meta.activeTag(v) == .integer) @intCast(v.integer) else 0;
+                const line_value = pos_obj.get("line") orelse {
+                    try self.sendError(id, .invalid_params, "missing line");
+                    return;
                 };
-                const character: u32 = blk: {
-                    const v = pos_obj.get("character") orelse break :blk 0;
-                    break :blk if (std.meta.activeTag(v) == .integer) @intCast(v.integer) else 0;
+                if (std.meta.activeTag(line_value) != .integer) {
+                    try self.sendError(id, .invalid_params, "line must be an integer");
+                    return;
+                }
+                const line = std.math.cast(u32, line_value.integer) orelse {
+                    try self.sendError(id, .invalid_params, "line must be a non-negative integer");
+                    return;
+                };
+
+                const character_value = pos_obj.get("character") orelse {
+                    try self.sendError(id, .invalid_params, "missing character");
+                    return;
+                };
+                if (std.meta.activeTag(character_value) != .integer) {
+                    try self.sendError(id, .invalid_params, "character must be an integer");
+                    return;
+                }
+                const character = std.math.cast(u32, character_value.integer) orelse {
+                    try self.sendError(id, .invalid_params, "character must be a non-negative integer");
+                    return;
                 };
 
                 const selection_range = computeSelectionRange(self.allocator, text, line, character) catch |err| switch (err) {
