@@ -10452,8 +10452,8 @@ which is explicit data the dependency-discovery stage already produced:
 
 - The root package, and every dependency reachable from it through filesystem
   paths alone, are the developer's own sources. Their roots are planned.
-- A package downloaded from a URL is not. Its `expect`s are its publisher's
-  tests, they passed before it was published, and re-running them on every
+- A package downloaded from a URL is not. Its `expect`s are its author's tests,
+  they passed before the release went out, and re-running them on every
   `roc test` of every consumer is work no consumer asked for.
 - A compiler-owned platform is not, for the same reason.
 
