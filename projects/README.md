@@ -53,8 +53,9 @@ termination hazard, and one verification coverage gap):
   question, and the capture-id override path.
 
 Within this batch the projects are independent.
-`spec-constr-specialization-limits` pairs naturally with
-`spec-constr-static-match-soundness`.
+(`spec-constr-specialization-limits` used to be paired here with
+`spec-constr-static-match-soundness`, which has since landed and had its
+doc removed.)
 
 A third batch came out of a whole-codebase competing-sources-of-truth
 audit (2026-07-18): a sweep of every subsystem for the same fact
@@ -244,6 +245,21 @@ no comment, because the next reader budgets for one match semantics when
 there are two. Both now say what is true, and a lint pins the claim to
 the imports so it moves when the gap closes.
 
+Housekeeping in the same pass. `float-range-flat-representation.md` was
+carrying its own "Status: Resolved" section rather than a project: range
+syntax now constructs a reusable `Num.Range(num)` whose single
+`Builtin.Num.Range.iter` is the monomorphization-recognized iterator
+source, so integer, `Dec`, and float ranges all keep flat by-value
+iterator state and the element-type performance cliff is gone. Its
+verification lives in `src/eval/test/eval_iter_alloc_tests.zig` and
+`src/eval/test/lir_inline_test.zig`, both present and covering it, so
+the doc is deleted. Twelve cross-references to four project docs that
+landed and were removed (`silent-drift-guards`,
+`store-generation-counters`, `spec-constr-static-match-soundness`,
+`audit-solver-mutating-rewrites`) were dangling links; they now read as
+plain names marked landed, and the two recommended-order lists dropped
+their landed entry and renumbered.
+
 Within the rest of this batch, the two `big` projects compose in either
 order. The rest are independent.
 
@@ -254,13 +270,10 @@ order. The rest are independent.
 1. [small/cross-phase-coverage-parity-tests.md](small/cross-phase-coverage-parity-tests.md)—
    the divergence-classification parity suite; a regression net the big
    lowering projects inherit.
-2. [small/silent-drift-guards.md](small/silent-drift-guards.md)—
-   finishes the monotype identity unification: one identity-field
-   visitor for digest and equality, and alias-transparent cached digests.
-3. [small/rceffect-conformance.md](small/rceffect-conformance.md)—
+2. [small/rceffect-conformance.md](small/rceffect-conformance.md)—
    comptime validity plus a per-op refcount conformance harness for the
    central ownership table (the PR 10023 bug class).
-4. [small/cache-and-identity-residuals.md](small/cache-and-identity-residuals.md)—
+3. [small/cache-and-identity-residuals.md](small/cache-and-identity-residuals.md)—
    closes the four small seams left after the identity/cache cures
    (name-text fallback, hand-enrolled serde contracts, split version
    hashes, `type_name` in nominal keys).
@@ -330,11 +343,10 @@ If one person or agent works through everything serially, this order
 front-loads leverage and keeps prerequisites satisfied:
 
 1. `small/cross-phase-coverage-parity-tests.md`
-2. `small/silent-drift-guards.md`
-3. `small/rceffect-conformance.md`
-4. `small/cache-and-identity-residuals.md`
-5. `small/pin-deferred-spec-requests.md`
-6. `small/hoist-consumes-dispatch-evidence.md`
-7. `small/hosted-extern-declared-abi.md`
-8. `small/frame-partitioned-checker-state.md`
-9. `small/compact-constant-aggregates.md`
+2. `small/rceffect-conformance.md`
+3. `small/cache-and-identity-residuals.md`
+4. `small/pin-deferred-spec-requests.md`
+5. `small/hoist-consumes-dispatch-evidence.md`
+6. `small/hosted-extern-declared-abi.md`
+7. `small/frame-partitioned-checker-state.md`
+8. `small/compact-constant-aggregates.md`
