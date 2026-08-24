@@ -2970,10 +2970,10 @@ the string directly. They do not need a required `init`, `finish`, or `default`
 hook. The runtime cursor types are implementation details of the builtin format
 module, not public `Json.State` or
 `Encoding.HttpHeader.State` APIs. They are marked internal in the builtin type
-registry, which is the single fact that keeps them out of user scope and out of
+registry, and that marking is what keeps them out of user scope and out of
 the generated docs.
 
-Because those types are unnameable, the requirement they express is published as
+Because those types are unnameable, the requirement they express is written as
 a where alias instead, and the format module's own signatures are written in
 terms of it:
 
