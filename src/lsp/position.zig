@@ -14,6 +14,32 @@ pub const LineOffsets = struct {
     pub fn deinit(self: *const LineOffsets) void {
         self.allocator.free(self.offsets);
     }
+
+    /// Which line contains the given byte offset.
+    ///
+    /// Callers convert many offsets against one table — every occurrence of a
+    /// symbol, every foldable region — so this binary searches rather than
+    /// scanning from the top of the file for each one.
+    pub fn lineAt(self: *const LineOffsets, offset: u32) u32 {
+        var low: usize = 0;
+        var high: usize = self.offsets.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.offsets[mid] <= offset) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        // `low` is the first line starting after the offset.
+        return if (low > 0) @intCast(low - 1) else 0;
+    }
+
+    /// The byte offset of a line/character position, or null past the last line.
+    pub fn offsetAt(self: *const LineOffsets, line: u32, character: u32) ?u32 {
+        if (line >= self.offsets.len) return null;
+        return self.offsets[line] + character;
+    }
 };
 
 /// Build line-start byte offsets for a source buffer.
@@ -44,15 +70,10 @@ pub fn buildLineOffsets(allocator: Allocator, source: []const u8) Allocator.Erro
 
 /// Convert a byte offset into an LSP line/character position using cached line offsets.
 pub fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) document_symbol_handler.Position {
-    var line: u32 = 0;
-    for (line_offsets.offsets, 0..) |line_offset, i| {
-        if (line_offset > offset) break;
-        line = @intCast(i);
-    }
-    const line_start = line_offsets.offsets[line];
+    const line = line_offsets.lineAt(offset);
     return .{
         .line = line,
-        .character = offset - line_start,
+        .character = offset - line_offsets.offsets[line],
     };
 }
 
