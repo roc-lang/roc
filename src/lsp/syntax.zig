@@ -2978,6 +2978,103 @@ pub const SyntaxChecker = struct {
         return regions.toOwnedSlice(self.allocator);
     }
 
+    /// One inferred type, ready to be shown against the name it belongs to.
+    pub const InlayHint = struct {
+        line: u32,
+        character: u32,
+        /// The rendered type, including its leading `: `. Owned by the result.
+        label: []u8,
+    };
+
+    /// The hints for one requested range.
+    pub const InlayHintsResult = struct {
+        hints: []InlayHint,
+
+        pub fn deinit(self: InlayHintsResult, allocator: std.mem.Allocator) void {
+            for (self.hints) |hint| allocator.free(hint.label);
+            allocator.free(self.hints);
+        }
+    };
+
+    /// Render the inferred type of every unannotated binding in a line range.
+    ///
+    /// Roc infers most types, and an annotation may leave parts of one to
+    /// inference with `_`, so the type a binding actually has is often written
+    /// nowhere in the file. These hints put it next to the name.
+    ///
+    /// Bindings that carry a written annotation are skipped: their type is
+    /// already on screen, and repeating it would only add noise.
+    pub fn getInlayHints(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        start_line: u32,
+        end_line: u32,
+    ) QueryError!?InlayHintsResult {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        var build = try self.prepareDocumentBuild(uri, override_text);
+        defer build.deinit();
+
+        self.logDebug(.build, "inlayHint: document {s} reused={}", .{ build.absolute_path, build.reused });
+
+        if (!build.build_succeeded) {
+            self.logDebug(.build, "inlayHint: build unavailable for {s}", .{build.absolute_path});
+            return null;
+        }
+
+        const module_env = build.getModuleEnv() orelse return null;
+
+        // The request names whole lines; widen to the byte span they cover.
+        const start_offset = pos.positionToOffset(module_env, start_line, 0) orelse return null;
+        const line_starts = module_env.getLineStartsAll();
+        const end_offset: u32 = if (end_line + 1 < line_starts.len)
+            line_starts[end_line + 1]
+        else
+            @intCast(module_env.common.source.len);
+
+        var bindings = try cir_queries.collectUnannotatedBindings(module_env, start_offset, end_offset, self.allocator);
+        defer bindings.deinit(self.allocator);
+
+        var hints: std.ArrayList(InlayHint) = .empty;
+        errdefer {
+            for (hints.items) |hint| self.allocator.free(hint.label);
+            hints.deinit(self.allocator);
+        }
+
+        var type_writer = try module_env.initTypeWriter();
+        defer type_writer.deinit();
+
+        for (bindings.items) |binding| {
+            type_writer.reset();
+            type_writer.write(ModuleEnv.varFrom(binding.pattern), .one_line) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => continue,
+            };
+
+            const rendered = type_writer.get();
+            if (rendered.len == 0) continue;
+
+            const shown = truncateTypeLabel(rendered);
+            const label = if (shown.len < rendered.len)
+                try std.fmt.allocPrint(self.allocator, ": {s}…", .{shown})
+            else
+                try std.fmt.allocPrint(self.allocator, ": {s}", .{shown});
+            errdefer self.allocator.free(label);
+
+            try hints.append(self.allocator, .{
+                .line = binding.after.line,
+                .character = binding.after.character,
+                .label = label,
+            });
+        }
+
+        return InlayHintsResult{
+            .hints = try hints.toOwnedSlice(self.allocator),
+        };
+    }
+
     /// Every place a symbol is written, split the way LSP asks for it.
     pub const ReferencesResult = struct {
         regions: []LspRange,
@@ -3993,4 +4090,22 @@ fn rangeContaining(regions: []const cir_queries.LspRange, line: u32, character: 
         if (character >= range.start_col and character <= range.end_col) return range;
     }
     return null;
+}
+
+/// How much of a rendered type an inlay hint shows.
+///
+/// A hint is drawn inside the line it annotates, so a long one pushes the code
+/// off screen. Roc's inferred types can be far longer than the code they
+/// describe — a generic function carries its whole `where` clause — so the
+/// label is cut and hovering the same name gives the type in full.
+const max_inlay_label_bytes = 56;
+
+/// Cut a rendered type to `max_inlay_label_bytes`, never mid-codepoint.
+fn truncateTypeLabel(rendered: []const u8) []const u8 {
+    if (rendered.len <= max_inlay_label_bytes) return rendered;
+
+    var end: usize = max_inlay_label_bytes;
+    // Back off any UTF-8 continuation bytes so the cut lands on a boundary.
+    while (end > 0 and (rendered[end] & 0xC0) == 0x80) : (end -= 1) {}
+    return rendered[0..end];
 }

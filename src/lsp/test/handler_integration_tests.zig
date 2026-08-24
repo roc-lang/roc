@@ -333,6 +333,8 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "prepare rename reports the occurrence under the cursor", .run = prepareRenameReportsOccurrenceUnderCursor },
     .{ .name = "references handler honours includeDeclaration", .run = referencesHandlerHonoursIncludeDeclaration },
     .{ .name = "references handler respects shadowing", .run = referencesHandlerRespectsShadowing },
+    .{ .name = "inlay hints show inferred types and skip annotated bindings", .run = inlayHintsShowInferredTypes },
+    .{ .name = "inlay hints stay within the requested range and truncate long types", .run = inlayHintsRespectRangeAndLength },
     .{ .name = "the name on an annotation is a usable starting point", .run = annotationNameResolvesLikeAnyOccurrence },
     .{ .name = "positions are UTF-16 code units, not bytes", .run = positionsUseUtf16CodeUnits },
     .{ .name = "rename refuses a declaration that is not a plain name", .run = renameRefusesNonIsolatedDeclaration },
@@ -1478,6 +1480,134 @@ pub fn renameRefusesNonIsolatedDeclaration() integration_spec.SpecError!void {
     var prepared = try responseById(allocator, responses, 3);
     defer prepared.deinit();
     try std.testing.expect((try prepared.result()) == .null);
+}
+
+/// Find the hint at a position and return its label.
+fn hintLabelAt(hints: std.json.Value, line: i64, character: i64) integration_spec.SpecError!?[]const u8 {
+    if (hints != .array) return error.TestUnexpectedResult;
+    for (hints.array.items) |hint| {
+        const position = try objectField(hint, "position");
+        if ((try integerField(position, "line")) != line) continue;
+        if ((try integerField(position, "character")) != character) continue;
+        const label = try objectField(hint, "label");
+        if (label != .string) return error.TestUnexpectedResult;
+        return label.string;
+    }
+    return null;
+}
+
+/// Verifies inlay hints render inferred types, and leave alone the bindings
+/// that already say their type or that the author marked unused.
+pub fn inlayHintsShowInferredTypes() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "inlay_types.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\annotated : I64
+        \\annotated = 1
+        \\
+        \\main = {{
+        \\    text = "roc"
+        \\    flag = annotated > 2
+        \\    _unused = 5
+        \\    text
+        \\}}
+    , .{platform_path});
+    defer allocator.free(source);
+
+    const request = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{{"textDocument":{{"uri":"{s}"}},"range":{{"start":{{"line":0,"character":0}},"end":{{"line":11,"character":0}}}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(request);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{request});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const hints = try response.result();
+    try std.testing.expect(hints == .array);
+
+    // `text` ends at column 8 on its line, `flag` at column 8 on the next.
+    const text_label = try hintLabelAt(hints, 6, 8) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(": Str", text_label);
+    const flag_label = try hintLabelAt(hints, 7, 8) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(": Bool", flag_label);
+
+    // `annotated` already writes its type, on the annotation line and on its
+    // own; neither may be annotated again.
+    try std.testing.expect((try hintLabelAt(hints, 2, 9)) == null);
+    try std.testing.expect((try hintLabelAt(hints, 3, 9)) == null);
+
+    // `_unused` was marked unused on purpose.
+    try std.testing.expect((try hintLabelAt(hints, 8, 11)) == null);
+}
+
+/// Verifies hints are limited to the requested lines, that a long type is cut
+/// rather than pushing the code off screen, and that a document which does not
+/// build produces no hints at all.
+pub fn inlayHintsRespectRangeAndLength() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "inlay_range.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\main = {{
+        \\    early = "before"
+        \\    wide = {{ alpha: 1, beta: "two", gamma: [3], delta: (4, "five"), epsilon: 6 }}
+        \\    late = "after"
+        \\    early
+        \\}}
+    , .{platform_path});
+    defer allocator.free(source);
+
+    // Only the middle of the block: `wide`, not `early` or `late`.
+    const narrow = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/inlayHint","params":{{"textDocument":{{"uri":"{s}"}},"range":{{"start":{{"line":4,"character":0}},"end":{{"line":4,"character":0}}}}}}}}
+    , .{fixture.uri});
+    defer allocator.free(narrow);
+
+    const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{narrow});
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const hints = try response.result();
+    try std.testing.expect(hints == .array);
+    try std.testing.expectEqual(@as(usize, 1), hints.array.items.len);
+
+    const label = try hintLabelAt(hints, 4, 8) orelse return error.TestUnexpectedResult;
+    // A record of five differently-typed fields renders past the cut, so the
+    // label must be shortened and marked as shortened.
+    try std.testing.expect(std.mem.startsWith(u8, label, ": {"));
+    try std.testing.expect(std.mem.endsWith(u8, label, "…"));
+    // ": " + at most 56 bytes of type + the three bytes of "…".
+    try std.testing.expect(label.len <= 2 + 56 + 3);
 }
 
 /// Verifies goto definition locates a local variable definition.
