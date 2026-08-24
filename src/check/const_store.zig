@@ -243,6 +243,9 @@ pub const ConstFnNestedEvidence = union(enum(u8)) {
 /// Exact checked callable relation attached to a stored target edge.
 pub const ConstFnCallableInstantiation = struct {
     view: names.CheckedModuleDigest,
+    /// Stable checked identity of `callable_ty`. The raw checked id remains
+    /// replay payload and may differ between equivalent fresh instantiations.
+    callable_key: names.CanonicalTypeKey,
     callable_ty: checked_ids.CheckedTypeId,
 };
 
@@ -253,6 +256,8 @@ pub const ConstFnEvidence = union(enum(u8)) {
     target: struct {
         view: names.CheckedModuleDigest,
         method: static_dispatch.MethodTarget,
+        /// Stable checked identity of `method.callable_ty`.
+        method_callable_key: names.CanonicalTypeKey,
         instantiation: ?ConstFnCallableInstantiation,
         nested: ConstFnNestedEvidence,
     },
@@ -868,6 +873,7 @@ pub const ConstStore = struct {
         const evidence = [_]ConstFnEvidence{.{ .target = .{
             .view = .{},
             .method = undefined,
+            .method_callable_key = .{},
             .instantiation = null,
             .nested = .from_callable,
         } }};
@@ -1191,6 +1197,10 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     target_view.bytes[0] = 0xA1;
     var instantiation_view: names.CheckedModuleDigest = .{};
     instantiation_view.bytes[0] = 0xB2;
+    var method_callable_key: names.CanonicalTypeKey = .{};
+    method_callable_key.bytes[0] = 0xC3;
+    var instantiation_callable_key: names.CanonicalTypeKey = .{};
+    instantiation_callable_key.bytes[0] = 0xD4;
     const evidence = [_]ConstFnEvidence{
         .{ .target = .{
             .view = target_view,
@@ -1204,7 +1214,12 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
                 } },
                 .callable_ty = @enumFromInt(6),
             },
-            .instantiation = .{ .view = instantiation_view, .callable_ty = @enumFromInt(7) },
+            .method_callable_key = method_callable_key,
+            .instantiation = .{
+                .view = instantiation_view,
+                .callable_key = instantiation_callable_key,
+                .callable_ty = @enumFromInt(7),
+            },
             .nested = .{ .resolved = .{ .count = 1, .subtree_len = 1 } },
         } },
         .{ .structural = .equality },
@@ -1272,8 +1287,10 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(@as(u32, 5), @intFromEnum(loaded_target.method.def_idx));
     try std.testing.expectEqual(evidence[0].target.method.kind, loaded_target.method.kind);
     try std.testing.expectEqual(@as(checked_ids.CheckedTypeId, @enumFromInt(6)), loaded_target.method.callable_ty);
+    try std.testing.expectEqual(method_callable_key, loaded_target.method_callable_key);
     const loaded_instantiation = loaded_target.instantiation.?;
     try std.testing.expectEqualSlices(u8, &instantiation_view.bytes, &loaded_instantiation.view.bytes);
+    try std.testing.expectEqual(instantiation_callable_key, loaded_instantiation.callable_key);
     try std.testing.expectEqual(@as(checked_ids.CheckedTypeId, @enumFromInt(7)), loaded_instantiation.callable_ty);
     const loaded_nested = loaded_target.nested.resolved;
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.count);

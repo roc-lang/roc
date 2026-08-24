@@ -1466,12 +1466,15 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
         .target => |a_target| switch (b) {
             .target => |b_target| blk: {
                 if (!std.meta.eql(a_target.view.key, b_target.view.key)) break :blk false;
-                if (!std.meta.eql(a_target.target, b_target.target)) break :blk false;
+                if (!specMethodTargetEql(a_target, b_target)) break :blk false;
                 if (a_target.local_proc_context != b_target.local_proc_context) break :blk false;
                 if (a_target.instantiation) |a_instantiation| {
                     const b_instantiation = b_target.instantiation orelse break :blk false;
                     if (!std.meta.eql(a_instantiation.view.key, b_instantiation.view.key)) break :blk false;
-                    if (a_instantiation.callable_ty != b_instantiation.callable_ty) break :blk false;
+                    if (!std.meta.eql(
+                        a_instantiation.view.types.rootKey(a_instantiation.callable_ty),
+                        b_instantiation.view.types.rootKey(b_instantiation.callable_ty),
+                    )) break :blk false;
                 } else if (b_target.instantiation != null) {
                     break :blk false;
                 }
@@ -1502,6 +1505,16 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
         .unreachable_value => b == .unreachable_value,
         .checked_error => b == .checked_error,
     };
+}
+
+fn specMethodTargetEql(left: *const SpecEvidenceTarget, right: *const SpecEvidenceTarget) bool {
+    return left.target.module_idx == right.target.module_idx and
+        left.target.def_idx == right.target.def_idx and
+        std.meta.eql(left.target.kind, right.target.kind) and
+        std.meta.eql(
+            left.view.types.rootKey(left.target.callable_ty),
+            right.view.types.rootKey(right.target.callable_ty),
+        );
 }
 
 fn specEvidenceVectorEql(a: []const SpecEvidence, b: []const SpecEvidence) bool {
@@ -1811,14 +1824,7 @@ fn specializationEvidenceView(evidence: StoredConstFnEvidence) specialize.Eviden
 }
 
 fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvidence) bool {
-    if (left.head != right.head or left.nodes.len != right.nodes.len or left.frames.len != right.frames.len) return false;
-    for (left.nodes, right.nodes) |left_node, right_node| {
-        if (!std.meta.eql(left_node, right_node)) return false;
-    }
-    for (left.frames, right.frames) |left_frame, right_frame| {
-        if (!std.meta.eql(left_frame, right_frame)) return false;
-    }
-    return true;
+    return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
 }
 
 fn programViewFnEvidence(program: Ast.ProgramView, template: Ast.FnTemplate) StoredConstFnEvidence {
@@ -3331,8 +3337,10 @@ const Builder = struct {
                 nodes.items[target_index] = .{ .target = .{
                     .view = .{ .bytes = target.view.key.bytes },
                     .method = target.target,
+                    .method_callable_key = target.view.types.rootKey(target.target.callable_ty),
                     .instantiation = if (target.instantiation) |instantiation| .{
                         .view = .{ .bytes = instantiation.view.key.bytes },
+                        .callable_key = instantiation.view.types.rootKey(instantiation.callable_ty),
                         .callable_ty = instantiation.callable_ty,
                     } else null,
                     .nested = nested,
@@ -49568,18 +49576,31 @@ test "graph constructor representation follows aliases and preserves nominal lay
 }
 
 test "specialization evidence equality includes exact target instantiation" {
+    var roots: [11]checked.CheckedTypeRoot = undefined;
+    for (&roots, 0..) |*root, index| {
+        root.* = .{ .id = @enumFromInt(@as(u32, @intCast(index))), .key = .{} };
+        root.key.bytes[0] = @intCast(index);
+    }
+    // A fresh checked identity may have a distinct raw id while retaining the
+    // same canonical type topology.
+    roots[10].key = roots[8].key;
+
     var target_view: ModuleView = undefined;
     target_view.key = .{};
     target_view.key.bytes[0] = 1;
+    target_view.types = .{ .roots = &roots };
     var other_target_view: ModuleView = undefined;
     other_target_view.key = .{};
     other_target_view.key.bytes[0] = 2;
+    other_target_view.types = .{ .roots = &roots };
     var instantiation_view: ModuleView = undefined;
     instantiation_view.key = .{};
     instantiation_view.key.bytes[0] = 3;
+    instantiation_view.types = .{ .roots = &roots };
     var other_instantiation_view: ModuleView = undefined;
     other_instantiation_view.key = .{};
     other_instantiation_view.key.bytes[0] = 4;
+    other_instantiation_view.types = .{ .roots = &roots };
 
     const method: static_dispatch.MethodTarget = .{
         .module_idx = 5,
@@ -49610,6 +49631,10 @@ test "specialization evidence equality includes exact target instantiation" {
     var different_callable = exact;
     different_callable.instantiation.?.callable_ty = @enumFromInt(9);
     try std.testing.expect(!specEvidenceEql(.{ .target = &exact }, .{ .target = &different_callable }));
+
+    var equivalent_fresh_callable = exact;
+    equivalent_fresh_callable.instantiation.?.callable_ty = @enumFromInt(10);
+    try std.testing.expect(specEvidenceEql(.{ .target = &exact }, .{ .target = &equivalent_fresh_callable }));
 
     var unresolved_nested = exact;
     unresolved_nested.nested = .synthesize;
