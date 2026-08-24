@@ -10435,7 +10435,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.emitCheckedIntMul(entry.op, result_reg, lhs_reg, rhs_reg, operand_layout, is_unsigned);
                         } else if (entry.mode == .overflows) {
                             const overflow_reg = try self.allocTempGeneral();
-                            try self.emitIntMulOverflowFlag(overflow_reg, result_reg, lhs_reg, rhs_reg, operand_layout, is_unsigned);
+                            try self.emitIntMulOverflowFlag(overflow_reg, result_reg, lhs_reg, rhs_reg, operand_layout);
                             try self.bindPendingScalarOverflowResult(result_reg);
                             self.codegen.freeGeneral(lhs_reg);
                             self.codegen.freeGeneral(rhs_reg);
@@ -10593,7 +10593,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             lhs_reg: GeneralReg,
             rhs_reg: GeneralReg,
             operand_layout: layout.Idx,
-            is_unsigned: bool,
         ) Allocator.Error!void {
             switch (operand_layout) {
                 .u8, .u16, .u32, .i8, .i16, .i32 => {
@@ -10651,7 +10650,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (rhs_temp) |temp| self.codegen.freeGeneral(temp);
                 },
                 .bool, .str, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
-                    _ = is_unsigned;
                     unreachable;
                 },
             }
