@@ -1,5 +1,6 @@
 //! Canonical deep-RC helper plans derived from canonical layout identities.
 
+const std = @import("std");
 const builtins = @import("builtins");
 
 const layout_mod = @import("./layout.zig");
@@ -92,33 +93,16 @@ pub const Plan = union(enum) {
 /// Reads canonical layouts and turns them into canonical RC helper plans.
 pub const Resolver = struct {
     store: *const Store,
-    /// When true, a container's per-element/field/payload RC treats a
-    /// `box_of_zst` element as refcounted, so an erased box carried inside a
-    /// list/struct/tag is increfed on clone and decrefed on drop. The
-    /// descriptor-guided boxy runtime sets this so its concrete RC path matches
-    /// the interpreter, which drives the same runtime. It never changes the
-    /// plans ARC consults to decide which RC statements to emit, so the lowered
-    /// program is unaffected.
-    erased_box_refcounted: bool = false,
 
     /// Create an RC helper resolver for one shared layout store.
     pub fn init(store: *const Store) Resolver {
         return .{ .store = store };
     }
 
-    /// Create a resolver that treats erased boxes (`box_of_zst`) as refcounted
-    /// container elements/fields/payloads.
-    pub fn initErasedBox(store: *const Store) Resolver {
-        return .{ .store = store, .erased_box_refcounted = true };
-    }
-
     /// Whether a nested value (field/payload) participates in reference
-    /// counting for this resolver's mode.
+    /// counting.
     fn nestedContainsRefcounted(self: *const Resolver, l: layout_mod.Layout) bool {
-        return if (self.erased_box_refcounted)
-            self.store.layoutContainsRcErasedBox(l)
-        else
-            self.store.layoutContainsRefcounted(l);
+        return self.store.layoutContainsRefcounted(l);
     }
 
     /// Build a helper key from an operation and layout id.
@@ -129,12 +113,7 @@ pub const Resolver = struct {
     /// Plan the RC behavior for a canonical helper key.
     pub fn plan(self: *const Resolver, helper_key: HelperKey) Plan {
         const l = self.store.getLayout(helper_key.layout_idx);
-        // An erased box carries a real refcounted heap allocation even though
-        // its payload layout is zero-sized, so it participates in reference
-        // counting exactly like a box in descriptor-guided mode.
-        if (l.tag == .box_of_zst) {
-            if (!self.erased_box_refcounted) return .noop;
-        } else if (!self.nestedContainsRefcounted(l)) {
+        if (!self.nestedContainsRefcounted(l)) {
             return .noop;
         }
 
@@ -159,6 +138,10 @@ pub const Resolver = struct {
                 .decref => .{ .box_decref = self.boxPlan(helper_key.layout_idx) },
                 .free => .{ .box_free = self.boxPlan(helper_key.layout_idx) },
             },
+            .erased_box => std.debug.panic(
+                "layout/ARC invariant violated: erased_box RC requires its explicit Boxy descriptor",
+                .{},
+            ),
             .erased_callable => switch (helper_key.op) {
                 .incref => .erased_callable_incref,
                 .decref => .erased_callable_decref,
@@ -240,13 +223,10 @@ pub const Resolver = struct {
 
     fn listPlan(self: *const Resolver, list_layout_idx: Idx) ListPlan {
         const abi = self.store.builtinListAbi(list_layout_idx);
-        const elem_refcounted = abi.contains_refcounted or
-            (self.erased_box_refcounted and abi.elem_layout_idx != null and
-                self.store.getLayout(abi.elem_layout_idx.?).tag == .box_of_zst);
         return .{
             .elem_alignment = abi.elem_alignment,
             .elem_width = abi.elem_size,
-            .child = if (elem_refcounted and abi.elem_layout_idx != null)
+            .child = if (abi.contains_refcounted and abi.elem_layout_idx != null)
                 .{
                     .op = .decref,
                     .layout_idx = abi.elem_layout_idx.?,
@@ -258,12 +238,9 @@ pub const Resolver = struct {
 
     fn boxPlan(self: *const Resolver, box_layout_idx: Idx) BoxPlan {
         const abi = self.store.builtinBoxAbi(box_layout_idx);
-        const elem_refcounted = abi.contains_refcounted or
-            (self.erased_box_refcounted and abi.elem_layout_idx != null and
-                self.store.getLayout(abi.elem_layout_idx.?).tag == .box_of_zst);
         return .{
             .elem_alignment = abi.elem_alignment,
-            .child = if (elem_refcounted and abi.elem_layout_idx != null)
+            .child = if (abi.contains_refcounted and abi.elem_layout_idx != null)
                 .{
                     .op = .decref,
                     .layout_idx = abi.elem_layout_idx.?,

@@ -859,6 +859,7 @@ pub const Interpreter = struct {
                 .scalar,
                 .box,
                 .box_of_zst,
+                .erased_box,
                 .list,
                 .list_of_zst,
                 .closure,
@@ -1148,7 +1149,7 @@ pub const Interpreter = struct {
         }
 
         pub fn layoutContainsRc(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) bool {
-            return self.interp.layout_store.layoutContainsRcErasedBox(self.interp.layout_store.getLayout(layout_idx));
+            return self.interp.layout_store.layoutContainsRefcounted(self.interp.layout_store.getLayout(layout_idx));
         }
 
         pub fn allocValue(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) Error!Value {
@@ -1160,15 +1161,15 @@ pub const Interpreter = struct {
         }
 
         pub fn rcPlanFor(self: BoxyFrameHooks, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
-            return self.interp.layout_store.rcHelperPlanErasedBox(helper);
+            return self.interp.layout_store.rcHelperPlan(helper);
         }
 
         pub fn rcStructFieldPlan(self: BoxyFrameHooks, struct_plan: layout_mod.RcStructPlan, field_index: u32) ?layout_mod.RcFieldPlan {
-            return self.interp.layout_store.rcHelperStructFieldPlanErasedBox(struct_plan, field_index);
+            return self.interp.layout_store.rcHelperStructFieldPlan(struct_plan, field_index);
         }
 
         pub fn rcTagVariantPlan(self: BoxyFrameHooks, tag_plan: layout_mod.RcTagUnionPlan, variant_index: u32) ?layout_mod.RcHelperKey {
-            return self.interp.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, variant_index);
+            return self.interp.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_index);
         }
 
         pub fn traceProcId(self: BoxyFrameHooks) u32 {
@@ -1605,7 +1606,7 @@ pub const Interpreter = struct {
                     }
                 }
             },
-            .zst, .box_of_zst => return,
+            .zst, .box_of_zst, .erased_box => return,
             // Compiler-internal pointers (TRMC holes) are opaque here: the slot they
             // point at may be a not-yet-filled hole, so there is nothing to validate.
             .ptr => return,
@@ -2112,7 +2113,7 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(layout_idx);
         debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
         switch (layout_val.tag) {
-            .scalar, .zst, .box_of_zst, .list_of_zst, .erased_callable => {},
+            .scalar, .zst, .box_of_zst, .erased_box, .list_of_zst, .erased_callable => {},
             .box, .ptr => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
             .list => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
             .closure => self.debugPrintLayoutShapeLines(layout_val.getClosure().captures_layout_idx, indent + 1, visited),
@@ -2317,7 +2318,7 @@ pub const Interpreter = struct {
                 const expected_layout_val = self.layout_store.getLayout(param_layout);
                 if (actual_layout_val.tag == .struct_ or expected_layout_val.tag == .struct_ or
                     actual_layout_val.tag == .tag_union or expected_layout_val.tag == .tag_union or
-                    (actual_layout_val.tag == .scalar and (expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst)))
+                    (actual_layout_val.tag == .scalar and (expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst or expected_layout_val.tag == .erased_box)))
                 {
                     debugPrint(
                         "LIR/interpreter invariant violated before proc arg coercion: proc={d} name={d} arg_index={d} actual_layout={d} ({s}) expected_layout={d} ({s}) param_local={d}\n",
@@ -3936,6 +3937,7 @@ pub const Interpreter = struct {
                     .scalar,
                     .box,
                     .box_of_zst,
+                    .erased_box,
                     .list,
                     .list_of_zst,
                     .closure,
@@ -4700,6 +4702,7 @@ pub const Interpreter = struct {
                 };
             },
             .scalar,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -5392,7 +5395,7 @@ pub const Interpreter = struct {
     }
 
     fn builtinInternalContainsRefcounted(self: *LirInterpreter, comptime _: []const u8, layout_idx: layout_mod.Idx) bool {
-        return self.layout_store.layoutContainsRcErasedBox(self.layout_store.getLayout(layout_idx));
+        return self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layout_idx));
     }
 
     fn rcHelperForLayout(self: *LirInterpreter, op: RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
@@ -5404,7 +5407,7 @@ pub const Interpreter = struct {
     }
 
     fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16, atomicity: RcAtomicity) void {
-        const plan = self.layout_store.rcHelperPlanErasedBox(helper);
+        const plan = self.layout_store.rcHelperPlan(helper);
         if (plan == .noop) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: explicit RC statement used noop helper for layout {d}",
@@ -5417,7 +5420,7 @@ pub const Interpreter = struct {
     fn cachedRcPlan(self: *LirInterpreter, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
         const id = helper.encode();
         if (self.rc_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperPlanErasedBox(helper);
+        const plan = self.layout_store.rcHelperPlan(helper);
         self.rc_plans.putAssumeCapacity(id, plan);
         return plan;
     }
@@ -5429,7 +5432,7 @@ pub const Interpreter = struct {
     ) ?layout_mod.RcFieldPlan {
         const id = helperChildPlanId(@intCast(struct_plan.struct_idx.int_idx), struct_plan.child_op, field_index);
         if (self.struct_field_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperStructFieldPlanErasedBox(struct_plan, field_index);
+        const plan = self.layout_store.rcHelperStructFieldPlan(struct_plan, field_index);
         self.struct_field_plans.putAssumeCapacity(id, plan);
         return plan;
     }
@@ -5441,7 +5444,7 @@ pub const Interpreter = struct {
     ) ?layout_mod.RcHelperKey {
         const id = helperChildPlanId(@intCast(tag_plan.tag_union_idx.int_idx), tag_plan.child_op, variant_index);
         if (self.tag_variant_plans.get(id)) |plan| return plan;
-        const plan = self.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, variant_index);
+        const plan = self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_index);
         self.tag_variant_plans.putAssumeCapacity(id, plan);
         return plan;
     }
@@ -5840,7 +5843,7 @@ pub const Interpreter = struct {
     fn listElementRcContext(self: *LirInterpreter, ll: LowLevelEvalInput, list_layout: layout_mod.Idx) Error!ListElementRcContext {
         const elem_layout = self.listElemLayout(list_layout);
         const elem_layout_value = self.layout_store.getLayout(elem_layout);
-        const elem_is_erased_box = elem_layout_value.tag == .box_of_zst;
+        const elem_is_erased_box = elem_layout_value.tag == .erased_box;
         const elem_is_box = elem_is_erased_box or elem_layout_value.tag == .box;
         var elem_desc: ?*const LirProgram.BoxyTypeDesc = null;
 
@@ -6159,6 +6162,7 @@ pub const Interpreter = struct {
                             .scalar,
                             .box,
                             .box_of_zst,
+                            .erased_box,
                             .list,
                             .list_of_zst,
                             .closure,
@@ -7898,7 +7902,7 @@ pub const Interpreter = struct {
         if (op == .eq and switch (layout_val.tag) {
             .zst, .struct_, .list, .list_of_zst, .tag_union => true,
             .scalar => layout_val.getScalar().tag == .str,
-            .box, .box_of_zst, .closure, .erased_callable, .ptr => false,
+            .box, .box_of_zst, .erased_box, .closure, .erased_callable, .ptr => false,
         }) {
             val.write(u8, if (try self.valuesEqual(a, b, arg_layout)) 1 else 0);
             return val;
@@ -9324,6 +9328,7 @@ pub const Interpreter = struct {
             },
             .scalar,
             .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -9520,6 +9525,7 @@ pub const Interpreter = struct {
                 return result;
             },
             .scalar,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,

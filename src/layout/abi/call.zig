@@ -296,7 +296,7 @@ fn isCAbiAggregate(store: *const Store, idx: Idx) bool {
             }
             break :blk true;
         },
-        .box, .box_of_zst, .list, .list_of_zst, .zst, .ptr => false,
+        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .ptr => false,
     };
 }
 
@@ -311,7 +311,7 @@ fn isCAbiI128Scalar(store: *const Store, idx: Idx) bool {
             }
             break :blk false;
         },
-        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => false,
+        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => false,
     };
 }
 
@@ -329,7 +329,7 @@ fn cAbiI128VectorKind(store: *const Store, idx: Idx) ?layout.Vector {
             }
             break :blk null;
         },
-        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => null,
+        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => null,
     };
 }
 
@@ -562,7 +562,7 @@ fn narrowScalarExtension(store: *const Store, idx: Idx) RegExtension {
             }
             break :blk .zero;
         },
-        .struct_, .closure, .erased_callable, .box, .box_of_zst, .list, .list_of_zst, .zst, .ptr => .none,
+        .struct_, .closure, .erased_callable, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .ptr => .none,
     };
 }
 
@@ -663,7 +663,7 @@ fn placementAarch64(
                 }
                 return integerPieces(arena, size, if (size == 16) .integer else .piecewise, extend);
             },
-            .box, .box_of_zst, .ptr => return integerPieces(arena, size, .piecewise, .none),
+            .box, .box_of_zst, .erased_box, .ptr => return integerPieces(arena, size, .piecewise, .none),
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
                 std.debug.assert(info.variants.len == 1 and info.data.discriminant_size == 0);
@@ -802,7 +802,7 @@ fn findVectorKind(store: *const Store, idx: Idx) ?layout.Vector {
             }
             break :blk null;
         },
-        .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .zst, .ptr => null,
+        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .zst, .ptr => null,
     };
 }
 

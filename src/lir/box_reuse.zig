@@ -650,10 +650,10 @@ const Transform = struct {
 
 fn payloadNeedsOwnedUnbox(layouts: *const layout_mod.Store, payload_layout: layout_mod.Idx) bool {
     const payload = layouts.getLayout(payload_layout);
-    if (!layouts.layoutContainsRcErasedBox(payload)) return false;
+    if (!layouts.layoutContainsRefcounted(payload)) return false;
     return switch (payload.tag) {
         .list, .struct_, .tag_union, .closure, .erased_callable => true,
-        .scalar, .list_of_zst, .box, .box_of_zst, .zst, .ptr => false,
+        .scalar, .list_of_zst, .box, .box_of_zst, .erased_box, .zst, .ptr => false,
     };
 }
 

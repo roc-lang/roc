@@ -1801,6 +1801,7 @@ const Certifier = struct {
             .scalar,
             .box,
             .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -1882,6 +1883,7 @@ const Certifier = struct {
             .scalar,
             .box,
             .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -5684,7 +5686,7 @@ test "certify accepts a retained Boxy field borrowed from implicit capture stora
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
 
-    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const capture_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
         .{ .index = 0, .layout = erased_box },
     });

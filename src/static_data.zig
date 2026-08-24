@@ -713,6 +713,7 @@ const StaticInitializerMachine = struct {
                 break :blk .{ .outer = value, .base = value, .base_layout = target_layout };
             },
             .scalar,
+            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -764,6 +765,7 @@ const StaticInitializerMachine = struct {
             .box => self.layoutValue(self.layouts().builtinBoxAbi(union_layout).elem_layout_idx orelse .zst),
             .scalar,
             .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,

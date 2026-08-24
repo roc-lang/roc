@@ -3769,19 +3769,20 @@ const ProcedureBuilder = struct {
 
     fn layoutIsBoxStorage(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
         const tag = self.result.layouts.getLayout(layout_idx).tag;
-        return tag == .box or tag == .box_of_zst;
+        return tag == .box or tag == .box_of_zst or tag == .erased_box;
     }
 
     fn layoutNeedsNestedBoxyDesc(self: *const ProcedureBuilder, layout_idx: layout.Idx) bool {
         return switch (self.result.layouts.getLayout(layout_idx).tag) {
             .box,
-            .box_of_zst,
+            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
             .tag_union,
             => true,
             .scalar,
+            .box_of_zst,
             .closure,
             .erased_callable,
             .zst,
@@ -13716,7 +13717,7 @@ const ProcBodyBuilder = struct {
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const source_layout = self.parent.result.store.getLocal(source).layout_idx;
         if (target_layout == source_layout and self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(source_rep)) {
-            if (self.parent.result.store.getLocal(source).boxy_desc == null and try self.layoutContainsBoxOfZst(source_layout)) {
+            if (self.parent.result.store.getLocal(source).boxy_desc == null and try self.layoutContainsErasedBox(source_layout)) {
                 const desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
                 self.parent.result.store.setLocalBoxyDesc(source, desc);
             }
@@ -16709,7 +16710,7 @@ const ProcBodyBuilder = struct {
         const layout_value = self.parent.result.layouts.getLayout(capture_layout);
         try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
             .payload_layout = capture_layout,
-            .contains_refcounted = self.parent.result.layouts.layoutContainsRcErasedBox(layout_value),
+            .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value),
             .nested_descs = .{ .start = nested_start, .len = @intCast(refs.items.len) },
         });
 
@@ -16791,7 +16792,7 @@ const ProcBodyBuilder = struct {
                     });
                 }
             },
-            .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("boxy erased capture descriptor field expected struct capture layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("boxy erased capture descriptor field expected struct capture layout"),
         }
 
         try fields.append(self.parent.allocator, .{
@@ -16808,7 +16809,7 @@ const ProcBodyBuilder = struct {
     fn erasedCallableOnDrop(self: *ProcBodyBuilder, maybe_capture_layout: ?layout.Idx) LIR.ErasedCallableOnDrop {
         const capture_layout = maybe_capture_layout orelse return .none;
         const helper_key = layout.RcHelper{ .op = .decref, .layout_idx = capture_layout };
-        return if (self.parent.result.layouts.rcHelperPlanErasedBox(helper_key) == .noop)
+        return if (self.parent.result.layouts.rcHelperPlan(helper_key) == .noop)
             .none
         else
             .{ .rc_helper = helper_key };
@@ -18942,7 +18943,7 @@ const ProcBodyBuilder = struct {
                             target_payloads.len,
                         );
                         const target_payload_tag = self.parent.result.layouts.getLayout(target_payload_layout).tag;
-                        const target_payload_is_box = target_payload_tag == .box or target_payload_tag == .box_of_zst;
+                        const target_payload_is_box = target_payload_tag == .box or target_payload_tag == .box_of_zst or target_payload_tag == .erased_box;
                         const target_standalone_layout = self.workerRuntimeLayoutForRep(target_payloads[payload_index].rep).layoutIdx();
                         const adapted_payload_desc_info = if (self.representationBoundaryIsDirect(
                             target_payloads[payload_index].rep,
@@ -19600,8 +19601,8 @@ const ProcBodyBuilder = struct {
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
         const target_tag = self.parent.result.layouts.getLayout(target_layout).tag;
         const source_tag = self.parent.result.layouts.getLayout(source_layout).tag;
-        const target_is_box = target_tag == .box or target_tag == .box_of_zst;
-        const source_is_box = source_tag == .box or source_tag == .box_of_zst;
+        const target_is_box = target_tag == .box or target_tag == .box_of_zst or target_tag == .erased_box;
+        const source_is_box = source_tag == .box or source_tag == .box_of_zst or source_tag == .erased_box;
 
         // A bare dynamic box has no target shape beyond the concrete source
         // allocation, so its descriptor must remain the exact source
@@ -19613,7 +19614,7 @@ const ProcBodyBuilder = struct {
             result.preserves_source_desc = true;
             return result;
         }
-        if (target_is_bare_dynamic and target_is_box and source_is_box and target_layout == source_layout and target_tag == .box_of_zst) {
+        if (target_is_bare_dynamic and target_is_box and source_is_box and target_layout == source_layout and target_tag == .erased_box) {
             var result = source_desc_info;
             result.preserves_source_desc = true;
             return result;
@@ -20432,7 +20433,7 @@ const ProcBodyBuilder = struct {
             }
             if (self.isZstLocal(target)) return try self.assignZst(target, next);
             const target_layout = self.parent.result.layouts.getLayout(self.parent.result.store.getLocal(target).layout_idx);
-            const assign_tag = if (target_layout.tag == .box_of_zst) blk: {
+            const assign_tag = if (target_layout.tag == .erased_box) blk: {
                 const target_desc = target_desc_ref orelse
                     boxyLowerInvariant("descriptor-erased tag construction had no target descriptor");
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
@@ -22189,11 +22190,11 @@ const ProcBodyBuilder = struct {
                 const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
                 const target_desc_info = try self.storageDescriptorForRepIfNeeded(record_rep);
                 // A `.dynamic`-rep record reports no static storage descriptor, but
-                // when its unboxed payload carries an erased `box_of_zst` the value
+                // when its unboxed payload carries an `erased_box` the value
                 // must be reference-counted through a descriptor. The unboxed payload
                 // has the box's payload shape, so reuse the source box's descriptor.
                 const payload_desc: ?LIR.BoxyDescRef = target_desc_info.desc orelse
-                    if (try self.layoutContainsBoxOfZst(payload_layout)) source_desc else null;
+                    if (try self.layoutContainsErasedBox(payload_layout)) source_desc else null;
                 if (payload_desc) |desc| {
                     self.parent.result.store.setLocalBoxyDesc(payload, desc);
                 }
@@ -25494,7 +25495,7 @@ const ProcBodyBuilder = struct {
                 .tag_union => descriptor_layout_value,
                 .box => self.parent.result.layouts.getLayout(descriptor_layout_value.getIdx()),
                 .zst => null,
-                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy descriptor read_path tag had a non-tag payload layout"),
+                .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy descriptor read_path tag had a non-tag payload layout"),
             };
 
             if (tag_layout) |layout_value| {
@@ -26087,8 +26088,8 @@ const ProcBodyBuilder = struct {
 
         const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
         const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
-        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst;
-        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst;
+        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst or source_layout_value.tag == .erased_box;
+        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst or target_layout_value.tag == .erased_box;
 
         if (source_is_box and !target_is_box) {
             const source_desc = try self.descriptorRefForSourceLocalRep(source, rep_id);
@@ -26757,7 +26758,7 @@ const ProcBodyBuilder = struct {
         const tag_layout = switch (layout_value.tag) {
             .tag_union => layout_value,
             .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
-            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return false,
+            .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return false,
         };
         if (tag_layout.tag != .tag_union) return false;
 
@@ -27094,7 +27095,7 @@ const ProcBodyBuilder = struct {
         const tag_layout = switch (layout_value.tag) {
             .tag_union => layout_value,
             .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
-            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return .{},
+            .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return .{},
         };
         if (tag_layout.tag != .tag_union) return .{};
 
@@ -30055,8 +30056,8 @@ const ProcBodyBuilder = struct {
         // boxed, not reinterpreted; the descriptor records the payload layout.
         const target_layout_value = self.parent.result.layouts.getLayout(target_layout);
         const source_layout_value = self.parent.result.layouts.getLayout(source_layout);
-        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst;
-        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst;
+        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst or target_layout_value.tag == .erased_box;
+        const source_is_box = source_layout_value.tag == .box or source_layout_value.tag == .box_of_zst or source_layout_value.tag == .erased_box;
         const source_is_list = source_layout_value.tag == .list or source_layout_value.tag == .list_of_zst;
         if (target_is_box and !source_is_box and !source_is_list) {
             const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
@@ -30307,11 +30308,11 @@ const ProcBodyBuilder = struct {
         const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
         const target_is_box = switch (self.parent.result.layouts.getLayout(target_layout).tag) {
-            .box, .box_of_zst => true,
+            .box, .box_of_zst, .erased_box => true,
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
         return target_is_box and switch (self.parent.result.layouts.getLayout(source_layout).tag) {
-            .box, .box_of_zst => true,
+            .box, .box_of_zst, .erased_box => true,
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
     }
@@ -31056,7 +31057,7 @@ const ProcBodyBuilder = struct {
                 .tag_union => descriptor_layout_value,
                 .box => self.parent.result.layouts.getLayout(descriptor_layout_value.getIdx()),
                 .zst => null,
-                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy callable descriptor read_path tag had a non-tag payload layout"),
+                .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy callable descriptor read_path tag had a non-tag payload layout"),
             };
             if (tag_layout) |layout_value| {
                 if (layout_value.tag != .tag_union) {
@@ -31970,6 +31971,7 @@ const ProcBodyBuilder = struct {
         switch (a_layout.tag) {
             .scalar => return std.meta.eql(a_layout.getScalar(), b_layout.getScalar()),
             .zst => return true,
+            .erased_box => return true,
             .box, .box_of_zst => {
                 return try self.boundaryLayoutsInterchangeableInner(
                     layouts.getBoxInfo(a_layout).elem_layout_idx,
@@ -32222,12 +32224,12 @@ const ProcBodyBuilder = struct {
                     const target_desc_info = try self.storageDescriptorForRepIfNeeded(identity_target_rep);
                     // A `.dynamic`-rep target reports no static storage descriptor,
                     // but when its unboxed storage layout carries an erased
-                    // `box_of_zst` the value must still be reference-counted through
+                    // `erased_box` the value must still be reference-counted through
                     // a descriptor (a layout-driven concrete RC walk cannot align
                     // the box's allocation). The unboxed storage has the same shape
                     // as the box payload, so reuse the source box's descriptor.
                     var selected_target_desc = target_desc_info;
-                    if (selected_target_desc.desc == null and try self.layoutContainsBoxOfZst(target_layout)) {
+                    if (selected_target_desc.desc == null and try self.layoutContainsErasedBox(target_layout)) {
                         selected_target_desc.desc = source_desc;
                     }
                     const resolved_target_desc = self.resultDescriptorForCallTarget(target, selected_target_desc);
@@ -32312,7 +32314,7 @@ const ProcBodyBuilder = struct {
         const source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
         const target_desc_info = try self.storageDescriptorForRepIfNeeded(target_rep);
         var selected_target_desc = target_desc_info;
-        if (selected_target_desc.desc == null and try self.layoutContainsBoxOfZst(target_layout)) {
+        if (selected_target_desc.desc == null and try self.layoutContainsErasedBox(target_layout)) {
             if (self.parent.result.store.getLocal(target).boxy_desc == null) {
                 selected_target_desc.desc = source_desc;
             }
@@ -32439,10 +32441,10 @@ const ProcBodyBuilder = struct {
 
         const source_payload = try self.addFrameLocal(source_payload_layout);
         // The unboxed source payload lives past the field conversions and is then
-        // dropped. When it carries an erased `box_of_zst` it must be
+        // dropped. When it carries an `erased_box` it must be
         // reference-counted through a descriptor, so tag it with the source box's
         // descriptor (which describes exactly this payload shape).
-        const source_payload_desc: ?LIR.BoxyDescRef = if (try self.layoutContainsBoxOfZst(source_payload_layout))
+        const source_payload_desc: ?LIR.BoxyDescRef = if (try self.layoutContainsErasedBox(source_payload_layout))
             try self.descriptorRefForSourceLocalRep(source, source_rep)
         else
             null;
@@ -32588,7 +32590,7 @@ const ProcBodyBuilder = struct {
         const boxed_source_layout = self.workerRuntimeLayoutForRep(source_record_rep).layoutIdx();
         const boxed_source_layout_value = self.parent.result.layouts.getLayout(boxed_source_layout);
         const source_backing_is_box = switch (boxed_source_layout_value.tag) {
-            .box, .box_of_zst => true,
+            .box, .box_of_zst, .erased_box => true,
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
         // A plan-dynamic record whose backing is concrete at this site (fully
@@ -33133,7 +33135,7 @@ const ProcBodyBuilder = struct {
                     if (!self.parent.result.layouts.isZeroSized(self.parent.result.layouts.getLayout(payload_layout))) return null;
                 }
             },
-            .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
         }
 
         const source_tag_count = self.checkedTagUnionCountForBoundary(source_rep) orelse return null;
@@ -33515,7 +33517,7 @@ const ProcBodyBuilder = struct {
                 // under the target rep's identity, so it is only sound when the
                 // source and target agree on how each payload field is stored.
                 // A worker can return a tag whose payload fields are erased
-                // (`box_of_zst`) while the dynamic target realizes them inline
+                // (`erased_box`) while the dynamic target realizes them inline
                 // (a fully-concrete instantiation, e.g. `Ok(val, input)` at a
                 // call site where both are `Str`). Reusing the erased source
                 // descriptor there would leave the boxed fields where the
@@ -34246,7 +34248,7 @@ const ProcBodyBuilder = struct {
             desc = .{ .local = try self.addFrameLocal(.opaque_ptr) };
         } else {
             desc = try self.frameDescriptorRefForRep(rep_id);
-            if (desc == null and try self.layoutContainsBoxOfZst(layout_idx)) {
+            if (desc == null and try self.layoutContainsErasedBox(layout_idx)) {
                 desc = try self.parent.staticDescRefForRep(identity_rep);
             }
         }
@@ -34292,7 +34294,7 @@ const ProcBodyBuilder = struct {
         {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
-        } else if (try self.layoutContainsBoxOfZst(layout_idx)) {
+        } else if (try self.layoutContainsErasedBox(layout_idx)) {
             self.parent.result.store.setLocalBoxyDesc(local, try self.parent.staticDescRefForRep(identity_rep));
         } else if (try self.descriptorRefForRepIfNeeded(rep_id)) |desc| {
             switch (desc) {
@@ -34356,7 +34358,7 @@ const ProcBodyBuilder = struct {
             ((exact.contains_dynamic or identity.contains_dynamic) and
                 self.parent.layoutNeedsNestedBoxyDesc(runtime.layoutIdx())))
             .{ .local = try self.addFrameLocal(.opaque_ptr) }
-        else if (try self.layoutContainsBoxOfZst(runtime.layoutIdx()))
+        else if (try self.layoutContainsErasedBox(runtime.layoutIdx()))
             try self.parent.staticDescRefForRep(identity_rep)
         else
             null;
@@ -35456,7 +35458,7 @@ const ProcBodyBuilder = struct {
                 @intCast(field_index),
             ),
             .zst => .zst,
-            .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("aggregate field layout requested for non-struct layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("aggregate field layout requested for non-struct layout"),
         };
     }
 
@@ -36792,7 +36794,7 @@ const ProcBodyBuilder = struct {
                 break :blk variants.get(@intCast(variant_index)).payload_layout;
             },
             .zst, .scalar => .zst,
-            .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("tag payload operation expected tag-union layout"),
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("tag payload operation expected tag-union layout"),
         };
     }
 
@@ -36802,26 +36804,26 @@ const ProcBodyBuilder = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => boxyLowerInvariant("list expression target was not a list layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => boxyLowerInvariant("list expression target was not a list layout"),
         };
     }
 
     fn layoutIsBoxyDynamicStorage(self: *const ProcBodyBuilder, layout_idx: layout.Idx) bool {
-        return self.parent.result.layouts.getLayout(layout_idx).tag == .box_of_zst;
+        return self.parent.result.layouts.getLayout(layout_idx).tag == .erased_box;
     }
 
-    /// Whether a layout transitively contains an erased `box_of_zst`. Such a box
-    /// carries no static payload shape (its `box_of_zst` alignment is 1), so a
+    /// Whether a layout transitively contains an `erased_box`. Such a box
+    /// carries no static payload shape, so a
     /// layout-driven concrete RC walk would decref its allocation with the wrong
     /// alignment; a value holding one must be reference-counted through its
     /// runtime descriptor instead.
-    fn layoutContainsBoxOfZst(self: *const ProcBodyBuilder, layout_idx: layout.Idx) Allocator.Error!bool {
+    fn layoutContainsErasedBox(self: *const ProcBodyBuilder, layout_idx: layout.Idx) Allocator.Error!bool {
         var seen = std.AutoHashMap(layout.Idx, void).init(self.parent.allocator);
         defer seen.deinit();
-        return try self.layoutContainsBoxOfZstInner(layout_idx, &seen);
+        return try self.layoutContainsErasedBoxInner(layout_idx, &seen);
     }
 
-    fn layoutContainsBoxOfZstInner(
+    fn layoutContainsErasedBoxInner(
         self: *const ProcBodyBuilder,
         layout_idx: layout.Idx,
         seen: *std.AutoHashMap(layout.Idx, void),
@@ -36830,15 +36832,15 @@ const ProcBodyBuilder = struct {
         const layouts = self.parent.result.layouts;
         const value = layouts.getLayout(layout_idx);
         return switch (value.tag) {
-            .box_of_zst => true,
-            .box, .list => try self.layoutContainsBoxOfZstInner(value.getIdx(), seen),
-            .list_of_zst => false,
+            .erased_box => true,
+            .box, .list => try self.layoutContainsErasedBoxInner(value.getIdx(), seen),
+            .box_of_zst, .list_of_zst => false,
             .struct_ => blk: {
                 const struct_idx = value.getStruct().idx;
                 const fields = layouts.struct_fields.sliceRange(layouts.getStructData(struct_idx).getFields());
                 var i: u32 = 0;
                 while (i < fields.len) : (i += 1) {
-                    if (try self.layoutContainsBoxOfZstInner(fields.get(i).layout, seen)) break :blk true;
+                    if (try self.layoutContainsErasedBoxInner(fields.get(i).layout, seen)) break :blk true;
                 }
                 break :blk false;
             },
@@ -36846,7 +36848,7 @@ const ProcBodyBuilder = struct {
                 const info = layouts.getTagUnionInfo(value);
                 var i: u32 = 0;
                 while (i < info.variants.len) : (i += 1) {
-                    if (try self.layoutContainsBoxOfZstInner(info.variants.get(i).payload_layout, seen)) break :blk true;
+                    if (try self.layoutContainsErasedBoxInner(info.variants.get(i).payload_layout, seen)) break :blk true;
                 }
                 break :blk false;
             },

@@ -230,13 +230,12 @@ fn tryUnsafeOffsets(self: *const Self, ret_layout: layout.Idx) TryUnsafeOffsets 
 
 fn builtinInternalListAbi(self: *const Self, comptime _: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
     const abi = self.getLayoutStore().builtinListAbi(list_layout_idx);
-    const elements_refcounted = abi.contains_refcounted or self.getLayoutStore().layoutContainsRcErasedBox(abi.elem_layout);
     return .{
         .elem_layout_idx = abi.elem_layout_idx,
         .elem_layout = abi.elem_layout,
         .elem_size = abi.elem_size,
         .elem_align = abi.elem_alignment,
-        .elements_refcounted = elements_refcounted,
+        .elements_refcounted = abi.contains_refcounted,
     };
 }
 
@@ -1596,7 +1595,7 @@ fn boxyListElementDescForLocals(
 ) ?BoxyListElementDesc {
     const elem_layout = list_abi.elem_layout_idx orelse return null;
     const elem_layout_value = self.getLayoutStore().getLayout(elem_layout);
-    const elem_is_erased_box = elem_layout_value.tag == .box_of_zst;
+    const elem_is_erased_box = elem_layout_value.tag == .erased_box;
     if (!elem_is_erased_box and elem_layout_value.tag != .box) return null;
 
     for (list_locals) |local| {
@@ -4628,6 +4627,7 @@ fn emitStructuralEq(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, negate: boo
         const ls = self.getLayoutStore();
         const l = ls.getLayout(lay_idx);
         switch (l.tag) {
+            .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box equality survived Boxy lowering", .{}),
             .struct_ => {
                 try self.compareCompositeByLayout(lhs_local, rhs_local, lay_idx);
                 if (negate) {
@@ -4828,6 +4828,7 @@ fn expandComposite(self: *Self, work: *std.ArrayList(EqWork), wa: Allocator, lhs
     const l = ls.getLayout(layout_idx);
 
     switch (l.tag) {
+        .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box equality survived Boxy lowering", .{}),
         .struct_ => {
             const struct_idx = l.getStruct().idx;
             const struct_data = ls.getStructData(struct_idx);
@@ -5036,6 +5037,7 @@ fn expandField(
 
     const field_layout = ls.getLayout(field_layout_idx);
     switch (field_layout.tag) {
+        .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box field equality survived Boxy lowering", .{}),
         .list => {
             const elem_layout = field_layout.getIdx();
             const lhs_list_local = try self.emitAddressOffsetToLocal(lhs_local, field_offset);
@@ -11081,6 +11083,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     try self.emitProcLocal(disc.source);
                     break :blk try self.procLocalValType(disc.source);
                 },
+                .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box discriminant access survived Boxy lowering", .{}),
             };
 
             switch (source_vt) {
@@ -11128,6 +11131,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.getTagUnion().idx));
                     break :blk variants.get(payload.variant_index).payload_layout;
                 },
+                .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box tag payload access survived Boxy lowering", .{}),
                 .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => .zst,
             };
             const payload_layout = ls.getLayout(payload_layout_idx);
@@ -11164,6 +11168,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.getTagUnion().idx));
                     break :blk variants.get(payload.variant_index).payload_layout;
                 },
+                .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box tag payload access survived Boxy lowering", .{}),
                 .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => .zst,
             };
             if (builtin.mode == .Debug and payload_layout_idx != target_layout) {
@@ -11225,7 +11230,7 @@ fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
     return switch (list_layout.tag) {
         .list => self.runtimeRepresentationLayoutIdx(list_layout.getIdx()),
         .list_of_zst => list_layout_idx,
-        .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => unreachable,
+        .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => unreachable,
     };
 }
 
@@ -11236,7 +11241,7 @@ fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: layout.Idx) lay
         const layout_val = ls.getLayout(current);
         switch (layout_val.tag) {
             .closure => current = layout_val.getClosure().captures_layout_idx,
-            .scalar, .box, .box_of_zst, .list, .list_of_zst, .struct_, .erased_callable, .zst, .tag_union, .ptr => return current,
+            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .erased_callable, .zst, .tag_union, .ptr => return current,
         }
     }
 }
@@ -11724,7 +11729,7 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Er
             .vector => 16,
         },
         .list, .list_of_zst => 12,
-        .box, .box_of_zst => 4,
+        .box, .box_of_zst, .erased_box => 4,
         .tag_union => (try WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls)).size,
         .struct_ => try WasmLayout.structSizeWithStore(l.getStruct().idx, ls),
         .closure, .erased_callable, .ptr => try self.layoutByteSize(layout_idx),
@@ -11742,7 +11747,7 @@ fn layoutByteAlign(self: *const Self, layout_idx: layout.Idx) Allocator.Error!u3
         .stack_memory => {
             const l = ls.getLayout(layout_idx);
             return switch (l.tag) {
-                .list, .list_of_zst, .box, .box_of_zst => 4,
+                .list, .list_of_zst, .box, .box_of_zst, .erased_box => 4,
                 .scalar => if (l.getScalar().tag == .str) 4 else @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
                 .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
             };
@@ -11772,7 +11777,7 @@ fn layoutStorageByteAlign(self: *const Self, layout_idx: layout.Idx) Allocator.E
             },
             .vector => 16,
         },
-        .list, .list_of_zst, .box, .box_of_zst => 4,
+        .list, .list_of_zst, .box, .box_of_zst, .erased_box => 4,
         .tag_union => WasmLayout.layoutAlignWasm(l),
         .struct_ => WasmLayout.layoutAlignWasm(l),
         .closure, .erased_callable, .ptr => try self.layoutByteAlign(layout_idx),
@@ -12197,7 +12202,7 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
     const source_layout = ls.getLayout(sa.struct_layout);
     const struct_layout_idx = switch (source_layout.tag) {
         .box => source_layout.getIdx(),
-        .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => sa.struct_layout,
+        .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => sa.struct_layout,
     };
     const struct_layout = ls.getLayout(struct_layout_idx);
     if (struct_layout.tag != .struct_) {
@@ -12424,7 +12429,7 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
     // Allocate space for all elements on the heap so list literals remain valid
     // when returned from functions (callee stack frames are reclaimed on return).
     const total_data_size = elem_size * @as(u32, @intCast(elems.len));
-    const elements_refcounted = ls.layoutContainsRcErasedBox(ls.getLayout(l.elem_layout));
+    const elements_refcounted = ls.layoutContainsRefcounted(ls.getLayout(l.elem_layout));
     const data_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     if (total_data_size > 0) {
         try self.emitHeapAllocWithRefcountConst(total_data_size, elem_align, elements_refcounted);
@@ -14321,7 +14326,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                                 inner_bad_utf8_disc = info.disc;
                             }
                         },
-                        .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => {},
+                        .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => {},
                     }
                 }
             }
@@ -14353,7 +14358,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         .u64, .i64 => true,
                         .u8, .i8, .u16, .i16, .u32, .i32, .u128, .i128 => false,
                     },
-                    .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
+                    .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
                 };
                 if (is_index) {
                     index_off = field_offset;

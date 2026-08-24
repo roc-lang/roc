@@ -551,14 +551,13 @@ fn computeLocalContainsRefcounted(
     boxy_rc_descs: []const ?LIR.BoxyDescRef,
 ) ResourceError![]bool {
     const local_count = store.localCount();
+    if (boxy_rc_descs.len != local_count) arcInvariant("ARC Boxy descriptor table did not cover every local");
     const contains = try allocator.alloc(bool, local_count);
     errdefer allocator.free(contains);
     for (0..local_count) |index| {
         const local_id: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
         const local = store.getLocal(local_id);
-        contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx)) or
-            (boxy_rc_descs[index] != null and
-                layouts.layoutContainsRcErasedBox(layouts.getLayout(local.layout_idx)));
+        contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx));
     }
 
     var changed = true;
@@ -609,7 +608,7 @@ fn computeLocalContainsRefcounted(
 /// Borrow-anchor refcounted set for the ARC solver. Extends the emission-time
 /// refcounted set with payload-read projections (`.field`, `.tag_payload`,
 /// `.tag_payload_struct`) whose result carries descriptor-driven dynamic
-/// (`box_of_zst`) content borrowed out of a refcounted source. Such a
+/// (`erased_box`) content borrowed out of a refcounted source. Such a
 /// projection is an alias into its source's allocation whose extracted boxes
 /// stay live past the projection, so the source's release must land after the
 /// projection's last use. An erased capture load similarly produces a view of
@@ -678,9 +677,9 @@ fn layoutMayContainBoxyDynamic(
         if ((try visited.getOrPut(idx)).found_existing) continue;
         const layout_val = layouts.getLayout(idx);
         switch (layout_val.tag) {
-            .box_of_zst => return true,
+            .erased_box => return true,
             .box, .list => try stack.append(allocator, layout_val.getIdx()),
-            .list_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
+            .list_of_zst, .box_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
             .struct_ => {
                 const info = layouts.getStructInfo(layout_val);
                 for (0..info.fields.len) |index| {
@@ -7862,7 +7861,7 @@ test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
-    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const capture_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
         .{ .index = 0, .layout = erased_box },
         .{ .index = 1, .layout = .opaque_ptr },
