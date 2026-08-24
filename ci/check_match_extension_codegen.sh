@@ -52,9 +52,12 @@ cd "$repo_root"
 # inlines into the procedure instead of staying behind calls. The pinned
 # eight-byte compare loop is unchanged - load, load, compare, advance, with
 # the from_le_bytes bounds test still doubling as the loop's termination.
+# Evaluating the later position first makes its bounds check govern both reads.
+# This keeps the fast loop to one bound branch per eight bytes when proven
+# no-wrap arithmetic gives LLVM stronger induction-variable facts.
 expectations=(
-    "x64musl:124"
-    "arm64musl:92"
+    "x64musl:102"
+    "arm64musl:90"
 )
 
 failed=0

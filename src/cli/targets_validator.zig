@@ -483,7 +483,9 @@ pub fn createValidationReport(
             try report.document.addLineBreak();
             try report.document.addText("  x64mac, arm64mac      - macOS");
             try report.document.addLineBreak();
-            try report.document.addText("  x64win, arm64win      - Windows");
+            try report.document.addText("  x64win, arm64win      - Windows (MSVC)");
+            try report.document.addLineBreak();
+            try report.document.addText("  x64mingw, arm64mingw  - Windows (MinGW)");
             try report.document.addLineBreak();
             try report.document.addText("  wasm32                - WebAssembly");
             try report.document.addLineBreak();

@@ -906,8 +906,8 @@ const Pass = struct {
         const len = try self.freshLocal(.u64, new_locals);
         const add = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = limit_target,
-            .op = .num_plus,
-            .rc_effect = LowLevelOp.num_plus.rcEffect(),
+            .op = .num_int_add_wrap,
+            .rc_effect = LowLevelOp.num_int_add_wrap.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ len, spare }),
             .next = next,
         } });
@@ -1474,8 +1474,8 @@ const Pass = struct {
         } });
         const subtract_slop = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = adjusted,
-            .op = .num_minus,
-            .rc_effect = LowLevelOp.num_minus.rcEffect(),
+            .op = .num_int_sub_wrap,
+            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ spare, slop }),
             .next = compare_count,
         } });
@@ -1490,8 +1490,8 @@ const Pass = struct {
         // difference cannot wrap.
         const measure_spare = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = spare,
-            .op = .num_minus,
-            .rc_effect = LowLevelOp.num_minus.rcEffect(),
+            .op = .num_int_sub_wrap,
+            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ slack_in, cur_len }),
             .next = compare_slop,
         } });
@@ -1678,7 +1678,7 @@ test "promote threads slack through an append-only loop" {
     const entry_len = store.getCFStmt(entry_measure.next).assign_low_level;
     try testing.expectEqual(LowLevelOp.list_len, entry_len.op);
     const entry_sum = store.getCFStmt(entry_len.next).assign_low_level;
-    try testing.expectEqual(LowLevelOp.num_plus, entry_sum.op);
+    try testing.expectEqual(LowLevelOp.num_int_add_wrap, entry_sum.op);
     const entry_limit_write = store.getCFStmt(entry_sum.next).set_local;
     try testing.expectEqual(slack_param, entry_limit_write.target);
     try testing.expectEqual(entry_sum.target, entry_limit_write.value);
