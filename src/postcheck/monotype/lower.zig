@@ -22112,39 +22112,74 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
+        // Record plan entries intentionally share renamed fields by field-name
+        // set. Track concrete types separately so that sharing cannot truncate
+        // traversal of a distinct record shape's children.
+        var seen_types = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer seen_types.deinit();
+
+        try self.buildParserConstructionPrecomputedPlanVisit(
+            plan,
+            &seen_types,
+            shape_ty,
+            encoding_expr,
+            encoding_ty,
+            str_ty,
+        );
+    }
+
+    fn buildParserConstructionPrecomputedPlanVisit(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        seen_types: *collections.DenseMap(Type.TypeId, void),
+        shape_ty: Type.TypeId,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (seen_types.contains(shape_ty)) return;
+        try seen_types.put(shape_ty, {});
+
         if (self.tryNullInfo(shape_ty)) |info| {
-            return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
+            return try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (try self.missingTryInfo(shape_ty)) |info| {
-            return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_ty, encoding_expr, encoding_ty, str_ty);
+            return try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, info.ok_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (self.builder.optionalFieldSlot(shape_ty)) |slot| {
-            return try self.buildParserConstructionPrecomputedPlan(plan, slot.payload_ty, encoding_expr, encoding_ty, str_ty);
+            return try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, slot.payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if ((try self.customParserLookup(shape_ty)) != null) return;
         if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
-            return try self.buildParserConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
+            return try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
             var dict_buf: [2]Type.TypeId = undefined;
             for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
-                try self.buildParserConstructionPrecomputedPlan(plan, dict_shape, encoding_expr, encoding_ty, str_ty);
+                try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, dict_shape, encoding_expr, encoding_ty, str_ty);
             }
             return;
         }
 
         switch (self.builder.shapeContent(shape_ty)) {
-            .list => |elem_ty| try self.buildParserConstructionPrecomputedPlan(plan, elem_ty, encoding_expr, encoding_ty, str_ty),
-            .box => |payload_ty| try self.buildParserConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty),
+            .list => |elem_ty| try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, elem_ty, encoding_expr, encoding_ty, str_ty),
+            .box => |payload_ty| try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, payload_ty, encoding_expr, encoding_ty, str_ty),
             .tuple => |span| {
                 const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(span));
                 defer self.allocator.free(item_tys);
                 for (item_tys) |elem_ty| {
-                    try self.buildParserConstructionPrecomputedPlan(plan, elem_ty, encoding_expr, encoding_ty, str_ty);
+                    try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, elem_ty, encoding_expr, encoding_ty, str_ty);
                 }
             },
-            .record, .zst => try self.buildParserConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_expr, encoding_ty, str_ty),
+            .record, .zst => {
+                try self.buildParserConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_expr, encoding_ty, str_ty);
+                const fields = try self.dupeRecordFieldsForShape(shape_ty);
+                defer self.allocator.free(fields);
+                for (fields) |field| {
+                    try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, field.ty, encoding_expr, encoding_ty, str_ty);
+                }
+            },
             .tag_union => |span| {
                 const tags = try GuardedList.dupe(self.allocator, Type.Tag, self.builder.program.types.tagSpan(span));
                 defer self.allocator.free(tags);
@@ -22152,7 +22187,7 @@ const BodyContext = struct {
                     const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(tag.payloads));
                     defer self.allocator.free(payload_tys);
                     for (payload_tys) |payload_ty| {
-                        try self.buildParserConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
+                        try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, payload_ty, encoding_expr, encoding_ty, str_ty);
                     }
                 }
             },
@@ -22407,10 +22442,6 @@ const BodyContext = struct {
         inserted = true;
 
         try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
-
-        for (fields) |field| {
-            try self.buildParserConstructionPrecomputedPlan(plan, field.ty, encoding_expr, encoding_ty, str_ty);
-        }
     }
 
     fn buildParserRestoredPrecomputedPlan(
@@ -22422,33 +22453,69 @@ const BodyContext = struct {
         shape_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
+        // Restoration must walk concrete types independently from the shared
+        // field-name entries for the same reason as construction above.
+        var seen_types = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer seen_types.deinit();
+
+        try self.buildParserRestoredPrecomputedPlanVisit(
+            plan,
+            &seen_types,
+            fn_value,
+            store_view,
+            fn_view,
+            shape_ty,
+            str_ty,
+        );
+    }
+
+    fn buildParserRestoredPrecomputedPlanVisit(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        seen_types: *collections.DenseMap(Type.TypeId, void),
+        fn_value: check.ConstStore.ConstFn,
+        store_view: ModuleView,
+        fn_view: ModuleView,
+        shape_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (seen_types.contains(shape_ty)) return;
+        try seen_types.put(shape_ty, {});
+
         if (self.tryNullInfo(shape_ty)) |info| {
-            return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, info.ok_payload_ty, str_ty);
+            return try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, info.ok_payload_ty, str_ty);
         }
         if ((try self.customParserLookup(shape_ty)) != null) return;
         if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
-            return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty);
+            return try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, str_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
             var dict_buf: [2]Type.TypeId = undefined;
             for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
-                try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, dict_shape, str_ty);
+                try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, dict_shape, str_ty);
             }
             return;
         }
 
         switch (self.builder.shapeContent(shape_ty)) {
-            .list => |elem_ty| try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, elem_ty, str_ty),
-            .box => |payload_ty| try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty),
+            .list => |elem_ty| try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, elem_ty, str_ty),
+            .box => |payload_ty| try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, str_ty),
             .tuple => |span| {
                 const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(span));
                 defer self.allocator.free(item_tys);
                 for (item_tys) |elem_ty| {
-                    try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, elem_ty, str_ty);
+                    try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, elem_ty, str_ty);
                 }
             },
-            .record, .zst => try self.buildParserRestoredRecordPrecomputedPlan(plan, fn_value, store_view, fn_view, shape_ty, str_ty),
+            .record, .zst => {
+                try self.buildParserRestoredRecordPrecomputedPlan(plan, fn_value, store_view, fn_view, shape_ty, str_ty);
+                const fields = try self.dupeRecordFieldsForShape(shape_ty);
+                defer self.allocator.free(fields);
+                for (fields) |field| {
+                    try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, field.ty, str_ty);
+                }
+            },
             .tag_union => |span| {
                 const tags = try GuardedList.dupe(self.allocator, Type.Tag, self.builder.program.types.tagSpan(span));
                 defer self.allocator.free(tags);
@@ -22456,7 +22523,7 @@ const BodyContext = struct {
                     const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(tag.payloads));
                     defer self.allocator.free(payload_tys);
                     for (payload_tys) |payload_ty| {
-                        try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty);
+                        try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, str_ty);
                     }
                 }
             },
@@ -22720,10 +22787,6 @@ const BodyContext = struct {
         inserted = true;
 
         try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
-
-        for (fields) |field| {
-            try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, field.ty, str_ty);
-        }
     }
 
     fn lowerParseShapeFromState(
