@@ -6786,10 +6786,13 @@ Builtin :: [].{
 			## ```
 			plus_wrap : U8, U8 -> U8
 
+			## Return `Bool.True` if adding these values would overflow a [U8].
+			plus_overflows : U8, U8 -> Bool
+
 			## Add two [U8] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U8].
 			plus_try : U8, U8 -> Try(U8, [Overflow, ..])
-			plus_try = |a, b| unsigned_plus_try(U8.highest, a, b)
+			plus_try = |a, b| unsigned_plus_try(a, b)
 
 			range_len_if_known : U8, U8, U8, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
@@ -6822,10 +6825,10 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U8, U8 -> U8
 			plus_saturated = |a, b|
-				if b > highest - a
+				if a.plus_overflows(b)
 					highest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [U8] from the first.
 			## ```roc
@@ -6838,6 +6841,9 @@ Builtin :: [].{
 			## expect U8.minus_wrap(0, 1) == U8.highest
 			## ```
 			minus_wrap : U8, U8 -> U8
+
+			## Return `Bool.True` if subtracting these values would overflow a [U8].
+			minus_overflows : U8, U8 -> Bool
 
 			## Subtract the second [U8] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U8].
@@ -6865,10 +6871,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : U8, U8 -> U8
 
+			## Return `Bool.True` if multiplying these values would overflow a [U8].
+			times_overflows : U8, U8 -> Bool
+
 			## Multiply two [U8] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U8].
 			times_try : U8, U8 -> Try(U8, [Overflow, ..])
-			times_try = |a, b| unsigned_times_try(U8.highest, 0, a, b)
+			times_try = |a, b| unsigned_times_try(a, b)
 
 			## Multiply two [U8] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -6877,7 +6886,7 @@ Builtin :: [].{
 			## expect U8.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : U8, U8 -> U8
-			times_saturated = |a, b| unsigned_times_saturated(U8.highest, 0, a, b)
+			times_saturated = |a, b| unsigned_times_saturated(U8.highest, a, b)
 
 			## Raise the first [U8] value to the power of the second.
 			## Crashes if the exact result does not fit in [U8].
@@ -7467,10 +7476,13 @@ Builtin :: [].{
 			## ```
 			plus_wrap : I8, I8 -> I8
 
+			## Return `Bool.True` if adding these values would overflow an [I8].
+			plus_overflows : I8, I8 -> Bool
+
 			## Add two [I8] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I8].
 			plus_try : I8, I8 -> Try(I8, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(I8.lowest, I8.highest, 0, a, b)
+			plus_try = |a, b| signed_plus_try(a, b)
 
 			range_len_if_known : I8, I8, I8, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
@@ -7505,12 +7517,13 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I8, I8 -> I8
 			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
+				if a.plus_overflows(b)
+					if b > 0
+						highest
+					else
+						lowest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [I8] from the first.
 			## ```roc
@@ -7524,10 +7537,13 @@ Builtin :: [].{
 			## ```
 			minus_wrap : I8, I8 -> I8
 
+			## Return `Bool.True` if subtracting these values would overflow an [I8].
+			minus_overflows : I8, I8 -> Bool
+
 			## Subtract the second [I8] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I8].
 			minus_try : I8, I8 -> Try(I8, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(I8.lowest, I8.highest, 0, a, b)
+			minus_try = |a, b| signed_minus_try(a, b)
 
 			## Subtract the second [I8] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7552,10 +7568,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : I8, I8 -> I8
 
+			## Return `Bool.True` if multiplying these values would overflow an [I8].
+			times_overflows : I8, I8 -> Bool
+
 			## Multiply two [I8] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I8].
 			times_try : I8, I8 -> Try(I8, [Overflow, ..])
-			times_try = |a, b| signed_times_try(I8.lowest, I8.highest, 0, -1, a, b)
+			times_try = |a, b| signed_times_try(a, b)
 
 			## Multiply two [I8] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7566,7 +7585,7 @@ Builtin :: [].{
 			## expect I8.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : I8, I8 -> I8
-			times_saturated = |a, b| signed_times_saturated(I8.lowest, I8.highest, 0, -1, a, b)
+			times_saturated = |a, b| signed_times_saturated(I8.lowest, I8.highest, 0, a, b)
 
 			## Raise the first [I8] value to the power of the second.
 			## Crashes if the exact result does not fit in [I8].
@@ -7647,7 +7666,7 @@ Builtin :: [].{
 			## expect I8.div_ceil_try(I8.lowest, -1) == Err(Overflow)
 			## ```
 			div_ceil_try : I8, I8 -> Try(I8, [DivByZero, Overflow, ..])
-			div_ceil_try = |a, b| signed_div_ceil_try(I8.lowest, I8.highest, 0, 1, -1, a, b)
+			div_ceil_try = |a, b| signed_div_ceil_try(I8.lowest, 0, 1, -1, a, b)
 
 			## Divide the first [I8] by the second, rounding the result toward negative infinity.
 			## ```roc
@@ -8220,10 +8239,13 @@ Builtin :: [].{
 			## ```
 			plus_wrap : U16, U16 -> U16
 
+			## Return `Bool.True` if adding these values would overflow a [U16].
+			plus_overflows : U16, U16 -> Bool
+
 			## Add two [U16] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U16].
 			plus_try : U16, U16 -> Try(U16, [Overflow, ..])
-			plus_try = |a, b| unsigned_plus_try(U16.highest, a, b)
+			plus_try = |a, b| unsigned_plus_try(a, b)
 
 			range_len_if_known : U16, U16, U16, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
@@ -8256,10 +8278,10 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U16, U16 -> U16
 			plus_saturated = |a, b|
-				if b > highest - a
+				if a.plus_overflows(b)
 					highest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [U16] from the first.
 			## ```roc
@@ -8272,6 +8294,9 @@ Builtin :: [].{
 			## expect U16.minus_wrap(0, 1) == U16.highest
 			## ```
 			minus_wrap : U16, U16 -> U16
+
+			## Return `Bool.True` if subtracting these values would overflow a [U16].
+			minus_overflows : U16, U16 -> Bool
 
 			## Subtract the second [U16] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U16].
@@ -8299,10 +8324,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : U16, U16 -> U16
 
+			## Return `Bool.True` if multiplying these values would overflow a [U16].
+			times_overflows : U16, U16 -> Bool
+
 			## Multiply two [U16] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U16].
 			times_try : U16, U16 -> Try(U16, [Overflow, ..])
-			times_try = |a, b| unsigned_times_try(U16.highest, 0, a, b)
+			times_try = |a, b| unsigned_times_try(a, b)
 
 			## Multiply two [U16] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8311,7 +8339,7 @@ Builtin :: [].{
 			## expect U16.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : U16, U16 -> U16
-			times_saturated = |a, b| unsigned_times_saturated(U16.highest, 0, a, b)
+			times_saturated = |a, b| unsigned_times_saturated(U16.highest, a, b)
 
 			## Raise the first [U16] value to the power of the second.
 			## Crashes if the exact result does not fit in [U16].
@@ -8960,10 +8988,13 @@ Builtin :: [].{
 			## ```
 			plus_wrap : I16, I16 -> I16
 
+			## Return `Bool.True` if adding these values would overflow an [I16].
+			plus_overflows : I16, I16 -> Bool
+
 			## Add two [I16] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I16].
 			plus_try : I16, I16 -> Try(I16, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(I16.lowest, I16.highest, 0, a, b)
+			plus_try = |a, b| signed_plus_try(a, b)
 
 			range_len_if_known : I16, I16, I16, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
@@ -8998,12 +9029,13 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I16, I16 -> I16
 			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
+				if a.plus_overflows(b)
+					if b > 0
+						highest
+					else
+						lowest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [I16] from the first.
 			## ```roc
@@ -9017,10 +9049,13 @@ Builtin :: [].{
 			## ```
 			minus_wrap : I16, I16 -> I16
 
+			## Return `Bool.True` if subtracting these values would overflow an [I16].
+			minus_overflows : I16, I16 -> Bool
+
 			## Subtract the second [I16] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I16].
 			minus_try : I16, I16 -> Try(I16, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(I16.lowest, I16.highest, 0, a, b)
+			minus_try = |a, b| signed_minus_try(a, b)
 
 			## Subtract the second [I16] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -9045,10 +9080,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : I16, I16 -> I16
 
+			## Return `Bool.True` if multiplying these values would overflow an [I16].
+			times_overflows : I16, I16 -> Bool
+
 			## Multiply two [I16] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I16].
 			times_try : I16, I16 -> Try(I16, [Overflow, ..])
-			times_try = |a, b| signed_times_try(I16.lowest, I16.highest, 0, -1, a, b)
+			times_try = |a, b| signed_times_try(a, b)
 
 			## Multiply two [I16] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -9059,7 +9097,7 @@ Builtin :: [].{
 			## expect I16.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : I16, I16 -> I16
-			times_saturated = |a, b| signed_times_saturated(I16.lowest, I16.highest, 0, -1, a, b)
+			times_saturated = |a, b| signed_times_saturated(I16.lowest, I16.highest, 0, a, b)
 
 			## Raise the first [I16] value to the power of the second.
 			## Crashes if the exact result does not fit in [I16].
@@ -9140,7 +9178,7 @@ Builtin :: [].{
 			## expect I16.div_ceil_try(I16.lowest, -1) == Err(Overflow)
 			## ```
 			div_ceil_try : I16, I16 -> Try(I16, [DivByZero, Overflow, ..])
-			div_ceil_try = |a, b| signed_div_ceil_try(I16.lowest, I16.highest, 0, 1, -1, a, b)
+			div_ceil_try = |a, b| signed_div_ceil_try(I16.lowest, 0, 1, -1, a, b)
 
 			## Divide the first [I16] by the second, rounding the result toward negative infinity.
 			## ```roc
@@ -9754,10 +9792,13 @@ Builtin :: [].{
 			## ```
 			plus_wrap : U32, U32 -> U32
 
+			## Return `Bool.True` if adding these values would overflow a [U32].
+			plus_overflows : U32, U32 -> Bool
+
 			## Add two [U32] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U32].
 			plus_try : U32, U32 -> Try(U32, [Overflow, ..])
-			plus_try = |a, b| unsigned_plus_try(U32.highest, a, b)
+			plus_try = |a, b| unsigned_plus_try(a, b)
 
 			range_len_if_known : U32, U32, U32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
@@ -9790,10 +9831,10 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U32, U32 -> U32
 			plus_saturated = |a, b|
-				if b > highest - a
+				if a.plus_overflows(b)
 					highest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [U32] from the first.
 			## ```roc
@@ -9806,6 +9847,9 @@ Builtin :: [].{
 			## expect U32.minus_wrap(0, 1) == U32.highest
 			## ```
 			minus_wrap : U32, U32 -> U32
+
+			## Return `Bool.True` if subtracting these values would overflow a [U32].
+			minus_overflows : U32, U32 -> Bool
 
 			## Subtract the second [U32] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U32].
@@ -9833,10 +9877,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : U32, U32 -> U32
 
+			## Return `Bool.True` if multiplying these values would overflow a [U32].
+			times_overflows : U32, U32 -> Bool
+
 			## Multiply two [U32] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U32].
 			times_try : U32, U32 -> Try(U32, [Overflow, ..])
-			times_try = |a, b| unsigned_times_try(U32.highest, 0, a, b)
+			times_try = |a, b| unsigned_times_try(a, b)
 
 			## Multiply two [U32] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -9845,7 +9892,7 @@ Builtin :: [].{
 			## expect U32.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : U32, U32 -> U32
-			times_saturated = |a, b| unsigned_times_saturated(U32.highest, 0, a, b)
+			times_saturated = |a, b| unsigned_times_saturated(U32.highest, a, b)
 
 			## Raise the first [U32] value to the power of the second.
 			## Crashes if the exact result does not fit in [U32].
@@ -10526,10 +10573,13 @@ Builtin :: [].{
 			## ```
 			plus_wrap : I32, I32 -> I32
 
+			## Return `Bool.True` if adding these values would overflow an [I32].
+			plus_overflows : I32, I32 -> Bool
+
 			## Add two [I32] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I32].
 			plus_try : I32, I32 -> Try(I32, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(I32.lowest, I32.highest, 0, a, b)
+			plus_try = |a, b| signed_plus_try(a, b)
 
 			range_len_if_known : I32, I32, I32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
@@ -10564,12 +10614,13 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I32, I32 -> I32
 			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
+				if a.plus_overflows(b)
+					if b > 0
+						highest
+					else
+						lowest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [I32] from the first.
 			## ```roc
@@ -10583,10 +10634,13 @@ Builtin :: [].{
 			## ```
 			minus_wrap : I32, I32 -> I32
 
+			## Return `Bool.True` if subtracting these values would overflow an [I32].
+			minus_overflows : I32, I32 -> Bool
+
 			## Subtract the second [I32] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I32].
 			minus_try : I32, I32 -> Try(I32, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(I32.lowest, I32.highest, 0, a, b)
+			minus_try = |a, b| signed_minus_try(a, b)
 
 			## Subtract the second [I32] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -10611,10 +10665,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : I32, I32 -> I32
 
+			## Return `Bool.True` if multiplying these values would overflow an [I32].
+			times_overflows : I32, I32 -> Bool
+
 			## Multiply two [I32] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I32].
 			times_try : I32, I32 -> Try(I32, [Overflow, ..])
-			times_try = |a, b| signed_times_try(I32.lowest, I32.highest, 0, -1, a, b)
+			times_try = |a, b| signed_times_try(a, b)
 
 			## Multiply two [I32] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -10625,7 +10682,7 @@ Builtin :: [].{
 			## expect I32.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : I32, I32 -> I32
-			times_saturated = |a, b| signed_times_saturated(I32.lowest, I32.highest, 0, -1, a, b)
+			times_saturated = |a, b| signed_times_saturated(I32.lowest, I32.highest, 0, a, b)
 
 			## Raise the first [I32] value to the power of the second.
 			## Crashes if the exact result does not fit in [I32].
@@ -10706,7 +10763,7 @@ Builtin :: [].{
 			## expect I32.div_ceil_try(I32.lowest, -1) == Err(Overflow)
 			## ```
 			div_ceil_try : I32, I32 -> Try(I32, [DivByZero, Overflow, ..])
-			div_ceil_try = |a, b| signed_div_ceil_try(I32.lowest, I32.highest, 0, 1, -1, a, b)
+			div_ceil_try = |a, b| signed_div_ceil_try(I32.lowest, 0, 1, -1, a, b)
 
 			## Divide the first [I32] by the second, rounding the result toward negative infinity.
 			## ```roc
@@ -11337,10 +11394,13 @@ Builtin :: [].{
 			## ```
 			plus_wrap : U64, U64 -> U64
 
+			## Return `Bool.True` if adding these values would overflow a [U64].
+			plus_overflows : U64, U64 -> Bool
+
 			## Add two [U64] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U64].
 			plus_try : U64, U64 -> Try(U64, [Overflow, ..])
-			plus_try = |a, b| unsigned_plus_try(U64.highest, a, b)
+			plus_try = |a, b| unsigned_plus_try(a, b)
 
 			range_len_if_known : U64, U64, U64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
@@ -11373,10 +11433,10 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U64, U64 -> U64
 			plus_saturated = |a, b|
-				if b > highest - a
+				if a.plus_overflows(b)
 					highest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [U64] from the first.
 			## ```roc
@@ -11389,6 +11449,9 @@ Builtin :: [].{
 			## expect U64.minus_wrap(0, 1) == U64.highest
 			## ```
 			minus_wrap : U64, U64 -> U64
+
+			## Return `Bool.True` if subtracting these values would overflow a [U64].
+			minus_overflows : U64, U64 -> Bool
 
 			## Subtract the second [U64] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U64].
@@ -11416,10 +11479,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : U64, U64 -> U64
 
+			## Return `Bool.True` if multiplying these values would overflow a [U64].
+			times_overflows : U64, U64 -> Bool
+
 			## Multiply two [U64] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U64].
 			times_try : U64, U64 -> Try(U64, [Overflow, ..])
-			times_try = |a, b| unsigned_times_try(U64.highest, 0, a, b)
+			times_try = |a, b| unsigned_times_try(a, b)
 
 			## Multiply two [U64] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -11428,7 +11494,7 @@ Builtin :: [].{
 			## expect U64.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : U64, U64 -> U64
-			times_saturated = |a, b| unsigned_times_saturated(U64.highest, 0, a, b)
+			times_saturated = |a, b| unsigned_times_saturated(U64.highest, a, b)
 
 			## Raise the first [U64] value to the power of the second.
 			## Crashes if the exact result does not fit in [U64].
@@ -12172,10 +12238,13 @@ Builtin :: [].{
 			## ```
 			plus_wrap : I64, I64 -> I64
 
+			## Return `Bool.True` if adding these values would overflow an [I64].
+			plus_overflows : I64, I64 -> Bool
+
 			## Add two [I64] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I64].
 			plus_try : I64, I64 -> Try(I64, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(I64.lowest, I64.highest, 0, a, b)
+			plus_try = |a, b| signed_plus_try(a, b)
 
 			range_len_if_known : I64, I64, I64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
@@ -12210,12 +12279,13 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I64, I64 -> I64
 			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
+				if a.plus_overflows(b)
+					if b > 0
+						highest
+					else
+						lowest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [I64] from the first.
 			## ```roc
@@ -12229,10 +12299,13 @@ Builtin :: [].{
 			## ```
 			minus_wrap : I64, I64 -> I64
 
+			## Return `Bool.True` if subtracting these values would overflow an [I64].
+			minus_overflows : I64, I64 -> Bool
+
 			## Subtract the second [I64] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I64].
 			minus_try : I64, I64 -> Try(I64, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(I64.lowest, I64.highest, 0, a, b)
+			minus_try = |a, b| signed_minus_try(a, b)
 
 			## Subtract the second [I64] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -12257,10 +12330,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : I64, I64 -> I64
 
+			## Return `Bool.True` if multiplying these values would overflow an [I64].
+			times_overflows : I64, I64 -> Bool
+
 			## Multiply two [I64] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I64].
 			times_try : I64, I64 -> Try(I64, [Overflow, ..])
-			times_try = |a, b| signed_times_try(I64.lowest, I64.highest, 0, -1, a, b)
+			times_try = |a, b| signed_times_try(a, b)
 
 			## Multiply two [I64] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -12271,7 +12347,7 @@ Builtin :: [].{
 			## expect I64.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : I64, I64 -> I64
-			times_saturated = |a, b| signed_times_saturated(I64.lowest, I64.highest, 0, -1, a, b)
+			times_saturated = |a, b| signed_times_saturated(I64.lowest, I64.highest, 0, a, b)
 
 			## Raise the first [I64] value to the power of the second.
 			## Crashes if the exact result does not fit in [I64].
@@ -12352,7 +12428,7 @@ Builtin :: [].{
 			## expect I64.div_ceil_try(I64.lowest, -1) == Err(Overflow)
 			## ```
 			div_ceil_try : I64, I64 -> Try(I64, [DivByZero, Overflow, ..])
-			div_ceil_try = |a, b| signed_div_ceil_try(I64.lowest, I64.highest, 0, 1, -1, a, b)
+			div_ceil_try = |a, b| signed_div_ceil_try(I64.lowest, 0, 1, -1, a, b)
 
 			## Divide the first [I64] by the second, rounding the result toward negative infinity.
 			## ```roc
@@ -13005,10 +13081,13 @@ Builtin :: [].{
 			## ```
 			plus_wrap : U128, U128 -> U128
 
+			## Return `Bool.True` if adding these values would overflow a [U128].
+			plus_overflows : U128, U128 -> Bool
+
 			## Add two [U128] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U128].
 			plus_try : U128, U128 -> Try(U128, [Overflow, ..])
-			plus_try = |a, b| unsigned_plus_try(U128.highest, a, b)
+			plus_try = |a, b| unsigned_plus_try(a, b)
 
 			range_len_if_known : U128, U128, U128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
@@ -13041,10 +13120,10 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U128, U128 -> U128
 			plus_saturated = |a, b|
-				if b > highest - a
+				if a.plus_overflows(b)
 					highest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [U128] from the first.
 			## ```roc
@@ -13057,6 +13136,9 @@ Builtin :: [].{
 			## expect U128.minus_wrap(0, 1) == U128.highest
 			## ```
 			minus_wrap : U128, U128 -> U128
+
+			## Return `Bool.True` if subtracting these values would overflow a [U128].
+			minus_overflows : U128, U128 -> Bool
 
 			## Subtract the second [U128] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in a [U128].
@@ -13084,10 +13166,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : U128, U128 -> U128
 
+			## Return `Bool.True` if multiplying these values would overflow a [U128].
+			times_overflows : U128, U128 -> Bool
+
 			## Multiply two [U128] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in a [U128].
 			times_try : U128, U128 -> Try(U128, [Overflow, ..])
-			times_try = |a, b| unsigned_times_try(U128.highest, 0, a, b)
+			times_try = |a, b| unsigned_times_try(a, b)
 
 			## Multiply two [U128] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -13096,7 +13181,7 @@ Builtin :: [].{
 			## expect U128.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : U128, U128 -> U128
-			times_saturated = |a, b| unsigned_times_saturated(U128.highest, 0, a, b)
+			times_saturated = |a, b| unsigned_times_saturated(U128.highest, a, b)
 
 			## Raise the first [U128] value to the power of the second.
 			## Crashes if the exact result does not fit in [U128].
@@ -13854,10 +13939,13 @@ Builtin :: [].{
 			## ```
 			plus_wrap : I128, I128 -> I128
 
+			## Return `Bool.True` if adding these values would overflow an [I128].
+			plus_overflows : I128, I128 -> Bool
+
 			## Add two [I128] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I128].
 			plus_try : I128, I128 -> Try(I128, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(I128.lowest, I128.highest, 0, a, b)
+			plus_try = |a, b| signed_plus_try(a, b)
 
 			range_len_if_known : I128, I128, I128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
@@ -13892,12 +13980,13 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I128, I128 -> I128
 			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
+				if a.plus_overflows(b)
+					if b > 0
+						highest
+					else
+						lowest
 				else
-					a + b
+					a.plus_wrap(b)
 
 			## Subtract the second [I128] from the first.
 			## ```roc
@@ -13911,10 +14000,13 @@ Builtin :: [].{
 			## ```
 			minus_wrap : I128, I128 -> I128
 
+			## Return `Bool.True` if subtracting these values would overflow an [I128].
+			minus_overflows : I128, I128 -> Bool
+
 			## Subtract the second [I128] from the first, returning `Err(Overflow)`
 			## instead of crashing or wrapping if the result does not fit in an [I128].
 			minus_try : I128, I128 -> Try(I128, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(I128.lowest, I128.highest, 0, a, b)
+			minus_try = |a, b| signed_minus_try(a, b)
 
 			## Subtract the second [I128] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -13939,10 +14031,13 @@ Builtin :: [].{
 			## ```
 			times_wrap : I128, I128 -> I128
 
+			## Return `Bool.True` if multiplying these values would overflow an [I128].
+			times_overflows : I128, I128 -> Bool
+
 			## Multiply two [I128] values, returning `Err(Overflow)` instead of
 			## crashing or wrapping if the result does not fit in an [I128].
 			times_try : I128, I128 -> Try(I128, [Overflow, ..])
-			times_try = |a, b| signed_times_try(I128.lowest, I128.highest, 0, -1, a, b)
+			times_try = |a, b| signed_times_try(a, b)
 
 			## Multiply two [I128] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -13953,7 +14048,7 @@ Builtin :: [].{
 			## expect I128.times_saturated(4, 3) == 12
 			## ```
 			times_saturated : I128, I128 -> I128
-			times_saturated = |a, b| signed_times_saturated(I128.lowest, I128.highest, 0, -1, a, b)
+			times_saturated = |a, b| signed_times_saturated(I128.lowest, I128.highest, 0, a, b)
 
 			## Raise the first [I128] value to the power of the second.
 			## Crashes if the exact result does not fit in [I128].
@@ -14034,7 +14129,7 @@ Builtin :: [].{
 			## expect I128.div_ceil_try(I128.lowest, -1) == Err(Overflow)
 			## ```
 			div_ceil_try : I128, I128 -> Try(I128, [DivByZero, Overflow, ..])
-			div_ceil_try = |a, b| signed_div_ceil_try(I128.lowest, I128.highest, 0, 1, -1, a, b)
+			div_ceil_try = |a, b| signed_div_ceil_try(I128.lowest, 0, 1, -1, a, b)
 
 			## Divide the first [I128] by the second, rounding the result toward negative infinity.
 			## ```roc
@@ -14762,7 +14857,16 @@ Builtin :: [].{
 			## Add two [Dec] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result is outside [Dec.lowest] through [Dec.highest].
 			plus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
-			plus_try = |a, b| signed_plus_try(Dec.lowest, Dec.highest, 0.0, a, b)
+			plus_try = |a, b| {
+				a_attos = Dec.to_attos(a)
+				b_attos = Dec.to_attos(b)
+
+				if a_attos.plus_overflows(b_attos) {
+					Err(Overflow)
+				} else {
+					Ok(Dec.from_attos(a_attos.plus_wrap(b_attos)))
+				}
+			}
 
 			range_len_if_known : Dec, Dec, Dec, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = range_len_dec
@@ -14791,13 +14895,20 @@ Builtin :: [].{
 			## expect Dec.plus_saturated(1.5, 2.5) == 4.0
 			## ```
 			plus_saturated : Dec, Dec -> Dec
-			plus_saturated = |a, b|
-				if b > 0 and a > highest - b
-					highest
-				else if b < 0 and a < lowest - b
-					lowest
-				else
-					a + b
+			plus_saturated = |a, b| {
+				a_attos = Dec.to_attos(a)
+				b_attos = Dec.to_attos(b)
+
+				if a_attos.plus_overflows(b_attos) {
+					if b_attos > 0 {
+						Dec.highest
+					} else {
+						Dec.lowest
+					}
+				} else {
+					Dec.from_attos(a_attos.plus_wrap(b_attos))
+				}
+			}
 
 			## Subtract the second [Dec] from the first.
 			## ```roc
@@ -14809,7 +14920,16 @@ Builtin :: [].{
 			## `Err(Overflow)` instead of crashing or wrapping if the result is outside
 			## [Dec.lowest] through [Dec.highest].
 			minus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
-			minus_try = |a, b| signed_minus_try(Dec.lowest, Dec.highest, 0.0, a, b)
+			minus_try = |a, b| {
+				a_attos = Dec.to_attos(a)
+				b_attos = Dec.to_attos(b)
+
+				if a_attos.minus_overflows(b_attos) {
+					Err(Overflow)
+				} else {
+					Ok(Dec.from_attos(a_attos.minus_wrap(b_attos)))
+				}
+			}
 
 			## Subtract the second [Dec] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -14820,7 +14940,20 @@ Builtin :: [].{
 			## expect Dec.minus_saturated(5.0, 3.5) == 1.5
 			## ```
 			minus_saturated : Dec, Dec -> Dec
-			minus_saturated = |a, b| signed_minus_saturated(Dec.lowest, Dec.highest, 0.0, a, b)
+			minus_saturated = |a, b| {
+				a_attos = Dec.to_attos(a)
+				b_attos = Dec.to_attos(b)
+
+				if a_attos.minus_overflows(b_attos) {
+					if b_attos > 0 {
+						Dec.lowest
+					} else {
+						Dec.highest
+					}
+				} else {
+					Dec.from_attos(a_attos.minus_wrap(b_attos))
+				}
+			}
 
 			## Multiply two [Dec] values. The result is limited to [Dec]'s fixed
 			## 18 fractional decimal places and crashes if it overflows.
@@ -14838,7 +14971,7 @@ Builtin :: [].{
 			## expect Dec.times_saturated(2.5, 4.0) == 10.0
 			## ```
 			times_saturated : Dec, Dec -> Dec
-			times_saturated = |a, b| signed_times_saturated(Dec.lowest, Dec.highest, 0.0, -1.0, a, b)
+			times_saturated = |a, b| signed_times_saturated_rescaled(Dec.lowest, Dec.highest, 0.0, -1.0, a, b)
 
 			## Raise a [Dec] to a [Dec] power. Results are limited to [Dec]'s
 			## fixed 18 fractional decimal places. Fractional exponents require a
@@ -22013,33 +22146,31 @@ bytes_to_str = |bytes|
 		Err(_) => Err(OutOfRange)
 	}
 
-unsigned_plus_try : item, item, item -> Try(item, [Overflow, ..])
-	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]
-unsigned_plus_try = |highest, a, b|
-	if a > highest - b {
+unsigned_plus_try : item, item -> Try(item, [Overflow, ..])
+	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
+unsigned_plus_try = |a, b|
+	if a.plus_overflows(b) {
 		Err(Overflow)
 	} else {
-		Ok(a + b)
+		Ok(a.plus_wrap(b))
 	}
 
 unsigned_minus_try : item, item -> Try(item, [Overflow, ..])
-	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
+	where [item.minus_overflows : item, item -> Bool, item.minus_wrap : item, item -> item]
 unsigned_minus_try = |a, b|
-	if a < b {
+	if a.minus_overflows(b) {
 		Err(Overflow)
 	} else {
-		Ok(a - b)
+		Ok(a.minus_wrap(b))
 	}
 
-unsigned_times_try : item, item, item, item -> Try(item, [Overflow, ..])
-	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
-unsigned_times_try = |highest, zero, a, b|
-	if b == zero {
-		Ok(zero)
-	} else if a > highest / b {
+unsigned_times_try : item, item -> Try(item, [Overflow, ..])
+	where [item.times_overflows : item, item -> Bool, item.times_wrap : item, item -> item]
+unsigned_times_try = |a, b|
+	if a.times_overflows(b) {
 		Err(Overflow)
 	} else {
-		Ok(a * b)
+		Ok(a.times_wrap(b))
 	}
 
 unsigned_div_try : item, item, item -> Try(item, [DivByZero, ..])
@@ -22051,45 +22182,34 @@ unsigned_div_try = |zero, a, b|
 		Ok(a / b)
 	}
 
-signed_plus_try : item, item, item, item, item -> Try(item, [Overflow, ..])
-	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_plus_try = |lowest, highest, zero, a, b|
-	if b > zero {
-		if a > highest - b {
-			Err(Overflow)
-		} else {
-			Ok(a + b)
-		}
-	} else if b < zero {
-		if a < lowest - b {
-			Err(Overflow)
-		} else {
-			Ok(a + b)
-		}
+signed_plus_try : item, item -> Try(item, [Overflow, ..])
+	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
+signed_plus_try = |a, b|
+	if a.plus_overflows(b) {
+		Err(Overflow)
 	} else {
-		Ok(a)
+		Ok(a.plus_wrap(b))
 	}
 
-signed_minus_try : item, item, item, item, item -> Try(item, [Overflow, ..])
-	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_minus_try = |lowest, highest, zero, a, b|
-	if b > zero {
-		if a < lowest + b {
-			Err(Overflow)
-		} else {
-			Ok(a - b)
-		}
-	} else if b < zero {
-		if a > highest + b {
-			Err(Overflow)
-		} else {
-			Ok(a - b)
-		}
+signed_minus_try : item, item -> Try(item, [Overflow, ..])
+	where [item.minus_overflows : item, item -> Bool, item.minus_wrap : item, item -> item]
+signed_minus_try = |a, b|
+	if a.minus_overflows(b) {
+		Err(Overflow)
 	} else {
-		Ok(a)
+		Ok(a.minus_wrap(b))
 	}
 
-signed_times_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_times_try : item, item -> Try(item, [Overflow, ..])
+	where [item.times_overflows : item, item -> Bool, item.times_wrap : item, item -> item]
+signed_times_try = |a, b|
+	if a.times_overflows(b) {
+		Err(Overflow)
+	} else {
+		Ok(a.times_wrap(b))
+	}
+
+signed_times_try_rescaled : item, item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
@@ -22098,7 +22218,7 @@ signed_times_try : item, item, item, item, item, item -> Try(item, [Overflow, ..
 		item.times : item, item -> item,
 		item.div_trunc_by : item, item -> item,
 	]
-signed_times_try = |lowest, highest, zero, neg_one, a, b|
+signed_times_try_rescaled = |lowest, highest, zero, neg_one, a, b|
 	if a == zero {
 		Ok(zero)
 	} else if b == zero {
@@ -22161,6 +22281,8 @@ unsigned_pow_try : item, item, item, item, item, item -> Try(item, [Overflow, ..
 		item.div_by : item, item -> item,
 		item.rem_by : item, item -> item,
 		item.times : item, item -> item,
+		item.times_overflows : item, item -> Bool,
+		item.times_wrap : item, item -> item,
 	]
 unsigned_pow_try = |highest, zero, one, two, base, exponent|
 	unsigned_pow_try_step(highest, zero, one, two, one, base, exponent)
@@ -22172,6 +22294,8 @@ unsigned_pow_try_step : item, item, item, item, item, item, item -> Try(item, [O
 		item.div_by : item, item -> item,
 		item.rem_by : item, item -> item,
 		item.times : item, item -> item,
+		item.times_overflows : item, item -> Bool,
+		item.times_wrap : item, item -> item,
 	]
 unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 	if exponent == zero {
@@ -22180,7 +22304,7 @@ unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 		next_acc = if exponent.rem_by(two) == zero {
 			Ok(acc)
 		} else {
-			unsigned_times_try(highest, zero, acc, base)
+			unsigned_times_try(acc, base)
 		}
 
 		match next_acc {
@@ -22190,7 +22314,7 @@ unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 				if next_exponent == zero {
 					Ok(updated_acc)
 				} else {
-					match unsigned_times_try(highest, zero, base, base) {
+					match unsigned_times_try(base, base) {
 						Err(Overflow) => Err(Overflow)
 						Ok(updated_base) => unsigned_pow_try_step(highest, zero, one, two, updated_acc, updated_base, next_exponent)
 					}
@@ -22209,6 +22333,8 @@ signed_pow_try : item, item, item, item, item, item, item, item -> Try(item, [Ov
 		item.rem_by : item, item -> item,
 		item.minus : item, item -> item,
 		item.times : item, item -> item,
+		item.times_overflows : item, item -> Bool,
+		item.times_wrap : item, item -> item,
 	]
 signed_pow_try = |lowest, highest, zero, one, two, neg_one, base, exponent|
 	if exponent < zero {
@@ -22237,6 +22363,8 @@ signed_pow_try_step : item, item, item, item, item, item, item, item, item -> Tr
 		item.rem_by : item, item -> item,
 		item.minus : item, item -> item,
 		item.times : item, item -> item,
+		item.times_overflows : item, item -> Bool,
+		item.times_wrap : item, item -> item,
 	]
 signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, exponent|
 	if exponent == zero {
@@ -22245,7 +22373,7 @@ signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, expo
 		next_acc = if exponent.rem_by(two) == zero {
 			Ok(acc)
 		} else {
-			match signed_times_try(lowest, highest, zero, neg_one, acc, base) {
+			match signed_times_try(acc, base) {
 				Ok(result) => Ok(result)
 				Err(Overflow) => Err(Overflow)
 			}
@@ -22259,7 +22387,7 @@ signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, expo
 				if next_exponent == zero {
 					Ok(updated_acc)
 				} else {
-					match signed_times_try(lowest, highest, zero, neg_one, base, base) {
+					match signed_times_try(base, base) {
 						Err(Overflow) => Err(Overflow)
 						Ok(updated_base) => signed_pow_try_step(lowest, highest, zero, one, two, neg_one, updated_acc, updated_base, next_exponent)
 					}
@@ -22286,17 +22414,17 @@ unsigned_div_ceil_try = |zero, one, a, b|
 			}
 		}
 
-signed_div_ceil_try : item, item, item, item, item, item, item -> Try(item, [DivByZero, Overflow, ..])
+signed_div_ceil_try : item, item, item, item, item, item -> Try(item, [DivByZero, Overflow, ..])
 	where [
 		item.is_eq : item, item -> Bool,
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
-		item.plus : item, item -> item,
-		item.minus : item, item -> item,
+		item.plus_overflows : item, item -> Bool,
+		item.plus_wrap : item, item -> item,
 		item.div_by : item, item -> item,
 		item.rem_by : item, item -> item,
 	]
-signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
+signed_div_ceil_try = |lowest, zero, one, neg_one, a, b|
 	match signed_div_try(lowest, zero, neg_one, a, b) {
 		Err(DivByZero) => Err(DivByZero)
 		Err(Overflow) => Err(Overflow)
@@ -22305,7 +22433,7 @@ signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
 				Ok(quotient)
 			} else if a > zero {
 				if b > zero {
-					match signed_plus_try(lowest, highest, zero, quotient, one) {
+					match signed_plus_try(quotient, one) {
 						Ok(result) => Ok(result)
 						Err(Overflow) => Err(Overflow)
 					}
@@ -22314,7 +22442,7 @@ signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
 				}
 			} else if a < zero {
 				if b < zero {
-					match signed_plus_try(lowest, highest, zero, quotient, one) {
+					match signed_plus_try(quotient, one) {
 						Ok(result) => Ok(result)
 						Err(Overflow) => Err(Overflow)
 					}
@@ -22341,36 +22469,54 @@ list_prepend_if_ok = |list, maybe_item|
 	}
 
 unsigned_minus_saturated : item, item, item -> item
-	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
+	where [item.minus_overflows : item, item -> Bool, item.minus_wrap : item, item -> item]
 unsigned_minus_saturated = |zero, a, b|
-	if a < b {
+	if a.minus_overflows(b) {
 		zero
 	} else {
-		a - b
+		a.minus_wrap(b)
 	}
 
 signed_minus_saturated : item, item, item, item, item -> item
-	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
+	where [item.is_gt : item, item -> Bool, item.minus_overflows : item, item -> Bool, item.minus_wrap : item, item -> item]
 signed_minus_saturated = |lowest, highest, zero, a, b|
-	match signed_minus_try(lowest, highest, zero, a, b) {
-		Ok(result) => result
-		Err(Overflow) =>
-			if b > zero {
-				lowest
-			} else {
-				highest
-			}
+	if a.minus_overflows(b) {
+		if b > zero {
+			lowest
+		} else {
+			highest
 		}
-
-unsigned_times_saturated : item, item, item, item -> item
-	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
-unsigned_times_saturated = |highest, zero, a, b|
-	match unsigned_times_try(highest, zero, a, b) {
-		Ok(result) => result
-		Err(Overflow) => highest
+	} else {
+		a.minus_wrap(b)
 	}
 
-signed_times_saturated : item, item, item, item, item, item -> item
+unsigned_times_saturated : item, item, item -> item
+	where [item.times_overflows : item, item -> Bool, item.times_wrap : item, item -> item]
+unsigned_times_saturated = |highest, a, b|
+	if a.times_overflows(b) {
+		highest
+	} else {
+		a.times_wrap(b)
+	}
+
+signed_times_saturated : item, item, item, item, item -> item
+	where [
+		item.is_lt : item, item -> Bool,
+		item.times_overflows : item, item -> Bool,
+		item.times_wrap : item, item -> item,
+	]
+signed_times_saturated = |lowest, highest, zero, a, b|
+	if a.times_overflows(b) {
+		if (a < zero) == (b < zero) {
+			highest
+		} else {
+			lowest
+		}
+	} else {
+		a.times_wrap(b)
+	}
+
+signed_times_saturated_rescaled : item, item, item, item, item, item -> item
 	where [
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
@@ -22379,8 +22525,8 @@ signed_times_saturated : item, item, item, item, item, item -> item
 		item.times : item, item -> item,
 		item.div_trunc_by : item, item -> item,
 	]
-signed_times_saturated = |lowest, highest, zero, neg_one, a, b|
-	match signed_times_try(lowest, highest, zero, neg_one, a, b) {
+signed_times_saturated_rescaled = |lowest, highest, zero, neg_one, a, b|
+	match signed_times_try_rescaled(lowest, highest, zero, neg_one, a, b) {
 		Ok(result) => result
 		Err(Overflow) =>
 			if a < zero {

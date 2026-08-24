@@ -5936,7 +5936,7 @@ pub const Interpreter = struct {
             ll.ret_layout;
 
         return switch (ll.op) {
-            .num_plus_wrap, .num_minus_wrap, .num_times_wrap => unreachable,
+            .num_plus, .num_minus, .num_times => unreachable,
             // ── String ops ──
             .str_is_eq => blk: {
                 const result = builtins.str.strEqual(valueToRocStr(args[0]), valueToRocStr(args[1]));
@@ -6948,12 +6948,23 @@ pub const Interpreter = struct {
             .list_split_last => self.evalListSplitLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
 
             // ── Arithmetic ──
-            .num_plus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, null),
-            .num_plus_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, .num_plus_checked),
-            .num_minus => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, null),
-            .num_minus_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, .num_minus_checked),
-            .num_times => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
-            .num_times_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, .num_times_checked),
+            .num_int_add_wrap,
+            .num_int_add_crash_on_overflow,
+            .num_int_add_overflows,
+            .num_int_add_proven_cannot_overflow,
+            .num_int_sub_wrap,
+            .num_int_sub_crash_on_overflow,
+            .num_int_sub_overflows,
+            .num_int_sub_proven_cannot_overflow,
+            .num_int_mul_wrap,
+            .num_int_mul_crash_on_overflow,
+            .num_int_mul_overflows,
+            .num_int_mul_proven_cannot_overflow,
+            => self.evalIntegerFamily(ll.op, args[0], args[1], ll.ret_layout, arg_layout),
+            .num_float_add => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, null),
+            .num_float_sub => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, null),
+            .num_float_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
+            .dec_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
             .num_div_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, null),
             .num_div_by_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, .num_div_by_checked),
             .num_div_trunc_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div_trunc, null),
@@ -7821,6 +7832,79 @@ pub const Interpreter = struct {
             .dec => val.write(i128, try self.decBinOp(a.read(i128), b.read(i128), op, checked_op)),
         }
         return val;
+    }
+
+    fn evalIntegerFamily(
+        self: *LirInterpreter,
+        low_level: LIR.LowLevel,
+        a: Value,
+        b: Value,
+        ret_layout: layout_mod.Idx,
+        arg_layout: layout_mod.Idx,
+    ) Error!Value {
+        const entry = CheckedArithmetic.classify(low_level) orelse unreachable;
+        if (entry.mode == .overflows) {
+            return self.evalIntegerOverflows(a, b, ret_layout, arg_layout, entry.operation);
+        }
+
+        const op: NumOp = switch (entry.operation) {
+            .add => .add,
+            .sub => .sub,
+            .mul => .mul,
+        };
+        if (builtin.mode == .Debug and entry.mode == .proven_cannot_overflow) {
+            if (try self.integerOperationOverflows(a, b, arg_layout, entry.operation)) {
+                return self.invariantFailedError("range prover emitted {s} for overflowing operands", .{@tagName(low_level)});
+            }
+        }
+        const checked_op: ?LIR.LowLevel = if (entry.mode == .crash_on_overflow) low_level else null;
+        return self.numBinOp(a, b, ret_layout, arg_layout, op, checked_op);
+    }
+
+    fn evalIntegerOverflows(
+        self: *LirInterpreter,
+        a: Value,
+        b: Value,
+        ret_layout: layout_mod.Idx,
+        arg_layout: layout_mod.Idx,
+        operation: CheckedArithmetic.Operation,
+    ) Error!Value {
+        const overflowed = try self.integerOperationOverflows(a, b, arg_layout, operation);
+        const value = try self.alloc(ret_layout);
+        value.write(u8, @intFromBool(overflowed));
+        return value;
+    }
+
+    fn integerOperationOverflows(
+        self: *LirInterpreter,
+        a: Value,
+        b: Value,
+        arg_layout: layout_mod.Idx,
+        operation: CheckedArithmetic.Operation,
+    ) Error!bool {
+        return switch (try self.numericOperandKind(arg_layout)) {
+            .unsigned_int => |bits| switch (bits) {
+                8 => intBinOverflows(u8, a.read(u8), b.read(u8), operation),
+                16 => intBinOverflows(u16, a.read(u16), b.read(u16), operation),
+                32 => intBinOverflows(u32, a.read(u32), b.read(u32), operation),
+                64 => intBinOverflows(u64, a.read(u64), b.read(u64), operation),
+                128 => intBinOverflows(u128, a.read(u128), b.read(u128), operation),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
+            },
+            .signed_int => |bits| switch (bits) {
+                8 => intBinOverflows(i8, a.read(i8), b.read(i8), operation),
+                16 => intBinOverflows(i16, a.read(i16), b.read(i16), operation),
+                32 => intBinOverflows(i32, a.read(i32), b.read(i32), operation),
+                64 => intBinOverflows(i64, a.read(i64), b.read(i64), operation),
+                128 => intBinOverflows(i128, a.read(i128), b.read(i128), operation),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
+            },
+            .dec => if (operation == .mul)
+                return self.invariantFailedError("LIR/interpreter invariant violated: Dec multiplication used the integer arithmetic family", .{})
+            else
+                intBinOverflows(i128, a.read(i128), b.read(i128), operation),
+            .float => return self.invariantFailedError("LIR/interpreter invariant violated: integer arithmetic predicate used a float layout", .{}),
+        };
     }
 
     fn numUnaryOp(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: NumOp, checked_op: ?LIR.LowLevel) Error!Value {
@@ -8745,6 +8829,14 @@ pub const Interpreter = struct {
         return result[0];
     }
 
+    fn intBinOverflows(comptime T: type, av: T, bv: T, operation: CheckedArithmetic.Operation) bool {
+        return switch (operation) {
+            .add => @addWithOverflow(av, bv)[1] != 0,
+            .sub => @subWithOverflow(av, bv)[1] != 0,
+            .mul => @mulWithOverflow(av, bv)[1] != 0,
+        };
+    }
+
     fn checkedIntNegate(comptime T: type, av: T) ?T {
         const result = @subWithOverflow(@as(T, 0), av);
         if (result[1] != 0) return null;
@@ -8794,8 +8886,14 @@ pub const Interpreter = struct {
     /// Dec (fixed-point i128 with 10^18 scale) binary operation.
     fn decBinOp(self: *LirInterpreter, av: i128, bv: i128, op: NumOp, checked_op: ?LIR.LowLevel) Error!i128 {
         return switch (op) {
-            .add => av +% bv,
-            .sub => av -% bv,
+            .add => if (checked_op) |op_tag|
+                checkedIntAdd(i128, av, bv) orelse return self.checkedOverflow(op_tag)
+            else
+                av +% bv,
+            .sub => if (checked_op) |op_tag|
+                checkedIntSub(i128, av, bv) orelse return self.checkedOverflow(op_tag)
+            else
+                av -% bv,
             .negate => -%av,
             .abs => blk: {
                 if (checked_op != null and av == std.math.minInt(i128)) {

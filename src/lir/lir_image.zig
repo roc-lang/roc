@@ -44,7 +44,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v23: Boxy type descriptors identify field-presence slots explicitly.
 /// v24: source file table entries carry package-qualified module identities
 ///      alongside display names.
-pub const FORMAT_VERSION: u32 = 24;
+/// v25: integer arithmetic uses explicit behavior-family operations.
+pub const FORMAT_VERSION: u32 = 25;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
