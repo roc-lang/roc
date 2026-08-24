@@ -2026,6 +2026,23 @@ const GeneratedParserDefAddress = struct {
     result_ty: u32,
 };
 
+/// Exact child identity for a compiler-generated parser success record.
+/// Generated Monotype types are immutable, so equal child ids must reuse one
+/// record id instead of appending structurally identical nodes to the store.
+const GeneratedParseResultOkTypeAddress = struct {
+    value_ty: u32,
+    rest_ty: u32,
+};
+
+/// Exact child identity for a compiler-generated Try instantiation. The
+/// template carries the nominal identity and backing authority; the two child
+/// types determine its instantiated arguments and backing tag payloads.
+const GeneratedTryTypeAddress = struct {
+    template_ty: u32,
+    ok_ty: u32,
+    err_ty: u32,
+};
+
 /// Process-local O(1) reuse key for a checker-classified closed direct
 /// procedure call. `evidence` is an interned producer identity in `module`;
 /// the plan's closed callable type is likewise structurally interned there.
@@ -2132,6 +2149,11 @@ const Builder = struct {
     symbols: Common.SymbolGen = .{},
     next_instantiation_scope: u64 = 0,
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
+    /// Exact constructor-keyed interning for parser result types synthesized
+    /// after graph sealing. These types never mutate, so the reused ids are
+    /// valid for the lifetime of the program builder.
+    parse_result_ok_types: std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId),
+    generated_try_types: std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId),
     /// Exact inhabitation answers for sealed Monotype types. These types are
     /// immutable, so the structural walk is needed at most once per TypeId.
     uninhabited_type_cache: collections.DenseMap(Type.TypeId, bool),
@@ -2211,6 +2233,8 @@ const Builder = struct {
             .target_usize = options.target_usize,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
+            .parse_result_ok_types = std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId).init(allocator),
+            .generated_try_types = std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId).init(allocator),
             .uninhabited_type_cache = collections.DenseMap(Type.TypeId, bool).init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
@@ -2310,6 +2334,8 @@ const Builder = struct {
         self.lowered_templates.deinit();
         self.spec_store.deinit();
         self.uninhabited_type_cache.deinit();
+        self.generated_try_types.deinit();
+        self.parse_result_ok_types.deinit();
         self.type_cache.deinit();
         self.evidence_arena.deinit();
     }
@@ -25572,13 +25598,21 @@ const BodyContext = struct {
         value_ty: Type.TypeId,
         rest_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
+        const address = GeneratedParseResultOkTypeAddress{
+            .value_ty = @intFromEnum(value_ty),
+            .rest_ty = @intFromEnum(rest_ty),
+        };
+        if (self.builder.parse_result_ok_types.get(address)) |ty| return ty;
+
         const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
         const value_name = try self.builder.program.names.internRecordFieldLabel("value");
         const fields = [_]Type.Field{
             .{ .name = rest_name, .ty = rest_ty, .default = null },
             .{ .name = value_name, .ty = value_ty, .default = null },
         };
-        return try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields) });
+        const ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields) });
+        try self.builder.parse_result_ok_types.put(address, ty);
+        return ty;
     }
 
     fn parseResultOk(
@@ -39540,6 +39574,13 @@ const BodyContext = struct {
         ok_ty: Type.TypeId,
         err_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
+        const address = GeneratedTryTypeAddress{
+            .template_ty = @intFromEnum(template_try_ty),
+            .ok_ty = @intFromEnum(ok_ty),
+            .err_ty = @intFromEnum(err_ty),
+        };
+        if (self.builder.generated_try_types.get(address)) |ty| return ty;
+
         const template_backing = self.builder.namedBackingType(template_try_ty) orelse Common.invariant("Try template type had no backing");
         const template_tags = switch (self.builder.shapeContent(template_backing)) {
             .tag_union => |span| try GuardedList.dupe(self.allocator, Type.Tag, self.builder.program.types.tagSpan(span)),
@@ -39572,7 +39613,9 @@ const BodyContext = struct {
 
         const backing_ty = try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTagVariants(&self.builder.program.names, tags) });
         const args = [_]Type.TypeId{ ok_ty, err_ty };
-        return try self.cloneNamedTypeWithArgs(template_try_ty, &args, backing_ty);
+        const ty = try self.cloneNamedTypeWithArgs(template_try_ty, &args, backing_ty);
+        try self.builder.generated_try_types.put(address, ty);
+        return ty;
     }
 
     fn tryOk(self: *BodyContext, try_ty: Type.TypeId, value_expr: DraftExprId) Allocator.Error!DraftExprId {
