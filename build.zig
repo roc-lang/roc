@@ -7450,6 +7450,34 @@ fn addMainExe(
             );
             exe.step.dependOn(&copy_default_platform_runtime.step);
 
+            // A shared-memory run of the synthetic Linux default platform has
+            // no external platform host to provide compiler-rt. Keep that
+            // carrier explicit and default-platform-owned instead of hiding it
+            // in the machine-code shim, which is also linked with user hosts.
+            if (default_platform_os == .linux) {
+                const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
+                const default_platform_compiler_rt_obj = b.addObject(.{
+                    .name = b.fmt("roc_default_compiler_rt_{s}", .{cross_target.name}),
+                    .root_module = b.createModule(.{
+                        .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
+                        .target = cross_resolved_target,
+                        .optimize = .ReleaseFast,
+                        .strip = false,
+                        .omit_frame_pointer = false,
+                        .pic = true,
+                    }),
+                });
+                default_platform_compiler_rt_obj.bundle_compiler_rt = false;
+                configureBackend(default_platform_compiler_rt_obj, cross_resolved_target);
+
+                const copy_default_platform_compiler_rt = b.addUpdateSourceFiles();
+                copy_default_platform_compiler_rt.addCopyFileToSource(
+                    default_platform_compiler_rt_obj.getEmittedBin(),
+                    b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_default_compiler_rt.o" }),
+                );
+                exe.step.dependOn(&copy_default_platform_compiler_rt.step);
+            }
+
             const default_platform_executable_obj = b.addObject(.{
                 .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),
                 .root_module = b.createModule(.{
