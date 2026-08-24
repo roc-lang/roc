@@ -872,6 +872,47 @@ fn emitI32Const(self: *Self, value: i32) Allocator.Error!void {
     WasmModule.leb128WriteI32(self.allocator, self.currentCode(), value) catch return error.OutOfMemory;
 }
 
+/// Emit the final-link table address of a function already placed in this
+/// module's element segment. A relocatable object cannot embed its current
+/// table offset: LLD may reserve slot zero or place another object's elements
+/// first. The function-symbol relocation lets LLD write the exact final slot.
+fn emitFunctionTableIndexConst(self: *Self, table_idx: u32) Allocator.Error!void {
+    if (!self.relocatable_object) return self.emitI32Const(@intCast(table_idx));
+
+    if (table_idx >= self.module.table_func_indices.items.len) {
+        wasmInvariantFmt(
+            "WasmCodeGen invariant violated: table index {d} outside element segment of length {d}",
+            .{ table_idx, self.module.table_func_indices.items.len },
+        );
+    }
+    const function_idx = self.module.table_func_indices.items[table_idx];
+    const symbol = self.function_symbols_by_index.get(function_idx) orelse {
+        wasmInvariantFmt(
+            "WasmCodeGen invariant violated: table function {d} has no relocation symbol",
+            .{function_idx},
+        );
+    };
+
+    try self.currentCode().append(self.allocator, Op.i32_const);
+    const relocation_offset: u32 = @intCast(self.currentCode().items.len);
+    try self.currentBody().addIndexRelocation(
+        self.allocator,
+        .table_index_sleb,
+        relocation_offset,
+        symbol,
+    );
+    try WasmModule.appendPaddedI32(self.allocator, self.currentCode(), 0);
+}
+
+fn emitOptionalFunctionTableIndexConst(self: *Self, table_idx: ?u32) Allocator.Error!void {
+    if (table_idx) |index| return self.emitFunctionTableIndexConst(index);
+    return self.emitI32Const(0);
+}
+
+fn emitListCallbackTableIndexConst(self: *Self, elements_refcounted: u32, table_idx: u32) Allocator.Error!void {
+    return self.emitOptionalFunctionTableIndexConst(if (elements_refcounted != 0) table_idx else null);
+}
+
 fn emitI64Const(self: *Self, value: i64) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.i64_const) catch return error.OutOfMemory;
     WasmModule.leb128WriteI64(self.allocator, self.currentCode(), value) catch return error.OutOfMemory;
@@ -984,6 +1025,7 @@ fn emitStrBinaryResultCall(
     result_offset: u32,
     kind: BuiltinKind,
     host_import: ?u32,
+    update_mode: ?i32,
 ) Allocator.Error!void {
     if (self.externalCallsUseRelocs()) {
         const lhs_fields = try self.loadRocStrFields(lhs);
@@ -991,6 +1033,7 @@ fn emitStrBinaryResultCall(
         try self.emitFpOffset(result_offset);
         try self.emitRocStrFields(lhs_fields);
         try self.emitRocStrFields(rhs_fields);
+        if (update_mode) |mode| try self.emitI32Const(mode);
         try self.emitLocalGet(self.roc_ops_local);
     } else {
         try self.emitLocalGet(lhs);
@@ -1008,7 +1051,26 @@ fn emitStrDropLowLevel(self: *Self, args: anytype, kind: BuiltinKind, host_impor
     const b = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalSet(b);
     const result_offset = try self.allocStackMemory(12, 4);
-    try self.emitStrBinaryResultCall(a, b, result_offset, kind, host_import);
+    try self.emitStrBinaryResultCall(a, b, result_offset, kind, host_import, null);
+    try self.emitFpOffset(result_offset);
+}
+
+fn emitStrConcatLowLevel(self: *Self, args: anytype, unique_args: u64) Allocator.Error!void {
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    const lhs = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(lhs);
+    try self.emitProcLocal(GuardedList.at(args, 1));
+    const rhs = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    try self.emitLocalSet(rhs);
+    const result_offset = try self.allocStackMemory(12, 4);
+    try self.emitStrBinaryResultCall(
+        lhs,
+        rhs,
+        result_offset,
+        BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_concat)),
+        self.str_concat_import,
+        updateModeImmForArg(unique_args, 0),
+    );
     try self.emitFpOffset(result_offset);
 }
 
@@ -2464,7 +2526,7 @@ pub fn generateModule(
         wasmInvariantFmt("WASM/codegen invariant violated: eval builtin object is empty", .{});
     }
 
-    var builtins_module = WasmModule.preload(self.allocator, wasm32_builtins_object, true) catch |err| switch (err) {
+    var builtins_module = WasmModule.preload(self.allocator, wasm32_builtins_object, .relocatable_for_merge) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HasInternalGlobals,
         error.InvalidLinkingVersion,
@@ -9153,7 +9215,13 @@ fn bindBoxyOutDesc(self: *Self, target: ProcLocalId, out_desc_ptr: u32) Allocato
 
 fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
     if (self.boxy_symbol_targets.count() == 0) return;
-    try self.emitLocalGet(self.roc_ops_local);
+    if (self.symbol_abi) {
+        // Standalone code calls host operations through linker symbols, so the
+        // runtime's vtable argument is deliberately null.
+        try self.emitNullPtr();
+    } else {
+        try self.emitLocalGet(self.roc_ops_local);
+    }
     try self.emitBoxyCall("roc_boxy_init_embedded");
 
     const proc_specs = self.store.getProcSpecs();
@@ -9161,7 +9229,7 @@ fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
         const proc_id: u32 = @intCast(i);
         const table_idx = self.boxy_dict_thunk_table_indices.get(proc_id) orelse continue;
         try self.emitI32Const(@intCast(proc_id));
-        try self.emitI32Const(@intCast(table_idx));
+        try self.emitFunctionTableIndexConst(table_idx);
         try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc.ret_layout))));
         try self.emitI64Const(@bitCast(proc.rc_borrowed_params));
         try self.emitI32Const(@intFromBool(proc.rc_ret_borrowed));
@@ -10561,8 +10629,7 @@ fn generateLiteral(self: *Self, target: ProcLocalId, value: LIR.LiteralValue) Al
                     .{@intFromEnum(proc_id)},
                 );
             };
-            self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-            WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(table_idx)) catch return error.OutOfMemory;
+            try self.emitFunctionTableIndexConst(table_idx);
         },
     }
 }
@@ -11213,7 +11280,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
             .{@intFromEnum(c.proc)},
         );
     };
-    const on_drop_table_idx: u32 = try self.erasedCallableOnDropTableIndex(c.on_drop);
+    const on_drop_table_idx = try self.erasedCallableOnDropTableIndex(c.on_drop);
     const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size));
     const payload_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     if (c.reuse) |reuse| {
@@ -11266,13 +11333,11 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
     }
 
     try self.emitLocalGet(payload_ptr);
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(table_idx)) catch return error.OutOfMemory;
+    try self.emitFunctionTableIndexConst(table_idx);
     try self.emitStoreOpSized(.i32, 4, 0);
 
     try self.emitLocalGet(payload_ptr);
-    self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
-    WasmModule.leb128WriteI32(self.allocator, self.currentCode(), @intCast(on_drop_table_idx)) catch return error.OutOfMemory;
+    try self.emitOptionalFunctionTableIndexConst(on_drop_table_idx);
     try self.emitStoreOpSized(.i32, 4, wasm_erased_callable_on_drop_offset);
 
     if (c.capture) |capture| {
@@ -11300,7 +11365,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
     );
     if (c.result_desc != null) {
         const proc_spec = self.store.getProcSpec(c.proc);
-        try self.emitI32Const(@intCast(table_idx));
+        try self.emitFunctionTableIndexConst(table_idx);
         try self.emitI32Const(@intCast(@intFromEnum(c.proc)));
         try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
         try self.emitI32Const(@intCast(metadata_offset));
@@ -11379,11 +11444,11 @@ fn emitFreshErasedCallablePayload(self: *Self, payload_ptr: u32, capture_size: u
     try self.emitLocalSet(payload_ptr);
 }
 
-fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop) Allocator.Error!u32 {
+fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop) Allocator.Error!?u32 {
     return switch (on_drop) {
-        .none => 0,
+        .none => null,
         .rc_helper => |helper_key| blk: {
-            if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) break :blk 0;
+            if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) break :blk null;
             // The on_drop slot is filled at closure creation, which is not an
             // RC statement and makes no thread-confinement claim, so it always
             // uses the atomic helper family (atomic is always sound).
@@ -13934,84 +13999,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_static_small_word_caseless_eq => {
             try self.generateLLStrStaticSmallWordCaselessEq(args);
         },
-        .str_concat => {
-            // LowLevel str_concat: concatenate 2 strings
-            try self.emitProcLocal(GuardedList.at(args, 0));
-            const a_str = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalSet(a_str);
-            try self.emitProcLocal(GuardedList.at(args, 1));
-            const b_str = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalSet(b_str);
-
-            // Extract ptr+len from each
-            const a_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const a_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitExtractStrPtrLen(a_str, a_ptr, a_len);
-            const b_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            const b_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitExtractStrPtrLen(b_str, b_ptr, b_len);
-
-            // total = a_len + b_len
-            const total = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLocalGet(a_len);
-            try self.emitLocalGet(b_len);
-            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-            try self.emitLocalSet(total);
-
-            const result_offset = try self.allocStackMemory(12, 4);
-            const result_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitFpOffset(result_offset);
-            try self.emitLocalSet(result_ptr);
-
-            const zero = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitI32Const(0);
-            try self.emitLocalSet(zero);
-
-            try self.emitLocalGet(total);
-            try self.emitI32Const(12);
-            self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
-            {
-                try self.emitZeroInit(result_ptr, 12);
-                try self.emitMemCopyLoop(result_ptr, zero, a_ptr, a_len);
-                try self.emitMemCopyLoop(result_ptr, a_len, b_ptr, b_len);
-
-                try self.emitLocalGet(result_ptr);
-                try self.emitLocalGet(total);
-                try self.emitI32Const(0x80);
-                self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, Op.i32_store8) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
-                WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 11) catch return error.OutOfMemory;
-            }
-            self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-            {
-                try self.emitHeapAllocWithRefcount(total, 1, false);
-                const buf = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-                try self.emitLocalSet(buf);
-
-                try self.emitMemCopyLoop(buf, zero, a_ptr, a_len);
-                try self.emitMemCopyLoop(buf, a_len, b_ptr, b_len);
-
-                try self.emitLocalGet(result_ptr);
-                try self.emitLocalGet(buf);
-                try self.emitStoreOp(.i32, 0);
-
-                try self.emitLocalGet(result_ptr);
-                try self.emitLocalGet(total);
-                try self.emitI32Const(1);
-                self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
-                try self.emitStoreOp(.i32, 4);
-
-                try self.emitLocalGet(result_ptr);
-                try self.emitLocalGet(total);
-                try self.emitStoreOp(.i32, 8);
-            }
-            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-
-            try self.emitLocalGet(result_ptr);
-        },
+        .str_concat => try self.emitStrConcatLowLevel(args, ll.unique_args),
         .str_contains => {
             // Check if string a contains substring b
             try self.generateLLStrSearch(args, .contains);
@@ -14399,7 +14387,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             } else {
                 const box_abi = ls.builtinBoxAbi(ll.ret_layout);
                 const value_size = box_abi.elem_size;
-                const value_vt = try self.procLocalValType(value_expr);
+                const value_repr = try WasmLayout.wasmReprWithStore(self.procLocalLayoutIdx(value_expr), ls);
+                const value_vt: ValType = switch (value_repr) {
+                    .stack_memory => .i32,
+                    .primitive => |val_type| val_type,
+                };
+                const value_is_composite = switch (value_repr) {
+                    .stack_memory => true,
+                    .primitive => false,
+                };
                 if (value_size == 0) {
                     _ = try self.emitProcLocal(value_expr);
                     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -14413,7 +14409,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
                     try self.emitProcLocal(value_expr);
 
-                    if (value_vt == .i32 and value_size > 4) {
+                    if (value_is_composite) {
                         const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                         try self.emitLocalSet(src_ptr);
 
@@ -14553,9 +14549,17 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 } else {
                     try self.emitProcLocal(box_expr);
 
-                    const result_vt = try self.resolveValType(ll.ret_layout);
+                    const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, ls);
+                    const result_vt: ValType = switch (result_repr) {
+                        .stack_memory => .i32,
+                        .primitive => |val_type| val_type,
+                    };
+                    const result_is_composite = switch (result_repr) {
+                        .stack_memory => true,
+                        .primitive => false,
+                    };
                     const result_size = try self.layoutByteSize(ll.ret_layout);
-                    if (result_vt == .i32 and result_size > 4) {
+                    if (result_is_composite) {
                         const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                         try self.emitLocalSet(src_local);
 
@@ -14780,8 +14784,17 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .ptr_store => {
             // ptr_store: (Ptr(T), T) -> {}. Copy sizeOf(T) bytes into *ptr.
             // Result is unit; leave a dummy i32 0 (zst convention).
-            const value_size = try self.layoutByteSize(self.procLocalLayoutIdx(GuardedList.at(args, 1)));
-            const value_vt = try self.procLocalValType(GuardedList.at(args, 1));
+            const value_expr = GuardedList.at(args, 1);
+            const value_size = try self.layoutByteSize(self.procLocalLayoutIdx(value_expr));
+            const value_repr = try WasmLayout.wasmReprWithStore(self.procLocalLayoutIdx(value_expr), self.getLayoutStore());
+            const value_vt: ValType = switch (value_repr) {
+                .stack_memory => .i32,
+                .primitive => |val_type| val_type,
+            };
+            const value_is_composite = switch (value_repr) {
+                .stack_memory => true,
+                .primitive => false,
+            };
 
             if (value_size == 0) {
                 _ = try self.emitProcLocal(GuardedList.at(args, 0));
@@ -14791,9 +14804,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.emitLocalSet(ptr_local);
 
-                try self.emitProcLocal(GuardedList.at(args, 1));
-                if (value_vt == .i32 and value_size > 4) {
-                    // Composite value: arg is an i32 pointer into linear memory.
+                try self.emitProcLocal(value_expr);
+                if (value_is_composite) {
                     const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     try self.emitLocalSet(src_local);
                     try self.emitMemCopy(ptr_local, 0, src_local, value_size);
@@ -14808,7 +14820,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // ptr_load: (Ptr(T)) -> T. Copy sizeOf(T) bytes out of *ptr.
             // Same shape as erased_capture_load above.
             const result_size = try self.layoutByteSize(ll.ret_layout);
-            const result_vt = try self.resolveValType(ll.ret_layout);
+            const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, self.getLayoutStore());
+            const result_vt: ValType = switch (result_repr) {
+                .stack_memory => .i32,
+                .primitive => |val_type| val_type,
+            };
+            const result_is_composite = switch (result_repr) {
+                .stack_memory => true,
+                .primitive => false,
+            };
 
             if (result_size == 0) {
                 _ = try self.emitProcLocal(GuardedList.at(args, 0));
@@ -14820,7 +14840,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.emitLocalSet(src_ptr);
 
-                if (result_vt == .i32 and result_size > 4) {
+                if (result_is_composite) {
                     const ls = self.getLayoutStore();
                     const result_align: u32 = @intCast(@max(ls.layoutSizeAlign(ls.getLayout(ll.ret_layout)).alignment.toByteUnits(), 1));
                     const dst_offset = try self.allocStackMemory(result_size, result_align);
@@ -20390,8 +20410,8 @@ fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layou
             try self.emitI32Const(@intCast(elem_align));
             try self.emitI32Const(@intCast(elem_size));
             try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
-            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
             try self.emitI32Const(@intCast(unique_args & 1));
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within)), null);
@@ -20446,8 +20466,8 @@ fn generateLLListCopyRangeWithin(self: *Self, args: anytype, ret_layout: layout.
             try self.emitI32Const(@intCast(elem_align));
             try self.emitI32Const(@intCast(elem_size));
             try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
-            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_copy_range_within)), null);
         },
@@ -20513,7 +20533,7 @@ fn generateLLListAppendRangeWithinUnsafe(self: *Self, args: anytype, ret_layout:
             try self.emitLocalGet(count_local);
             try self.emitI32Const(@intCast(elem_size));
             try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_range_within_unsafe)), null);
         },
@@ -20654,8 +20674,8 @@ fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Id
             try self.emitI32Const(@intCast(elem_align));
             try self.emitI32Const(@intCast(elem_size));
             try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
-            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
             try self.emitI32Const(@intCast(unique_args & 1));
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_sublist)), null);
@@ -20744,8 +20764,8 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, targ
                 try self.emitI32Const(@intCast(elem_align));
                 try self.emitI32Const(@intCast(elem_size));
                 try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitI32Const(@intCast(callbacks.incref_table_idx));
-                try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
                 try self.emitI64Const(@intCast(unique_args & 0b11));
                 try self.emitLocalGet(self.roc_ops_local);
                 try self.emitBuiltinCall(.list_concat, null);
@@ -20804,8 +20824,8 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, targ
                 try self.emitI32Const(@intCast(elem_size));
                 try self.emitLocalGet(index_local);
                 try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitI32Const(@intCast(callbacks.incref_table_idx));
-                try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
                 try self.emitLocalGet(self.roc_ops_local);
                 try self.emitBuiltinCall(.list_drop_at, null);
@@ -20860,8 +20880,8 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, tar
                 try self.emitI32Const(@intCast(elem_align));
                 try self.emitI32Const(@intCast(elem_size));
                 try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitI32Const(@intCast(callbacks.incref_table_idx));
-                try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
                 try self.emitLocalGet(self.roc_ops_local);
                 try self.emitBuiltinCall(.list_reverse, null);
@@ -21044,8 +21064,8 @@ fn emitListReplaceCall(
             try self.emitI32Const(@intCast(elem_size));
             try self.emitFpOffset(out_element_offset);
             try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
-            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
             try self.emitI32Const(updateModeImmForArg(unique_args, 0));
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_replace_unsafe)), null);
@@ -21085,8 +21105,8 @@ fn emitListSetCall(
             try self.emitLocalGet(elem_ptr);
             try self.emitI32Const(@intCast(elem_size));
             try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
-            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+            try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
             try self.emitI32Const(updateModeImmForArg(unique_args, 0));
             try self.emitLocalGet(self.roc_ops_local);
             try self.emitBuiltinCall(.list_set, null);
@@ -21264,8 +21284,8 @@ fn generateLLListSwap(self: *Self, args: anytype, ret_layout: layout.Idx, target
                 try self.emitLocalGet(index_1_local);
                 try self.emitLocalGet(index_2_local);
                 try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitI32Const(@intCast(callbacks.incref_table_idx));
-                try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
                 try self.emitLocalGet(self.roc_ops_local);
                 try self.emitBuiltinCall(.list_swap, null);
@@ -21323,8 +21343,8 @@ fn generateLLListReserve(self: *Self, args: anytype, ret_layout: layout.Idx, tar
                 try self.emitLocalGet(spare_local);
                 try self.emitI32Const(@intCast(elem_size));
                 try self.emitI32Const(@intCast(callbacks.elements_refcounted));
-                try self.emitI32Const(@intCast(callbacks.incref_table_idx));
-                try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.incref_table_idx);
+                try self.emitListCallbackTableIndexConst(callbacks.elements_refcounted, callbacks.decref_table_idx);
                 try self.emitI32Const(updateModeImmForArg(unique_args, 0));
                 try self.emitLocalGet(self.roc_ops_local);
                 try self.emitBuiltinCall(.list_reserve, null);

@@ -29,7 +29,11 @@ platform ""
         x64v1musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"], output: Exe },
         arm64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"], output: Exe },
         arm64v1musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"], output: Exe },
-        wasm32: { inputs: ["host.wasm", app], output: Shared },
+        wasm32: {
+            inputs: ["host.wasm", app],
+            output: Shared,
+            exports: ["wasm_main", "wasm_result_len", "wasm_alloc_count", "wasm_dealloc_count"],
+        },
     }
 
 import A

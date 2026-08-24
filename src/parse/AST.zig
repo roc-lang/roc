@@ -420,7 +420,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
 
     return switch (diagnostic.tag) {
         .multiple_platforms => reportParseProblem(ctx, "Multiple Platforms", "I was parsing an app header, and it names more than one platform.", "An app can use exactly one `platform` entry. Keep the platform entry you want to run with, and make every other dependency a normal package string.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\", json: \"../json/main.roc\" }" }),
-        .no_platform => reportParseProblem(ctx, "Missing Platform", "I was parsing an app header, and I could not find a platform entry.", "App headers must include one field whose value starts with `platform`. That platform tells Roc how to run the app.", .{ .example = "app [main] { pf: platform \"../basic-cli/platform.roc\" }" }),
         .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .roc_version_key_is_reserved => reportParseProblem(ctx, "Reserved Dependency Name", "I was parsing a dependency record, and `roc` is used as the name of a platform or package.", "The `roc` name is reserved for pinning the compiler version, so it cannot name a dependency. Pick a different name for this one.", .{ .example = "pf: platform \"../platform/main.roc\"", .show_found = false }),
@@ -559,7 +558,6 @@ pub const Diagnostic = struct {
     /// different types of diagnostic errors
     pub const Tag = enum {
         multiple_platforms,
-        no_platform,
         invalid_roc_version,
         duplicate_roc_version,
         roc_version_key_is_reserved,
@@ -1837,7 +1835,10 @@ pub const File = struct {
 pub const Header = union(enum) {
     app: struct {
         provides: Collection.Idx,
-        platform_idx: RecordField.Idx,
+        /// The `pf: platform "..."` entry of `packages`, or null when the
+        /// header names no platform. An app that names no platform gets the
+        /// built-in Echo platform, exactly as a headerless app does.
+        platform_idx: ?RecordField.Idx,
         packages: Collection.Idx,
         /// The optional `roc: "<version>"` entry of `packages`. Like
         /// `platform_idx`, this still appears in `packages` too.
@@ -1927,8 +1928,10 @@ pub const Header = union(enum) {
                 try tree.endNode(provides_begin, attrs2);
 
                 // Platform
-                const platform = ast.store.getRecordField(a.platform_idx);
-                try platform.pushToSExprTree(gpa, env, ast, tree);
+                if (a.platform_idx) |platform_idx| {
+                    const platform = ast.store.getRecordField(platform_idx);
+                    try platform.pushToSExprTree(gpa, env, ast, tree);
+                }
 
                 // Packages
                 const packages_coll = ast.store.getCollection(a.packages);

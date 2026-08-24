@@ -4233,7 +4233,10 @@ pub fn canonicalizeFile(
             try self.createExposedScope(h.exposes);
         },
         .app => |h| {
-            self.env.module_kind = .app;
+            // An app that names no platform gets the built-in Echo platform,
+            // the same one a headerless app gets, so it canonicalizes as a
+            // default app: `echo!` is in scope and no platform is required.
+            self.env.module_kind = if (h.platform_idx == null) .default_app else .app;
             try self.checkRocVersionPin(h.roc_version);
             // App modules may have platform requirements that should constrain numeric literals
             // before defaulting to Dec, so defer numeric defaults until after platform checking

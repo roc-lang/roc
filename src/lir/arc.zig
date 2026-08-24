@@ -2216,6 +2216,7 @@ const Inserter = struct {
                             assign.target,
                             root,
                             assign.next,
+                            segment.ctx.loop_keep,
                         );
                         complete_moved_root = !transfer.retain_target;
                     } else {
@@ -3965,10 +3966,12 @@ const Inserter = struct {
         target: LIR.LocalId,
         root: LIR.LocalId,
         next: LIR.CFStmtId,
+        loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
         const release_old_target = self.takeRebindTarget(owned, target);
         const unit = self.unitOf(root);
-        const root_used = try self.ownershipPlaceUsedInPath(next, unit);
+        const root_used = (loop_keep != null and loop_keep.?.set.contains(unit)) or
+            try self.ownershipPlaceUsedInPath(next, unit);
         const has_unit = owned.contains(unit);
         const restitution = if (root_used)
             try self.completeProjectionRestitution(target, unit, next)
@@ -9725,6 +9728,49 @@ test "RC switch continuation merge releases branch-divergent owner at the bounda
     // the string's unit into the callee, so the merged continuation entry
     // excludes it and the default branch releases it at the boundary.
     try f.expectRc(diverged, 0, 1, 0);
+}
+
+test "RC complete field projection preserves a loop-kept root" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+    });
+    const field = try f.local(f.list_i64);
+    const record = try f.local(record_layout);
+    const state = try f.local(record_layout);
+    const extracted = try f.local(f.list_i64);
+    const appended = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+
+    const join_id = f.freshJoinPointId();
+    const continue_loop = try f.store.addCFStmt(.loop_continue);
+    const consume = try f.assignLowLevel(
+        appended,
+        &.{ extracted, elem },
+        LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(1, 0),
+        continue_loop,
+    );
+    const take = try f.assignRefField(extracted, state, 0, consume);
+    const entry = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_state = try f.setLocal(state, record, .initialize_join_param, entry);
+    const assign_elem = try f.assignI64(elem, 1, initialize_state);
+    const assign_record = try f.assignStruct(record, &.{field}, assign_elem);
+    const remainder = try f.assignList(field, &.{}, assign_record);
+    const body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = take,
+        .remainder = remainder,
+    } });
+
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    // The back edge requires the root's unit on the next iteration. The
+    // complete field read therefore retains its target instead of moving
+    // that loop-kept unit away.
+    try f.expectRc(extracted, 1, 0, 0);
 }
 
 test "RC divergent field takes normalize exact residual places on each switch edge" {

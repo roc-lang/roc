@@ -29280,24 +29280,26 @@ pub const CheckedModuleArtifact = struct {
     // Version 69 records in the checking-context identity how a module's
     // compile-time roots were established, so an app root checked without its
     // entrypoint contract cannot share a cache entry with one checked under it.
-    // Version 70 carries unset (`name: _`) field labels on checked record
+    // Version 70 retains canonical callable type keys in stored function
+    // evidence so specialization identity does not depend on fresh checked ids.
+    // Version 71 carries unset (`name: _`) field labels on checked record
     // expressions (`record_unset_label_pool`, design.md "In Progress:
     // Unsetting an Optional Field").
-    // Version 71 removes the field-default root kind: defaults materialize
+    // Version 72 removes the field-default root kind: defaults materialize
     // per specialization from the archived checked expression, and a
     // default's literal conversion is an ordinary conversion root
     // (design.md "Defaulted Fields").
-    // Version 72 publishes nested-procedure sites for lambdas/closures inside
+    // Version 73 publishes nested-procedure sites for lambdas/closures inside
     // defaulted-field expressions under a `.default_root` owner
     // (`NestedProcSiteOwner`): default expressions belong to no procedure
     // template, so their sites carry the module's default-expression root set
     // as owner (design.md "Defaulted Fields").
-    // Version 73 adds the `default_root` qualifier to stored nested function
+    // Version 74 adds the `default_root` qualifier to stored nested function
     // references (`ConstStore.FnDef.nested`): a compile-time function value
     // whose site lives inside a defaulted-field expression names the
     // declaring module's content identity so const-store restore resolves
     // the default-root site (design.md "Defaulted Fields").
-    const serialized_layout_version: u32 = 73;
+    const serialized_layout_version: u32 = 74;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35466,8 +35468,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x4A, 0x65, 0x02, 0xA4, 0x8F, 0x4D, 0x24, 0x62, 0x30, 0x0C, 0x3F, 0x4C, 0x38, 0x5A, 0x52, 0x87,
-        0xDF, 0x81, 0xC3, 0xEC, 0xED, 0xCA, 0x3B, 0x0E, 0x82, 0x79, 0xF6, 0x54, 0x29, 0x44, 0xAD, 0x03,
+        0x3B, 0x04, 0x74, 0x07, 0xEC, 0x86, 0x65, 0xE5, 0x59, 0xC4, 0x4F, 0x9F, 0xBE, 0xC2, 0x29, 0xA7,
+        0x9A, 0xC8, 0xDE, 0x4E, 0x79, 0x7A, 0xBB, 0x6E, 0x5F, 0xCB, 0x3B, 0xE8, 0x4C, 0x46, 0x82, 0x8E,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

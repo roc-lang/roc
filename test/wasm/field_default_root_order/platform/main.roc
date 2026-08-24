@@ -13,6 +13,7 @@ platform "field-default-root-order"
             maximum_memory,
             initial_stack_size,
             global_base,
+            exports: ["wasm_main", "wasm_result_len", "wasm_reset_alloc_counts", "wasm_alloc_count", "wasm_dealloc_count"],
         },
     }
 

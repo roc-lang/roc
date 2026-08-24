@@ -63,9 +63,20 @@ test "NodeStore round trip - Headers" {
     try headers.append(gpa, AST.Header{
         .app = .{
             .packages = rand_idx(random, AST.Collection.Idx),
-            .platform_idx = rand_idx(random, AST.RecordField.Idx),
+            .platform_idx = @enumFromInt(11),
             .provides = rand_idx(random, AST.Collection.Idx),
             .roc_version = @enumFromInt(7),
+            .region = rand_region(random),
+        },
+    });
+
+    // An app header that names no platform round trips with a null platform.
+    try headers.append(gpa, AST.Header{
+        .app = .{
+            .packages = rand_idx(random, AST.Collection.Idx),
+            .platform_idx = null,
+            .provides = rand_idx(random, AST.Collection.Idx),
+            .roc_version = null,
             .region = rand_region(random),
         },
     });

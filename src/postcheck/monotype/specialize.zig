@@ -113,10 +113,7 @@ const OwnedEvidence = struct {
 };
 
 fn evidenceEql(left: EvidenceView, right: EvidenceView) bool {
-    if (left.head != right.head or left.nodes.len != right.nodes.len or left.frames.len != right.frames.len) return false;
-    for (left.nodes, right.nodes) |a, b| if (!std.meta.eql(a, b)) return false;
-    for (left.frames, right.frames) |a, b| if (!std.meta.eql(a, b)) return false;
-    return true;
+    return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
 }
 
 fn evidenceDigestMatches(identity: Ast.SpecIdentity, evidence: EvidenceView) bool {

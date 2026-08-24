@@ -1423,6 +1423,16 @@ adopting the redirect destination's descriptor and checked representative; it
 must not directly graft one storage root beneath another and recreate an
 unbounded chain.
 
+A solver savepoint runs only non-poisoning unification. Successful speculative
+relations may be committed in place, but a mismatch returns without poisoning
+either top-level operand so the savepoint owner can roll the relation back.
+Occurrence-directed mismatch poisoning is permanent recovery against the live
+equivalence classes; running it inside a savepoint would both do work whose
+result must be discarded and make correctness depend on the queried
+occurrence's current representative. The commit-probe API fixes the
+non-poisoning behavior for every relation it runs, and ordinary poisoning
+unification asserts that no savepoint is active.
+
 A failed unification is different from a successful class union. Its first
 operand can be one checked occurrence already connected to a shared binding;
 error recovery must poison that exact occurrence without making the binding or
@@ -6975,6 +6985,15 @@ callable identity, method scope, exact evidence topology, and exact structural
 equality of the closed Monotype function type. Digest collisions are therefore
 harmless.
 
+Checked callable type ids inside dispatch evidence are relation-replay payload,
+not specialization identity: separate generalized scheme uses deliberately
+contain distinct identity-bearing roots. Evidence hashing and exact topology
+equality use each callable root's producer-authored checked type key instead. The
+owning checked module remains part of the identity, and the raw root id remains
+alongside the key solely so Monotype can replay the exact checked relation.
+Thus instantiations with the same checked identity-variable topology
+reuse one specialization, while different callable shapes remain distinct.
+
 The identity is immutable: it is written once when the record is reserved and
 never rewritten, so no structure that indexes by identity ever needs a rekey or
 a second synchronized entry. Later refinements are data on the record. The
@@ -8633,31 +8652,17 @@ reaching `assign_boxy_adapt` is never treated as unsupported.
 
 Machine-code backends lower the complete Boxy statement surface to the shared
 `roc_boxy_*` C ABI. Native LLVM links the target's standalone Boxy runtime
-object and an object containing the serialized sidecar. Optimized Wasm links
-the relocatable Boxy runtime object and a static-data module containing that
-same sidecar into the emitted app object, then resolves the complete app and
-host link with Wasm LLD. When standalone Wasm dev LIR explicitly requires
-Boxy, the build prepares each distinct host through a content-addressed
-relocatable LLD link with the builtins object and relocatable Boxy runtime
-object. Later builds load that cached prepared-host variant and surgically
-merge only the generated app code and its exact sidecar. Non-Boxy dev builds
-directly use the fast surgical merge because no runtime object needs LLD
-symbol resolution. The cache identity includes every ordered input's bytes;
-changing any input produces a different prepared host. The cached object
-preserves only the platform's original function exports, leaving builtins and
-Boxy runtime functions internal and eligible for dead-code elimination during
-the surgical link. Preparation is serialized per content identity across
-compiler processes and remains available when the checked module cache and
-generated app-object cache are disabled: it is the exact prepared platform
-link output, not a cached app result. The
-standalone Wasm runtime uses direct
-data-symbol relocations rather than PIC GOT
-globals, so the partial link preserves its unresolved sidecar references for
-the later surgical merge. Entrypoint wrappers initialize the embedded runtime
-before calling Roc code. Dictionary worker thunks and erased-callable
-registrations expose only the proc ids, layouts, descriptor sources, and
-ownership metadata already present in LIR; backend code does not derive any of
-them from procedure bodies.
+object and an object containing the serialized sidecar. Both dev and optimized
+Wasm compose generated app code, builtins, the relocatable Boxy runtime, its
+exact static-data sidecar, and compiler-rt into the compiler-only object
+described by the Sealed Roc Object Boundary. Platform objects never participate
+in that composition. The standalone Wasm runtime uses direct data-symbol
+relocations rather than PIC GOT globals so the relocatable composition binds
+its app-specific sidecar references before the object is sealed. Entrypoint
+wrappers initialize the embedded runtime before calling Roc code. Dictionary
+worker thunks and erased-callable registrations expose only the proc ids,
+layouts, descriptor sources, and ownership metadata already present in LIR;
+backend code does not derive any of them from procedure bodies.
 
 In-process test invocation context is also an explicit execution ABI input. It
 is threaded through ordinary procedures, Boxy dictionary calls and their
@@ -11221,9 +11226,11 @@ function. `output:` is one of:
 ```text
 Exe:     linked executable binary. For wasm32, a command module (has an
          entry).
-Archive: one static archive (.a, .lib) containing the declared host inputs,
-         the compiled app, and the builtins, with input archives flattened
-         in. Archive keeps its inputs because the host must provide
+Archive: one static archive (.a, .lib) containing the declared host inputs
+         and one sealed compiled-app object, with input archives flattened
+         in. The sealed object already contains every reachable compiler-owned
+         implementation (builtins, runtime support, and compiler-rt) with local
+         binding. Archive keeps its inputs because the host must provide
          roc_alloc and the other runtime symbols; the consumer receives a
          single self-contained archive and performs the final link in their
          own build, which extracts members lazily by symbol reference.
@@ -11290,6 +11297,63 @@ symbols stay distinct because the platform header that assigns those symbols
 is the data that separates them. `provides` follows the same rule: the
 exported symbol set is part of the platform relation, and two exports remain
 two exports even when they name the same Roc function.
+
+### Sealed Roc Object Boundary
+
+Before any platform object participates in symbol resolution, every compiled
+backend must produce one **sealed Roc object**. The checked platform relation is
+the complete authority for its external symbol contract:
+
+- the sealed object's globally-bound definitions are exactly the function and
+  data symbols named by `provides`;
+- its globally-bound undefined function symbols are exactly the `hosted`
+  symbols and the fixed runtime set described below;
+- every compiler-owned definition other than `provides` has local binding;
+- no compiler-owned undefined symbol remains.
+
+Compiler-owned definitions include generated Roc procedures and data, builtin
+wrappers, Boxy runtime functions and sidecars, reference-counting helpers,
+backend support, and compiler-rt implementations. Hidden visibility is not
+sufficient: a hidden global still participates in static symbol resolution and
+can collide with or satisfy a platform reference. Local binding is required.
+After relocations have been bound to local symbol indices, non-debug output
+removes the textual names of compiler-owned local symbols wherever the object
+format permits it.
+
+The compiler constructs the sealed object in a Roc-only composition phase.
+Platform inputs are categorically forbidden from that phase. Compiler-owned
+support is selected from explicit backend-produced requirements, merged,
+resolved, dead-stripped from the `provides` roots, and localized. A verifier
+then compares the resulting defined and undefined global symbol sets with the
+checked platform contract. An unexpected definition, an unresolved builtin or
+compiler-rt call, or an undeclared host requirement is a compiler error; it is
+never passed through to the platform linker as a best-effort import.
+
+Every object-format address embedded in compiler-owned code or data remains a
+relocation through this boundary. In particular, Wasm function pointers are
+relocations against their function symbols, never raw indices into the
+compiler object's current table: the final linker may reserve null slots or
+concatenate platform table-initializer segments before the sealed object's segment. The
+same rule applies to code constants, static data, Boxy registrations, erased
+callables, and runtime callback tables. Sealing changes symbol binding in place
+without decoding and re-encoding code, data, table-initializer, COMDAT, or relocation
+sections, so it adds no whole-object rewrite and preserves the linker's exact
+layout metadata.
+
+Only after sealing may the compiler link the object with the platform inputs.
+Consequently a platform may define a strong symbol whose spelling matches any
+compiler implementation detail—including a compiler-rt name such as
+`__multi3`—without collision or interposition: platform relocations bind the
+platform's global definition, while Roc relocations are already bound to the
+sealed object's local definition.
+
+An Archive output contains the sealed object as one member rather than separate
+app, builtins, runtime, sidecar, or compiler-rt members. The archive symbol
+index therefore advertises only the platform's `provides` definitions from
+Roc-owned code. `Shared` and `Exe` outputs pass only the sealed object to
+the platform linker. Final runtime exports are selected exclusively from the
+platform target's `exports` field. An absent or empty field exports no
+functions; object symbol discovery must never enlarge that set.
 
 Compiled Roc code references each hosted symbol (and the fixed runtime set:
 roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed)
@@ -11395,12 +11459,12 @@ reachable only from unused host functions are absent from the final binary
 (by symbol table inspection and by content-pattern absence), and present when
 actually used.
 
-Shared-library output uses the same symbol ABI: the host objects and app
+Shared-library output uses the same symbol ABI: the host objects and sealed app
 object are linked into one library, app/host resolution happens inside that
-link, and dead-strip roots are the exported symbols. Internal `roc_*` symbols
-must be hidden in shared libraries—on ELF, default-visibility exports are
-preemptible, and two Roc-built libraries loaded into one process would
-otherwise interpose each other's runtime symbols.
+link, and dead-strip roots are the exported symbols. The sealed-object boundary
+means compiler-owned symbols already have local binding before this link; they
+cannot be preempted or interposed when two Roc-built libraries are loaded into
+one process.
 
 Interpreter execution (the default `roc` command, embedded interpreter builds,
 REPL, compile-time constants, glue evaluation) keeps the same host objects: a
