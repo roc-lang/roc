@@ -8,7 +8,7 @@
 //! - Hover (findTypeAtOffset)
 //! - Go-to-definition (findLookupAtOffset, findDefinitionAtOffset)
 //! - Find-references (collectLookupReferences)
-//! - Document highlights (findPatternAtOffset)
+//! - Document highlights (resolveSymbolAtOffset, findPatternAtOffset)
 //! - Completions (findFieldAccessReceiverTypeVar)
 
 const std = @import("std");
@@ -622,6 +622,7 @@ pub fn collectLookupReferences(
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
+
         visitor.walkExpr(&module_env.store, def.expr);
         if (visitor.stopped) break;
     }
@@ -635,6 +636,88 @@ pub fn collectLookupReferences(
     if (ctx.oom) |err| return err;
 
     return results;
+}
+
+/// Resolve the symbol at the given offset to the pattern that defines it.
+///
+/// The cursor can sit on either end of a binding: on the defining pattern
+/// itself, or on an `e_lookup_local` that references it. Both ends resolve to
+/// the same `Pattern.Idx`, which is the identity `collectLookupReferences`
+/// expects, so callers that need every occurrence of a symbol must go through
+/// here rather than through `findPatternAtOffset` alone.
+///
+/// Returns null when the offset names something other than a local binding
+/// (an external lookup, a record field, a keyword). Callers must treat that as
+/// "no symbol here" and must not widen the query by matching identifier text.
+pub fn resolveSymbolAtOffset(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern.Idx {
+    if (findPatternAtOffset(module_env, offset)) |pattern_idx| return pattern_idx;
+
+    const lookup = findLookupAtOffset(module_env, offset) orelse return null;
+    return switch (lookup) {
+        .expr => |expr_idx| switch (module_env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |local| local.pattern_idx,
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_str,
+            .e_bytes_literal,
+            .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_lookup_required,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_match,
+            .e_if,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_tag,
+            .e_nominal,
+            .e_nominal_external,
+            .e_zero_argument_tag,
+            .e_closure,
+            .e_lambda,
+            .e_binop,
+            .e_unary_minus,
+            .e_unary_not,
+            .e_field_access,
+            .e_method_call,
+            .e_dispatch_call,
+            .e_interpolation,
+            .e_structural_eq,
+            .e_structural_hash,
+            .e_method_eq,
+            .e_type_method_call,
+            .e_type_dispatch_call,
+            .e_tuple_access,
+            .e_runtime_error,
+            .e_crash,
+            .e_dbg,
+            .e_expect_err,
+            .e_expect,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_return,
+            .e_break,
+            .e_for,
+            .e_hosted_lambda,
+            .e_run_low_level,
+            => null,
+        },
+        .field_access => null,
+    };
 }
 
 /// Find a pattern at the given offset.

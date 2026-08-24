@@ -2181,8 +2181,10 @@ pub const SyntaxChecker = struct {
         // Convert LSP position to byte offset
         const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
 
-        // Find the pattern_idx at this position
-        const target_pattern = cir_queries.findPatternAtOffset(module_env, target_offset) orelse return null;
+        // Resolve the symbol at this position. The cursor may sit on the
+        // definition or on any reference to it; both resolve to the pattern
+        // that owns the binding.
+        const target_pattern = cir_queries.resolveSymbolAtOffset(module_env, target_offset) orelse return null;
 
         // Collect all references to this pattern
         var regions: std.ArrayList(LspRange) = .empty;
