@@ -2616,7 +2616,10 @@ is indistinguishable from one written out clause by clause. Nothing downstream
 of checking sees a where alias. Because a rigid variable's constraint set is
 fixed by the annotation that introduces it, a where alias constrains only its
 receiver; canonicalization rejects a constraint written against a parameter
-rather than emitting one that could never reach the applied argument.
+rather than emitting one that could never reach the applied argument. An alias
+reference resolves its name through the ordinary type namespace, so it may be
+qualified (`a.Json.Encodable`) exactly like a type reference in any other
+position.
 
 The checked module outputs normalized dispatch plans. A dispatch plan is a
 checked record, not lowered code:
@@ -2966,7 +2969,24 @@ helper such as `Json.to_str` requires an empty encoder error type and returns
 the string directly. They do not need a required `init`, `finish`, or `default`
 hook. The runtime cursor types are implementation details of the builtin format
 module, not public `Json.State` or
-`Encoding.HttpHeader.State` APIs.
+`Encoding.HttpHeader.State` APIs. They are marked internal in the builtin type
+registry, which is the single fact that keeps them out of user scope and out of
+the generated docs.
+
+Because those types are unnameable, the requirement they express is published as
+a where alias instead, and the format module's own signatures are written in
+terms of it:
+
+```roc
+to_str : a -> Str where [a.Encodable([])]
+to_str_try : a -> Try(Str, err) where [a.Encodable(err)]
+parse : Str -> Try(a, [InvalidJson(Str), ..errs]) where [a.Parseable([InvalidJson(Str), ..errs])]
+```
+
+so `where [a.Json.Encodable([])]` is the supported way for user code to require
+that a value can be written as JSON. A public API whose constraint mentions an
+internal type has no writeable spelling, so a format module that hides a type
+owes callers an alias that names the same requirement.
 
 The underlying parse method is public and callable. It is deliberately curried:
 
@@ -2997,10 +3017,11 @@ shape:
 
 ```roc
 HttpHeader := [MissingRequired, BadHeader].{
-	parse : Str -> Try(output, HttpHeader)
-		where [
-			output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
-		]
+	output.Parseable(errs) : where [
+		output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, errs)),
+	]
+
+	parse : Str -> Try(output, HttpHeader) where [output.Parseable(HttpHeader)]
 	parse = |raw| {
 		Output : output
 
@@ -3392,10 +3413,11 @@ HttpHeaderEncoding :: [Caseless].{
 }
 
 HttpHeader := [MissingRequired, BadHeader].{
-	parser_for : () -> (Str -> Try(output, HttpHeader))
-		where [
-			output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
-		]
+	output.Parseable(errs) : where [
+		output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, errs)),
+	]
+
+	parser_for : () -> (Str -> Try(output, HttpHeader)) where [output.Parseable(HttpHeader)]
 	parser_for = || {
 		Output : output
 		parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)

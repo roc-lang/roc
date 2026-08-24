@@ -1,4 +1,4 @@
-ParserHiddenEncodingTypesRejected :: [].{}
+ParserInternalEncodingTypesRejected :: [].{}
 
 json_state : Encoding.JsonState
 json_state = todo

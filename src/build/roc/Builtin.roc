@@ -229,10 +229,21 @@ Builtin :: [].{
 			encode_dict : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_dict = |_, state, count, write_entries| JsonEncoding.encode_dict(state, count, write_entries)
 
-			to_str : a -> Str
-				where [
-					a.encoder_for : JsonEncoding -> (a, JsonEncodeState -> Try(JsonEncodeState, [])),
-				]
+			## Names the requirement that a value can be written as JSON, so a
+			## signature can say "JSON-encodable" without naming the encoder's
+			## internal format and output-state types.
+			a.Encodable(err) : where [
+				a.encoder_for : JsonEncoding -> (a, JsonEncodeState -> Try(JsonEncodeState, err)),
+			]
+
+			## Names the requirement that a value can be read from JSON, so a
+			## signature can say "JSON-parseable" without naming the parser's
+			## internal format and cursor types.
+			a.Parseable(errs) : where [
+				a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, errs)),
+			]
+
+			to_str : a -> Str where [a.Encodable([])]
 			to_str = |value| {
 				Shape : a
 				encode_shape = Shape.encoder_for(JsonEncoding.Default)
@@ -245,10 +256,7 @@ Builtin :: [].{
 			## be represented in JSON. For example, `F32` and `F64` values can be
 			## finite numbers, `NaN`, positive infinity, or negative infinity, but
 			## JSON can only represent the finite number case.
-			to_str_try : a -> Try(Str, err)
-				where [
-					a.encoder_for : JsonEncoding -> (a, JsonEncodeState -> Try(JsonEncodeState, err)),
-				]
+			to_str_try : a -> Try(Str, err) where [a.Encodable(err)]
 			to_str_try = |value| {
 				Shape : a
 				encode_shape = Shape.encoder_for(JsonEncoding.Default)
@@ -258,9 +266,7 @@ Builtin :: [].{
 			}
 
 			parse : Str -> Try(a, [InvalidJson(Str), ..errs])
-				where [
-					a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..errs])),
-				]
+				where [a.Parseable([InvalidJson(Str), ..errs])]
 			parse = |json| {
 				Shape : a
 				parse_shape = Shape.parser_for(JsonEncoding.Default)
@@ -277,9 +283,7 @@ Builtin :: [].{
 			}
 
 			parse_trailing_commas : Str -> Try(a, [InvalidJson(Str), ..errs])
-				where [
-					a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..errs])),
-				]
+				where [a.Parseable([InvalidJson(Str), ..errs])]
 			parse_trailing_commas = |json| {
 				Shape : a
 				parse_shape = Shape.parser_for(JsonEncoding.TrailingCommas)
@@ -296,9 +300,7 @@ Builtin :: [].{
 			}
 
 			parser_camel : () -> (Str -> Try(a, [InvalidJson(Str), ..errs]))
-				where [
-					a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..errs])),
-				]
+				where [a.Parseable([InvalidJson(Str), ..errs])]
 			parser_camel = || {
 				Shape : a
 				parse_shape = Shape.parser_for(JsonEncoding.CamelCase)
@@ -2098,10 +2100,15 @@ Builtin :: [].{
 		}
 
 		HttpHeader :: {}.{
+			## Names the requirement that a value can be read from HTTP headers, so
+			## a signature can say "header-parseable" without naming the parser's
+			## internal format and cursor types.
+			output.Parseable(errs) : where [
+				output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, errs)),
+			]
+
 			parser_for : () -> (Str -> Try(output, [BadHeader, ..errs]))
-				where [
-					output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, [BadHeader, ..errs])),
-				]
+				where [output.Parseable([BadHeader, ..errs])]
 			parser_for = || {
 				Output : output
 				parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
@@ -2113,9 +2120,7 @@ Builtin :: [].{
 			}
 
 			parse : Str -> Try(output, [BadHeader, ..errs])
-				where [
-					output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, [BadHeader, ..errs])),
-				]
+				where [output.Parseable([BadHeader, ..errs])]
 			parse = |raw| {
 				Output : output
 

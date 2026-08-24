@@ -262,6 +262,7 @@ pub const Tag = enum {
     diag_type_from_missing_module,
     diag_module_not_imported,
     diag_nested_type_not_found,
+    diag_internal_builtin_type,
     diag_nested_value_not_found,
     diag_record_builder_map2_not_found,
     diag_too_many_exports,

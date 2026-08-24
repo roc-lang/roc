@@ -2279,7 +2279,11 @@ fn renderDocTypeHtml(
                         if (item.needs_parens) try frames.append(gpa, .{ .html = ")" });
                         try frames.append(gpa, .{ .doc_type = .{
                             .value = func.ret,
-                            .needs_parens = false,
+                            // A function returning a function needs parens around
+                            // the result: `a -> (b -> c)` and `a, b -> c` are
+                            // different types, and only the parenthesized spelling
+                            // round-trips back through the parser.
+                            .needs_parens = func.ret.* == .function,
                             .indent = item.indent,
                         } });
                         try frames.append(gpa, .{ .html = if (func.effectful)
