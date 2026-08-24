@@ -364,15 +364,43 @@ fn structuralJsonSource(
     return try source.toOwnedSlice(allocator);
 }
 
-fn structuralJsonMonotypeStats(
+fn nestedOptionalStructuralJsonParserSource(
     allocator: Allocator,
     field_count: usize,
-    field_ty: []const u8,
-    operation: StructuralJsonOperation,
-) TestError!StructuralJsonMonotypeStats {
-    const source = try structuralJsonSource(allocator, field_count, field_ty, operation);
-    defer allocator.free(source);
+) Allocator.Error![]u8 {
+    var source = std.ArrayList(u8).empty;
+    errdefer source.deinit(allocator);
 
+    try source.appendSlice(allocator,
+        \\Fields : {
+        \\
+    );
+    for (0..field_count) |field_index| {
+        const field = try std.fmt.allocPrint(
+            allocator,
+            "    f{d} : Try(Str, [Missing]),\n",
+            .{field_index},
+        );
+        defer allocator.free(field);
+        try source.appendSlice(allocator, field);
+    }
+    try source.appendSlice(allocator,
+        \\}
+        \\
+        \\Shape : { outer : Try({ mid : Try({ inner : Try(Fields, [Missing]) }, [Missing]) }, [Missing]) }
+        \\
+        \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\main = |json| Json.parse(json)
+        \\
+    );
+
+    return try source.toOwnedSlice(allocator);
+}
+
+fn structuralJsonMonotypeStatsForSource(
+    allocator: Allocator,
+    source: []const u8,
+) TestError!StructuralJsonMonotypeStats {
     var counters: MonoLower.SpecializationCounters = .{};
     var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
         .specialization_counters = &counters,
@@ -387,6 +415,18 @@ fn structuralJsonMonotypeStats(
         .template_misses = counters.template_misses,
         .nested_misses = counters.nested_misses,
     };
+}
+
+fn structuralJsonMonotypeStats(
+    allocator: Allocator,
+    field_count: usize,
+    field_ty: []const u8,
+    operation: StructuralJsonOperation,
+) TestError!StructuralJsonMonotypeStats {
+    const source = try structuralJsonSource(allocator, field_count, field_ty, operation);
+    defer allocator.free(source);
+
+    return structuralJsonMonotypeStatsForSource(allocator, source);
 }
 
 const StructuralJsonLirStats = struct {
@@ -1808,6 +1848,43 @@ test "issue 10121 repeated nested JSON record fields share parser helpers" {
         );
     }
     try std.testing.expect(eight_fields.expressions <= linear_expression_bound);
+}
+
+test "issue 10889 nested optional JSON parser specialization growth is bounded" {
+    // Repro for https://github.com/roc-lang/roc/issues/10889: wrapping one
+    // wide optional-field record in optional record layers should add constant
+    // specialization work rather than multiplying the per-field growth.
+    const allocator = std.testing.allocator;
+    const flat_four = try structuralJsonMonotypeStats(allocator, 4, "Try(Str, [Missing])", .parse);
+    const flat_eight = try structuralJsonMonotypeStats(allocator, 8, "Try(Str, [Missing])", .parse);
+
+    const nested_four_source = try nestedOptionalStructuralJsonParserSource(allocator, 4);
+    defer allocator.free(nested_four_source);
+    const nested_four = try structuralJsonMonotypeStatsForSource(allocator, nested_four_source);
+
+    const nested_eight_source = try nestedOptionalStructuralJsonParserSource(allocator, 8);
+    defer allocator.free(nested_eight_source);
+    const nested_eight = try structuralJsonMonotypeStatsForSource(allocator, nested_eight_source);
+
+    const flat_expression_growth = flat_eight.expressions - flat_four.expressions;
+    const nested_expression_growth = nested_eight.expressions - nested_four.expressions;
+    if (nested_expression_growth > flat_expression_growth * 2) {
+        std.debug.print(
+            "nested optional JSON parser expression growth exceeded twice the flat growth: " ++
+                "expressions flat {d}->{d}, nested {d}->{d}; definitions flat {d}->{d}, nested {d}->{d}\n",
+            .{
+                flat_four.expressions,
+                flat_eight.expressions,
+                nested_four.expressions,
+                nested_eight.expressions,
+                flat_four.definitions,
+                flat_eight.definitions,
+                nested_four.definitions,
+                nested_eight.definitions,
+            },
+        );
+    }
+    try std.testing.expect(nested_expression_growth <= flat_expression_growth * 2);
 }
 
 test "issue 10121 structural JSON helper sharing survives LIR lowering" {
