@@ -2555,6 +2555,53 @@ test "multi-use block helper with statements is not inlined" {
     , "helper", false);
 }
 
+test "single-use block helper nested in a multi-use wrapper is not duplicated" {
+    try expectInlinePlanDecision(
+        \\helper : List(U64), U64 -> List(U64)
+        \\helper = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\wrapper : List(U64), U64 -> List(U64)
+        \\wrapper = |xs, i| helper(xs, i)
+        \\
+        \\main : List(U64)
+        \\main = {
+        \\    a = wrapper([0.U64, 0], 1)
+        \\    wrapper(a, 2)
+        \\}
+    , "helper", false);
+}
+
+test "procedure boundary keeps a deeper single-use helper inline" {
+    const source =
+        \\inner : List(U64), U64 -> List(U64)
+        \\inner = |xs, i| {
+        \\    a = xs.set(0, i) ?? xs
+        \\    a.set(1, i) ?? a
+        \\}
+        \\
+        \\middle : List(U64), U64 -> List(U64)
+        \\middle = |xs, i| {
+        \\    a = inner(xs, i)
+        \\    a.set(0, i) ?? a
+        \\}
+        \\
+        \\wrapper : List(U64), U64 -> List(U64)
+        \\wrapper = |xs, i| middle(xs, i)
+        \\
+        \\main : List(U64)
+        \\main = {
+        \\    a = wrapper([0.U64, 0], 1)
+        \\    wrapper(a, 2)
+        \\}
+    ;
+
+    try expectInlinePlanDecision(source, "middle", false);
+    try expectInlinePlanDecision(source, "inner", true);
+}
+
 test "escaping single-call block helper is not inlined" {
     try expectInlinePlanDecision(
         \\helper : List(U64), U64 -> List(U64)

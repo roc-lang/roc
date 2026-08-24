@@ -3481,24 +3481,29 @@ Monotype Lifted output. No later pipeline stage repeats that finalization.
 
 SpecConstr also owns the exact procedure-use inventory for its final rewritten
 graph. Its last graph snapshot records each function's external direct-call
-count, unique call expression when there is one, function-value/root uses, and
-presence of procedure-relative returns. The checked pipeline retains that
-sidecar across Lambda Solved and supplies it to the solved inline analyzer; the
-analyzer does not rescan the whole program or reconstruct uses from emitted
-code. Lambda Solved does not change the lifted expression graph, so function ids
-and use counts remain exact across that boundary.
+count, unique call expression and owning function when there is one,
+function-value/root uses, and presence of procedure-relative returns. The
+checked pipeline retains that sidecar across Lambda Solved and supplies it to
+the solved inline analyzer; the analyzer does not rescan the whole program or
+reconstruct uses from emitted code. Lambda Solved does not change the lifted
+expression graph, so function ids and use counts remain exact across that
+boundary.
 
 The solved inline plan admits capture-free functions with exactly one non-cold
 external direct call and no function-value or root uses. A single call-site proof
 permits ordinary statements, branches, local loops, and typed join points because
-lowering the body once cannot duplicate stored code. Bodies with
-procedure-relative returns or loop control not owned by a loop inside the body
-remain procedures, and cycles consisting entirely of selected inline bodies are
-rejected before lowering. The analyzer records the complete decision before LIR
-generation; direct Solved-to-LIR lowering only substitutes arguments and dumbly
-lowers a selected body at its unique call site. The existing wrapper eligibility
-remains available for proven small call-through and low-level wrappers even when
-they have multiple direct uses.
+lowering the body once cannot duplicate stored code. That proof follows the
+unique call's owning functions through the selected inline plan. If an owning
+wrapper has multiple direct inline sites or also survives as a function value,
+the nested single-use body remains a procedure; a non-inlined owner establishes
+a single procedure-body boundary. Bodies with procedure-relative returns or
+loop control not owned by a loop inside the body remain procedures, and cycles
+consisting entirely of selected inline bodies are rejected before lowering. The
+analyzer records the complete decision before LIR generation; direct
+Solved-to-LIR lowering only substitutes arguments and dumbly lowers a selected
+body at its unique call site. The existing wrapper eligibility remains available
+for proven small call-through and low-level wrappers even when they have multiple
+direct uses.
 Each post-lift capture operand explicitly names the callee capture slot it
 supplies. Capture finalization preserves that key while rewriting the operand
 value and never infers the target slot from the value's own capture identity.

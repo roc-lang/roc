@@ -265,6 +265,7 @@ fn walkSpanCloned(
 pub const ProcedureUse = struct {
     external_calls: usize = 0,
     external_call_expr: ?Ast.ExprId = null,
+    external_call_owner: ?Ast.FnId = null,
     value_refs: usize = 0,
     contains_return: bool = false,
 };
@@ -11092,6 +11093,7 @@ fn collectAllFnUsesInExpr(
                     const summary = &uses[@intFromEnum(callee)];
                     summary.external_calls += 1;
                     summary.external_call_expr = expr_id;
+                    summary.external_call_owner = owner;
                 }
             }
             collectAllFnUsesInExprSpan(program, call.args, owner, uses);

@@ -67,7 +67,19 @@ const Decision = union(enum) {
     unknown,
     visiting,
     never,
-    inline_body: Lifted.ExprId,
+    inline_body: Candidate,
+};
+
+const Candidate = struct {
+    body: Lifted.ExprId,
+    kind: enum { wrapper, single_use },
+};
+
+const MaterializationState = enum {
+    unknown,
+    visiting,
+    once,
+    multiple,
 };
 
 const InlineAnalyzer = struct {
@@ -105,11 +117,19 @@ const InlineAnalyzer = struct {
             _ = try analyzer.inlineBody(fn_id);
         }
 
+        const materialization_states = try allocator.alloc(MaterializationState, decisions.len);
+        defer allocator.free(materialization_states);
+        @memset(materialization_states, .unknown);
+        for (0..solved.lifted.fnCount()) |index| {
+            const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            analyzer.resolveSingleUseMaterialization(fn_id, materialization_states);
+        }
+
         const inline_bodies = try allocator.alloc(?Lifted.ExprId, decisions.len);
         errdefer allocator.free(inline_bodies);
         for (decisions, 0..) |decision, index| {
             inline_bodies[index] = switch (decision) {
-                .inline_body => |body| body,
+                .inline_body => |candidate| candidate.body,
                 .unknown,
                 .visiting,
                 .never,
@@ -135,7 +155,7 @@ const InlineAnalyzer = struct {
                 return null;
             },
             .never => return null,
-            .inline_body => |body| return body,
+            .inline_body => |candidate| return candidate.body,
         }
 
         self.decisions[index] = .visiting;
@@ -145,7 +165,7 @@ const InlineAnalyzer = struct {
             if (popped != fn_id) Common.invariant("inline analysis stack was corrupted");
         }
 
-        const inline_body = self.inlineCandidate(fn_id) orelse {
+        const candidate = self.inlineCandidate(fn_id) orelse {
             self.decisions[index] = .never;
             return null;
         };
@@ -155,7 +175,7 @@ const InlineAnalyzer = struct {
         // re-enters this function while it is `.visiting`, so `markCycle` marks
         // the whole cycle `.never` and keeps it out of the inline plan instead
         // of inlining it without bound.
-        if (!try self.visitBodyCallees(inline_body, 0)) {
+        if (!try self.visitBodyCallees(candidate.body, 0)) {
             self.decisions[index] = .never;
             return null;
         }
@@ -168,13 +188,14 @@ const InlineAnalyzer = struct {
             => Common.invariant("inline analysis decision changed unexpectedly while visiting a candidate"),
         }
 
-        self.decisions[index] = .{ .inline_body = inline_body };
-        return inline_body;
+        self.decisions[index] = .{ .inline_body = candidate };
+        return candidate.body;
     }
 
-    fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
-        if (self.wrapperCandidate(fn_id)) |body| return body;
-        return self.singleUseCandidate(fn_id);
+    fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Candidate {
+        if (self.wrapperCandidate(fn_id)) |body| return .{ .body = body, .kind = .wrapper };
+        if (self.singleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .single_use };
+        return null;
     }
 
     fn singleUseCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
@@ -202,6 +223,98 @@ const InlineAnalyzer = struct {
             .hosted => return null,
         };
         return body;
+    }
+
+    /// Resolve outer single-use candidates before their descendants. Demoting
+    /// an outer body creates a procedure boundary, which can make a nested
+    /// single-use body safe to inline exactly once.
+    fn resolveSingleUseMaterialization(
+        self: *InlineAnalyzer,
+        fn_id: Lifted.FnId,
+        states: []MaterializationState,
+    ) void {
+        const index = @intFromEnum(fn_id);
+        const candidate = switch (self.decisions[index]) {
+            .inline_body => |candidate| candidate,
+            .never => {
+                states[index] = .once;
+                return;
+            },
+            .unknown,
+            .visiting,
+            => Common.invariant("inline materialization analysis saw an unfinished decision"),
+        };
+        if (candidate.kind != .single_use) return;
+
+        switch (states[index]) {
+            .unknown => states[index] = .visiting,
+            .visiting => Common.invariant("single-use call-owner graph contained a selected cycle"),
+            .once => return,
+            .multiple => Common.invariant("resolved single-use body still had multiple materializations"),
+        }
+
+        const use = self.procedure_usage.get(fn_id);
+        const owner = use.external_call_owner orelse
+            Common.invariant("single-use function had no external call owner");
+        if (!self.bodyMaterializedOnce(owner, states)) {
+            self.decisions[index] = .never;
+        }
+        states[index] = .once;
+    }
+
+    /// Whether the selected inline plan lowers this source body in exactly one
+    /// place. A procedure boundary owns one body materialization. A selected
+    /// body instead inherits the materialization count of its unique caller;
+    /// multiple direct inline sites or a simultaneous value/procedure use stop
+    /// the proof.
+    fn bodyMaterializedOnce(
+        self: *InlineAnalyzer,
+        fn_id: Lifted.FnId,
+        states: []MaterializationState,
+    ) bool {
+        const index = @intFromEnum(fn_id);
+        switch (self.decisions[index]) {
+            .never => {
+                states[index] = .once;
+                return true;
+            },
+            .inline_body => |candidate| if (candidate.kind == .single_use) {
+                self.resolveSingleUseMaterialization(fn_id, states);
+                return true;
+            },
+            .unknown,
+            .visiting,
+            => Common.invariant("inline materialization analysis saw an unfinished owner decision"),
+        }
+
+        switch (states[index]) {
+            .unknown => states[index] = .visiting,
+            .visiting => Common.invariant("selected wrapper call-owner graph contained a cycle"),
+            .once => return true,
+            .multiple => return false,
+        }
+
+        const use = self.procedure_usage.get(fn_id);
+        const once = if (use.external_calls == 0)
+            true
+        else if (use.external_calls != 1)
+            false
+        else blk: {
+            const call_expr_id = use.external_call_expr orelse
+                Common.invariant("single-call inline owner had no external call expression");
+            const call_expr = self.solved.lifted.getExpr(call_expr_id);
+            if (call_expr.data != .call_proc) {
+                Common.invariant("single-call inline owner use was not a direct call expression");
+            }
+            if (call_expr.data.call_proc.is_cold) break :blk true;
+            if (use.value_refs != 0) break :blk false;
+
+            const owner = use.external_call_owner orelse
+                Common.invariant("single-call inline owner had no external call owner");
+            break :blk self.bodyMaterializedOnce(owner, states);
+        };
+        states[index] = if (once) .once else .multiple;
+        return once;
     }
 
     fn wrapperCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) ?Lifted.ExprId {
