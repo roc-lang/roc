@@ -1,0 +1,275 @@
+//! Handlers for LSP `textDocument/rename` and `textDocument/prepareRename`.
+//!
+//! Rename rewrites every occurrence of one binding: the binding itself, the
+//! name on its type annotation, and every reference to it. The occurrences come
+//! from the CIR, so shadowing is respected and same-named bindings elsewhere in
+//! the file are left alone.
+//!
+//! This handler never guesses. If the document does not build, or the position
+//! names something other than a plain local binding, it refuses instead of
+//! offering a partial rewrite — editing every occurrence but one silently
+//! breaks the program, which is worse than doing nothing.
+//!
+//! Cross-module rename is not supported: only the requested document is edited,
+//! and a binding another module can reach is still reported here, so a rename
+//! of an exported name must be reviewed by the author. That limit is why the
+//! server declares `prepareProvider`, which lets the editor ask first.
+
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const protocol = @import("../protocol.zig");
+const syntax = @import("../syntax.zig");
+
+/// One text replacement inside a document.
+const TextEdit = struct {
+    range: Range,
+    newText: []const u8,
+};
+
+const Position = struct {
+    line: u32,
+    character: u32,
+};
+
+const Range = struct {
+    start: Position,
+    end: Position,
+};
+
+/// An LSP `WorkspaceEdit` carrying edits for a single document.
+///
+/// `changes` is keyed by document URI, which no static Zig struct can express,
+/// so the object is written by hand. The `changes` form is used rather than
+/// `documentChanges` because every client supports it, while `documentChanges`
+/// is gated on a client capability the server does not currently parse.
+const WorkspaceEdit = struct {
+    uri: []const u8,
+    edits: []const TextEdit,
+
+    pub fn jsonStringify(self: WorkspaceEdit, writer: anytype) error{WriteFailed}!void {
+        try writer.beginObject();
+        try writer.objectField("changes");
+        try writer.beginObject();
+        try writer.objectField(self.uri);
+        try writer.write(self.edits);
+        try writer.endObject();
+        try writer.endObject();
+    }
+};
+
+/// A position request, as both rename handlers receive it.
+const PositionParams = struct {
+    uri: []const u8,
+    line: u32,
+    character: u32,
+    /// The request's params object, so `rename` can read `newName` from it
+    /// without re-validating what was already checked here.
+    obj: std.json.ObjectMap,
+};
+
+/// Parse `textDocument.uri` and `position` out of a request.
+///
+/// Reports the specific missing or mistyped field to the client and returns
+/// null when the params do not describe a position.
+fn parsePositionParams(
+    self: anytype,
+    id: *protocol.JsonId,
+    method: []const u8,
+    maybe_params: ?std.json.Value,
+) (Allocator.Error || error{WriteFailed})!?PositionParams {
+    // Name the method in the message so a client that sends both requests can
+    // tell which one it got wrong.
+    var message_buf: [96]u8 = undefined;
+
+    const params = maybe_params orelse {
+        const message = std.fmt.bufPrint(&message_buf, "{s} requires params", .{method}) catch "rename requires params";
+        try self.sendError(id, .invalid_params, message);
+        return null;
+    };
+    if (std.meta.activeTag(params) != .object) {
+        const message = std.fmt.bufPrint(&message_buf, "{s} params must be an object", .{method}) catch "rename params must be an object";
+        try self.sendError(id, .invalid_params, message);
+        return null;
+    }
+    const obj = params.object;
+
+    const text_doc_value = obj.get("textDocument") orelse {
+        try self.sendError(id, .invalid_params, "missing textDocument");
+        return null;
+    };
+    if (std.meta.activeTag(text_doc_value) != .object) {
+        try self.sendError(id, .invalid_params, "textDocument must be an object");
+        return null;
+    }
+    const uri_value = text_doc_value.object.get("uri") orelse {
+        try self.sendError(id, .invalid_params, "missing uri");
+        return null;
+    };
+    if (std.meta.activeTag(uri_value) != .string) {
+        try self.sendError(id, .invalid_params, "uri must be a string");
+        return null;
+    }
+
+    const position_value = obj.get("position") orelse {
+        try self.sendError(id, .invalid_params, "missing position");
+        return null;
+    };
+    if (std.meta.activeTag(position_value) != .object) {
+        try self.sendError(id, .invalid_params, "position must be an object");
+        return null;
+    }
+    const position_obj = position_value.object;
+
+    const line_value = position_obj.get("line") orelse {
+        try self.sendError(id, .invalid_params, "missing line");
+        return null;
+    };
+    if (std.meta.activeTag(line_value) != .integer) {
+        try self.sendError(id, .invalid_params, "line must be an integer");
+        return null;
+    }
+    const line: u32 = std.math.cast(u32, line_value.integer) orelse {
+        try self.sendError(id, .invalid_params, "line must be a non-negative integer");
+        return null;
+    };
+
+    const character_value = position_obj.get("character") orelse {
+        try self.sendError(id, .invalid_params, "missing character");
+        return null;
+    };
+    if (std.meta.activeTag(character_value) != .integer) {
+        try self.sendError(id, .invalid_params, "character must be an integer");
+        return null;
+    }
+    const character: u32 = std.math.cast(u32, character_value.integer) orelse {
+        try self.sendError(id, .invalid_params, "character must be a non-negative integer");
+        return null;
+    };
+
+    return PositionParams{
+        .uri = uri_value.string,
+        .line = line,
+        .character = character,
+        .obj = obj,
+    };
+}
+
+/// Convert a collected range into the LSP wire shape.
+fn toRange(range: syntax.SyntaxChecker.LspRange) Range {
+    return .{
+        .start = .{ .line = range.start_line, .character = range.start_col },
+        .end = .{ .line = range.end_line, .character = range.end_col },
+    };
+}
+
+/// Handler for `textDocument/rename` requests.
+pub fn handler(comptime ServerType: type) type {
+    return struct {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
+            const position = try parsePositionParams(self, id, "rename", maybe_params) orelse return;
+
+            const new_name_value = position.obj.get("newName") orelse {
+                try self.sendError(id, .invalid_params, "missing newName");
+                return;
+            };
+            if (std.meta.activeTag(new_name_value) != .string) {
+                try self.sendError(id, .invalid_params, "newName must be a string");
+                return;
+            }
+            const new_name = new_name_value.string;
+
+            const doc = self.doc_store.get(position.uri);
+            const text = if (doc) |d| d.text else null;
+
+            const outcome = self.syntax_checker.getRenameEditsAtPosition(
+                position.uri,
+                text,
+                position.line,
+                position.character,
+                new_name,
+            ) catch |err| {
+                std.log.err("rename failed: {s}", .{@errorName(err)});
+                if (err == error.OutOfMemory) return error.OutOfMemory;
+                try self.sendError(id, .request_failed, "rename could not be computed for this document");
+                return;
+            };
+
+            const resolved = outcome orelse {
+                try self.sendError(id, .request_failed, "this document does not currently compile, so it cannot be renamed safely");
+                return;
+            };
+
+            switch (resolved) {
+                .rejected => |rejection| {
+                    const message = switch (rejection) {
+                        .not_a_local_binding => "only local bindings can be renamed here",
+                        .bad_new_name => |reason| reason.message(),
+                        .name_already_in_scope => "that name is already used by another binding that is visible here, so renaming would change what the code means",
+                        .scope_unavailable => "this binding's scope could not be determined, so the rename could not be checked for safety",
+                    };
+                    try self.sendError(id, .request_failed, message);
+                },
+                .edits => |result| {
+                    defer result.deinit(self.allocator);
+
+                    var edits: std.ArrayList(TextEdit) = .empty;
+                    defer edits.deinit(self.allocator);
+                    for (result.regions) |range| {
+                        try edits.append(self.allocator, .{
+                            .range = toRange(range),
+                            .newText = new_name,
+                        });
+                    }
+
+                    try self.sendResponse(id, WorkspaceEdit{
+                        .uri = position.uri,
+                        .edits = edits.items,
+                    });
+                },
+            }
+        }
+    };
+}
+
+/// Handler for `textDocument/prepareRename` requests.
+pub fn prepareHandler(comptime ServerType: type) type {
+    return struct {
+        pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
+            const position = try parsePositionParams(self, id, "prepareRename", maybe_params) orelse return;
+
+            const doc = self.doc_store.get(position.uri);
+            const text = if (doc) |d| d.text else null;
+
+            const prepared = self.syntax_checker.prepareRenameAtPosition(
+                position.uri,
+                text,
+                position.line,
+                position.character,
+            ) catch |err| {
+                std.log.err("prepareRename failed: {s}", .{@errorName(err)});
+                if (err == error.OutOfMemory) return error.OutOfMemory;
+                try self.sendNullResponse(id);
+                return;
+            };
+
+            // A null result tells the editor not to offer renaming here, which
+            // is what it should do for anything this server cannot rewrite in
+            // full.
+            const result = prepared orelse {
+                try self.sendNullResponse(id);
+                return;
+            };
+            defer result.deinit(self.allocator);
+
+            const Response = struct {
+                range: Range,
+                placeholder: []const u8,
+            };
+
+            try self.sendResponse(id, Response{
+                .range = toRange(result.range),
+                .placeholder = result.placeholder,
+            });
+        }
+    };
+}

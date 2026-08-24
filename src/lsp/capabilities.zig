@@ -33,6 +33,7 @@ pub const ServerCapabilities = struct {
     selectionRangeProvider: bool = false,
     documentHighlightProvider: bool = false,
     completionProvider: ?CompletionOptions = null,
+    renameProvider: ?RenameOptions = null,
 
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
@@ -60,6 +61,12 @@ pub const ServerCapabilities = struct {
         triggerCharacters: []const []const u8 = &.{ ".", ":" },
         resolveProvider: bool = false,
     };
+
+    pub const RenameOptions = struct {
+        /// The server answers `textDocument/prepareRename`, so the editor asks
+        /// whether a position is renameable before prompting for a new name.
+        prepareProvider: bool = true,
+    };
 };
 
 /// Returns the server capabilities currently implemented.
@@ -84,5 +91,6 @@ pub fn buildCapabilities() ServerCapabilities {
         .selectionRangeProvider = true,
         .documentHighlightProvider = true,
         .completionProvider = .{},
+        .renameProvider = .{},
     };
 }

@@ -3,17 +3,46 @@ The Roc compiler can now expose an experimental Language Server Protocol (LSP) e
 written in Zig as part of the Rust to Zig rewrite.
 
 ## Current state
-The experimental LSP currently only holds the scaffolding for the incoming implementation.
-It doesn't provide any features yet, but it does connect to your editor, detect file change
-and store the buffer in memory. 
-The following request have been handled :
-- `initialize`
-- `shutdown`
-The following notifications have been handled :
-- `initialized`
-- `exit`
-- `didOpen` (stores the buffer into a `StringHashMap`, but doesn't do any action on it)
-- `didChange` (same as `didOpen`, but also supports incremental changes)
+The following requests are handled:
+- `initialize`, `shutdown`
+- `textDocument/hover`
+- `textDocument/definition`
+- `textDocument/completion`
+- `textDocument/documentSymbol`
+- `textDocument/documentHighlight`
+- `textDocument/formatting`
+- `textDocument/foldingRange`
+- `textDocument/selectionRange`
+- `textDocument/semanticTokens/full`
+- `textDocument/rename`, `textDocument/prepareRename`
+
+The following notifications are handled:
+- `initialized`, `exit`
+- `didOpen` (stores the buffer into a `StringHashMap`)
+- `didChange` (same as `didOpen`, and supports incremental changes)
+
+Diagnostics are pushed as `textDocument/publishDiagnostics` when a document is opened or changed.
+
+### Rename
+
+Rename edits only the document it was asked about. It rewrites the binding, the name on
+its type annotation, and every reference, taking the occurrences from the CIR so shadowing
+is respected.
+
+It refuses rather than producing a partial rewrite, because editing every occurrence but one
+silently breaks the program. It refuses when:
+- the document does not compile, so there is no CIR to read occurrences from
+- the position names something other than a plain local binding — a type, a tag, a record
+  field, or a destructuring pattern
+- the new name is not a single Roc identifier
+- the new name would change what the name *means*: case separates types from values, and the
+  `!`, `_` and `$` markers carry meaning, so `foo` cannot be renamed to `foo!`
+- another binding of the new name is live where the renamed one is, which would capture a
+  reference or shadow a binding
+
+Cross-module rename does not exist yet. A binding that other modules import is still renamed
+locally, so renaming an exported name will break its importers — the editor cannot warn about
+this, so it is on the author to check.
 
 
 ## How to implement new LSP capabilities

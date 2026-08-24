@@ -26,6 +26,7 @@ const completion_builtins = @import("completion/builtins.zig");
 const completion_builder = @import("completion/builder.zig");
 const BuildEnvHandle = @import("build_env_handle.zig").BuildEnvHandle;
 const doc_comments = @import("doc_comments.zig");
+const rename_rules = @import("rename.zig");
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -2186,7 +2187,23 @@ pub const SyntaxChecker = struct {
         // that owns the binding.
         const target_pattern = cir_queries.resolveSymbolAtOffset(module_env, target_offset) orelse return null;
 
-        // Collect all references to this pattern
+        return HighlightResult{
+            .regions = try self.collectSymbolRegions(module_env, target_pattern),
+        };
+    }
+
+    /// Collect every source range that names `target_pattern`: the binding
+    /// itself, the name on its type annotation if it has one, and every
+    /// reference to it.
+    ///
+    /// This is the set a rename must rewrite, so highlighting and renaming
+    /// share it rather than each deciding what counts as an occurrence.
+    /// Caller owns the returned slice.
+    fn collectSymbolRegions(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        target_pattern: CIR.Pattern.Idx,
+    ) Allocator.Error![]LspRange {
         var regions: std.ArrayList(LspRange) = .empty;
         errdefer regions.deinit(self.allocator);
 
@@ -2197,14 +2214,213 @@ pub const SyntaxChecker = struct {
             try regions.append(self.allocator, range);
         }
 
-        // Find all lookups that reference this pattern
+        // Find all lookups that reference this pattern, plus the name written
+        // on the binding's type annotation.
         var lookup_regions = try cir_queries.collectLookupReferences(module_env, target_pattern, self.allocator);
         defer lookup_regions.deinit(self.allocator);
         try regions.appendSlice(self.allocator, lookup_regions.items);
 
-        return HighlightResult{
-            .regions = try regions.toOwnedSlice(self.allocator),
+        return regions.toOwnedSlice(self.allocator);
+    }
+
+    /// What checking a new name against the surrounding scopes established.
+    const ScopeCheck = enum {
+        /// No other binding of that name is live where the renamed one is.
+        clear,
+        /// Another such binding is live, so the rewrite would capture or shadow.
+        taken,
+        /// The renamed binding's extent was not found, so nothing was checked.
+        scope_unavailable,
+    };
+
+    /// Whether renaming `target_pattern` to `new_name` would collide with
+    /// another binding of that name.
+    ///
+    /// Rename rewrites text, but a name means whichever binding is live where
+    /// it is written. If a different `new_name` binding is live anywhere the
+    /// renamed one is, the rewrite silently repoints a reference: renaming `k`
+    /// in `|v| { helper = |k| k + v }` to `v` yields `|v| v + v`, which
+    /// compiles and computes something else.
+    ///
+    /// Two bindings whose live ranges overlap cannot both be called
+    /// `new_name`, so an overlap is refused. Bindings in unrelated scopes do
+    /// not overlap and stay renameable.
+    fn checkNewNameAgainstScope(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        target_pattern: CIR.Pattern.Idx,
+        new_name: []const u8,
+    ) Allocator.Error!ScopeCheck {
+        var scopes = scope_map.ScopeMap.init(self.allocator);
+        defer scopes.deinit();
+        try scopes.build(module_env);
+
+        var target_binding: ?scope_map.Binding = null;
+        for (scopes.bindings.items) |binding| {
+            if (@intFromEnum(binding.pattern_idx) == @intFromEnum(target_pattern)) {
+                target_binding = binding;
+                break;
+            }
+        }
+
+        // Without the renamed binding's own extent there is nothing to compare
+        // against. `ScopeMap` records a destructured field under the extent of
+        // the pattern that destructures it, for one, so not every binding is
+        // found by its own index. Refuse, but say which of the two happened:
+        // "the name is taken" would be a claim about the code that has not
+        // been established.
+        const target = target_binding orelse return .scope_unavailable;
+
+        for (scopes.bindings.items) |binding| {
+            if (@intFromEnum(binding.pattern_idx) == @intFromEnum(target_pattern)) continue;
+            if (!std.mem.eql(u8, module_env.common.idents.getText(binding.ident), new_name)) continue;
+            if (binding.visible_from <= target.visible_to and target.visible_from <= binding.visible_to) {
+                return .taken;
+            }
+        }
+        return .clear;
+    }
+
+    /// Why a rename request could not be answered with edits.
+    pub const RenameRejection = union(enum) {
+        /// The position does not name a binding this server can rename.
+        not_a_local_binding,
+        /// The requested new name is not usable in place of the old one.
+        bad_new_name: rename_rules.Rejection,
+        /// Another binding of the requested name is live where the renamed one
+        /// is, so the rewrite would capture or shadow it.
+        name_already_in_scope,
+        /// The renamed binding's extent could not be determined, so the rename
+        /// could not be checked for capture at all.
+        scope_unavailable,
+    };
+
+    /// The edits a rename produces, all within the requested document.
+    pub const RenameResult = struct {
+        regions: []LspRange,
+        /// The name being replaced, owned by this result.
+        old_name: []u8,
+
+        pub fn deinit(self: RenameResult, allocator: std.mem.Allocator) void {
+            allocator.free(self.regions);
+            allocator.free(self.old_name);
+        }
+    };
+
+    /// A rename request either produces edits or is refused with a reason.
+    pub const RenameOutcome = union(enum) {
+        edits: RenameResult,
+        rejected: RenameRejection,
+    };
+
+    /// What the editor needs to open its rename prompt.
+    pub const PrepareRenameResult = struct {
+        /// The occurrence under the cursor, which the editor highlights.
+        range: LspRange,
+        /// The current name, pre-filled into the prompt. Owned by this result.
+        placeholder: []u8,
+
+        pub fn deinit(self: PrepareRenameResult, allocator: std.mem.Allocator) void {
+            allocator.free(self.placeholder);
+        }
+    };
+
+    /// Report whether the symbol at the given position can be renamed, and
+    /// under what name the editor should prompt.
+    ///
+    /// Returns null when there is nothing renameable there, which the editor
+    /// shows by refusing to open its rename prompt at all.
+    pub fn prepareRenameAtPosition(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        line: u32,
+        character: u32,
+    ) QueryError!?PrepareRenameResult {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        var build = try self.prepareDocumentBuild(uri, override_text);
+        defer build.deinit();
+
+        self.logDebug(.build, "prepareRename: document {s} reused={}", .{ build.absolute_path, build.reused });
+
+        // Rename must never be answered from a partial build: rewriting every
+        // occurrence but one silently breaks the program, so refusing is the
+        // only honest answer when the CIR is unavailable.
+        if (!build.build_succeeded) {
+            self.logDebug(.build, "prepareRename: build unavailable for {s}", .{build.absolute_path});
+            return null;
+        }
+
+        const module_env = build.getModuleEnv() orelse return null;
+        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+        const target = renameTargetAt(module_env, target_offset) orelse return null;
+
+        const regions = try self.collectSymbolRegions(module_env, target.pattern);
+        defer self.allocator.free(regions);
+
+        // Prompt on the occurrence the cursor is actually in, not on the
+        // definition, so the editor highlights what the user clicked.
+        const cursor_range = rangeContaining(regions, line, character) orelse return null;
+
+        const name = module_env.common.idents.getText(target.ident);
+        return PrepareRenameResult{
+            .range = cursor_range,
+            .placeholder = try self.allocator.dupe(u8, name),
         };
+    }
+
+    /// Produce the edits that rename the symbol at the given position.
+    ///
+    /// Returns null when the document could not be built or the position maps
+    /// nowhere; a built document with nothing renameable at that position is
+    /// reported as a rejection instead, so the editor can say why.
+    pub fn getRenameEditsAtPosition(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        line: u32,
+        character: u32,
+        new_name: []const u8,
+    ) QueryError!?RenameOutcome {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        var build = try self.prepareDocumentBuild(uri, override_text);
+        defer build.deinit();
+
+        self.logDebug(.build, "rename: document {s} reused={}", .{ build.absolute_path, build.reused });
+
+        if (!build.build_succeeded) {
+            self.logDebug(.build, "rename: build unavailable for {s}", .{build.absolute_path});
+            return null;
+        }
+
+        const module_env = build.getModuleEnv() orelse return null;
+        const target_offset = pos.positionToOffset(module_env, line, character) orelse return null;
+
+        const target = renameTargetAt(module_env, target_offset) orelse
+            return RenameOutcome{ .rejected = .not_a_local_binding };
+
+        const old_name = module_env.common.idents.getText(target.ident);
+        if (try rename_rules.checkNewName(self.allocator, old_name, new_name)) |rejection| {
+            return RenameOutcome{ .rejected = .{ .bad_new_name = rejection } };
+        }
+
+        switch (try self.checkNewNameAgainstScope(module_env, target.pattern, new_name)) {
+            .clear => {},
+            .taken => return RenameOutcome{ .rejected = .name_already_in_scope },
+            .scope_unavailable => return RenameOutcome{ .rejected = .scope_unavailable },
+        }
+
+        const regions = try self.collectSymbolRegions(module_env, target.pattern);
+        errdefer self.allocator.free(regions);
+
+        return RenameOutcome{ .edits = .{
+            .regions = regions,
+            .old_name = try self.allocator.dupe(u8, old_name),
+        } };
     }
 
     /// Find the pattern_idx at the given offset.
@@ -2906,4 +3122,50 @@ fn extractSymbolFromDecl(
         line_offsets,
         if (is_function) .function else .variable,
     );
+}
+
+/// The binding a rename request refers to.
+const RenameTarget = struct {
+    pattern: CIR.Pattern.Idx,
+    ident: base.Ident.Idx,
+};
+
+/// Resolve a source offset to a binding that can be renamed.
+///
+/// Only a plain `assign` pattern names a single binding whose every occurrence
+/// this server can account for. Destructuring, literal, and tag patterns bind
+/// through structure that a name-for-name rewrite cannot express, so they are
+/// refused rather than half-renamed.
+fn renameTargetAt(module_env: *ModuleEnv, offset: u32) ?RenameTarget {
+    const pattern_idx = cir_queries.resolveSymbolAtOffset(module_env, offset) orelse return null;
+    return switch (module_env.store.getPattern(pattern_idx)) {
+        .assign => |assign| .{ .pattern = pattern_idx, .ident = assign.ident },
+        .as,
+        .applied_tag,
+        .nominal,
+        .nominal_external,
+        .record_destructure,
+        .list,
+        .tuple,
+        .num_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .num_from_numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .underscore,
+        .runtime_error,
+        => null,
+    };
+}
+
+/// Find the collected range that contains the given position.
+fn rangeContaining(regions: []const cir_queries.LspRange, line: u32, character: u32) ?cir_queries.LspRange {
+    for (regions) |range| {
+        if (range.start_line != line or range.end_line != line) continue;
+        if (character >= range.start_col and character <= range.end_col) return range;
+    }
+    return null;
 }
