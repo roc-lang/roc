@@ -4700,7 +4700,7 @@ const Builder = struct {
         const fields = switch (self.shapeContent(ty)) {
             .record => |span| self.program.types.fieldSpan(span),
             .zst => return null,
-            _ => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
         };
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
@@ -29156,18 +29156,16 @@ const BodyContext = struct {
         return try self.addExprSpan(lowered);
     }
 
+    /// Forwards to the scope that owns the type store; the query itself
+    /// has one implementation.
     fn constListElemType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
-        return switch (self.builder.shapeContent(ty)) {
-            .list => |elem| elem,
-            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("ConstStore list restored with a non-list monotype"),
-        };
+        return self.builder.constListElemType(ty);
     }
 
+    /// Forwards to the scope that owns the type store; the query itself
+    /// has one implementation.
     fn constBoxPayloadType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
-        return switch (self.builder.shapeContent(ty)) {
-            .box => |payload| payload,
-            .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => Common.invariant("ConstStore box restored with a non-box monotype"),
-        };
+        return self.builder.constBoxPayloadType(ty);
     }
 
     fn lowerConstCaptureType(
@@ -29377,8 +29375,10 @@ const BodyContext = struct {
         };
     }
 
+    /// Forwards to the scope that owns the type store; the query itself
+    /// has one implementation.
     fn constRecordFields(self: *BodyContext, ty: Type.TypeId) Type.StoreSpanBorrow(Type.Field, "fields") {
-        return self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty));
+        return self.builder.constRecordFields(ty);
     }
 
     fn restoreConstFnAtNode(
@@ -31328,17 +31328,10 @@ const BodyContext = struct {
         Common.invariant("expected record field id was absent from monotype type");
     }
 
+    /// Forwards to the scope that owns the type store; the query itself
+    /// has one implementation.
     fn recordFieldByTextOptional(self: *BodyContext, ty: Type.TypeId, text: []const u8) ?Type.Field {
-        const fields = switch (self.builder.shapeContent(ty)) {
-            .record => |span| self.builder.program.types.fieldSpan(span),
-            .zst => return null,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
-        };
-        for (0..GuardedList.borrowLen(fields)) |index| {
-            const field = GuardedList.at(fields, index);
-            if (Ident.textEql(self.builder.program.names.recordFieldLabelText(field.name), text)) return field;
-        }
-        return null;
+        return self.builder.recordFieldByTextOptional(ty, text);
     }
 
     fn iterItemType(self: *BodyContext, ty: Type.TypeId) Type.TypeId {
@@ -34462,11 +34455,10 @@ const BodyContext = struct {
         };
     }
 
+    /// Forwards to the scope that owns the type store; the query itself
+    /// has one implementation.
     fn typeHasBuiltinOwner(self: *BodyContext, ty: Type.TypeId, owner: static_dispatch.BuiltinOwner) bool {
-        return switch (methodOwnerFromType(&self.builder.program.types, ty) orelse return false) {
-            .builtin => |actual| actual == owner,
-            .nominal => false,
-        };
+        return self.builder.typeHasBuiltinOwner(ty, owner);
     }
 
     fn setPayloadType(self: *BodyContext, ty: Type.TypeId) ?Type.TypeId {
