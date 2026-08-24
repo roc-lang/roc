@@ -1,5 +1,5 @@
 //! Tests for the range-prove LIR pass: checks that a dominating margin guard
-//! proves away are rewritten to unchecked forms, and checks the prover cannot
+//! proves away are rewritten to proven forms, and checks the prover cannot
 //! justify stay fully checked.
 
 const std = @import("std");
@@ -60,8 +60,8 @@ fn countDecodeShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
         }
         counted = .{
             .found_decode_proc = true,
-            .plus_checked = std.mem.count(u8, text, "num_plus_checked"),
-            .minus_checked = std.mem.count(u8, text, "num_minus_checked"),
+            .plus_checked = std.mem.count(u8, text, "num_int_add_crash_on_overflow"),
+            .minus_checked = std.mem.count(u8, text, "num_int_sub_crash_on_overflow"),
             .is_lt = std.mem.count(u8, text, "num_is_lt("),
             .is_gt = std.mem.count(u8, text, "num_is_gt("),
             .switches = std.mem.count(u8, text, "switch "),
@@ -126,6 +126,176 @@ test "the pass leaves the shape untouched when disabled" {
     try std.testing.expectEqual(@as(usize, 1), counted.is_lt);
     try std.testing.expectEqual(@as(usize, 1), counted.is_gt);
     try std.testing.expectEqual(@as(usize, 3), counted.switches);
+}
+
+const ArithmeticShape = struct {
+    found: bool = false,
+    add_wrap: usize = 0,
+    add_crash: usize = 0,
+    add_overflows: usize = 0,
+    add_proven: usize = 0,
+    sub_crash: usize = 0,
+    sub_proven: usize = 0,
+    mul_crash: usize = 0,
+    mul_proven: usize = 0,
+    switches: usize = 0,
+    crashes: usize = 0,
+    literal_three: usize = 0,
+};
+
+const ArithmeticSelection = enum {
+    masked_mul,
+    two_masked_add,
+    overflow_predicate,
+    folded_try,
+    same_sign_chain,
+    mixed_sign_chain,
+    overflow_crash,
+};
+
+var arithmetic_shape: ArithmeticShape = .{};
+var arithmetic_selection: ArithmeticSelection = .masked_mul;
+
+fn countArithmeticShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    arithmetic_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 20);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        const text = writer.buffered();
+        if (std.c.getenv("RANGE_PROVE_DUMP_ALL") != null) std.debug.print("\n===== arithmetic candidate =====\n{s}\n", .{text});
+        const selected = switch (arithmetic_selection) {
+            .masked_mul => std.mem.count(u8, text, "num_int_mul_") > 0 and std.mem.count(u8, text, "num_bitwise_and") == 1,
+            .two_masked_add => std.mem.count(u8, text, "num_int_add_") > 0 and std.mem.count(u8, text, "num_bitwise_and") == 2,
+            .overflow_predicate => std.mem.count(u8, text, "num_int_add_overflows") > 0,
+            .folded_try => std.mem.count(u8, text, "num_bitwise_and") == 1 and std.mem.count(u8, text, "num_int_add_proven_cannot_overflow") > 0,
+            .same_sign_chain => std.mem.count(u8, text, "num_int_add_wrap") > 0 and std.mem.count(u8, text, "literal 3") > 0,
+            .mixed_sign_chain => std.mem.count(u8, text, "num_int_add_crash_on_overflow") > 0 and std.mem.count(u8, text, "num_int_sub_") > 0,
+            .overflow_crash => std.mem.count(u8, text, "num_bitwise_and") > 0 and std.mem.count(u8, text, "crash") > 0,
+        };
+        if (!selected) continue;
+        arithmetic_shape = .{
+            .found = true,
+            .add_wrap = std.mem.count(u8, text, "num_int_add_wrap"),
+            .add_crash = std.mem.count(u8, text, "num_int_add_crash_on_overflow"),
+            .add_overflows = std.mem.count(u8, text, "num_int_add_overflows"),
+            .add_proven = std.mem.count(u8, text, "num_int_add_proven_cannot_overflow"),
+            .sub_crash = std.mem.count(u8, text, "num_int_sub_crash_on_overflow"),
+            .sub_proven = std.mem.count(u8, text, "num_int_sub_proven_cannot_overflow"),
+            .mul_crash = std.mem.count(u8, text, "num_int_mul_crash_on_overflow"),
+            .mul_proven = std.mem.count(u8, text, "num_int_mul_proven_cannot_overflow"),
+            .switches = std.mem.count(u8, text, "switch "),
+            .crashes = std.mem.count(u8, text, "crash"),
+            .literal_three = std.mem.count(u8, text, "literal 3"),
+        };
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== arithmetic proc =====\n{s}\n", .{text});
+        return;
+    }
+}
+
+fn arithmeticApp(comptime body: []const u8, comptime call: []const u8) []const u8 {
+    return body ++
+        "\nmain! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+        "main! = |_args| {\n" ++
+        "    echo!(Str.inspect(" ++ call ++ "))\n" ++
+        "    Ok({})\n" ++
+        "}\n";
+}
+
+test "checked multiply is discharged from a masked range" {
+    arithmetic_selection = .masked_mul;
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp("calc : U8 -> U8\ncalc = |a| a.bitwise_and(15) * 4\n", "calc(List.len(_args).to_u8_wrap())"),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countArithmeticShape,
+    );
+    try std.testing.expect(arithmetic_shape.found);
+    try std.testing.expectEqual(@as(usize, 0), arithmetic_shape.mul_crash);
+    try std.testing.expectEqual(@as(usize, 1), arithmetic_shape.mul_proven);
+}
+
+test "two bounded variables discharge checked add" {
+    arithmetic_selection = .two_masked_add;
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp(
+            "calc : U8, U8 -> U8\ncalc = |a, b| a.bitwise_and(15) + b.bitwise_and(31)\n",
+            "calc(List.len(_args).to_u8_wrap(), List.len(_args).to_u8_wrap())",
+        ),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countArithmeticShape,
+    );
+    try std.testing.expect(arithmetic_shape.found);
+    try std.testing.expectEqual(@as(usize, 0), arithmetic_shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 1), arithmetic_shape.add_proven);
+}
+
+test "a false overflow-predicate edge proves the matching wrap exact" {
+    arithmetic_selection = .overflow_predicate;
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp(
+            "calc : U8, U8 -> U8\ncalc = |a, b| match a.plus_try(b) { Ok(value) => value, Err(Overflow) => 0 }\n",
+            "calc(List.len(_args).to_u8_wrap(), List.len(_args).to_u8_wrap())",
+        ),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countArithmeticShape,
+    );
+    try std.testing.expect(arithmetic_shape.found);
+    try std.testing.expectEqual(@as(usize, 1), arithmetic_shape.add_overflows);
+    try std.testing.expectEqual(@as(usize, 0), arithmetic_shape.add_wrap);
+    try std.testing.expectEqual(@as(usize, 1), arithmetic_shape.add_proven);
+}
+
+test "a provably false overflow predicate folds its branch" {
+    arithmetic_selection = .folded_try;
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp(
+            "calc : U8 -> U8\ncalc = |a| {\n    value = a.bitwise_and(15)\n    if value.plus_overflows(1) { 0 } else { value.plus_wrap(1) }\n}\n",
+            "calc(List.len(_args).to_u8_wrap())",
+        ),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countArithmeticShape,
+    );
+    try std.testing.expect(arithmetic_shape.found);
+    try std.testing.expectEqual(@as(usize, 0), arithmetic_shape.add_overflows);
+    try std.testing.expectEqual(@as(usize, 0), arithmetic_shape.switches);
+    try std.testing.expectEqual(@as(usize, 1), arithmetic_shape.add_proven);
+}
+
+test "same-sign checked constants combine but mixed-sign constants do not" {
+    arithmetic_selection = .same_sign_chain;
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp("calc : U8 -> U8\ncalc = |a| (a + 1) + 2\n", "calc(List.len(_args).to_u8_wrap())"),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countArithmeticShape,
+    );
+    try std.testing.expect(arithmetic_shape.found);
+    try std.testing.expectEqual(@as(usize, 1), arithmetic_shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 1), arithmetic_shape.literal_three);
+
+    arithmetic_selection = .mixed_sign_chain;
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp("calc : U8 -> U8\ncalc = |a| (a + 100) - 100\n", "calc(List.len(_args).to_u8_wrap())"),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countArithmeticShape,
+    );
+    try std.testing.expect(arithmetic_shape.found);
+    try std.testing.expectEqual(@as(usize, 1), arithmetic_shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 0), arithmetic_shape.add_wrap);
+    try std.testing.expectEqual(@as(usize, 1), arithmetic_shape.sub_proven);
+}
+
+test "a constant overflowing plain add becomes an unconditional crash" {
+    arithmetic_selection = .overflow_crash;
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp("calc : U8 -> U8\ncalc = |a| (a.bitwise_and(0) + 255) + 1\n", "calc(List.len(_args).to_u8_wrap())"),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countArithmeticShape,
+    );
+    try std.testing.expect(arithmetic_shape.found);
+    try std.testing.expectEqual(@as(usize, 0), arithmetic_shape.add_crash);
+    try std.testing.expectEqual(@as(usize, 1), arithmetic_shape.crashes);
 }
 
 // Mirrors the real decode loop's structure: a conjunction in the loop
@@ -321,8 +491,8 @@ fn countRealShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
         }
         counted = .{
             .found_decode_proc = true,
-            .plus_checked = std.mem.count(u8, text, "num_plus_checked"),
-            .minus_checked = std.mem.count(u8, text, "num_minus_checked"),
+            .plus_checked = std.mem.count(u8, text, "num_int_add_crash_on_overflow"),
+            .minus_checked = std.mem.count(u8, text, "num_int_sub_crash_on_overflow"),
             .is_lt = std.mem.count(u8, text, "num_is_lt("),
             .is_gt = std.mem.count(u8, text, "num_is_gt("),
             .switches = std.mem.count(u8, text, "switch "),
