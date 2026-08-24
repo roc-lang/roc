@@ -156,9 +156,6 @@ already diverged in behavior, not just in text.
 - [small/erased-ownership-as-lir-data.md](small/erased-ownership-as-lir-data.md)—
   the lowerer records erased ownership and the certifier re-derives it
   with a copy of the rule; `.boxy` has no producer at all.
-- [small/postcheck-ir-store-boilerplate.md](small/postcheck-ir-store-boilerplate.md)—
-  the four post-check IR stores share 57 and 44 byte-identical
-  function bodies of flat-store mechanics.
 
 Single-source primitive tables have landed (the batch's first
 project): `CheckedPrimitive`'s four post-check mappings—storage layout,
@@ -216,6 +213,36 @@ only in what each does at a binding site. That is now
 parameter, with a `structural_test.zig` lint keeping it single. Three
 copies could have come to disagree about whether a given position
 binds—a list rest pattern, say—and only one would have been right.
+
+A second correction, also from implementing it. The audit filed a
+`postcheck-ir-store-boilerplate` project proposing a comptime
+`FlatStore(Spec)` mixin that *generates* each store's `add*`, `get*`,
+`set*`, `*Count`, `*View`, and `*Span` surface. Zig 0.16 removed
+`usingnamespace`, so a mixin cannot inject named declarations into a
+struct at all; every accessor has to stay a hand-written name whatever
+sits behind it. The project's mechanism does not exist in this compiler,
+so the doc is deleted rather than left proposing it.
+
+The duplication it counted is real—57 byte-identical bodies between
+`monotype/ast.zig` and `monotype_lifted/ast.zig`—but most of those
+bodies are already one-line delegations whose only content is the field
+they name, which is the part that legitimately differs per store. The
+part with real duplicated logic was the span append: three lines
+(`len()`, `appendSlice`, construct the span) written out 33 times across
+the three stores. That is now `Common.appendSpan` /
+`Common.appendNonemptySpan`, with `Span` itself single-sourced, and a
+`structural_test.zig` lint keeps the hand-written form from coming back.
+`addTypedLocalSpan` deliberately kept its own body: it preallocates
+through `ensureUnusedCapacity`, which is a different append, not the
+same one spelled differently.
+
+Two doc claims were also corrected in the code. `match_tree.zig` and
+`postcheck/mod.zig` both described the decision-tree match compiler as
+"shared by both LIR lowerers"; it is used by `.lss` only, and a doc
+comment asserting a sharing invariant that does not hold is worse than
+no comment, because the next reader budgets for one match semantics when
+there are two. Both now say what is true, and a lint pins the claim to
+the imports so it moves when the gap closes.
 
 Within the rest of this batch, the two `big` projects compose in either
 order. The rest are independent.

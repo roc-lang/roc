@@ -9,6 +9,49 @@ const lir_core = @import("lir_core");
 const checked = check.CheckedModule;
 const LIR = lir_core.LIR;
 
+/// Span into one of a post-check IR's flat side tables.
+///
+/// The three post-check IRs all address their side tables the same way, so the
+/// type and the append that produces it live here rather than once per store.
+pub fn Span(comptime _: type) type {
+    return extern struct {
+        start: u32,
+        len: u32,
+
+        pub fn empty() @This() {
+            return .{ .start = 0, .len = 0 };
+        }
+    };
+}
+
+/// Append `values` to a flat side table and return the span addressing them.
+/// `list` is any table exposing `len()` and `appendSlice(allocator, values)`.
+pub fn appendSpan(
+    comptime T: type,
+    list: anytype,
+    allocator: std.mem.Allocator,
+    values: []const T,
+) std.mem.Allocator.Error!Span(T) {
+    const start: u32 = @intCast(list.len());
+    try list.appendSlice(allocator, values);
+    return .{ .start = start, .len = @intCast(values.len) };
+}
+
+/// `appendSpan` for a table whose spans are never empty. An empty span there
+/// would read as "no children" at every consumer, which is a different shape
+/// from the one the producer meant, so it fails as an invariant rather than
+/// being stored.
+pub fn appendNonemptySpan(
+    comptime T: type,
+    list: anytype,
+    allocator: std.mem.Allocator,
+    values: []const T,
+    comptime message: []const u8,
+) std.mem.Allocator.Error!Span(T) {
+    if (values.len == 0) invariant(message);
+    return try appendSpan(T, list, allocator, values);
+}
+
 /// Resource failure while converting checked module data toward LIR.
 pub const LowerError = std.mem.Allocator.Error;
 

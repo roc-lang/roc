@@ -1589,6 +1589,45 @@ test "one pattern walk collects bound locals" {
     try expectContains(@embedFile("monotype_lifted/ast.zig"), "pub fn forEachBoundLocal(");
 }
 
+test "the match compiler's stated consumers are its actual consumers" {
+    // `match_tree.zig` and `mod.zig` both claimed this compiler was "shared by
+    // both LIR lowerers". It is not: `.boxy` folds match branches into a
+    // sequential chain of its own. A doc comment asserting a sharing invariant
+    // that does not hold is worse than none, because the next reader budgets
+    // for one match semantics and there are two. This pins the claim to the
+    // imports, so whichever way the gap closes, the comment has to move with it.
+    const boxy_uses_it = std.mem.find(u8, @embedFile("boxy/lower.zig"), "match_tree") != null;
+    const header = @embedFile("match_tree.zig");
+    const mod_source = @embedFile("mod.zig");
+    if (boxy_uses_it) {
+        try expectNotContains(header, "does not consume this yet");
+        try expectNotContains(mod_source, "does not use it yet");
+    } else {
+        try expectContains(header, "does not consume this yet");
+        try expectContains(mod_source, "does not use it yet");
+        try expectContains(@embedFile("solved_lir_lower.zig"), "match_tree.Compiler(");
+    }
+}
+
+test "post-check IR stores append spans through one implementation" {
+    // All three post-check IRs address their flat side tables the same way, and
+    // the append that produces a span was written out once per table per store
+    // (33 copies of the same three lines). It lives in `Common` now, so a change
+    // to how spans are allocated cannot land on one table and miss the rest.
+    const stores = [_][]const u8{
+        @embedFile("monotype/ast.zig"),
+        @embedFile("monotype_lifted/ast.zig"),
+        @embedFile("lambda_mono/ast.zig"),
+    };
+    for (stores) |source| {
+        // The hand-written form these replaced. Its absence is the invariant.
+        try expectNotContains(source, "const start: u32 = @intCast(self.expr_ids.len());");
+        try expectContains(source, "Common.appendSpan(");
+    }
+    try expectContains(@embedFile("common.zig"), "pub fn appendSpan(");
+    try expectContains(@embedFile("common.zig"), "pub fn appendNonemptySpan(");
+}
+
 test "post-check invariant helper is failure-only" {
     const fn_info = @typeInfo(@TypeOf(Common.invariant)).@"fn";
     try std.testing.expect(fn_info.return_type.? == noreturn);
