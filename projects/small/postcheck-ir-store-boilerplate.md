@@ -158,9 +158,6 @@ counts on a large corpus program, and `zig build` wall time.
 - [nodestore-serde-enrollment.md](nodestore-serde-enrollment.md)—the
   same comptime-drive-the-field-lists cure for the canonicalizer's
   `NodeStore`; land either first, they share technique.
-- [spec-constr-single-cloner.md](spec-constr-single-cloner.md)—the
-  other Monotype Lifted duplication, at the traversal layer rather
-  than the storage layer.
 - [../big/postcheck-lowerer-decomposition.md](../big/postcheck-lowerer-decomposition.md)—
   independent; both reduce the post-check line count, neither blocks
   the other.

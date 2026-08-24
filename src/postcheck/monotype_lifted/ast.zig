@@ -1364,6 +1364,68 @@ pub const Program = struct {
     }
 };
 
+/// Visit every local a pattern binds, innermost first, in binding order.
+///
+/// Three consumers need this walk—the lift pass's bound-set scan, its capture
+/// graph builder, and SpecConstr's body-local scope—and they differ only in
+/// what they do at a binding site, never in which pattern positions bind. The
+/// walk lives here so a new `PatData` variant is one edit, and so the three
+/// cannot come to disagree about, say, whether a list rest pattern binds.
+///
+/// `binder` is any value exposing `bindLocal(LocalId) !void`.
+pub fn forEachBoundLocal(program: *const Program, pat_id: PatId, binder: anytype) std.mem.Allocator.Error!void {
+    switch (program.getPat(pat_id).data) {
+        .bind => |local| try binder.bindLocal(local),
+        .wildcard,
+        .int_lit,
+        .dec_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .str_lit,
+        => {},
+        .str_pattern => |str| {
+            const steps = program.strPatternStepSpan(str.steps);
+            for (0..steps.len) |index| {
+                if (GuardedList.at(steps, index).capture) |capture| {
+                    try forEachBoundLocal(program, capture, binder);
+                }
+            }
+        },
+        .as => |as| {
+            try forEachBoundLocal(program, as.pattern, binder);
+            try binder.bindLocal(as.local);
+        },
+        .record => |fields| {
+            const destructs = program.recordDestructSpan(fields);
+            for (0..destructs.len) |index| {
+                try forEachBoundLocal(program, GuardedList.at(destructs, index).pattern, binder);
+            }
+        },
+        .tuple => |items| {
+            const children = program.patSpan(items);
+            for (0..children.len) |index| {
+                try forEachBoundLocal(program, GuardedList.at(children, index), binder);
+            }
+        },
+        .list => |list| {
+            const children = program.patSpan(list.patterns);
+            for (0..children.len) |index| {
+                try forEachBoundLocal(program, GuardedList.at(children, index), binder);
+            }
+            if (list.rest) |rest| if (rest.pattern) |rest_pattern| {
+                try forEachBoundLocal(program, rest_pattern, binder);
+            };
+        },
+        .tag => |tag| {
+            const payloads = program.patSpan(tag.payloads);
+            for (0..payloads.len) |index| {
+                try forEachBoundLocal(program, GuardedList.at(payloads, index), binder);
+            }
+        },
+        .nominal => |backing| try forEachBoundLocal(program, backing, binder),
+    }
+}
+
 test "monotype lifted declarations are referenced" {
     std.testing.refAllDecls(@This());
 }

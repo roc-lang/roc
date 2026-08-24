@@ -159,9 +159,6 @@ already diverged in behavior, not just in text.
 - [small/postcheck-ir-store-boilerplate.md](small/postcheck-ir-store-boilerplate.md)—
   the four post-check IR stores share 57 and 44 byte-identical
   function bodies of flat-store mechanics.
-- [small/spec-constr-single-cloner.md](small/spec-constr-single-cloner.md)—
-  two cloners over Monotype Lifted covering 29 and 44 expression
-  variants; the narrower one declines the difference silently.
 
 Single-source primitive tables have landed (the batch's first
 project): `CheckedPrimitive`'s four post-check mappings—storage layout,
@@ -195,6 +192,30 @@ erased-callable proc lost it. `box_reuse` adopted the shared
 eligibility predicate; `loop_append_promote` deliberately did not,
 because its gate is a genuinely different one (it admits non-Roc ABI
 procs), which is recorded here rather than papered over.
+
+One correction to the batch, from implementing it. The audit filed a
+`spec-constr-single-cloner` project on the claim that Monotype Lifted's
+two cloners cover 29 and 44 expression variants and that the narrower
+one declines the difference *silently*, so a new variant would be
+half-supported without a build error. That claim was wrong.
+`Pass.cloneExprFresh` ends in an explicit 19-variant arm returning null,
+and `grep -c 'else =>' src/postcheck/monotype_lifted/spec_constr.zig` is
+zero—the repo's ban on non-exhaustive switch prongs already forces both
+cloners to make a decision about every variant. The coverage gap is a
+deliberate, compiler-enforced decline set, not a silent one, so the
+project's premise did not survive contact and the risky part of it (one
+traversal through a compile-time-hot pass, for a drift the compiler
+already catches) was not worth doing.
+
+The real duplication that project found *was* there, one layer down:
+the pattern walk that collects a pattern's bound locals existed three
+times—the lift pass's bound-set scan, its capture graph builder, and
+SpecConstr's body-local scope—identical in every position, differing
+only in what each does at a binding site. That is now
+`Ast.forEachBoundLocal`, taking the binding action as a comptime
+parameter, with a `structural_test.zig` lint keeping it single. Three
+copies could have come to disagree about whether a given position
+binds—a list rest pattern, say—and only one would have been right.
 
 Within the rest of this batch, the two `big` projects compose in either
 order. The rest are independent.

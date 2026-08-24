@@ -1570,6 +1570,25 @@ test "boxy stage tests share one set of checked-type fixtures" {
     try expectContains(@embedFile("boxy/test_fixtures.zig"), "pub fn tableIndex(");
 }
 
+test "one pattern walk collects bound locals" {
+    // The lift pass's bound-set scan, its capture graph builder, and
+    // SpecConstr's body-local scope all walk a pattern for the locals it binds.
+    // They differ only in what they do at a binding site, never in which
+    // positions bind, so the walk lives once on the lifted AST. Three copies
+    // could come to disagree about a position (whether a list rest pattern
+    // binds, say) and only one of them would be right.
+    const consumers = [_][]const u8{
+        @embedFile("monotype_lifted/lift.zig"),
+        @embedFile("monotype_lifted/spec_constr.zig"),
+    };
+    for (consumers) |source| {
+        try expectNotContains(source, "fn forEachBoundLocal(");
+        // Each consumer keeps only a thin `bindPat` that names its binder.
+        try expectContains(source, "forEachBoundLocal(");
+    }
+    try expectContains(@embedFile("monotype_lifted/ast.zig"), "pub fn forEachBoundLocal(");
+}
+
 test "post-check invariant helper is failure-only" {
     const fn_info = @typeInfo(@TypeOf(Common.invariant)).@"fn";
     try std.testing.expect(fn_info.return_type.? == noreturn);
