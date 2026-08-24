@@ -124,6 +124,56 @@ independent of the earlier batches and of each other:
   module, def) plus a repro command before the stack trace, built from
   thread-local context frames pushed at existing phase boundaries.
 
+A fifth batch (2026-08-24) came out of a duplication audit of the
+stages between type checking and code generation—Monotype, Monotype
+Lifted, SpecConstr, Lambda Solved, the two LIR lowerers, the LIR
+passes, and ARC. It looked specifically for *multiple implementations
+of one semantic rule* rather than for repeated text. The recurring
+shape: `.lss` and `.boxy` were scoped by the phases they skip, but
+value semantics (equality, hashing, `Inspect`, `match` compilation)
+are not phase artifacts and got duplicated along with the phases; and
+inside each strategy, producer/consumer boundaries that design.md
+states as "record the decision, consume it later" are implemented as
+"re-derive it from the emitted shape". Several of these pairs have
+already diverged in behavior, not just in text.
+
+- [big/one-value-semantics-layer.md](big/one-value-semantics-layer.md)—
+  `Inspect` (four implementations, four copies of the format
+  strings), structural equality and hashing (two), and `match`
+  compilation (`.boxy` never adopted the shared decision-tree
+  compiler, contrary to this README and `postcheck/mod.zig`) collapse
+  onto one shape-parameterized layer, plus a standing `.lss`/`.boxy`
+  differential harness.
+- [big/postcheck-lowerer-decomposition.md](big/postcheck-lowerer-decomposition.md)—
+  the god-structs (`BodyContext` at 36.6k lines, `ProcBodyBuilder` at
+  25.1k) that force helpers to be copied rather than shared; 53 and 17
+  duplicated method names respectively, with divergence already
+  present in both.
+- [small/arc-shared-predicates.md](small/arc-shared-predicates.md)—
+  four ARC predicates defined twice, including the refcounted-local
+  predicate where the RC inserter and its own certifier already use
+  different code.
+- [small/erased-ownership-as-lir-data.md](small/erased-ownership-as-lir-data.md)—
+  the lowerer records erased ownership and the certifier re-derives it
+  with a copy of the rule; `.boxy` has no producer at all.
+- [small/boxy-rep-queries-on-the-plan.md](small/boxy-rep-queries-on-the-plan.md)—
+  ~45 representation queries duplicated between boxy planning and boxy
+  lowering; `childRolesMatch` exists three times with two different
+  exhaustiveness postures.
+- [small/lir-call-result-fusion-framework.md](small/lir-call-result-fusion-framework.md)—
+  `return_slot` and `str_append` are the same pass twice, sharing a
+  byte-identical liveness guard that nothing keeps in sync.
+- [small/postcheck-ir-store-boilerplate.md](small/postcheck-ir-store-boilerplate.md)—
+  the four post-check IR stores share 57 and 44 byte-identical
+  function bodies of flat-store mechanics.
+- [small/spec-constr-single-cloner.md](small/spec-constr-single-cloner.md)—
+  two cloners over Monotype Lifted covering 29 and 44 expression
+  variants; the narrower one declines the difference silently.
+
+Within this batch, the two `big` projects compose in either order.
+`boxy-rep-queries-on-the-plan` should land before or with
+`one-value-semantics-layer`. The rest are independent.
+
 ## Recommended order
 
 ### Start here—enforcement layers, cheap and load-bearing
@@ -184,12 +234,17 @@ Small:
   static-data and builtin-call materialization for constant/repeated
   lists, ending the one-local-per-element explosion behind issue 9898.
 
-The decision-tree match compiler has landed: both LIR pipelines lower
-`match` through one shared Maranget-style module
-(src/postcheck/match_tree.zig)—one multiway switch per tested position,
-one discriminant read, strings and list-length buckets as ordinary arms—
-with the sharing invariant documented in design.md and enforced by a debug
-statement-count lint.
+The decision-tree match compiler has landed for `.lss`: the direct
+solved-to-LIR lowering compiles `match` through one shared Maranget-style
+module (src/postcheck/match_tree.zig)—one multiway switch per tested
+position, one discriminant read, strings and list-length buckets as
+ordinary arms—with the sharing invariant documented in design.md and
+enforced by a debug statement-count lint. The 2026-08-24 audit found
+`.boxy` never adopted it (`grep -rn match_tree src/postcheck/boxy/` is
+empty; `boxy/lower.zig` folds branches into a sequential chain), so the
+"shared by both LIR lowerers" claim in `src/postcheck/mod.zig` is not yet
+true. Closing that is step 6 of
+[big/one-value-semantics-layer.md](big/one-value-semantics-layer.md).
 
 Single-source builtin registration has landed: the seven hand-typed
 `roc_builtins_*` symbol/ABI tables now derive from one comptime registry
