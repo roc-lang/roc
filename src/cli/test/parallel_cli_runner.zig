@@ -381,7 +381,8 @@ const CustomCase = enum {
     default_platform_build_x64openbsd_rejected,
     default_platform_build_wasm32,
     default_platform_wasm32_archive_reproducible,
-    issue_10733_wasm_boxy_dev_cache,
+    issue_10733_wasm_boxy_dev_sealed_object,
+    issue_10827_private_compiler_support,
     macos_output_basename_reproducible,
     default_platform_crash_x64musl,
     default_platform_crash_arm64musl,
@@ -838,6 +839,16 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: list concat with refcounted elements issue 9316 (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/issue_9316.roc", .stdout_exact = "[\"BAZ\", \"DUCK\", \"XYZ\", \"ABC\"]" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: cmd-test OOM repro compiles and runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/repro_oom_cmd_test.roc", .stdout_exact = "" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: cmd-test OOM repro compiles and runs (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/repro_oom_cmd_test.roc", .stdout_exact = "" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: crash reports its message and exits (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/crash.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Roc application crashed with this message:" }, .{ .stream = .stderr, .text = "boom" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack memory" }, .{ .stream = .stderr, .text = "SIGSEGV" } } } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: crash reports its message and exits (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/crash.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Roc application crashed with this message:" }, .{ .stream = .stderr, .text = "boom" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack memory" }, .{ .stream = .stderr, .text = "SIGSEGV" } } } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: recursion that overflows the stack reports it and exits (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/stack_overflow.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "overflowed its stack memory" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "Segmentation fault" } } } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: recursion that overflows the stack reports it and exits (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/stack_overflow.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "overflowed its stack memory" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "Segmentation fault" } } } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: app header with no platform (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/platformless_app.roc", .stdout_exact = "Hello, World!" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: app header with no platform (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/platformless_app.roc", .stdout_exact = "Hello, World!" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: app header with no platform depends on a package (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/platformless_app_with_package.roc", .stdout_exact = "Hello, World!" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: app header with no platform depends on a package (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/platformless_app_with_package.roc", .stdout_exact = "Hello, World!" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: roc check accepts an app header with no platform", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/echo/platformless_app_with_package.roc", .exit = .success } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: roc test runs an app header with no platform", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/echo/platformless_app_with_package.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: no main is not a default app (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/no_main.roc", .exit = .failure } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: no main is not a default app (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/no_main.roc", .exit = .failure } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
@@ -1402,6 +1413,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check accepts direct nominal record construction", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/NominalRecordConstruction.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check keeps generic missing-field errors out of optional-only parser records", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/ParserOptionalOnlyRecordNoMissingMethod.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test composes JSON and derived-record parser errors", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonParseErrorComposition.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    // Repro for https://github.com/roc-lang/roc/issues/10888: record shapes
+    // with the same field set at consecutive levels must retain nested codec metadata.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10888: JSON parser retains metadata for repeated nested record fields", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/issue_10888_json_parse_repeated_nested_field.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test infers JSON record parser shape without record annotation", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonParseInferredRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test infers JSON article parser shape from use sites", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonParseInferredArticle.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test preserves composed parser errors through a generic wrapper", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonParseGenericWrapperErrors.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -1479,9 +1493,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 schedules field defaults before explicit platform roots", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/field_default_root_order/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "compile-time root request order placed a root before its field defaults or another dependency" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 10733: dev wasm32 caches a valid Boxy-prepared compiler-rt host", .backend = .dev, .body = .{ .custom = .issue_10733_wasm_boxy_dev_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10733: dev wasm32 emits a valid sealed Boxy object", .backend = .dev, .body = .{ .custom = .issue_10733_wasm_boxy_dev_sealed_object } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM size wasm32 links the Boxy runtime", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", "--output=boxed_closure_size.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10733: LLVM speed wasm32 links the Boxy runtime", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=boxed_closure_speed.wasm" }, .roc_file = "test/wasm/boxed_closure_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "UnresolvedBuiltinImport" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10827: Roc compiler support is private from a strong-intrinsic wasm host", .backend = .dev, .body = .{ .custom = .issue_10827_private_compiler_support } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build Shared output links a Windows DLL", .body = .{ .custom = .build_windows_shared_library } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_passing_results } },
@@ -2712,7 +2727,8 @@ fn runCustomCase(
         .default_platform_build_x64openbsd_rejected => customDefaultPlatformOpenBsdRejected(io, allocator, &env, &timer, timeout_ms),
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
-        .issue_10733_wasm_boxy_dev_cache => customIssue10733WasmBoxyDevCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
+        .issue_10827_private_compiler_support => customIssue10827PrivateCompilerSupport(io, allocator, &env, &timer, timeout_ms),
         .macos_output_basename_reproducible => customMacosOutputBasenameReproducible(io, allocator, &env, &timer, timeout_ms),
         .default_platform_crash_x64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .x64musl, .crash),
         .default_platform_crash_arm64musl => customDefaultPlatformDebugBacktrace(io, allocator, &env, &timer, timeout_ms, .arm64musl, .crash),
@@ -3253,7 +3269,7 @@ fn hotReloadPlatformSource(allocator: Allocator, target: NativeMuslTarget) CliRu
         \\    }}
         \\    targets: {{
         \\        inputs_dir: "targets/",
-        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "libc.a"] }},
+        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
         \\import Host
@@ -3729,6 +3745,36 @@ fn copyNativeMuslTargetFile(
     };
 }
 
+fn buildNativeMuslCompilerRtObject(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    target: NativeMuslTarget,
+    target_dir: []const u8,
+) ?TestResult {
+    const root_path = std.fs.path.join(allocator, &.{ target_dir, "compiler_rt_root.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate compiler-rt root path: {}", .{err});
+    const object_path = std.fs.path.join(allocator, &.{ target_dir, "compiler_rt.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate compiler-rt object path: {}", .{err});
+    const emit_arg = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{object_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate compiler-rt output argument: {}", .{err});
+
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = root_path, .data = "" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write compiler-rt root: {}", .{err});
+
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "build-obj",
+        "-target",
+        target.zig_target,
+        "-fcompiler-rt",
+        root_path,
+        emit_arg,
+    }, project_root_path, .{ .args = &.{} });
+}
+
 fn customHotReloadDevShim(
     io: std.Io,
     allocator: Allocator,
@@ -3773,6 +3819,7 @@ fn customHotReloadDevShim(
         return customInfraFailure(allocator, timer, "failed to copy crt1.o: {}", .{err});
     copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to copy libc.a: {}", .{err});
+    if (buildNativeMuslCompilerRtObject(io, allocator, env, timer, timeout_ms, target, target_dir)) |failure| return failure;
 
     const platform_source = hotReloadPlatformSource(allocator, target) catch |err|
         return customInfraFailure(allocator, timer, "failed to render platform source: {}", .{err});
@@ -3944,7 +3991,7 @@ fn hotReloadModelPlatformSource(allocator: Allocator, target: NativeMuslTarget) 
         \\    }}
         \\    targets: {{
         \\        inputs_dir: "targets/",
-        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "libc.a"] }},
+        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
         \\init_model_for_host : U64 -> Box(Model)
@@ -4170,6 +4217,7 @@ fn customHotReloadModelBoundary(
         return customInfraFailure(allocator, timer, "failed to copy model crt1.o: {}", .{err});
     copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to copy model libc.a: {}", .{err});
+    if (buildNativeMuslCompilerRtObject(io, allocator, env, timer, timeout_ms, target, target_dir)) |failure| return failure;
 
     const platform_source = hotReloadModelPlatformSource(allocator, target) catch |err|
         return customInfraFailure(allocator, timer, "failed to render model platform source: {}", .{err});
@@ -5191,7 +5239,7 @@ fn customDefaultPlatformWasm32ArchiveReproducible(
     return null;
 }
 
-fn validateIssue10733Wasm(
+fn validateWasmOutput(
     io: std.Io,
     allocator: Allocator,
     timer: *harness.Timer,
@@ -5201,7 +5249,7 @@ fn validateIssue10733Wasm(
         return customInfraFailure(allocator, timer, "failed to read wasm output {s}: {}", .{ path, err });
     defer allocator.free(wasm_bytes);
 
-    var module_def = bytebox.createModuleDefinition(allocator, .{ .debug_name = "issue_10733_boxy" }) catch |err|
+    var module_def = bytebox.createModuleDefinition(allocator, .{ .debug_name = "cli_wasm_output" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to create wasm validator: {}", .{err});
     defer module_def.destroy();
     module_def.decode(wasm_bytes) catch |err|
@@ -5209,7 +5257,7 @@ fn validateIssue10733Wasm(
     return null;
 }
 
-fn customIssue10733WasmBoxyDevCache(
+fn customIssue10733WasmBoxyDevSealedObject(
     io: std.Io,
     allocator: Allocator,
     env: *const CaseEnv,
@@ -5242,7 +5290,7 @@ fn customIssue10733WasmBoxyDevCache(
         .contains = &contains,
         .not_contains = &not_contains,
     })) |failure| return failure;
-    if (validateIssue10733Wasm(io, allocator, timer, first_path)) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, first_path)) |failure| return failure;
 
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache", second_output_arg },
@@ -5251,24 +5299,60 @@ fn customIssue10733WasmBoxyDevCache(
         .contains = &contains,
         .not_contains = &not_contains,
     })) |failure| return failure;
-    if (validateIssue10733Wasm(io, allocator, timer, second_path)) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, second_path)) |failure| return failure;
 
     const first_bytes = std.Io.Dir.cwd().readFileAlloc(io, first_path, allocator, .unlimited) catch |err|
         return customInfraFailure(allocator, timer, "failed to reread first wasm output: {}", .{err});
     defer allocator.free(first_bytes);
     const second_bytes = std.Io.Dir.cwd().readFileAlloc(io, second_path, allocator, .unlimited) catch |err|
-        return customInfraFailure(allocator, timer, "failed to reread cached wasm output: {}", .{err});
+        return customInfraFailure(allocator, timer, "failed to reread second wasm output: {}", .{err});
     defer allocator.free(second_bytes);
     if (!std.mem.eql(u8, first_bytes, second_bytes)) {
-        return customFailure(allocator, timer, "cached prepared host changed the final wasm bytes", .{});
+        return customFailure(allocator, timer, "sealed Roc object changed the final wasm bytes", .{});
     }
     if (std.mem.find(u8, first_bytes, "wasm_main") == null) {
-        return customFailure(allocator, timer, "prepared host lost its platform export", .{});
+        return customFailure(allocator, timer, "final wasm lost its declared platform export", .{});
     }
     if (std.mem.find(u8, first_bytes, "roc_boxy_init_embedded") != null or
         std.mem.find(u8, first_bytes, "roc_builtins_str_concat") != null)
     {
-        return customFailure(allocator, timer, "prepared host leaked runtime internals into final wasm exports", .{});
+        return customFailure(allocator, timer, "sealed Roc object leaked runtime internals into final wasm exports", .{});
+    }
+
+    return null;
+}
+
+fn customIssue10827PrivateCompilerSupport(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "issue-10827.wasm" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate issue 10827 output path: {}", .{err});
+    defer allocator.free(output_path);
+    const output_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate issue 10827 output argument: {}", .{err});
+    defer allocator.free(output_arg);
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache", output_arg },
+        .roc_file = "test/wasm/issue_10827_strong_intrinsic_host/app.roc",
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        .not_contains = &.{ .{ .stream = .stderr, .text = "duplicate symbol" }, .{ .stream = .stderr, .text = "panic" } },
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+    const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to reread issue 10827 wasm output: {}", .{err});
+    defer allocator.free(wasm_bytes);
+    if (std.mem.find(u8, wasm_bytes, "run") == null) {
+        return customFailure(allocator, timer, "final wasm lost its declared run export", .{});
+    }
+    if (std.mem.find(u8, wasm_bytes, "__multi3") != null) {
+        return customFailure(allocator, timer, "final wasm exposed the compiler-rt __multi3 name", .{});
     }
 
     return null;
@@ -9605,6 +9689,12 @@ fn printProblemResult(tc: CliCase, r: TestResult, ms: f64) void {
     printRepro(tc);
 }
 
+/// How many lines of a failing case's captured output to print. A crashing
+/// child's own report is the whole diagnosis on a platform the reader cannot
+/// reproduce on, and a Roc crash report plus a stack trace runs to dozens of
+/// lines, so the budget has to clear that with room to spare.
+const captured_output_line_budget = 200;
+
 fn printCapturedOutput(label: []const u8, capture: ?[]const u8) void {
     const data = capture orelse return;
     if (data.len == 0) return;
@@ -9614,7 +9704,7 @@ fn printCapturedOutput(label: []const u8, capture: ?[]const u8) void {
         if (line.len == 0) continue;
         if (count == 0) {
             std.debug.print("        {s}: {s}\n", .{ label, line });
-        } else if (count < 5) {
+        } else if (count < captured_output_line_budget) {
             std.debug.print("        {s}\n", .{line});
         } else {
             std.debug.print("        ... ({s} truncated)\n", .{label});

@@ -578,15 +578,15 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
     switch (header) {
         .app => |app| {
             node.tag = .app_header;
-            // TODO this doesn't seem right, were giving it a record_field index instead of a token index
-            node.main_token = @intFromEnum(app.platform_idx);
             // Store provides collection
             node.data.lhs = @intFromEnum(app.provides);
-            // `packages` and the optional `roc` version pin do not both fit in
-            // the node, so they share an extra_data record.
-            const ed_start = try store.reserveExtraDataStart(2);
+            // `packages`, the optional platform entry, and the optional `roc`
+            // version pin do not all fit in the node, so they share an
+            // extra_data record.
+            const ed_start = try store.reserveExtraDataStart(3);
             store.extra_data.appendAssumeCapacity(@intFromEnum(app.packages));
             store.extra_data.appendAssumeCapacity(try packOptionalIndex(app.roc_version));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(app.platform_idx));
             node.data.rhs = ed_start;
             node.region = app.region;
         },
@@ -1748,7 +1748,7 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
         .app_header => {
             const ed_start = node.data.rhs;
             return .{ .app = .{
-                .platform_idx = @enumFromInt(node.main_token),
+                .platform_idx = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 2]),
                 .provides = @enumFromInt(node.data.lhs),
                 .packages = @enumFromInt(store.extra_data.items[ed_start]),
                 .roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 1]),

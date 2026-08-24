@@ -1466,12 +1466,15 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
         .target => |a_target| switch (b) {
             .target => |b_target| blk: {
                 if (!std.meta.eql(a_target.view.key, b_target.view.key)) break :blk false;
-                if (!std.meta.eql(a_target.target, b_target.target)) break :blk false;
+                if (!specMethodTargetEql(a_target, b_target)) break :blk false;
                 if (a_target.local_proc_context != b_target.local_proc_context) break :blk false;
                 if (a_target.instantiation) |a_instantiation| {
                     const b_instantiation = b_target.instantiation orelse break :blk false;
                     if (!std.meta.eql(a_instantiation.view.key, b_instantiation.view.key)) break :blk false;
-                    if (a_instantiation.callable_ty != b_instantiation.callable_ty) break :blk false;
+                    if (!std.meta.eql(
+                        a_instantiation.view.types.rootKey(a_instantiation.callable_ty),
+                        b_instantiation.view.types.rootKey(b_instantiation.callable_ty),
+                    )) break :blk false;
                 } else if (b_target.instantiation != null) {
                     break :blk false;
                 }
@@ -1502,6 +1505,16 @@ fn specEvidenceEql(a: SpecEvidence, b: SpecEvidence) bool {
         .unreachable_value => b == .unreachable_value,
         .checked_error => b == .checked_error,
     };
+}
+
+fn specMethodTargetEql(left: *const SpecEvidenceTarget, right: *const SpecEvidenceTarget) bool {
+    return left.target.module_idx == right.target.module_idx and
+        left.target.def_idx == right.target.def_idx and
+        std.meta.eql(left.target.kind, right.target.kind) and
+        std.meta.eql(
+            left.view.types.rootKey(left.target.callable_ty),
+            right.view.types.rootKey(right.target.callable_ty),
+        );
 }
 
 fn specEvidenceVectorEql(a: []const SpecEvidence, b: []const SpecEvidence) bool {
@@ -1811,14 +1824,7 @@ fn specializationEvidenceView(evidence: StoredConstFnEvidence) specialize.Eviden
 }
 
 fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvidence) bool {
-    if (left.head != right.head or left.nodes.len != right.nodes.len or left.frames.len != right.frames.len) return false;
-    for (left.nodes, right.nodes) |left_node, right_node| {
-        if (!std.meta.eql(left_node, right_node)) return false;
-    }
-    for (left.frames, right.frames) |left_frame, right_frame| {
-        if (!std.meta.eql(left_frame, right_frame)) return false;
-    }
-    return true;
+    return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
 }
 
 fn programViewFnEvidence(program: Ast.ProgramView, template: Ast.FnTemplate) StoredConstFnEvidence {
@@ -3331,8 +3337,10 @@ const Builder = struct {
                 nodes.items[target_index] = .{ .target = .{
                     .view = .{ .bytes = target.view.key.bytes },
                     .method = target.target,
+                    .method_callable_key = target.view.types.rootKey(target.target.callable_ty),
                     .instantiation = if (target.instantiation) |instantiation| .{
                         .view = .{ .bytes = instantiation.view.key.bytes },
+                        .callable_key = instantiation.view.types.rootKey(instantiation.callable_ty),
                         .callable_ty = instantiation.callable_ty,
                     } else null,
                     .nested = nested,
@@ -7892,8 +7900,8 @@ const Builder = struct {
 
     fn sameMonotype(self: *Builder, lhs: Type.TypeId, rhs: Type.TypeId) bool {
         if (lhs == rhs) return true;
-        const lhs_digest = self.program.types.typeDigest(&self.program.names, lhs);
-        const rhs_digest = self.program.types.typeDigest(&self.program.names, rhs);
+        const lhs_digest = self.program.types.equalityDigest(&self.program.names, lhs);
+        const rhs_digest = self.program.types.equalityDigest(&self.program.names, rhs);
         return std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
     }
 
@@ -22104,39 +22112,74 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
+        // Record plan entries intentionally share renamed fields by field-name
+        // set. Track concrete types separately so that sharing cannot truncate
+        // traversal of a distinct record shape's children.
+        var seen_types = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer seen_types.deinit();
+
+        try self.buildParserConstructionPrecomputedPlanVisit(
+            plan,
+            &seen_types,
+            shape_ty,
+            encoding_expr,
+            encoding_ty,
+            str_ty,
+        );
+    }
+
+    fn buildParserConstructionPrecomputedPlanVisit(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        seen_types: *collections.DenseMap(Type.TypeId, void),
+        shape_ty: Type.TypeId,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (seen_types.contains(shape_ty)) return;
+        try seen_types.put(shape_ty, {});
+
         if (self.tryNullInfo(shape_ty)) |info| {
-            return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
+            return try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (try self.missingTryInfo(shape_ty)) |info| {
-            return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_ty, encoding_expr, encoding_ty, str_ty);
+            return try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, info.ok_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (self.builder.optionalFieldSlot(shape_ty)) |slot| {
-            return try self.buildParserConstructionPrecomputedPlan(plan, slot.payload_ty, encoding_expr, encoding_ty, str_ty);
+            return try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, slot.payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if ((try self.customParserLookup(shape_ty)) != null) return;
         if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
-            return try self.buildParserConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
+            return try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
             var dict_buf: [2]Type.TypeId = undefined;
             for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
-                try self.buildParserConstructionPrecomputedPlan(plan, dict_shape, encoding_expr, encoding_ty, str_ty);
+                try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, dict_shape, encoding_expr, encoding_ty, str_ty);
             }
             return;
         }
 
         switch (self.builder.shapeContent(shape_ty)) {
-            .list => |elem_ty| try self.buildParserConstructionPrecomputedPlan(plan, elem_ty, encoding_expr, encoding_ty, str_ty),
-            .box => |payload_ty| try self.buildParserConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty),
+            .list => |elem_ty| try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, elem_ty, encoding_expr, encoding_ty, str_ty),
+            .box => |payload_ty| try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, payload_ty, encoding_expr, encoding_ty, str_ty),
             .tuple => |span| {
                 const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(span));
                 defer self.allocator.free(item_tys);
                 for (item_tys) |elem_ty| {
-                    try self.buildParserConstructionPrecomputedPlan(plan, elem_ty, encoding_expr, encoding_ty, str_ty);
+                    try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, elem_ty, encoding_expr, encoding_ty, str_ty);
                 }
             },
-            .record, .zst => try self.buildParserConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_expr, encoding_ty, str_ty),
+            .record, .zst => {
+                try self.buildParserConstructionRecordPrecomputedPlan(plan, shape_ty, encoding_expr, encoding_ty, str_ty);
+                const fields = try self.dupeRecordFieldsForShape(shape_ty);
+                defer self.allocator.free(fields);
+                for (fields) |field| {
+                    try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, field.ty, encoding_expr, encoding_ty, str_ty);
+                }
+            },
             .tag_union => |span| {
                 const tags = try GuardedList.dupe(self.allocator, Type.Tag, self.builder.program.types.tagSpan(span));
                 defer self.allocator.free(tags);
@@ -22144,7 +22187,7 @@ const BodyContext = struct {
                     const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(tag.payloads));
                     defer self.allocator.free(payload_tys);
                     for (payload_tys) |payload_ty| {
-                        try self.buildParserConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
+                        try self.buildParserConstructionPrecomputedPlanVisit(plan, seen_types, payload_ty, encoding_expr, encoding_ty, str_ty);
                     }
                 }
             },
@@ -22399,10 +22442,6 @@ const BodyContext = struct {
         inserted = true;
 
         try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
-
-        for (fields) |field| {
-            try self.buildParserConstructionPrecomputedPlan(plan, field.ty, encoding_expr, encoding_ty, str_ty);
-        }
     }
 
     fn buildParserRestoredPrecomputedPlan(
@@ -22414,33 +22453,69 @@ const BodyContext = struct {
         shape_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
+        // Restoration must walk concrete types independently from the shared
+        // field-name entries for the same reason as construction above.
+        var seen_types = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer seen_types.deinit();
+
+        try self.buildParserRestoredPrecomputedPlanVisit(
+            plan,
+            &seen_types,
+            fn_value,
+            store_view,
+            fn_view,
+            shape_ty,
+            str_ty,
+        );
+    }
+
+    fn buildParserRestoredPrecomputedPlanVisit(
+        self: *BodyContext,
+        plan: *ParserPrecomputedPlan,
+        seen_types: *collections.DenseMap(Type.TypeId, void),
+        fn_value: check.ConstStore.ConstFn,
+        store_view: ModuleView,
+        fn_view: ModuleView,
+        shape_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!void {
+        if (seen_types.contains(shape_ty)) return;
+        try seen_types.put(shape_ty, {});
+
         if (self.tryNullInfo(shape_ty)) |info| {
-            return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, info.ok_payload_ty, str_ty);
+            return try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, info.ok_payload_ty, str_ty);
         }
         if ((try self.customParserLookup(shape_ty)) != null) return;
         if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
-            return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty);
+            return try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, str_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
             var dict_buf: [2]Type.TypeId = undefined;
             for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
-                try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, dict_shape, str_ty);
+                try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, dict_shape, str_ty);
             }
             return;
         }
 
         switch (self.builder.shapeContent(shape_ty)) {
-            .list => |elem_ty| try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, elem_ty, str_ty),
-            .box => |payload_ty| try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty),
+            .list => |elem_ty| try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, elem_ty, str_ty),
+            .box => |payload_ty| try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, str_ty),
             .tuple => |span| {
                 const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(span));
                 defer self.allocator.free(item_tys);
                 for (item_tys) |elem_ty| {
-                    try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, elem_ty, str_ty);
+                    try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, elem_ty, str_ty);
                 }
             },
-            .record, .zst => try self.buildParserRestoredRecordPrecomputedPlan(plan, fn_value, store_view, fn_view, shape_ty, str_ty),
+            .record, .zst => {
+                try self.buildParserRestoredRecordPrecomputedPlan(plan, fn_value, store_view, fn_view, shape_ty, str_ty);
+                const fields = try self.dupeRecordFieldsForShape(shape_ty);
+                defer self.allocator.free(fields);
+                for (fields) |field| {
+                    try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, field.ty, str_ty);
+                }
+            },
             .tag_union => |span| {
                 const tags = try GuardedList.dupe(self.allocator, Type.Tag, self.builder.program.types.tagSpan(span));
                 defer self.allocator.free(tags);
@@ -22448,7 +22523,7 @@ const BodyContext = struct {
                     const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(tag.payloads));
                     defer self.allocator.free(payload_tys);
                     for (payload_tys) |payload_ty| {
-                        try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty);
+                        try self.buildParserRestoredPrecomputedPlanVisit(plan, seen_types, fn_value, store_view, fn_view, payload_ty, str_ty);
                     }
                 }
             },
@@ -22712,10 +22787,6 @@ const BodyContext = struct {
         inserted = true;
 
         try self.appendParserPrecomputedCaptures(plan, fields, locals, values);
-
-        for (fields) |field| {
-            try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, field.ty, str_ty);
-        }
     }
 
     fn lowerParseShapeFromState(
@@ -23441,7 +23512,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const false_expr = try self.boolLiteral(false, ctl.bool_ty);
-        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+        const remaining_minus_one = try self.lowLevelExpr(.num_int_sub_wrap, &.{
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             try self.intLiteralExpr(1, ctl.u64_ty),
         }, ctl.u64_ty);
@@ -23577,7 +23648,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const cursor_expr = try self.localExpr(continue_state_local, state_ty);
         const false_expr = try self.boolLiteral(false, ctl.bool_ty);
-        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+        const remaining_minus_one = try self.lowLevelExpr(.num_int_sub_wrap, &.{
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             try self.intLiteralExpr(1, ctl.u64_ty),
         }, ctl.u64_ty);
@@ -24654,7 +24725,7 @@ const BodyContext = struct {
             state_ty,
         );
         const counted_done = try self.addExpr(.{ .ty = ret_ty, .data = .{ .break_ = done_value } });
-        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+        const remaining_minus_one = try self.lowLevelExpr(.num_int_sub_wrap, &.{
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             try self.intLiteralExpr(1, ctl.u64_ty),
         }, ctl.u64_ty);
@@ -25093,7 +25164,7 @@ const BodyContext = struct {
             try self.localExpr(elem_local, elem_ty),
             list_ty,
         );
-        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+        const remaining_minus_one = try self.lowLevelExpr(.num_int_sub_wrap, &.{
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             try self.intLiteralExpr(1, ctl.u64_ty),
         }, ctl.u64_ty);
@@ -49568,18 +49639,31 @@ test "graph constructor representation follows aliases and preserves nominal lay
 }
 
 test "specialization evidence equality includes exact target instantiation" {
+    var roots: [11]checked.CheckedTypeRoot = undefined;
+    for (&roots, 0..) |*root, index| {
+        root.* = .{ .id = @enumFromInt(@as(u32, @intCast(index))), .key = .{} };
+        root.key.bytes[0] = @intCast(index);
+    }
+    // A fresh checked identity may have a distinct raw id while retaining the
+    // same canonical type topology.
+    roots[10].key = roots[8].key;
+
     var target_view: ModuleView = undefined;
     target_view.key = .{};
     target_view.key.bytes[0] = 1;
+    target_view.types = .{ .roots = &roots };
     var other_target_view: ModuleView = undefined;
     other_target_view.key = .{};
     other_target_view.key.bytes[0] = 2;
+    other_target_view.types = .{ .roots = &roots };
     var instantiation_view: ModuleView = undefined;
     instantiation_view.key = .{};
     instantiation_view.key.bytes[0] = 3;
+    instantiation_view.types = .{ .roots = &roots };
     var other_instantiation_view: ModuleView = undefined;
     other_instantiation_view.key = .{};
     other_instantiation_view.key.bytes[0] = 4;
+    other_instantiation_view.types = .{ .roots = &roots };
 
     const method: static_dispatch.MethodTarget = .{
         .module_idx = 5,
@@ -49610,6 +49694,10 @@ test "specialization evidence equality includes exact target instantiation" {
     var different_callable = exact;
     different_callable.instantiation.?.callable_ty = @enumFromInt(9);
     try std.testing.expect(!specEvidenceEql(.{ .target = &exact }, .{ .target = &different_callable }));
+
+    var equivalent_fresh_callable = exact;
+    equivalent_fresh_callable.instantiation.?.callable_ty = @enumFromInt(10);
+    try std.testing.expect(specEvidenceEql(.{ .target = &exact }, .{ .target = &equivalent_fresh_callable }));
 
     var unresolved_nested = exact;
     unresolved_nested.nested = .synthesize;
