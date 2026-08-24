@@ -8,13 +8,12 @@ shape, not on which post-check phase list produced it. Today each is
 implemented independently once per lowering strategy—and `Inspect` is
 implemented four times.
 
-**Inspect—four implementations, four copies of the format strings.**
+**Inspect—three implementations, three copies of the format strings.**
 
-- `src/postcheck/monotype/lower.zig:8769-9117` (`Builder.inspectBody`,
-  `toInspectCall`, `inspectTuple`, `inspectRecord`,
-  `inspectFieldSlot`, `inspectTagUnion`, `inspectList`).
-- `src/postcheck/monotype/lower.zig:14738-15060`
-  (`BodyContext.inspectBody` and the same seven siblings).
+- `src/postcheck/monotype/lower.zig` (`BodyContext.inspectBody`,
+  `toInspectCall`, `inspectTuple`, `inspectRecord`, `inspectFieldSlot`,
+  `inspectTagUnion`, `inspectList`). A fourth copy lived in `Builder`
+  and was dead; it has been deleted.
 - `src/postcheck/boxy/lower.zig:27699-28270`
   (`lowerInspectExprInto`, `lowerToInspectMethodInto`,
   `lowerRecordInspectLocalsInto`, `lowerTupleInspectLocalsInto`,
@@ -32,16 +31,17 @@ independently in each. A change to how Roc renders a record, a tuple,
 an optional field, or a boxed value must be made in four places, with
 nothing that fails if it is made in three.
 
-The two `monotype/lower.zig` copies **have already diverged on
-behavior**, not just on plumbing. `Builder.toInspectCall`
-(`:8808`) returns `null`—falling back to structural rendering—for
-`.structural` and `.local_proc` method targets, and has no
-error-payload and no capture handling. `BodyContext.toInspectCall`
-(`:14777`) routes an `err` callable payload to `runtimeCrashExpr`,
-consults `frozen_inspect_method_calls`, and passes a capture span.
-Whether a user's `to_inspect` method is honored therefore depends on
-which context derived the inspect, which is not a distinction the
-language exposes.
+The two `monotype/lower.zig` copies had diverged on behavior, not just
+plumbing: `Builder.toInspectCall` returned `null`—falling back to
+structural rendering—for `.structural` and `.local_proc` method targets,
+with no error-payload and no capture handling, while
+`BodyContext.toInspectCall` routed an `err` callable payload to
+`runtimeCrashExpr`, consulted `frozen_inspect_method_calls`, and passed
+a capture span. That divergence turned out to be unreachable: every call
+site of `Builder`'s inspect family was inside the family itself, so the
+weaker copy was dead and has been deleted rather than merged. Three
+implementations remain, and the audit's original claim that inspect
+behavior depended on which context derived it was wrong.
 
 **Structural equality and hashing—two implementations.**
 `solved_lir_lower.zig:4882` (`lowerStructuralEqInto`), `:4891`
