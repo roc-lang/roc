@@ -10277,13 +10277,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .mul => .num_times,
                 };
             }
-            return switch (op) {
-                .num_float_add => .num_plus,
-                .num_float_sub => .num_minus,
-                .num_float_mul => .num_times,
-                .dec_mul => .num_times,
-                else => CheckedArithmetic.uncheckedOp(op) orelse op,
-            };
+            if (op == .num_float_add) return .num_plus;
+            if (op == .num_float_sub) return .num_minus;
+            if (op == .num_float_mul or op == .dec_mul) return .num_times;
+            return CheckedArithmetic.uncheckedOp(op) orelse op;
         }
 
         fn crashingBinaryOp(op: lir.LowLevel) ?lir.LowLevel {
@@ -10601,15 +10598,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (operand_layout) {
                 .u8, .u16, .u32, .i8, .i16, .i32 => {
                     try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg);
-                    switch (operand_layout) {
-                        .u8 => try self.emitUnsignedIntRangeFlag(flag_reg, result_reg, 255),
-                        .u16 => try self.emitUnsignedIntRangeFlag(flag_reg, result_reg, 65_535),
-                        .u32 => try self.emitUnsignedIntRangeFlag(flag_reg, result_reg, 4_294_967_295),
-                        .i8 => try self.emitSignedIntRangeFlag(flag_reg, result_reg, -128, 127),
-                        .i16 => try self.emitSignedIntRangeFlag(flag_reg, result_reg, -32_768, 32_767),
-                        .i32 => try self.emitSignedIntRangeFlag(flag_reg, result_reg, -2_147_483_648, 2_147_483_647),
-                        else => unreachable,
-                    }
+                    if (operand_layout == .u8) {
+                        try self.emitUnsignedIntRangeFlag(flag_reg, result_reg, 255);
+                    } else if (operand_layout == .u16) {
+                        try self.emitUnsignedIntRangeFlag(flag_reg, result_reg, 65_535);
+                    } else if (operand_layout == .u32) {
+                        try self.emitUnsignedIntRangeFlag(flag_reg, result_reg, 4_294_967_295);
+                    } else if (operand_layout == .i8) {
+                        try self.emitSignedIntRangeFlag(flag_reg, result_reg, -128, 127);
+                    } else if (operand_layout == .i16) {
+                        try self.emitSignedIntRangeFlag(flag_reg, result_reg, -32_768, 32_767);
+                    } else if (operand_layout == .i32) {
+                        try self.emitSignedIntRangeFlag(flag_reg, result_reg, -2_147_483_648, 2_147_483_647);
+                    } else unreachable;
                 },
                 .i64 => if (comptime target.toCpuArch() == .aarch64) {
                     const high_reg = try self.allocTempGeneral();
@@ -10644,10 +10645,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (lhs_reg != .RAX) try self.codegen.emit.movRegReg(.w64, .RAX, lhs_reg);
                     try self.codegen.emit.mulReg(.w64, rhs_src);
                     try self.emitMovRegReg(result_reg, .RAX);
-                    const zero_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(zero_reg, 0);
-                    try self.codegen.emitCmp(.w64, flag_reg, .RDX, zero_reg, condNotEqual());
-                    self.codegen.freeGeneral(zero_reg);
+                    // MUL sets OF exactly when the high half is nonzero. Read
+                    // it after preserving RAX so result_reg may safely be RDX.
+                    try self.emitSetCond(flag_reg, condOverflow());
                     if (rhs_temp) |temp| self.codegen.freeGeneral(temp);
                 },
                 .bool, .str, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
@@ -26258,6 +26258,24 @@ test "generate addition" {
 
     const proc = try addBinaryLowLevelProc(&store, .num_int_add_crash_on_overflow, 40, 2, .i64, .i64);
     try std.testing.expectEqual(@as(i64, 42), try runRootI64(&store, &test_state.layout_store, proc));
+}
+
+test "dev backend detects u64 multiplication overflow" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const no_overflow = try addBinaryLowLevelProc(&store, .num_int_mul_overflows, -1, 1, .u64, .bool);
+    try std.testing.expectEqual(@as(u8, 0), try runRootU8(&store, &test_state.layout_store, no_overflow, .bool));
+
+    const overflow = try addBinaryLowLevelProc(&store, .num_int_mul_overflows, -1, 2, .u64, .bool);
+    try std.testing.expectEqual(@as(u8, 1), try runRootU8(&store, &test_state.layout_store, overflow, .bool));
 }
 
 test "dev backend fuses overflow predicate with matching wrapping result" {

@@ -127,6 +127,14 @@ const OverflowPred = struct {
     lhs: NodeId,
     rhs: NodeId,
     operand_layout: layout_mod.Idx,
+    predicate_stmt: CFStmtId,
+};
+
+/// A false overflow-predicate edge that proves matching arithmetic exact.
+const NoOverflowFact = struct {
+    predicate: OverflowPred,
+    switch_stmt: CFStmtId,
+    edge_head: CFStmtId,
 };
 
 /// A same-sign constant checked chain whose defining statement can be
@@ -165,7 +173,7 @@ const Fact = struct {
 
 const EdgeFact = union(enum) {
     ordering: Fact,
-    no_overflow: OverflowPred,
+    no_overflow: NoOverflowFact,
 };
 
 /// Saved path-environment entry for backtracking.
@@ -190,14 +198,16 @@ const JumpRecord = struct {
     stmt: CFStmtId,
 };
 
-/// Debug-only record of one applied rewrite: the statement changed, the
-/// root-level claim its proof established, and the path facts available when
-/// it was proven. Certified independently at the end of the round.
+const ProofClaim = union(enum) {
+    ordering: struct { a: NodeId, b: NodeId, m: i128 },
+    no_overflow: NoOverflowFact,
+};
+
+/// Debug-only record of one applied rewrite and the path claim that justified
+/// it. Certified independently at the end of the round.
 const ProofRecord = struct {
     stmt: CFStmtId,
-    claim_a: NodeId,
-    claim_b: NodeId,
-    claim_m: i128,
+    claim: ProofClaim,
     facts_start: u32,
     facts_len: u32,
 };
@@ -364,7 +374,7 @@ const Pass = struct {
     // Per-proc, per-round state. Reset by `resetRound`.
     nodes: std.ArrayList(Node),
     facts: std.ArrayList(Fact),
-    no_overflow_facts: std.ArrayList(OverflowPred),
+    no_overflow_facts: std.ArrayList(NoOverflowFact),
     global_env: collections.DenseMap(LocalId, Binding),
     path_env: collections.DenseMap(LocalId, Binding),
     undo: std.ArrayList(Undo),
@@ -420,7 +430,7 @@ const Pass = struct {
     // Debug-only certification state; unused (and empty) in release builds.
     proof_records: std.ArrayList(ProofRecord),
     proof_facts: std.ArrayList(Fact),
-    last_claim: ?struct { a: NodeId, b: NodeId, m: i128 },
+    last_claim: ?ProofClaim,
     read_counts: ?BodyClone.ReadCounts,
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store) Pass {
@@ -711,7 +721,7 @@ const Pass = struct {
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
         const m = k + self.offLoOf(b) - self.offHiOf(a);
-        if (builtin.mode == .Debug) self.last_claim = .{ .a = ra, .b = rb, .m = m };
+        if (builtin.mode == .Debug) self.last_claim = .{ .ordering = .{ .a = ra, .b = rb, .m = m } };
         if (ra == rb) return m >= 0;
 
         // Reach rb from ra along fact edges with accumulated slack <= m.
@@ -1998,9 +2008,7 @@ const Pass = struct {
         try self.proof_facts.appendSlice(self.allocator, self.facts.items);
         try self.proof_records.append(self.allocator, .{
             .stmt = stmt,
-            .claim_a = claim.a,
-            .claim_b = claim.b,
-            .claim_m = claim.m,
+            .claim = claim,
             .facts_start = start,
             .facts_len = @intCast(self.facts.items.len),
         });
@@ -2034,11 +2042,25 @@ const Pass = struct {
                     .meet => {},
                 }
             }
-            if (!RangeProveCertify.implies(self.allocator, facts, self.nodes.items, record.claim_a, record.claim_b, record.claim_m)) {
-                std.debug.panic(
-                    "range_prove certification failed: claim at s{d} does not follow from its facts",
-                    .{@intFromEnum(record.stmt)},
-                );
+            switch (record.claim) {
+                .ordering => |claim| {
+                    if (!RangeProveCertify.implies(self.allocator, facts, self.nodes.items, claim.a, claim.b, claim.m)) {
+                        std.debug.panic(
+                            "range_prove certification failed: claim at s{d} does not follow from its facts",
+                            .{@intFromEnum(record.stmt)},
+                        );
+                    }
+                },
+                .no_overflow => |claim| {
+                    if (!doms.dominates(claim.edge_head, record.stmt) or
+                        !RangeProveCertify.isFalseOverflowEdge(self.store, claim))
+                    {
+                        std.debug.panic(
+                            "range_prove certification failed: overflow claim at s{d} does not follow from its false predicate edge",
+                            .{@intFromEnum(record.stmt)},
+                        );
+                    }
+                },
             }
         }
     }
@@ -2183,10 +2205,8 @@ const Pass = struct {
                         // place; `s` is a pre-rewrite copy, so its `next`
                         // stays valid either way.
                         try self.modelLowLevel(current, s);
-                        switch (self.store.getCFStmt(current)) {
-                            .crash => break :walk,
-                            else => current = s.next,
-                        }
+                        if (std.meta.activeTag(self.store.getCFStmt(current)) == .crash) break :walk;
+                        current = s.next;
                     },
                     .set_local => |s| {
                         try self.visited.put(current, {});
@@ -2421,9 +2441,9 @@ const Pass = struct {
         if (binding != null and cond_is_bool and branch_count == 1) {
             const only = GuardedList.at(branches, 0);
             if (only.value == 1) {
-                default_fact = self.boolEdgeFact(binding.?, false, switch_stmt);
+                default_fact = self.boolEdgeFact(binding.?, false, switch_stmt, s.default_branch);
             } else if (only.value == 0) {
-                default_fact = self.boolEdgeFact(binding.?, true, switch_stmt);
+                default_fact = self.boolEdgeFact(binding.?, true, switch_stmt, s.default_branch);
             }
         }
         try self.pushFrame(s.default_branch, default_fact);
@@ -2433,19 +2453,23 @@ const Pass = struct {
             var edge_fact: ?EdgeFact = null;
             if (binding != null and cond_is_bool) {
                 if (branch.value == 1) {
-                    edge_fact = self.boolEdgeFact(binding.?, true, switch_stmt);
+                    edge_fact = self.boolEdgeFact(binding.?, true, switch_stmt, branch.body);
                 } else if (branch.value == 0) {
-                    edge_fact = self.boolEdgeFact(binding.?, false, switch_stmt);
+                    edge_fact = self.boolEdgeFact(binding.?, false, switch_stmt, branch.body);
                 }
             }
             try self.pushFrame(branch.body, edge_fact);
         }
     }
 
-    fn boolEdgeFact(self: *const Pass, binding: Binding, holds: bool, switch_stmt: CFStmtId) ?EdgeFact {
+    fn boolEdgeFact(self: *const Pass, binding: Binding, holds: bool, switch_stmt: CFStmtId, edge_head: CFStmtId) ?EdgeFact {
         if (binding.pred) |pred| return .{ .ordering = self.predFact(pred, holds, switch_stmt) };
         if (!holds) {
-            if (binding.overflow_pred) |overflow_pred| return .{ .no_overflow = overflow_pred };
+            if (binding.overflow_pred) |overflow_pred| return .{ .no_overflow = .{
+                .predicate = overflow_pred,
+                .switch_stmt = switch_stmt,
+                .edge_head = edge_head,
+            } };
         }
         return null;
     }
@@ -3219,11 +3243,14 @@ const Pass = struct {
         if (try self.foldSameSignConstantChain(stmt, s, args, entry, lhs, rhs, operand_layout, max.?)) return;
 
         var proof = try self.proveFamilyNoOverflow(entry.operation, lhs, rhs, operand_layout);
-        if (!proof.proven and self.pathProvesNoOverflow(entry.operation, lhs, rhs, operand_layout)) {
-            proof = .{
-                .proven = true,
-                .result = try self.survivingFamilyResult(entry.operation, lhs, rhs),
-            };
+        if (!proof.proven) {
+            if (self.pathNoOverflowFact(entry.operation, lhs, rhs, operand_layout)) |fact| {
+                if (builtin.mode == .Debug) self.last_claim = .{ .no_overflow = fact };
+                proof = .{
+                    .proven = true,
+                    .result = try self.survivingFamilyResult(entry.operation, lhs, rhs),
+                };
+            }
         }
         const always_overflows = self.familyAlwaysOverflows(entry.operation, lhs, rhs, max.?);
 
@@ -3259,6 +3286,7 @@ const Pass = struct {
                 .lhs = lhs,
                 .rhs = rhs,
                 .operand_layout = operand_layout,
+                .predicate_stmt = stmt,
             } });
             return;
         }
@@ -3350,10 +3378,9 @@ const Pass = struct {
         const chain = (self.lookup(inner_local) orelse return false).arithmetic_chain orelse return false;
         if (chain.operation != entry.operation or chain.constant < 0 or chain.constant > max) return false;
 
-        const inner = switch (self.store.getCFStmt(chain.stmt)) {
-            .assign_low_level => |inner| inner,
-            else => return false,
-        };
+        const inner_stmt = self.store.getCFStmt(chain.stmt);
+        if (std.meta.activeTag(inner_stmt) != .assign_low_level) return false;
+        const inner = inner_stmt.assign_low_level;
         if (inner.target != inner_local) return false;
         const outer_literal_stmt = self.literalDefinitionOnPath(inner.next, stmt, outer_constant_local) orelse return false;
         const read_counts = self.read_counts orelse return false;
@@ -3394,13 +3421,11 @@ const Pass = struct {
         var definition: ?CFStmtId = null;
         while (remaining > 0) : (remaining -= 1) {
             if (current == target) return definition;
-            current = switch (self.store.getCFStmt(current)) {
-                .assign_literal => |literal| blk: {
-                    if (literal.target == local) definition = current;
-                    break :blk literal.next;
-                },
-                else => return null,
-            };
+            const stmt = self.store.getCFStmt(current);
+            if (std.meta.activeTag(stmt) != .assign_literal) return null;
+            const literal = stmt.assign_literal;
+            if (literal.target == local) definition = current;
+            current = literal.next;
         }
         return null;
     }
@@ -3461,22 +3486,23 @@ const Pass = struct {
         return .{};
     }
 
-    fn pathProvesNoOverflow(
+    fn pathNoOverflowFact(
         self: *const Pass,
         operation: CheckedArithmetic.Operation,
         lhs: NodeId,
         rhs: NodeId,
         operand_layout: layout_mod.Idx,
-    ) bool {
+    ) ?NoOverflowFact {
         var i = self.no_overflow_facts.items.len;
         while (i > 0) {
             i -= 1;
             const fact = self.no_overflow_facts.items[i];
-            if (fact.operation != operation or fact.operand_layout != operand_layout) continue;
-            if (fact.lhs == lhs and fact.rhs == rhs) return true;
-            if ((operation == .add or operation == .mul) and fact.lhs == rhs and fact.rhs == lhs) return true;
+            const predicate = fact.predicate;
+            if (predicate.operation != operation or predicate.operand_layout != operand_layout) continue;
+            if (predicate.lhs == lhs and predicate.rhs == rhs) return fact;
+            if ((operation == .add or operation == .mul) and predicate.lhs == rhs and predicate.rhs == lhs) return fact;
         }
-        return false;
+        return null;
     }
 
     fn survivingFamilyResult(self: *Pass, operation: CheckedArithmetic.Operation, lhs: NodeId, rhs: NodeId) ResourceError!?NodeId {
@@ -3669,6 +3695,31 @@ const RangeProveCertify = struct {
             for (owned) |succ| try stack.append(allocator, succ);
         }
         return graph;
+    }
+
+    /// Verify that the recorded edge is the False arm of the recorded
+    /// overflow predicate's Bool switch.
+    fn isFalseOverflowEdge(store: *const LirStore, fact: NoOverflowFact) bool {
+        const predicate_stmt = store.getCFStmt(fact.predicate.predicate_stmt);
+        if (std.meta.activeTag(predicate_stmt) != .assign_low_level) return false;
+        const predicate = predicate_stmt.assign_low_level;
+        const entry = CheckedArithmetic.classify(predicate.op) orelse return false;
+        if (entry.mode != .overflows or entry.operation != fact.predicate.operation) return false;
+
+        const switch_stmt = store.getCFStmt(fact.switch_stmt);
+        if (std.meta.activeTag(switch_stmt) != .switch_stmt) return false;
+        const bool_switch = switch_stmt.switch_stmt;
+        if (bool_switch.cond != predicate.target) return false;
+
+        const branches = store.getCFSwitchBranches(bool_switch.branches);
+        const branch_count = GuardedList.borrowLen(branches);
+        for (0..branch_count) |index| {
+            const branch = GuardedList.at(branches, index);
+            if (branch.value == 0 and branch.body == fact.edge_head) return true;
+        }
+        return branch_count == 1 and
+            GuardedList.at(branches, 0).value == 1 and
+            bool_switch.default_branch == fact.edge_head;
     }
 
     /// Re-derive `value(ra) <= value(rb) + m` from the snapshot facts and the

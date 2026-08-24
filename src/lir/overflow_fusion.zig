@@ -13,6 +13,7 @@ const LirStore = core.LirStore;
 const CheckedArithmetic = core.CheckedArithmetic;
 const GuardedList = LirStore.GuardedList;
 
+/// The arithmetic consumer whose result can reuse the predicate computation.
 pub const Match = struct {
     consumer_stmt: LIR.CFStmtId,
     result_target: LIR.LocalId,
@@ -25,20 +26,18 @@ pub const Match = struct {
 /// from the consumer. That makes the transformation an exact local peephole:
 /// no effects or unrelated calculations are moved across the branch.
 pub fn findResultConsumer(store: *const LirStore, predicate_stmt: LIR.CFStmtId) ?Match {
-    const predicate = switch (store.getCFStmt(predicate_stmt)) {
-        .assign_low_level => |assign| assign,
-        else => return null,
-    };
+    const predicate_cf_stmt = store.getCFStmt(predicate_stmt);
+    if (std.meta.activeTag(predicate_cf_stmt) != .assign_low_level) return null;
+    const predicate = predicate_cf_stmt.assign_low_level;
     const predicate_entry = CheckedArithmetic.classify(predicate.op) orelse return null;
     if (predicate_entry.mode != .overflows) return null;
 
     const predicate_args = store.getLocalSpan(predicate.args);
     if (GuardedList.borrowLen(predicate_args) != 2) return null;
 
-    const bool_switch = switch (store.getCFStmt(predicate.next)) {
-        .switch_stmt => |switch_stmt| switch_stmt,
-        else => return null,
-    };
+    const next_cf_stmt = store.getCFStmt(predicate.next);
+    if (std.meta.activeTag(next_cf_stmt) != .switch_stmt) return null;
+    const bool_switch = next_cf_stmt.switch_stmt;
     if (bool_switch.cond != predicate.target) return null;
 
     // Roc Bool uses 0 for False and 1 for True. Lowering commonly emits the
@@ -56,43 +55,44 @@ pub fn findResultConsumer(store: *const LirStore, predicate_stmt: LIR.CFStmtId) 
     var current = false_arm;
     var remaining = store.cfStmtCount();
     while (remaining > 0) : (remaining -= 1) {
-        switch (store.getCFStmt(current)) {
-            .assign_ref => |assign| {
-                if (assign.op != .local) return null;
-                const source = assign.op.local;
-                var followed = false;
-                if (source == lhs_alias) {
-                    lhs_alias = assign.target;
-                    followed = true;
-                }
-                if (source == rhs_alias) {
-                    rhs_alias = assign.target;
-                    followed = true;
-                }
-                if (!followed) return null;
-                current = assign.next;
-            },
-            .assign_low_level => |consumer| {
-                const consumer_entry = CheckedArithmetic.classify(consumer.op) orelse return null;
-                if (consumer_entry.operation != predicate_entry.operation) return null;
-                switch (consumer_entry.mode) {
-                    .wrap, .crash_on_overflow, .proven_cannot_overflow => {},
-                    .overflows => return null,
-                }
-
-                const consumer_args = store.getLocalSpan(consumer.args);
-                if (GuardedList.borrowLen(consumer_args) != 2) return null;
-                const consumer_lhs = GuardedList.at(consumer_args, 0);
-                const consumer_rhs = GuardedList.at(consumer_args, 1);
-                const ordered = consumer_lhs == lhs_alias and consumer_rhs == rhs_alias;
-                const swapped = consumer_entry.operation != .sub and
-                    consumer_lhs == rhs_alias and consumer_rhs == lhs_alias;
-                if (!ordered and !swapped) return null;
-
-                return .{ .consumer_stmt = current, .result_target = consumer.target };
-            },
-            else => return null,
+        const stmt = store.getCFStmt(current);
+        if (std.meta.activeTag(stmt) == .assign_ref) {
+            const assign = stmt.assign_ref;
+            if (assign.op != .local) return null;
+            const source = assign.op.local;
+            var followed = false;
+            if (source == lhs_alias) {
+                lhs_alias = assign.target;
+                followed = true;
+            }
+            if (source == rhs_alias) {
+                rhs_alias = assign.target;
+                followed = true;
+            }
+            if (!followed) return null;
+            current = assign.next;
+            continue;
         }
+
+        if (std.meta.activeTag(stmt) != .assign_low_level) return null;
+        const consumer = stmt.assign_low_level;
+        const consumer_entry = CheckedArithmetic.classify(consumer.op) orelse return null;
+        if (consumer_entry.operation != predicate_entry.operation) return null;
+        switch (consumer_entry.mode) {
+            .wrap, .crash_on_overflow, .proven_cannot_overflow => {},
+            .overflows => return null,
+        }
+
+        const consumer_args = store.getLocalSpan(consumer.args);
+        if (GuardedList.borrowLen(consumer_args) != 2) return null;
+        const consumer_lhs = GuardedList.at(consumer_args, 0);
+        const consumer_rhs = GuardedList.at(consumer_args, 1);
+        const ordered = consumer_lhs == lhs_alias and consumer_rhs == rhs_alias;
+        const swapped = consumer_entry.operation != .sub and
+            consumer_lhs == rhs_alias and consumer_rhs == lhs_alias;
+        if (!ordered and !swapped) return null;
+
+        return .{ .consumer_stmt = current, .result_target = consumer.target };
     }
 
     return null;

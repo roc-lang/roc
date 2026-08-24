@@ -5788,11 +5788,11 @@ fn emitCompositeOverflowPredicate(
 
     switch (entry.operation) {
         .add, .sub => {
-            switch (plain_op) {
-                .num_plus => try self.emitI128Add(lhs_local, rhs_local),
-                .num_minus => try self.emitI128Sub(lhs_local, rhs_local),
-                else => unreachable,
-            }
+            if (plain_op == .num_plus) {
+                try self.emitI128Add(lhs_local, rhs_local);
+            } else if (plain_op == .num_minus) {
+                try self.emitI128Sub(lhs_local, rhs_local);
+            } else unreachable;
             const result_local = try self.stabilizeCompositeResult(16);
             if (operand_layout == .u128) {
                 if (entry.operation == .add) {
@@ -16717,13 +16717,10 @@ fn plainNumericLowLevel(op: LIR.LowLevel) LIR.LowLevel {
             .mul => .num_times,
         };
     }
-    return switch (op) {
-        .num_float_add => .num_plus,
-        .num_float_sub => .num_minus,
-        .num_float_mul => .num_times,
-        .dec_mul => .num_times,
-        else => CheckedArithmetic.uncheckedOp(op) orelse op,
-    };
+    if (op == .num_float_add) return .num_plus;
+    if (op == .num_float_sub) return .num_minus;
+    if (op == .num_float_mul or op == .dec_mul) return .num_times;
+    return CheckedArithmetic.uncheckedOp(op) orelse op;
 }
 
 /// Generate numeric low-level operations (num_plus, num_minus, etc.)
