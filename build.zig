@@ -7302,7 +7302,14 @@ fn addMainExe(
     machine_code_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     machine_code_shim_lib.step.dependOn(&write_compiled_builtins.step);
     machine_code_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
-    machine_code_shim_lib.bundle_compiler_rt = true;
+    // The shim is linked alongside a platform host that is its own compiler-rt
+    // carrier, and COFF rejects the resulting duplicate definitions of `memcpy`
+    // and the integer/float libcalls outright (the same hazard noted on the
+    // boxy object above). The shim does not need a copy of its own: its objects
+    // reference only memcpy, memmove and memset, which the rest of the link
+    // already provides -- both for a platform host and for the freestanding
+    // default platform.
+    machine_code_shim_lib.bundle_compiler_rt = false;
     // On Linux the shim reaches the kernel directly, so the executables it is
     // linked into need no libc. Declaring that here makes the Zig compiler
     // enforce it: any new libc dependency in the shim's module graph becomes a
@@ -7584,6 +7591,34 @@ fn addMainExe(
                 b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_runtime_ext }),
             );
             exe.step.dependOn(&copy_default_platform_runtime.step);
+
+            // A shared-memory run of the synthetic Linux default platform has
+            // no external platform host to provide compiler-rt. Keep that
+            // carrier explicit and default-platform-owned instead of hiding it
+            // in the machine-code shim, which is also linked with user hosts.
+            if (default_platform_os == .linux) {
+                const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
+                const default_platform_compiler_rt_obj = b.addObject(.{
+                    .name = b.fmt("roc_default_compiler_rt_{s}", .{cross_target.name}),
+                    .root_module = b.createModule(.{
+                        .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
+                        .target = cross_resolved_target,
+                        .optimize = .ReleaseFast,
+                        .strip = false,
+                        .omit_frame_pointer = false,
+                        .pic = true,
+                    }),
+                });
+                default_platform_compiler_rt_obj.bundle_compiler_rt = false;
+                configureBackend(default_platform_compiler_rt_obj, cross_resolved_target);
+
+                const copy_default_platform_compiler_rt = b.addUpdateSourceFiles();
+                copy_default_platform_compiler_rt.addCopyFileToSource(
+                    default_platform_compiler_rt_obj.getEmittedBin(),
+                    b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_default_compiler_rt.o" }),
+                );
+                exe.step.dependOn(&copy_default_platform_compiler_rt.step);
+            }
 
             const default_platform_executable_obj = b.addObject(.{
                 .name = b.fmt("roc_default_platform_{s}", .{cross_target.name}),

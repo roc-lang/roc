@@ -694,6 +694,48 @@ fn DefaultPlatformObjects(comptime base_name: []const u8) type {
 const DefaultPlatformRuntimeObjects = DefaultPlatformObjects("roc_default_runtime");
 const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_platform");
 
+const DefaultPlatformCompilerRtObjects = struct {
+    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_default_compiler_rt.o");
+    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/roc_default_compiler_rt.o");
+    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_default_compiler_rt.o");
+    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/roc_default_compiler_rt.o");
+
+    pub fn forTarget(requested: RocTarget) ?[]const u8 {
+        return switch (requested.defaultCpuTarget()) {
+            .x64musl => x64musl,
+            .arm64musl => arm64musl,
+            .x64glibc, .x64linux => x64glibc,
+            .arm64glibc, .arm64linux => arm64glibc,
+            .x64mac,
+            .arm64mac,
+            .x64win,
+            .arm64win,
+            .x64freebsd,
+            .x64openbsd,
+            .x64netbsd,
+            .x64elf,
+            .x64v1mac,
+            .x64v1win,
+            .x64v1freebsd,
+            .x64v1openbsd,
+            .x64v1netbsd,
+            .x64v1musl,
+            .x64v1glibc,
+            .x64v1linux,
+            .x64v1elf,
+            .arm64v1win,
+            .arm64v1linux,
+            .arm64v1musl,
+            .arm64v1glibc,
+            .arm32linux,
+            .arm32musl,
+            .wasm32,
+            .wasm32v1,
+            => null,
+        };
+    }
+};
+
 /// Prebuilt boxy runtime objects (the `roc_boxy_*` C-ABI wrappers plus
 /// `roc_boxy_init_embedded`), linked by `roc build --opt=dev` into programs that
 /// emit boxy statements. Shipped for every target that carries a builtins
@@ -2409,11 +2451,13 @@ fn defaultRunCheckedHostIdentity(
 
 fn defaultRunLinkInputsIdentity(target: RocTarget) ?[32]u8 {
     const runtime_bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
+    const compiler_rt_bytes = DefaultPlatformCompilerRtObjects.forTarget(target) orelse return null;
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-default-link-inputs-v3");
     updateHashBytes(&hasher, @tagName(target));
     hasher.update(&bytesDigest(runtime_bytes));
+    hasher.update(&bytesDigest(compiler_rt_bytes));
 
     return hasher.finalResult();
 }
@@ -3941,11 +3985,15 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         const runtime_path = (try writeDefaultPlatformRuntimeObject(ctx, temp_dir, selected_target)) orelse {
             return rejectRunTargetNotExecutable(ctx, selected_target);
         };
+        const compiler_rt_path = (try writeDefaultPlatformCompilerRtObject(ctx, temp_dir, selected_target)) orelse {
+            return rejectRunTargetNotExecutable(ctx, selected_target);
+        };
 
         const object_files = [_][]const u8{
             platform_shim_path,
             shim_path,
             runtime_path,
+            compiler_rt_path,
         };
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(selected_target.toOsTag()),
@@ -8670,6 +8718,16 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
         return err;
     };
     return runtime_path;
+}
+
+fn writeDefaultPlatformCompilerRtObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
+    const bytes = DefaultPlatformCompilerRtObjects.forTarget(target) orelse return null;
+    const object_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_default_compiler_rt.o" });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, bytes) catch |err| {
+        std.log.err("Failed to write default platform compiler-rt object {s}: {}", .{ object_path, err });
+        return err;
+    };
+    return object_path;
 }
 
 fn lirResultNeedsBoxyRuntime(result: *const lir.Program.Result) bool {
