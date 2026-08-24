@@ -132,11 +132,19 @@ pub const Solution = struct {
     /// count 1 at the local's definition and no statement can add another
     /// holder afterward.
     unique: std.bit_set.DynamicBitSetUnmanaged,
+    /// Born with a count of one, before any holder accounting.
+    born_unique: std.bit_set.DynamicBitSetUnmanaged,
     /// Bit set => some occurrence can add another holder to the local's
     /// value (or consume it a second time). A parameter a variant's demand
     /// vector seeds born-unique stays unique through its body only when
     /// this bit is clear.
     unique_destroyed: std.bit_set.DynamicBitSetUnmanaged,
+    /// Born unique, with something having since given the allocation a second
+    /// owner. Unlike `unique_destroyed` this excludes aliases whose source is
+    /// merely read: a live borrowed alias shares its source's borrow group, so
+    /// emission answers that where it knows the statement, and an owned alias
+    /// carries its own retained unit and lands here regardless.
+    unique_extra_owner: std.bit_set.DynamicBitSetUnmanaged,
     /// Bit set => the proc's signature is pinned by ABI (roots, hosted,
     /// erased-callable, bodyless, and address-escaping procs). Pinned procs
     /// are never mode-specialized.
@@ -163,7 +171,9 @@ pub const Solution = struct {
         self.allocator.free(self.maybe_uninitialized_condition_mask);
         self.visible.deinit(self.allocator);
         self.unique.deinit(self.allocator);
+        self.born_unique.deinit(self.allocator);
         self.unique_destroyed.deinit(self.allocator);
+        self.unique_extra_owner.deinit(self.allocator);
         self.pinned.deinit(self.allocator);
     }
 
@@ -215,6 +225,16 @@ pub const Solution = struct {
     /// True when some occurrence can add another holder to the local's
     /// value (or consume it a second time), so a born-unique seed on this
     /// local would not survive to a consuming use.
+    /// True when the value is born unique and nothing has given its
+    /// allocation a second owner. Emission pairs this with its own liveness
+    /// question over the borrow group, which covers the aliases this omits.
+    pub fn isBornUniqueWithoutExtraOwner(self: *const Solution, local: LIR.LocalId) bool {
+        const index = @intFromEnum(local);
+        if (index >= self.born_unique.bit_length) return false;
+        if (!self.born_unique.isSet(index)) return false;
+        return !self.unique_extra_owner.isSet(index);
+    }
+
     pub fn isUniqueDestroyed(self: *const Solution, local: LIR.LocalId) bool {
         const index = @intFromEnum(local);
         if (index >= self.leader.len) return true;
@@ -227,6 +247,18 @@ pub const Solution = struct {
         const index = @intFromEnum(proc);
         if (index >= self.pinned.capacity()) return true;
         return self.pinned.isSet(index);
+    }
+
+    /// The local this one is a pure same-value alias of, or null. An owned
+    /// alias anchors its own liveness, so its source's liveness has to be
+    /// followed separately to learn whether the shared allocation is still
+    /// reachable under another name.
+    pub fn aliasSourceOf(self: *const Solution, local: LIR.LocalId) ?LIR.LocalId {
+        const index = @intFromEnum(local);
+        if (index >= self.alias_source.len) return null;
+        const source = self.alias_source[index];
+        if (source == no_local) return null;
+        return @enumFromInt(source);
     }
 
     pub fn leaderOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
@@ -493,6 +525,10 @@ const Solver = struct {
     binding_facts: std.ArrayList(BindingFact),
     visibility_facts: std.ArrayList(VisibilityFact),
     unique_facts: std.ArrayList(UniqueFact),
+    /// Statement that produced each entry of `unique_facts`, filled in
+    /// lockstep. The double-consume check reads it to ask whether two
+    /// consumes of one value can reach each other.
+    fact_stmts: std.ArrayList(LIR.CFStmtId),
     address_taken: std.bit_set.DynamicBitSetUnmanaged,
     /// Reachable returned locals and joins, partitioned by source proc.
     /// This is the sole structural walk of the ownership-neutral CFG. Every
@@ -548,6 +584,7 @@ pub fn solve(
         .binding_facts = .empty,
         .visibility_facts = .empty,
         .unique_facts = .empty,
+        .fact_stmts = .empty,
         .address_taken = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count),
         .proc_stmts = try allocator.alloc(std.ArrayList(LIR.CFStmtId), proc_count),
         .proc_returns = try allocator.alloc(std.ArrayList(u32), proc_count),
@@ -593,6 +630,7 @@ pub fn solve(
         solver.binding_facts.deinit(allocator);
         solver.visibility_facts.deinit(allocator);
         solver.unique_facts.deinit(allocator);
+        solver.fact_stmts.deinit(allocator);
         solver.address_taken.deinit(allocator);
         for (solver.proc_stmts) |*stmts| stmts.deinit(allocator);
         allocator.free(solver.proc_stmts);
@@ -710,20 +748,27 @@ pub fn solve(
         errdefer dense_uniqueness.deinit(allocator);
         try solveUniqueReturnModes(&solver, &dense_uniqueness, &unique_origins);
     }
-    // Emission consumes the final bit and the destroyed set (for variant
-    // parameter seeds); the born-unique origin set is re-derived by the
-    // certifier.
-    dense_uniqueness.born_unique.deinit(allocator);
+    // Emission consumes the final bit, the destroyed set (for variant
+    // parameter seeds), the born-unique origin set, and the second-owner set;
+    // the certifier re-derives the origin set for itself.
+    defer dense_uniqueness.born_unique.deinit(allocator);
     defer dense_uniqueness.unique.deinit(allocator);
     defer dense_uniqueness.destroyed.deinit(allocator);
+    defer dense_uniqueness.extra_owner.deinit(allocator);
 
     var unique = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     errdefer unique.deinit(allocator);
     var unique_destroyed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     errdefer unique_destroyed.deinit(allocator);
+    var unique_extra_owner = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    errdefer unique_extra_owner.deinit(allocator);
+    var born_unique_locals = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    errdefer born_unique_locals.deinit(allocator);
     for (domain.arc_to_local, 0..) |local, arc_index| {
         if (dense_uniqueness.unique.isSet(arc_index)) unique.set(local);
         if (dense_uniqueness.destroyed.isSet(arc_index)) unique_destroyed.set(local);
+        if (dense_uniqueness.extra_owner.isSet(arc_index)) unique_extra_owner.set(local);
+        if (dense_uniqueness.born_unique.isSet(arc_index)) born_unique_locals.set(local);
     }
     if (builtin.mode == .Debug) {
         var independently_unique = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, null, solver.proc_stmts, null, null, null);
@@ -811,6 +856,8 @@ pub fn solve(
         .visible = visible,
         .unique = unique,
         .unique_destroyed = unique_destroyed,
+        .unique_extra_owner = unique_extra_owner,
+        .born_unique = born_unique_locals,
         .pinned = solver.pinned,
     };
     solver_sigs_kept = true;
@@ -837,6 +884,8 @@ pub fn solve(
         solution.visible.deinit(allocator);
         solution.unique.deinit(allocator);
         solution.unique_destroyed.deinit(allocator);
+        solution.unique_extra_owner.deinit(allocator);
+        solution.born_unique.deinit(allocator);
         solution.pinned.deinit(allocator);
     }
 
@@ -1440,6 +1489,8 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         var destroy_counts = [_]u64{0} ** @typeInfo(DestroyOrigin).@"enum".fields.len;
         var mechanism_counts = [_]u64{0} ** @typeInfo(DestroyMechanism).@"enum".fields.len;
         var site_counts = [_]u64{0} ** 7;
+        var real_double: u64 = 0;
+        var spurious_double: u64 = 0;
         const site_names = [_][]const u8{
             "destroy fact",
             "borrowed call arg",
@@ -1507,6 +1558,16 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
                             }
                             const tag = tags[origin];
                             site_counts[if (tag == 255) 5 else tag] += 1;
+                            // Consume-rooted verdicts are the ones a path
+                            // check can overturn. Errors count as real, which
+                            // keeps the reported gain a lower bound.
+                            if (tag == 2 or tag == 6) {
+                                if (DoubleConsume.isReal(solver, origin) catch true) {
+                                    real_double += 1;
+                                } else {
+                                    spurious_double += 1;
+                                }
+                            }
                         }
                     }
                     if (root.depth > max_depth) max_depth = root.depth;
@@ -1541,6 +1602,12 @@ const UniqueSolveDiag = if (builtin.os.tag == .freestanding) struct {
         }
         for (site_counts, 0..) |count, index| {
             if (count != 0) std.debug.print("  site:{s: <22} {d}\n", .{ site_names[index], count });
+        }
+        if (real_double + spurious_double != 0) {
+            std.debug.print(
+                "  path check: {d} consumes cannot both run, {d} can\n",
+                .{ spurious_double, real_double },
+            );
         }
     }
 };
@@ -1736,6 +1803,144 @@ fn solveUniqueReturnModes(
 /// once. The lists are the producer-authored CFG projected into a stable
 /// per-procedure inventory; pins, call SCCs, binding/signature facts,
 /// visibility, uniqueness, returns, and joins all consume this same lift.
+/// Whether to record which statement produced each uniqueness fact, which
+/// the double-consume measurement needs and nothing else does.
+/// Printing is selected by comptime target: a runtime guard still leaves the
+/// call compiled, and stderr does not exist on a target without an OS.
+const ConsumeWithdrawReport = if (builtin.os.tag == .freestanding) struct {
+    fn print(_: u32) void {}
+} else struct {
+    fn print(count: u32) void {
+        std.debug.print(
+            "=== ARC consume verdicts a path check would withdraw: {d} ===\n",
+            .{count},
+        );
+    }
+};
+
+fn traceConsumes() bool {
+    if (builtin.os.tag == .freestanding) return false;
+    return std.c.getenv("ROC_ARC_UNIQUE_DIAG") != null;
+}
+
+/// Decides whether a value's two consumes can both run.
+///
+/// The solve marks a value destroyed on its second consume without asking
+/// whether the two can happen on one execution path, so a value consumed in
+/// each arm of a branch counts as consumed twice. Creating an alias consumes
+/// its source, which makes that shape common.
+///
+/// A consume is genuinely a second one only when another consume reaches it
+/// without passing a definition of the value in between. That covers the four
+/// shapes correctly: two arms of a branch reach each other not at all,
+/// sequential consumes reach forwards, a loop that redefines the value each
+/// iteration is cut by the definition, and a loop that does not is reached
+/// around the back edge.
+const DoubleConsume = struct {
+    /// Statements that consume `local`, either outright or by aliasing it.
+    fn collectConsumes(
+        solver: *const Solver,
+        local: u32,
+        out: *std.ArrayList(LIR.CFStmtId),
+    ) SolveError!void {
+        out.clearRetainingCapacity();
+        if (solver.fact_stmts.items.len != solver.unique_facts.items.len) {
+            solveInvariant("fact-to-statement map fell out of step with the facts");
+        }
+        for (solver.unique_facts.items, 0..) |fact, index| {
+            const consumed: ?LIR.LocalId = switch (fact) {
+                .consume => |value| value,
+                .alias => |alias| alias.source,
+                else => null,
+            };
+            const value = consumed orelse continue;
+            const arc_index = solver.domain.indexOf(value) orelse continue;
+            if (arc_index != local) continue;
+            try out.append(solver.allocator, solver.fact_stmts.items[index]);
+        }
+    }
+
+    /// Statements that define `local`, which end any pending consume.
+    fn collectDefs(
+        solver: *const Solver,
+        local: u32,
+        out: *std.bit_set.DynamicBitSetUnmanaged,
+    ) void {
+        if (solver.fact_stmts.items.len != solver.unique_facts.items.len) {
+            solveInvariant("fact-to-statement map fell out of step with the facts");
+        }
+        for (solver.unique_facts.items, 0..) |fact, index| {
+            const defined: ?LIR.LocalId = switch (fact) {
+                .birth => |value| value,
+                .foreign => |value| value,
+                .alias => |alias| alias.target,
+                .param_write => |write| write.param,
+                else => null,
+            };
+            const value = defined orelse continue;
+            const arc_index = solver.domain.indexOf(value) orelse continue;
+            if (arc_index != local) continue;
+            out.set(@intFromEnum(solver.fact_stmts.items[index]));
+        }
+    }
+
+    /// True when some consume of `local` reaches another without a definition
+    /// of `local` in between, so both can run on one path.
+    fn isReal(solver: *const Solver, local: u32) SolveError!bool {
+        var consumes = std.ArrayList(LIR.CFStmtId).empty;
+        defer consumes.deinit(solver.allocator);
+        try collectConsumes(solver, local, &consumes);
+        if (consumes.items.len < 2) return false;
+
+        const stmt_count = solver.store.cfStmtCount();
+        var defs = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, stmt_count);
+        defer defs.deinit(solver.allocator);
+        collectDefs(solver, local, &defs);
+
+        var targets = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, stmt_count);
+        defer targets.deinit(solver.allocator);
+        for (consumes.items) |stmt| targets.set(@intFromEnum(stmt));
+
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, stmt_count);
+        defer seen.deinit(solver.allocator);
+        var work = std.ArrayList(LIR.CFStmtId).empty;
+        defer work.deinit(solver.allocator);
+
+        // One statement consuming the value twice needs no path at all: both
+        // consumes run whenever it does.
+        for (consumes.items, 0..) |a, i| {
+            for (consumes.items[i + 1 ..]) |b| {
+                if (a == b) return true;
+            }
+        }
+
+        for (consumes.items) |start| {
+            // A statement that also defines the value ends the value it just
+            // consumed. Locals are reused rather than renamed, so a later
+            // consume of the same local is a consume of the *next* value, not
+            // a second consume of this one. This is the `x = f(x)` shape that
+            // every loop-carried update takes.
+            if (defs.isSet(@intFromEnum(start))) continue;
+            seen.unsetAll();
+            work.clearRetainingCapacity();
+            // Start from the successors: reaching the starting statement again
+            // means coming back around a loop, which is a real second consume.
+            try appendStructuralSuccessors(solver.allocator, solver.store, &work, solver.store.getCFStmt(start));
+            while (work.pop()) |current| {
+                const index = @intFromEnum(current);
+                if (seen.isSet(index)) continue;
+                seen.set(index);
+                if (targets.isSet(index)) return true;
+                // A definition ends the pending consume, so paths through it
+                // carry nothing forward.
+                if (defs.isSet(index)) continue;
+                try appendStructuralSuccessors(solver.allocator, solver.store, &work, solver.store.getCFStmt(current));
+            }
+        }
+        return false;
+    }
+};
+
 fn liftReachableStatements(solver: *Solver) SolveError!void {
     var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, solver.store.cfStmtCount());
     defer seen.deinit(solver.allocator);
@@ -1748,6 +1953,13 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
         for (0..GuardedList.borrowLen(params)) |param_index| {
             const param = GuardedList.at(params, param_index);
             try solver.unique_facts.append(solver.allocator, .{ .foreign = param });
+            {
+                // A parameter is defined at entry rather than by a statement.
+                // The body stands in for that, which is where it first
+                // becomes live; bodyless procs have no statement to name and
+                // no reachable consumes to check against.
+                try solver.fact_stmts.append(solver.allocator, proc.body orelse @enumFromInt(0));
+            }
         }
         // Bodyless procedures still have ABI parameter definitions. They
         // contribute no reachable statements, but their params are foreign
@@ -1768,7 +1980,13 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
             try liftProcStmtFacts(solver, @intCast(proc_index), proc.args, current);
             if (!facts_seen.isSet(stmt_index)) {
                 facts_seen.set(stmt_index);
+                const before = solver.unique_facts.items.len;
                 try liftSharedStmtFacts(solver, current);
+                try solver.fact_stmts.appendNTimes(
+                    solver.allocator,
+                    current,
+                    solver.unique_facts.items.len - before,
+                );
             }
             try appendStructuralSuccessors(solver.allocator, solver.store, &solver.stack, stmt);
         }
@@ -3340,8 +3558,8 @@ fn computeVisibilityFromLift(
 
 /// Checks that every relation the uniqueness analysis treats as naming one
 /// allocation falls inside the allocation partition. The two are derived
-/// independently — one from the lifted fact stream, the other from a direct
-/// statement walk — so agreement is evidence that the partition covers every
+/// independently—one from the lifted fact stream, the other from a direct
+/// statement walk—so agreement is evidence that the partition covers every
 /// aliasing path. Only refcounted pairs are checked, because the partition
 /// unions nothing else.
 /// Sizes of the allocation sets holding the values at argument positions
@@ -3442,6 +3660,17 @@ pub const Uniqueness = struct {
     /// Which code path set each local's destroyed bit, recorded where it
     /// happens rather than inferred afterwards from the surrounding state.
     destroy_site: ?[]u8 = null,
+    /// Bit set => something gave this value's allocation a second owner: a
+    /// retain, a move into an aggregate, a handoff to a callee that keeps it,
+    /// or a second consume. This is the half of `destroyed` that no liveness
+    /// question can see, because the other owner is not a local.
+    ///
+    /// The other half—an alias whose source is read somewhere—is deliberately
+    /// absent. A live borrowed alias shares its source's borrow group, so
+    /// emission already answers that positionally by asking whether the group
+    /// is used after the statement, and an owned alias carries its own
+    /// retained unit and so appears here anyway.
+    extra_owner: std.bit_set.DynamicBitSetUnmanaged = .{},
 
     /// Bit set => every definition of the local binds a value whose
     /// outermost allocation originated at a unique birth: a fresh aggregate
@@ -3463,6 +3692,7 @@ pub const Uniqueness = struct {
 
     /// Frees all three bit sets.
     pub fn deinit(self: *Uniqueness, allocator: Allocator) void {
+        self.extra_owner.deinit(allocator);
         if (self.destroy_blame) |blame| allocator.free(blame);
         if (self.destroy_site) |sites| allocator.free(sites);
         self.born_unique.deinit(allocator);
@@ -3681,6 +3911,13 @@ fn computeUniquenessFromFacts(
         break :blk tags;
     };
     errdefer if (sites) |tags| allocator.free(tags);
+    // Separating the two lets a spurious consume verdict be withdrawn without
+    // touching a verdict some other path would have reached anyway.
+    var consume_destroyed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, solver.domain.arc_to_local.len);
+    defer consume_destroyed.deinit(allocator);
+    var other_destroyed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, solver.domain.arc_to_local.len);
+    defer other_destroyed.deinit(allocator);
+
     const mark = struct {
         fn go(tags: ?[]u8, index: u32, tag: u8) void {
             if (tags) |slots| {
@@ -3755,7 +3992,10 @@ fn computeUniquenessFromFacts(
             {
                 const was = destroyed.isSet(source);
                 Marks.consume(&consumed, &destroyed, source);
-                if (!was and destroyed.isSet(source)) mark(sites, source, 6);
+                if (!was and destroyed.isSet(source)) {
+                    mark(sites, source, 6);
+                    consume_destroyed.set(source);
+                }
             }
             if (source == target) {
                 foreign.set(target);
@@ -3770,10 +4010,14 @@ fn computeUniquenessFromFacts(
         .consume => |local| if (domain.indexOf(local)) |index| {
             const was = destroyed.isSet(index);
             Marks.consume(&consumed, &destroyed, index);
-            if (!was and destroyed.isSet(index)) mark(sites, index, 2);
+            if (!was and destroyed.isSet(index)) {
+                mark(sites, index, 2);
+                consume_destroyed.set(index);
+            }
         },
         .destroy => |destroy| if (domain.indexOf(destroy.local)) |index| {
             destroyed.set(index);
+            other_destroyed.set(index);
             mark(sites, index, 0);
         },
         .read => |local| if (domain.indexOf(local)) |index| read.set(index),
@@ -3802,12 +4046,31 @@ fn computeUniquenessFromFacts(
             if (sig.paramMode(position) == .owned) {
                 const was = destroyed.isSet(arg);
                 Marks.consume(&consumed, &destroyed, arg);
-                if (!was and destroyed.isSet(arg)) mark(sites, arg, 2);
+                if (!was and destroyed.isSet(arg)) {
+                    mark(sites, arg, 2);
+                    consume_destroyed.set(arg);
+                }
             } else {
                 destroyed.set(arg);
+                other_destroyed.set(arg);
                 mark(sites, arg, 1);
             }
         }
+    }
+
+    // Counts how many consume verdicts a path check would withdraw, without
+    // withdrawing them. Acting on the answer would have to be done identically
+    // in `computeUniquenessDetailed`, which derives uniqueness from statements
+    // rather than facts and is checked against this one; until the two share a
+    // derivation, this measures the opportunity rather than taking it.
+    if (traceConsumes()) {
+        var withdrawable: u32 = 0;
+        var candidate_iter = consume_destroyed.iterator(.{});
+        while (candidate_iter.next()) |index| {
+            if (other_destroyed.isSet(index)) continue;
+            if (!(DoubleConsume.isReal(solver, @intCast(index)) catch true)) withdrawable += 1;
+        }
+        if (withdrawable != 0) ConsumeWithdrawReport.print(withdrawable);
     }
 
     var foreign_iter = foreign.iterator(.{});
@@ -3818,6 +4081,7 @@ fn computeUniquenessFromFacts(
         born.unset(target);
         if (multi_def.isSet(target)) {
             destroyed.set(target);
+            other_destroyed.set(target);
             mark(sites, target, 3);
         }
     }
@@ -3925,11 +4189,44 @@ fn computeUniquenessFromFacts(
         }
     }
 
+    // A second owner reaches every alias of the value, so the seeds
+    // propagate along the same edges the ordinary bits use. A mere read of an
+    // alias source does not, which is the whole point of keeping this
+    // separate from `destroyed`.
+    var extra_owner = try other_destroyed.clone(allocator);
+    errdefer extra_owner.deinit(allocator);
+    // A second consume gives the value a second owner only when both consumes
+    // can run on one path. Counting them without asking that treats two arms
+    // of a branch as two consumes, and creating an alias consumes its source,
+    // which makes that shape ordinary rather than rare.
+    var consume_iter = consume_destroyed.iterator(.{});
+    while (consume_iter.next()) |index| {
+        if (try DoubleConsume.isReal(solver, @intCast(index))) extra_owner.set(index);
+    }
+    var owner_changed = true;
+    while (owner_changed) {
+        owner_changed = false;
+        for (alias_targets.items) |target| {
+            const source = alias_source[target];
+            if (extra_owner.isSet(source) and !extra_owner.isSet(target)) {
+                extra_owner.set(target);
+                owner_changed = true;
+            }
+        }
+    }
+
     var unique = try born.clone(allocator);
     errdefer unique.deinit(allocator);
     var destroyed_iter = destroyed.iterator(.{});
     while (destroyed_iter.next()) |index| unique.unset(index);
-    return .{ .born_unique = born, .unique = unique, .destroyed = destroyed, .destroy_blame = blame, .destroy_site = sites };
+    return .{
+        .born_unique = born,
+        .unique = unique,
+        .destroyed = destroyed,
+        .extra_owner = extra_owner,
+        .destroy_blame = blame,
+        .destroy_site = sites,
+    };
 }
 
 /// Marks every local whose value's outermost allocation provably has count 1
@@ -4038,19 +4335,19 @@ fn computeUniquenessDetailed(
     // A definition that is not a unique birth or a pure same-value alias
     // (parameters, payload reads, foreign calls, join params) poisons the
     // local outright.
-    var foreign_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    defer foreign_def.deinit(allocator);
+    var foreign = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer foreign.deinit(allocator);
     var destroyed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     errdefer destroyed.deinit(allocator);
-    var consumed_once = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    defer consumed_once.deinit(allocator);
+    var consumed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer consumed.deinit(allocator);
     // Non-consuming, non-holder-adding reads (payload reads, borrowed
     // low-level arguments, expect/debug/switch operands). They never destroy
     // a local's own uniqueness—emission's path-sensitive facts cover the
     // checked argument itself—but they block alias inheritance, because a
     // source read anywhere keeps the source live past the alias definition.
-    var borrow_used = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-    defer borrow_used.deinit(allocator);
+    var read = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer read.deinit(allocator);
     var has_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer has_def.deinit(allocator);
     var multi_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
@@ -4152,7 +4449,7 @@ fn computeUniquenessDetailed(
             alloc: Allocator,
             sources: []u32,
             targets: *std.ArrayList(u32),
-            foreign: *std.bit_set.DynamicBitSetUnmanaged,
+            foreign_set: *std.bit_set.DynamicBitSetUnmanaged,
             once: *std.bit_set.DynamicBitSetUnmanaged,
             dead: *std.bit_set.DynamicBitSetUnmanaged,
             target: LIR.LocalId,
@@ -4160,11 +4457,11 @@ fn computeUniquenessDetailed(
         ) SolveError!void {
             const target_index = m.indexOf(target) orelse return;
             const source_index = m.indexOf(source) orelse {
-                foreign.set(target_index);
+                foreign_set.set(target_index);
                 return;
             };
             if (source_index == target_index) {
-                foreign.set(target_index);
+                foreign_set.set(target_index);
                 return;
             }
             m.consume(once, dead, source);
@@ -4172,7 +4469,7 @@ fn computeUniquenessDetailed(
                 sources[target_index] = @intCast(source_index);
                 try targets.append(alloc, @intCast(target_index));
             } else if (sources[target_index] != source_index) {
-                foreign.set(target_index);
+                foreign_set.set(target_index);
             }
         }
     };
@@ -4186,7 +4483,7 @@ fn computeUniquenessDetailed(
         for (0..GuardedList.borrowLen(params)) |param_index| {
             const param = GuardedList.at(params, param_index);
             marks.trackDef(&has_def, &multi_def, param);
-            marks.destroy(&foreign_def, param);
+            marks.destroy(&foreign, param);
             if (origin_facts) |facts| facts.noteForeign(param);
         }
     }
@@ -4205,24 +4502,24 @@ fn computeUniquenessDetailed(
             .assign_ref => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 switch (assign.op) {
-                    .local => |source| try Alias.record(marks, allocator, alias_source, &alias_targets, &foreign_def, &consumed_once, &destroyed, assign.target, source),
-                    .list_reinterpret => |op| try Alias.record(marks, allocator, alias_source, &alias_targets, &foreign_def, &consumed_once, &destroyed, assign.target, op.backing_ref),
-                    .nominal => |op| try Alias.record(marks, allocator, alias_source, &alias_targets, &foreign_def, &consumed_once, &destroyed, assign.target, op.backing_ref),
+                    .local => |source| try Alias.record(marks, allocator, alias_source, &alias_targets, &foreign, &consumed, &destroyed, assign.target, source),
+                    .list_reinterpret => |op| try Alias.record(marks, allocator, alias_source, &alias_targets, &foreign, &consumed, &destroyed, assign.target, op.backing_ref),
+                    .nominal => |op| try Alias.record(marks, allocator, alias_source, &alias_targets, &foreign, &consumed, &destroyed, assign.target, op.backing_ref),
                     .discriminant => |op| {
-                        marks.destroy(&foreign_def, assign.target);
-                        marks.noteUse(&borrow_used, op.source);
+                        marks.destroy(&foreign, assign.target);
+                        marks.noteUse(&read, op.source);
                     },
                     .field => |op| {
-                        marks.destroy(&foreign_def, assign.target);
-                        marks.noteUse(&borrow_used, op.source);
+                        marks.destroy(&foreign, assign.target);
+                        marks.noteUse(&read, op.source);
                     },
                     .tag_payload => |op| {
-                        marks.destroy(&foreign_def, assign.target);
-                        marks.noteUse(&borrow_used, op.source);
+                        marks.destroy(&foreign, assign.target);
+                        marks.noteUse(&read, op.source);
                     },
                     .tag_payload_struct => |op| {
-                        marks.destroy(&foreign_def, assign.target);
-                        marks.noteUse(&borrow_used, op.source);
+                        marks.destroy(&foreign, assign.target);
+                        marks.noteUse(&read, op.source);
                     },
                 }
             },
@@ -4232,7 +4529,7 @@ fn computeUniquenessDetailed(
                     // Static-backed literals view backing whose count is the
                     // static sentinel, never 1, so they are not unique births
                     // and must never take in-place paths.
-                    .str_literal, .static_data, .bytes_literal => marks.destroy(&foreign_def, assign.target),
+                    .str_literal, .static_data, .bytes_literal => marks.destroy(&foreign, assign.target),
                     .i64_literal,
                     .i128_literal,
                     .f64_literal,
@@ -4249,7 +4546,7 @@ fn computeUniquenessDetailed(
                 if (callee_sig.ret_unique) {
                     marks.noteBirth(&born, assign.target);
                 } else {
-                    marks.destroy(&foreign_def, assign.target);
+                    marks.destroy(&foreign, assign.target);
                 }
                 const args = store.getLocalSpan(assign.args);
                 for (0..GuardedList.borrowLen(args)) |position| {
@@ -4258,7 +4555,7 @@ fn computeUniquenessDetailed(
                         // The callee receives the argument's single unit;
                         // passing it is one consuming use, exactly like a
                         // consumed low-level argument.
-                        marks.consume(&consumed_once, &destroyed, arg);
+                        marks.consume(&consumed, &destroyed, arg);
                     } else {
                         // A borrowed-position argument stays with the
                         // caller while the callee reads it; conservatively
@@ -4269,9 +4566,9 @@ fn computeUniquenessDetailed(
             },
             .assign_call_erased => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
+                marks.destroy(&foreign, assign.target);
                 if (assign.reuse_source) |reuse_source| {
-                    marks.consume(&consumed_once, &destroyed, reuse_source);
+                    marks.consume(&consumed, &destroyed, reuse_source);
                 } else {
                     marks.destroy(&destroyed, assign.closure);
                 }
@@ -4285,10 +4582,10 @@ fn computeUniquenessDetailed(
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.noteBirth(&born, assign.target);
                 if (assign.capture) |capture| marks.destroy(&destroyed, capture);
-                if (assign.reuse) |reuse| marks.consume(&consumed_once, &destroyed, reuse);
+                if (assign.reuse) |reuse| marks.consume(&consumed, &destroyed, reuse);
             },
             .str_match => |str_match| {
-                marks.noteUse(&borrow_used, str_match.source);
+                marks.noteUse(&read, str_match.source);
                 const steps = store.getStrMatchSteps(str_match.steps);
                 for (0..GuardedList.borrowLen(steps)) |step_index| {
                     const step = GuardedList.at(steps, step_index);
@@ -4296,13 +4593,13 @@ fn computeUniquenessDetailed(
                         .discard => {},
                         .view => |local| {
                             marks.trackDef(&has_def, &multi_def, local);
-                            marks.destroy(&foreign_def, local);
+                            marks.destroy(&foreign, local);
                         },
                     }
                 }
             },
             .str_match_set => |str_match_set| {
-                marks.noteUse(&borrow_used, str_match_set.source);
+                marks.noteUse(&read, str_match_set.source);
                 const arms = store.getStrMatchArms(str_match_set.arms);
                 for (0..GuardedList.borrowLen(arms)) |arm_index| {
                     const arm = GuardedList.at(arms, arm_index);
@@ -4313,7 +4610,7 @@ fn computeUniquenessDetailed(
                             .discard => {},
                             .view => |local| {
                                 marks.trackDef(&has_def, &multi_def, local);
-                                marks.destroy(&foreign_def, local);
+                                marks.destroy(&foreign, local);
                             },
                         }
                     }
@@ -4325,7 +4622,7 @@ fn computeUniquenessDetailed(
                 if (rc_effect.result_unique) {
                     marks.noteBirth(&born, assign.target);
                 } else {
-                    marks.destroy(&foreign_def, assign.target);
+                    marks.destroy(&foreign, assign.target);
                 }
                 const args = store.getLocalSpan(assign.args);
                 for (0..GuardedList.borrowLen(args)) |position| {
@@ -4337,7 +4634,7 @@ fn computeUniquenessDetailed(
                     const bit = @as(u64, 1) << @as(u6, @intCast(position));
                     var read_only = true;
                     if ((rc_effect.consume_args & bit) != 0) {
-                        marks.consume(&consumed_once, &destroyed, arg);
+                        marks.consume(&consumed, &destroyed, arg);
                         read_only = false;
                     }
                     if ((rc_effect.retain_args & bit) != 0) {
@@ -4345,7 +4642,7 @@ fn computeUniquenessDetailed(
                         read_only = false;
                     }
                     if (read_only) {
-                        marks.noteUse(&borrow_used, arg);
+                        marks.noteUse(&read, arg);
                     }
                 }
             },
@@ -4391,13 +4688,13 @@ fn computeUniquenessDetailed(
                         if (marks.indexOf(assign.value)) |value_index| {
                             try param_write_edges.append(allocator, .{ param_index, value_index });
                         } else {
-                            foreign_def.set(param_index);
+                            foreign.set(param_index);
                         }
                     }
-                    marks.consume(&consumed_once, &destroyed, assign.value);
+                    marks.consume(&consumed, &destroyed, assign.value);
                 } else {
                     marks.trackDef(&has_def, &multi_def, assign.target);
-                    marks.destroy(&foreign_def, assign.target);
+                    marks.destroy(&foreign, assign.target);
                     marks.destroy(&destroyed, assign.target);
                     marks.destroy(&destroyed, assign.value);
                 }
@@ -4416,24 +4713,24 @@ fn computeUniquenessDetailed(
                 for (0..GuardedList.borrowLen(maybe_uninitialized_params)) |position| {
                     const param = GuardedList.at(maybe_uninitialized_params, position);
                     const param_index = marks.indexOf(param) orelse continue;
-                    foreign_def.set(param_index);
+                    foreign.set(param_index);
                 }
             },
             // Returning is the value's consuming use: the unit moves to the
             // caller, which feeds the per-proc unique-return solve.
-            .ret => |ret_stmt| marks.consume(&consumed_once, &destroyed, ret_stmt.value),
+            .ret => |ret_stmt| marks.consume(&consumed, &destroyed, ret_stmt.value),
             .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
-                marks.consume(&consumed_once, &destroyed, message);
+                marks.consume(&consumed, &destroyed, message);
             },
-            .debug => |debug_stmt| marks.noteUse(&borrow_used, debug_stmt.message),
+            .debug => |debug_stmt| marks.noteUse(&read, debug_stmt.message),
             // The failure report is the message's consuming use.
-            .expect_err => |expect_err_stmt| marks.consume(&consumed_once, &destroyed, expect_err_stmt.message),
-            .expect => |expect_stmt| marks.noteUse(&borrow_used, expect_stmt.condition),
+            .expect_err => |expect_err_stmt| marks.consume(&consumed, &destroyed, expect_err_stmt.message),
+            .expect => |expect_stmt| marks.noteUse(&read, expect_stmt.condition),
             .init_uninitialized => {},
             .comptime_branch_taken => {},
-            .switch_stmt => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
-            .switch_initialized_payload => |switch_stmt| marks.noteUse(&borrow_used, switch_stmt.cond),
-            .decref_if_initialized => |rc| marks.noteUse(&borrow_used, rc.cond),
+            .switch_stmt => |switch_stmt| marks.noteUse(&read, switch_stmt.cond),
+            .switch_initialized_payload => |switch_stmt| marks.noteUse(&read, switch_stmt.cond),
+            .decref_if_initialized => |rc| marks.noteUse(&read, rc.cond),
             .decref, .free, .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
         }
     }
@@ -4441,7 +4738,7 @@ fn computeUniquenessDetailed(
     // born_unique: every definition is a birth or a settled pure alias, and
     // no foreign definition. unique: born unique with no holder-adding
     // occurrence anywhere.
-    var foreign_iter = foreign_def.iterator(.{});
+    var foreign_iter = foreign.iterator(.{});
     while (foreign_iter.next()) |index| born.unset(index);
 
     // A flow-insensitive uniqueness bit denotes one concrete allocation
@@ -4475,12 +4772,12 @@ fn computeUniquenessDetailed(
 
     const alias_edges = try allocator.alloc(u32, alias_targets.items.len);
     defer allocator.free(alias_edges);
-    const alias_fill = try allocator.dupe(u32, alias_offsets[0..local_count]);
-    defer allocator.free(alias_fill);
+    const fill = try allocator.dupe(u32, alias_offsets[0..local_count]);
+    defer allocator.free(fill);
     for (alias_targets.items) |target| {
         const source = alias_source[target];
-        alias_edges[alias_fill[source]] = target;
-        alias_fill[source] += 1;
+        alias_edges[fill[source]] = target;
+        fill[source] += 1;
     }
 
     var alias_work = std.ArrayList(u32).empty;
@@ -4502,7 +4799,7 @@ fn computeUniquenessDetailed(
 
     for (alias_targets.items) |target| {
         const source = alias_source[target];
-        if (born.isSet(source) or destroyed.isSet(source) or borrow_used.isSet(source)) {
+        if (born.isSet(source) or destroyed.isSet(source) or read.isSet(source)) {
             try queueAliasSource(allocator, &alias_work, &alias_queued, source);
         }
     }
@@ -4511,17 +4808,17 @@ fn computeUniquenessDetailed(
         alias_queued.unset(source);
         for (alias_edges[alias_offsets[source]..alias_offsets[source + 1]]) |target| {
             var changed = false;
-            if (!foreign_def.isSet(target) and !born.isSet(target) and born.isSet(source)) {
+            if (!foreign.isSet(target) and !born.isSet(target) and born.isSet(source)) {
                 born.set(target);
                 changed = true;
             }
             // Any other occurrence of the source—a holder-adding or
             // second consuming use (destroyed) or a mere read
-            // (borrow_used)—keeps the source live past the alias
+            // (read)—keeps the source live past the alias
             // definition, so the shared allocation's count exceeds 1 at
             // the target's consuming use.
             if (!destroyed.isSet(target) and
-                (destroyed.isSet(source) or borrow_used.isSet(source)))
+                (destroyed.isSet(source) or read.isSet(source)))
             {
                 destroyed.set(target);
                 changed = true;
@@ -4544,7 +4841,7 @@ fn computeUniquenessDetailed(
         var param_iter = join_param_set.iterator(.{});
         params: while (param_iter.next()) |param_index| {
             if (born.isSet(param_index)) continue;
-            if (foreign_def.isSet(param_index)) continue;
+            if (foreign.isSet(param_index)) continue;
             if (has_def.isSet(param_index)) continue;
             if (proc_arg_set.isSet(param_index)) continue;
             var write_count: usize = 0;
@@ -4563,12 +4860,12 @@ fn computeUniquenessDetailed(
             alias_queued.unset(source);
             for (alias_edges[alias_offsets[source]..alias_offsets[source + 1]]) |target| {
                 var changed = false;
-                if (!foreign_def.isSet(target) and !born.isSet(target) and born.isSet(source)) {
+                if (!foreign.isSet(target) and !born.isSet(target) and born.isSet(source)) {
                     born.set(target);
                     changed = true;
                 }
                 if (!destroyed.isSet(target) and
-                    (destroyed.isSet(source) or borrow_used.isSet(source)))
+                    (destroyed.isSet(source) or read.isSet(source)))
                 {
                     destroyed.set(target);
                     changed = true;

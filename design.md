@@ -5508,8 +5508,8 @@ multiplication requires rescaling, so it remains its own operation.
 ### Division and shifts
 
 Division, remainder, modulo, negation, and absolute value keep their existing
-checked forms. Their overflow shape differs — the most negative value divided
-by negative one, and division by zero — and they are not part of this family.
+checked forms. Their overflow shape differs—the most negative value divided
+by negative one, and division by zero—and they are not part of this family.
 Shift operations do not yet assert no-wraparound where it would be provable.
 
 ## ARC Borrow Inference

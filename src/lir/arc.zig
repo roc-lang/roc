@@ -458,6 +458,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
 
     inserter.unique_diag.report();
+    inserter.unique_diag.reportGroups(&inserter);
     inserter.seed_diag.report();
 }
 
@@ -972,6 +973,10 @@ const UniqueBlock = enum {
     /// Another operand of the same statement shares the borrow group, so the
     /// group is still live at the operation.
     group_shares_operand,
+    /// The allocation stays reachable after the statement under another name:
+    /// the value aliases something whose own group is used later. An owned
+    /// alias leads its own group, so its source has to be asked separately.
+    alias_source_live,
 };
 
 /// Histogram of why runtime uniqueness checks survive, for telling which
@@ -983,6 +988,8 @@ const UniqueDiag = if (builtin.os.tag == .freestanding) struct {
     }
 
     fn record(_: *@This(), _: UniqueBlock) void {}
+
+    fn reportGroups(_: *const @This(), _: *const Inserter) void {}
 
     fn report(_: *const @This()) void {}
 } else struct {
@@ -998,6 +1005,55 @@ const UniqueDiag = if (builtin.os.tag == .freestanding) struct {
     fn record(self: *@This(), reason: UniqueBlock) void {
         if (!self.on) return;
         self.counts[@intFromEnum(reason)] += 1;
+    }
+
+    /// Sizes of the borrow groups holding the values at check-eligible
+    /// argument positions. The group is what emission asks its liveness
+    /// question over, so its size decides whether that question can
+    /// discriminate: a value sharing a group with everything always looks
+    /// live.
+    fn reportGroups(self: *const @This(), inserter: *const Inserter) void {
+        if (!self.on) return;
+        const store = inserter.store;
+        const local_count = store.localCount();
+        var sizes = store.allocator.alloc(u32, local_count) catch return;
+        defer store.allocator.free(sizes);
+        @memset(sizes, 0);
+        for (0..local_count) |index| {
+            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+            if (!inserter.localContainsRefcounted(local)) continue;
+            sizes[@intFromEnum(inserter.solution.leaderOf(local))] += 1;
+        }
+        var counted: u32 = 0;
+        var alone: u32 = 0;
+        var small: u32 = 0;
+        var largest: u32 = 0;
+        var total_size: u64 = 0;
+        for (0..store.cfStmtCount()) |stmt_index| {
+            const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+            const assign = switch (stmt) {
+                .assign_low_level => |low| low,
+                else => continue,
+            };
+            const mask = assign.rc_effect.may_runtime_uniqueness_check_args & assign.rc_effect.consume_args;
+            if (mask == 0) continue;
+            const args = store.getLocalSpan(assign.args);
+            for (0..GuardedList.borrowLen(args)) |position| {
+                if (position >= 64) break;
+                if ((mask & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
+                const size = sizes[@intFromEnum(inserter.solution.leaderOf(GuardedList.at(args, position)))];
+                counted += 1;
+                total_size += size;
+                if (size <= 1) alone += 1;
+                if (size <= 4) small += 1;
+                if (size > largest) largest = size;
+            }
+        }
+        if (counted == 0) return;
+        std.debug.print(
+            "=== ARC borrow groups at check-eligible positions ({d}) ===\n  alone {d}, at most four {d}, largest {d}, mean {d}\n",
+            .{ counted, alone, small, largest, total_size / counted },
+        );
     }
 
     fn report(self: *const @This()) void {
@@ -3347,7 +3403,7 @@ const Inserter = struct {
             }
         }
         const unique_args = if (want_unique)
-            self.uniqueArgsMask(args, rc_effect, target, preserve_consumed_args, owned)
+            try self.uniqueArgsMask(args, rc_effect, target, preserve_consumed_args, owned, next, loop_keep)
         else
             0;
         const target_consumed = self.maskedArgsContainLocal(args, rc_effect.consume_args, target);
@@ -3617,7 +3673,9 @@ const Inserter = struct {
         target: LIR.LocalId,
         preserve_consumed_args: u64,
         owned: *const OwnedSet,
-    ) u64 {
+        next: LIR.CFStmtId,
+        loop_keep: ?LoopKeep,
+    ) ResourceError!u64 {
         const check_mask = rc_effect.may_runtime_uniqueness_check_args;
         if (check_mask == 0) return 0;
         var unique: u64 = 0;
@@ -3636,6 +3694,8 @@ const Inserter = struct {
                 .bit = bit,
                 .preserve_consumed_args = preserve_consumed_args,
                 .owned = owned,
+                .alias_chain_live = local != target and
+                    try self.aliasChainUsedInPath(next, local, loop_keep),
             });
             self.unique_diag.record(reason);
             if (reason == .elided) unique |= bit;
@@ -3659,6 +3719,7 @@ const Inserter = struct {
         if (self.groupSharesOtherOperand(args.locals, args.position, args.local)) {
             return .group_shares_operand;
         }
+        if (args.alias_chain_live) return .alias_source_live;
         // Tested last on purpose. Every condition above is specific to this
         // statement, while this one is a whole-procedure verdict, so ordering
         // it here reports how many positions the statement-local conditions
@@ -3671,7 +3732,13 @@ const Inserter = struct {
     /// emission view: solved unique, or a parameter the variant being
     /// emitted seeds born-unique and whose body never adds another holder.
     fn isLocalUniqueHere(self: *const Inserter, local: LIR.LocalId) bool {
-        if (self.solution.isUnique(local)) return true;
+        // Born with a count of one and never given a second owner. The other
+        // way a second reference can exist—a live alias—is not asked here,
+        // because it is a question about this statement rather than about the
+        // whole procedure: the callers of this test also require the value's
+        // borrow group to be dead after the statement and unshared with
+        // another operand of it, which is what rules a live alias out.
+        if (self.solution.isBornUniqueWithoutExtraOwner(local)) return true;
         if (!self.unique_param_override.contains(local)) return false;
         return !self.solution.isUniqueDestroyed(local);
     }
@@ -4963,6 +5030,27 @@ const Inserter = struct {
         }
         if (!graph.reaches_loop_edge.isSet(node_index)) return keep_free;
         return self.computeReadsBeforeRebind(start, keep, keep.id);
+    }
+
+    /// Whether the allocation behind `local` is still reachable after `start`
+    /// under any name. An owned alias leads its own group, so checking that
+    /// group alone would miss a later use of the value it aliases; the chain
+    /// is followed to the origin and every group along it asked.
+    fn aliasChainUsedInPath(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        local: LIR.LocalId,
+        loop_keep: ?LoopKeep,
+    ) ResourceError!bool {
+        var cursor = local;
+        var hops: u32 = 0;
+        while (hops < 64) : (hops += 1) {
+            if (try self.groupUsedInPath(start, cursor, loop_keep)) return true;
+            const source = self.solution.aliasSourceOf(cursor) orelse return false;
+            if (source == cursor) return false;
+            cursor = source;
+        }
+        return true;
     }
 
     fn groupUsedInPath(
