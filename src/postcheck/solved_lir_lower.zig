@@ -9028,7 +9028,7 @@ const Lowerer = struct {
             if (self.local_nodes.get(ty)) |node| return layout.localGraphInput(node);
 
             switch (self.lowerer.types.get(ty)) {
-                .primitive => |primitive| return layout.committedGraphInput(primitiveLayout(primitive)),
+                .primitive => |primitive| return layout.committedGraphInput(Common.primitiveLayout(primitive)),
                 .zst => return layout.committedGraphInput(.zst),
                 .erased_capture_ptr => return layout.committedGraphInput(.opaque_ptr),
                 .named => |named| if (named.builtin_owner) |owner| {
@@ -9255,34 +9255,6 @@ const Lowerer = struct {
             };
         }
     };
-
-    fn primitiveLayout(primitive: MonoType.Primitive) layout.Idx {
-        return switch (primitive) {
-            .bool => .bool,
-            .str => .str,
-            .u8 => .u8,
-            .i8 => .i8,
-            .u16 => .u16,
-            .i16 => .i16,
-            .u32 => .u32,
-            .i32 => .i32,
-            .u64 => .u64,
-            .i64 => .i64,
-            .u128 => .u128,
-            .i128 => .i128,
-            .f32 => .f32,
-            .f64 => .f64,
-            .dec => .dec,
-            .u8x16 => .u8x16,
-            .i8x16 => .i8x16,
-            .u16x8 => .u16x8,
-            .i16x8 => .i16x8,
-            .u32x4 => .u32x4,
-            .i32x4 => .i32x4,
-            .u64x2 => .u64x2,
-            .i64x2 => .i64x2,
-        };
-    }
 
     fn builtinOwnerLayout(owner: check.StaticDispatchRegistry.BuiltinOwner) ?layout.Idx {
         return switch (owner) {

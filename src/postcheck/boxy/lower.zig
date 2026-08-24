@@ -17,6 +17,12 @@ const types = @import("types");
 const Common = @import("../common.zig");
 const Layouts = @import("layouts.zig");
 const Plan = @import("plan.zig");
+const test_fixtures = @import("test_fixtures.zig");
+
+/// Shared Boxy stage-test fixtures, aliased so every stage builds the same
+/// synthetic checked payloads from one definition.
+const fixtureTableIndex = test_fixtures.tableIndex;
+const builtinNominal = test_fixtures.builtinNominal;
 const solved_lir_lower = @import("../solved_lir_lower.zig");
 
 const Allocator = std.mem.Allocator;
@@ -27860,7 +27866,7 @@ const ProcBodyBuilder = struct {
         if (primitive == .bool) {
             return try self.lowerBoolInspectLocalsInto(target, source, next);
         }
-        const op = primitiveInspectLowLevelOp(primitive);
+        const op = Common.primitiveInspectLowLevelOp(primitive);
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
@@ -29037,7 +29043,7 @@ const ProcBodyBuilder = struct {
         primitive: checked.CheckedPrimitive,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const op = hasherWriteOp(primitive);
+        const op = Common.hasherWriteOp(primitive);
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
@@ -36365,64 +36371,6 @@ const ProcBodyBuilder = struct {
         return @intCast(count);
     }
 
-    fn hasherWriteOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
-        return switch (primitive) {
-            .bool => .hasher_write_bool,
-            .str => .hasher_write_str,
-            .u8 => .hasher_write_u8,
-            .i8 => .hasher_write_i8,
-            .u16 => .hasher_write_u16,
-            .i16 => .hasher_write_i16,
-            .u32 => .hasher_write_u32,
-            .i32 => .hasher_write_i32,
-            .u64 => .hasher_write_u64,
-            .i64 => .hasher_write_i64,
-            .u128 => .hasher_write_u128,
-            .i128 => .hasher_write_i128,
-            .f32 => .hasher_write_f32,
-            .f64 => .hasher_write_f64,
-            .dec => .hasher_write_dec,
-            .u8x16,
-            .i8x16,
-            .u16x8,
-            .i16x8,
-            .u32x4,
-            .i32x4,
-            .u64x2,
-            .i64x2,
-            => .hasher_write_u128,
-        };
-    }
-
-    fn primitiveInspectLowLevelOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
-        return switch (primitive) {
-            .bool => boxyLowerInvariant("Bool inspect must lower through tag-union inspect"),
-            .str => .str_inspect,
-            .u8 => .u8_to_str,
-            .i8 => .i8_to_str,
-            .u16 => .u16_to_str,
-            .i16 => .i16_to_str,
-            .u32 => .u32_to_str,
-            .i32 => .i32_to_str,
-            .u64 => .u64_to_str,
-            .i64 => .i64_to_str,
-            .u128 => .u128_to_str,
-            .i128 => .i128_to_str,
-            .f32 => .f32_to_str,
-            .f64 => .f64_to_str,
-            .dec => .dec_to_str,
-            .u8x16,
-            .i8x16,
-            .u16x8,
-            .i16x8,
-            .u32x4,
-            .i32x4,
-            .u64x2,
-            .i64x2,
-            => boxyLowerInvariant("SIMD inspect must lower through its explicit Builtin body"),
-        };
-    }
-
     const RecordFieldAccessInfo = struct {
         record_rep: Plan.TypeRepId,
         field_idx: u16,
@@ -37831,11 +37779,6 @@ test "descriptor materialization captures close over recursive template graphs" 
     const captures = result.store.getLocalSpan(assign.captures);
     try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(captures));
     try std.testing.expectEqual(captured, GuardedList.at(captures, 0));
-}
-
-/// Convert an intentional fixture-table position while preserving enum inference.
-fn fixtureTableIndex(comptime index: u32) u32 {
-    return index;
 }
 
 test "boxy lowerer returns an empty LIR program for an empty plan" {
@@ -46757,22 +46700,6 @@ fn testModuleIdentity() checked.ModuleIdentity {
         .display_module_name = @enumFromInt(fixtureTableIndex(0)),
         .qualified_module_name = @enumFromInt(fixtureTableIndex(0)),
         .kind = .module,
-    };
-}
-
-fn builtinNominal(
-    builtin: checked.CheckedBuiltinNominal,
-    _: checked.CheckedTypeId,
-    args: checked.CheckedTypeRange,
-) checked.StoredNominal {
-    return .{
-        .name = @enumFromInt(fixtureTableIndex(0)),
-        .origin_module = @enumFromInt(fixtureTableIndex(0)),
-        .owner_module = .{},
-        .builtin = builtin,
-        .is_opaque = false,
-        .representation = .{ .builtin = builtin },
-        .args = args,
     };
 }
 

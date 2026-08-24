@@ -170,8 +170,18 @@ already diverged in behavior, not just in text.
   two cloners over Monotype Lifted covering 29 and 44 expression
   variants; the narrower one declines the difference silently.
 
-Within this batch, the two `big` projects compose in either order.
-`boxy-rep-queries-on-the-plan` should land before or with
+Single-source primitive tables have landed (the batch's first
+project): `CheckedPrimitive`'s four post-check mappings—storage layout,
+inspect low-level op, hasher write op, and builtin owner—each have one
+definition. The first three live in `src/postcheck/common.zig`; the
+owner table lives beside `CheckedPrimitive` itself in
+`src/check/checked_artifact.zig`. A `structural_test.zig` lint fails the
+build if a second definition of any of them appears. None of the copies
+had been forced by a type barrier: `MonoType.Primitive` is a plain alias
+of `checked.CheckedPrimitive`.
+
+Within the rest of this batch, the two `big` projects compose in either
+order. `boxy-rep-queries-on-the-plan` should land before or with
 `one-value-semantics-layer`. The rest are independent.
 
 ## Recommended order

@@ -10,7 +10,14 @@ const std = @import("std");
 const check = @import("check");
 const layout = @import("layout");
 
+const Common = @import("../common.zig");
 const Plan = @import("plan.zig");
+const test_fixtures = @import("test_fixtures.zig");
+
+/// Shared Boxy stage-test fixtures, aliased so every stage builds the same
+/// synthetic checked payloads from one definition.
+const fixtureTableIndex = test_fixtures.tableIndex;
+const builtinNominal = test_fixtures.builtinNominal;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -444,7 +451,7 @@ const Builder = struct {
                 } },
                 .host => .{ .concrete = try self.dynamicStorageLayout() },
             },
-            .primitive => |primitive| .{ .concrete = primitiveLayout(primitive) },
+            .primitive => |primitive| .{ .concrete = Common.primitiveLayout(primitive) },
             .bool_tag_union => .{ .concrete = .bool },
             .empty_record, .empty_tag_union => .{ .concrete = .zst },
             .erased_callable => .{ .concrete = try self.store.insertErasedCallable() },
@@ -879,34 +886,6 @@ const GraphBuilder = struct {
     }
 };
 
-fn primitiveLayout(primitive: checked.CheckedPrimitive) layout.Idx {
-    return switch (primitive) {
-        .bool => .bool,
-        .str => .str,
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        .u8x16 => .u8x16,
-        .i8x16 => .i8x16,
-        .u16x8 => .u16x8,
-        .i16x8 => .i16x8,
-        .u32x4 => .u32x4,
-        .i32x4 => .i32x4,
-        .u64x2 => .u64x2,
-        .i64x2 => .i64x2,
-    };
-}
-
 fn repHasRecordFields(program: *const Plan.ProgramPlan, rep: Plan.TypeRepresentation) bool {
     for (program.childSlice(rep.children)) |child| {
         if (child.role == .record_field) return true;
@@ -939,11 +918,6 @@ fn boxyLayoutInvariant(comptime message: []const u8) noreturn {
         std.debug.panic("boxy layout invariant violated: {s}", .{message});
     }
     unreachable;
-}
-
-/// Convert an intentional fixture-table position while preserving enum inference.
-fn fixtureTableIndex(comptime index: u32) u32 {
-    return index;
 }
 
 test "boxy layout planner records dynamic worker boxes separately from storage layout" {
@@ -1340,20 +1314,4 @@ test "boxy layout planner reuses structural backing order without padding" {
     try std.testing.expectEqual(@as(u32, 0), store.getStructFieldOffsetByOriginalIndex(struct_idx, 0));
     try std.testing.expectEqual(@as(u32, 4), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     try std.testing.expectEqual(@as(u32, 8), store.getStructSize(struct_idx));
-}
-
-fn builtinNominal(
-    builtin: checked.CheckedBuiltinNominal,
-    _: checked.CheckedTypeId,
-    args: checked.CheckedTypeRange,
-) checked.StoredNominal {
-    return .{
-        .name = @enumFromInt(fixtureTableIndex(0)),
-        .origin_module = @enumFromInt(fixtureTableIndex(0)),
-        .owner_module = .{},
-        .builtin = builtin,
-        .is_opaque = false,
-        .representation = .{ .builtin = builtin },
-        .args = args,
-    };
 }

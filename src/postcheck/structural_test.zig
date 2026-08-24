@@ -1449,6 +1449,71 @@ test "direct LIR verification consumes producer-owned specialization identities"
     try expectContains(direct_lower, "different types for an exact function specialization");
 }
 
+fn countDefinitions(source: []const u8, decl: []const u8) usize {
+    var count: usize = 0;
+    var rest = source;
+    while (std.mem.find(u8, rest, decl)) |index| {
+        count += 1;
+        rest = rest[index + decl.len ..];
+    }
+    return count;
+}
+
+test "each primitive mapping has exactly one definition" {
+    // `MonoType.Primitive` is an alias of `checked.CheckedPrimitive`
+    // (monotype/type.zig), so nothing in the type system stops a consumer from
+    // writing a second switch over the same 24 members. These tables are the
+    // single source of truth; a copy would let two lowering paths decide a
+    // layout, hasher op, or inspect op differently for the same primitive.
+    const sources = [_][]const u8{
+        @embedFile("common.zig"),
+        @embedFile("monotype/type.zig"),
+        @embedFile("monotype/lower.zig"),
+        @embedFile("solved_lir_lower.zig"),
+        @embedFile("boxy/lower.zig"),
+        @embedFile("boxy/plan.zig"),
+        @embedFile("boxy/layouts.zig"),
+    };
+    const single_definition = [_][]const u8{
+        "fn primitiveLayout(",
+        "fn primitiveInspectLowLevelOp(",
+        "fn hasherWriteOp(",
+    };
+    for (single_definition) |decl| {
+        var total: usize = 0;
+        for (sources) |source| total += countDefinitions(source, decl);
+        try std.testing.expectEqual(@as(usize, 1), total);
+    }
+    try expectContains(@embedFile("common.zig"), "pub fn primitiveLayout(");
+    try expectContains(@embedFile("common.zig"), "pub fn primitiveInspectLowLevelOp(");
+    try expectContains(@embedFile("common.zig"), "pub fn hasherWriteOp(");
+
+    // The primitive-to-owner table lives beside `CheckedPrimitive` itself, so
+    // post-check holds no definition of it at all and consumes the checked one.
+    for (sources) |source| {
+        try expectNotContains(source, "fn builtinOwnerForPrimitive(");
+        try expectNotContains(source, "fn builtinOwnerFromPrimitive(");
+    }
+    const owner_fn = @typeInfo(@TypeOf(check.CheckedModule.builtinOwnerForPrimitive)).@"fn";
+    try std.testing.expect(owner_fn.params.len == 1);
+    try std.testing.expect(owner_fn.params[0].type.? == check.CheckedModule.CheckedPrimitive);
+    try std.testing.expect(owner_fn.return_type.? == check.StaticDispatchRegistry.BuiltinOwner);
+}
+
+test "boxy stage tests share one set of checked-type fixtures" {
+    const sources = [_][]const u8{
+        @embedFile("boxy/lower.zig"),
+        @embedFile("boxy/plan.zig"),
+        @embedFile("boxy/layouts.zig"),
+    };
+    for (sources) |source| {
+        try expectNotContains(source, "fn builtinNominal(");
+        try expectNotContains(source, "fn fixtureTableIndex(");
+    }
+    try expectContains(@embedFile("boxy/test_fixtures.zig"), "pub fn builtinNominal(");
+    try expectContains(@embedFile("boxy/test_fixtures.zig"), "pub fn tableIndex(");
+}
+
 test "post-check invariant helper is failure-only" {
     const fn_info = @typeInfo(@TypeOf(Common.invariant)).@"fn";
     try std.testing.expect(fn_info.return_type.? == noreturn);

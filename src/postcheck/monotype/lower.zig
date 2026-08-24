@@ -8879,7 +8879,7 @@ const Builder = struct {
 
     fn primitiveInspect(self: *Builder, value: Ast.ExprId, primitive: Type.Primitive, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
         const args = [_]Ast.ExprId{value};
-        return try self.lowLevelExpr(primitiveInspectLowLevelOp(primitive), &args, str_ty);
+        return try self.lowLevelExpr(Common.primitiveInspectLowLevelOp(primitive), &args, str_ty);
     }
 
     fn inspectTuple(self: *Builder, value: Ast.ExprId, items: anytype, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
@@ -14889,7 +14889,7 @@ const BodyContext = struct {
 
     fn primitiveInspect(self: *BodyContext, value: DraftExprId, primitive: Type.Primitive, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
         const args = [_]DraftExprId{value};
-        return try self.lowLevelExpr(primitiveInspectLowLevelOp(primitive), &args, str_ty);
+        return try self.lowLevelExpr(Common.primitiveInspectLowLevelOp(primitive), &args, str_ty);
     }
 
     fn inspectTuple(self: *BodyContext, value: DraftExprId, items: anytype, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
@@ -36453,7 +36453,7 @@ const BodyContext = struct {
     ) ?static_dispatch.MethodOwner {
         return switch (self.graph.content(node)) {
             .redirect => unreachable,
-            .primitive => |primitive| .{ .builtin = builtinOwnerFromPrimitive(primitive) },
+            .primitive => |primitive| .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
             .list => .{ .builtin = .list },
             .box => .{ .builtin = .box },
             .named => |named| if (named.builtin_owner) |owner|
@@ -50556,34 +50556,6 @@ fn instRecordFieldLessThan(
     return name_store.recordFieldLabelTextLessThan(lhs.name, rhs.name);
 }
 
-fn builtinOwnerFromPrimitive(primitive: Type.Primitive) static_dispatch.BuiltinOwner {
-    return switch (primitive) {
-        .bool => .bool,
-        .str => .str,
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        .u8x16 => .u8x16,
-        .i8x16 => .i8x16,
-        .u16x8 => .u16x8,
-        .i16x8 => .i16x8,
-        .u32x4 => .u32x4,
-        .i32x4 => .i32x4,
-        .u64x2 => .u64x2,
-        .i64x2 => .i64x2,
-    };
-}
-
 fn nominalHasDeclarationBacking(nominal: checked.CheckedNominalType) bool {
     return switch (nominal.representation) {
         .opaque_without_backing => false,
@@ -50652,27 +50624,6 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .crypto_sha256_hasher => .crypto_sha256_hasher,
         .crypto_blake3_digest => .crypto_blake3_digest,
         .crypto_blake3_hasher => .crypto_blake3_hasher,
-    };
-}
-
-fn primitiveInspectLowLevelOp(primitive: Type.Primitive) can.CIR.Expr.LowLevel {
-    return switch (primitive) {
-        .str => .str_inspect,
-        .u8 => .u8_to_str,
-        .i8 => .i8_to_str,
-        .u16 => .u16_to_str,
-        .i16 => .i16_to_str,
-        .u32 => .u32_to_str,
-        .i32 => .i32_to_str,
-        .u64 => .u64_to_str,
-        .i64 => .i64_to_str,
-        .u128 => .u128_to_str,
-        .i128 => .i128_to_str,
-        .f32 => .f32_to_str,
-        .f64 => .f64_to_str,
-        .dec => .dec_to_str,
-        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => Common.invariant("SIMD inspect must lower through its explicit Builtin body"),
-        .bool => Common.invariant("Bool must lower as an ordinary tag union before Str.inspect"),
     };
 }
 

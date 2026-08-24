@@ -10,6 +10,12 @@ const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
 const Common = @import("../common.zig");
+const test_fixtures = @import("test_fixtures.zig");
+
+/// Shared Boxy stage-test fixtures, aliased so every stage builds the same
+/// synthetic checked payloads from one definition.
+const fixtureTableIndex = test_fixtures.tableIndex;
+const builtinNominal = test_fixtures.builtinNominal;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -12263,11 +12269,6 @@ fn boxyPlanInvariant(comptime message: []const u8) noreturn {
     unreachable;
 }
 
-/// Convert an intentional fixture-table position while preserving enum inference.
-fn fixtureTableIndex(comptime index: u32) u32 {
-    return index;
-}
-
 test "boxy planner records root wrapper plans from checked root metadata" {
     const gpa = std.testing.allocator;
 
@@ -14001,22 +14002,6 @@ test "boxy planner records imported box payload capability source modules" {
     try expectTypeRef(source_key, @enumFromInt(5), fields[1].source_type);
     try std.testing.expectEqual(@as(u16, 1), fields[2].index);
     try expectTypeRef(source_key, @enumFromInt(1), fields[2].source_type);
-}
-
-fn builtinNominal(
-    builtin: checked.CheckedBuiltinNominal,
-    _: checked.CheckedTypeId,
-    args: checked.CheckedTypeRange,
-) checked.StoredNominal {
-    return .{
-        .name = @enumFromInt(fixtureTableIndex(0)),
-        .origin_module = @enumFromInt(fixtureTableIndex(0)),
-        .owner_module = .{},
-        .builtin = builtin,
-        .is_opaque = false,
-        .representation = .{ .builtin = builtin },
-        .args = args,
-    };
 }
 
 fn moduleKey(byte: u8) checked.ModuleId {

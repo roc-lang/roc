@@ -660,7 +660,7 @@ pub const Store = struct {
 
     pub fn ownerHead(self: *const Store, ty: TypeId) OwnerHead {
         return switch (self.get(ty)) {
-            .primitive => |primitive| .{ .builtin = builtinOwner(primitive) },
+            .primitive => |primitive| .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
             .list => .{ .builtin = .list },
             .box => .{ .builtin = .box },
             .named => |named| if (named.builtin_owner) |owner|
@@ -2978,34 +2978,6 @@ fn optionalDigestEql(lhs: ?names.TypeDigest, rhs: ?names.TypeDigest) bool {
         return std.mem.eql(u8, lhs_digest.bytes[0..], rhs_digest.bytes[0..]);
     }
     return rhs == null;
-}
-
-fn builtinOwner(primitive: Primitive) static_dispatch.BuiltinOwner {
-    return switch (primitive) {
-        .bool => .bool,
-        .str => .str,
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        .u8x16 => .u8x16,
-        .i8x16 => .i8x16,
-        .u16x8 => .u16x8,
-        .i16x8 => .i16x8,
-        .u32x4 => .u32x4,
-        .i32x4 => .i32x4,
-        .u64x2 => .u64x2,
-        .i64x2 => .i64x2,
-    };
 }
 
 test "monotype type declarations are referenced" {
