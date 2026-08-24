@@ -2985,7 +2985,7 @@ parse : Str -> Try(a, [InvalidJson(Str), ..errs]) where [a.Parseable([InvalidJso
 
 so `where [a.Json.Encodable([])]` is the supported way for user code to require
 that a value can be written as JSON. A public API whose constraint mentions an
-internal type has no writeable spelling, so a format module that hides a type
+internal type has no writable spelling, so a format module that hides a type
 owes callers an alias that names the same requirement.
 
 The underlying parse method is public and callable. It is deliberately curried:
