@@ -21,6 +21,7 @@ const RangeProve = @import("range_prove.zig");
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const LIR = core.LIR;
+const CheckedArithmetic = core.CheckedArithmetic;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
 const postcheck = @import("postcheck");
@@ -611,6 +612,7 @@ fn finishLoweredOutput(
     target: TargetConfig,
     lowered: anytype,
 ) LowerResourceError!LoweredProgram {
+    verifyArithmeticBoundary(&lowered.lir_result.store, false);
     const lir_passes_started_ns = if (target.timing) |timing| timing.start() else 0;
 
     // TRMC/TCE must rewrite recursive procs before ARC insertion: it deletes
@@ -621,6 +623,7 @@ fn finishLoweredOutput(
     if (target.promote_loop_appends) {
         try LoopAppendPromote.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     }
+    verifyArithmeticBoundary(&lowered.lir_result.store, true);
     if (target.prove_ranges) {
         try RangeProve.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     }
@@ -699,6 +702,24 @@ fn lowerBoxyCheckedModulesToLir(
     errdefer lowered.deinit();
 
     return finishLoweredOutput(allocator, roots, target, &lowered);
+}
+
+fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
+    if (builtin.mode != .Debug) return;
+    for (store.getCFStmts()) |stmt| {
+        if (stmt != .assign_low_level) continue;
+        const op = stmt.assign_low_level.op;
+        if (CheckedArithmetic.isSourcePolicyOp(op)) {
+            checkedPipelineInvariant("source-policy arithmetic operation reached LIR");
+        }
+        if (before_prover) {
+            if (CheckedArithmetic.classify(op)) |entry| {
+                if (entry.mode == .proven_cannot_overflow) {
+                    checkedPipelineInvariant("proven integer arithmetic existed before range proving");
+                }
+            }
+        }
+    }
 }
 
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {

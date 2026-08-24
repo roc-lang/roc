@@ -6614,7 +6614,7 @@ const Lowerer = struct {
     /// Emit `target = len_local - value` using a fresh u64 literal operand.
     fn lenMinusConst(self: *Lowerer, target: LIR.LocalId, len_local: LIR.LocalId, value: i64, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         const operand = try self.addLocalForLayout(.u64);
-        const subtract = try self.assignBinaryLowLevel(target, .num_minus, len_local, operand, next);
+        const subtract = try self.assignBinaryLowLevel(target, .num_int_sub_wrap, len_local, operand, next);
         return try self.assignU64Literal(operand, value, subtract);
     }
 

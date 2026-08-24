@@ -3265,7 +3265,7 @@ fn hotReloadPlatformSource(allocator: Allocator, target: NativeMuslTarget) CliRu
         \\    }}
         \\    targets: {{
         \\        inputs_dir: "targets/",
-        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "libc.a"] }},
+        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
         \\import Host
@@ -3741,6 +3741,36 @@ fn copyNativeMuslTargetFile(
     };
 }
 
+fn buildNativeMuslCompilerRtObject(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    target: NativeMuslTarget,
+    target_dir: []const u8,
+) ?TestResult {
+    const root_path = std.fs.path.join(allocator, &.{ target_dir, "compiler_rt_root.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate compiler-rt root path: {}", .{err});
+    const object_path = std.fs.path.join(allocator, &.{ target_dir, "compiler_rt.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate compiler-rt object path: {}", .{err});
+    const emit_arg = std.fmt.allocPrint(allocator, "-femit-bin={s}", .{object_path}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate compiler-rt output argument: {}", .{err});
+
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = root_path, .data = "" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write compiler-rt root: {}", .{err});
+
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "build-obj",
+        "-target",
+        target.zig_target,
+        "-fcompiler-rt",
+        root_path,
+        emit_arg,
+    }, project_root_path, .{ .args = &.{} });
+}
+
 fn customHotReloadDevShim(
     io: std.Io,
     allocator: Allocator,
@@ -3785,6 +3815,7 @@ fn customHotReloadDevShim(
         return customInfraFailure(allocator, timer, "failed to copy crt1.o: {}", .{err});
     copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to copy libc.a: {}", .{err});
+    if (buildNativeMuslCompilerRtObject(io, allocator, env, timer, timeout_ms, target, target_dir)) |failure| return failure;
 
     const platform_source = hotReloadPlatformSource(allocator, target) catch |err|
         return customInfraFailure(allocator, timer, "failed to render platform source: {}", .{err});
@@ -3956,7 +3987,7 @@ fn hotReloadModelPlatformSource(allocator: Allocator, target: NativeMuslTarget) 
         \\    }}
         \\    targets: {{
         \\        inputs_dir: "targets/",
-        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "libc.a"] }},
+        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
         \\init_model_for_host : U64 -> Box(Model)
@@ -4182,6 +4213,7 @@ fn customHotReloadModelBoundary(
         return customInfraFailure(allocator, timer, "failed to copy model crt1.o: {}", .{err});
     copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to copy model libc.a: {}", .{err});
+    if (buildNativeMuslCompilerRtObject(io, allocator, env, timer, timeout_ms, target, target_dir)) |failure| return failure;
 
     const platform_source = hotReloadModelPlatformSource(allocator, target) catch |err|
         return customInfraFailure(allocator, timer, "failed to render model platform source: {}", .{err});
