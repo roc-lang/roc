@@ -9548,8 +9548,8 @@ query is definition-sensitive: a `set_local` that writes the root ends the
 current place definition after its value operand is read. Uses reached through
 the following jump belong to the newly written join value and cannot keep the
 previous definition alive. Conversely, reaching an implicit `loop_continue`
-without such a rebind keeps the current definition live into the next
-iteration. A pure
+or `loop_break` without such a rebind keeps the current definition live across
+the loop boundary. A pure
 same-value alias followed only by non-refcounted field reads is
 representation-only: an inline struct's scalar bytes remain available after
 its stored RC units move or are released, so such reads do not keep the

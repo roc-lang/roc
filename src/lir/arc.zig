@@ -5084,11 +5084,12 @@ const Inserter = struct {
                 },
                 .ret => |stmt| if (self.isAliasOfOwnershipPlace(stmt.value, root)) return true,
                 .crash, .expect_err => return true,
-                // An implicit continue edge reaches the next iteration with
-                // this definition still live. A root rebind encountered
-                // earlier stopped this path before it could get here.
-                .loop_continue => return true,
-                .runtime_error, .comptime_exhaustiveness_failed, .loop_break => {},
+                // An implicit loop boundary hands the kept value to either
+                // the next iteration or the code after the loop. A root
+                // rebind encountered earlier stopped this path before it
+                // could get here.
+                .loop_continue, .loop_break => return true,
+                .runtime_error, .comptime_exhaustiveness_failed => {},
             }
         }
         return false;
@@ -9740,47 +9741,49 @@ test "RC switch continuation merge releases branch-divergent owner at the bounda
     try f.expectRc(diverged, 0, 1, 0);
 }
 
-test "RC complete field projection preserves a loop-kept root" {
-    var f = try ArcTest.init(testing.allocator);
-    defer f.deinit();
-    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
-        .{ .index = 0, .layout = f.list_i64 },
-    });
-    const field = try f.local(f.list_i64);
-    const record = try f.local(record_layout);
-    const state = try f.local(record_layout);
-    const extracted = try f.local(f.list_i64);
-    const appended = try f.local(f.list_i64);
-    const elem = try f.local(.i64);
+test "RC complete field projection preserves a root at implicit loop boundaries" {
+    for ([_]LIR.CFStmt{ .loop_continue, .loop_break }) |terminal| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+            .{ .index = 0, .layout = f.list_i64 },
+        });
+        const field = try f.local(f.list_i64);
+        const record = try f.local(record_layout);
+        const state = try f.local(record_layout);
+        const extracted = try f.local(f.list_i64);
+        const appended = try f.local(f.list_i64);
+        const elem = try f.local(.i64);
 
-    const join_id = f.freshJoinPointId();
-    const continue_loop = try f.store.addCFStmt(.loop_continue);
-    const consume = try f.assignLowLevel(
-        appended,
-        &.{ extracted, elem },
-        LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(1, 0),
-        continue_loop,
-    );
-    const take = try f.assignRefField(extracted, state, 0, consume);
-    const entry = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
-    const initialize_state = try f.setLocal(state, record, .initialize_join_param, entry);
-    const assign_elem = try f.assignI64(elem, 1, initialize_state);
-    const assign_record = try f.assignStruct(record, &.{field}, assign_elem);
-    const remainder = try f.assignList(field, &.{}, assign_record);
-    const body = try f.store.addCFStmt(.{ .join = .{
-        .id = join_id,
-        .params = try f.span(&.{state}),
-        .body = take,
-        .remainder = remainder,
-    } });
+        const join_id = f.freshJoinPointId();
+        const boundary = try f.store.addCFStmt(terminal);
+        const consume = try f.assignLowLevel(
+            appended,
+            &.{ extracted, elem },
+            LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(1, 0),
+            boundary,
+        );
+        const take = try f.assignRefField(extracted, state, 0, consume);
+        const entry = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+        const initialize_state = try f.setLocal(state, record, .initialize_join_param, entry);
+        const assign_elem = try f.assignI64(elem, 1, initialize_state);
+        const assign_record = try f.assignStruct(record, &.{field}, assign_elem);
+        const remainder = try f.assignList(field, &.{}, assign_record);
+        const body = try f.store.addCFStmt(.{ .join = .{
+            .id = join_id,
+            .params = try f.span(&.{state}),
+            .body = take,
+            .remainder = remainder,
+        } });
 
-    _ = try f.addProc(&.{}, body, .i64);
-    try f.run();
+        _ = try f.addProc(&.{}, body, .i64);
+        try f.run();
 
-    // The back edge requires the root's unit on the next iteration. The
-    // complete field read therefore retains its target instead of moving
-    // that loop-kept unit away.
-    try f.expectRc(extracted, 1, 0, 0);
+        // Both loop terminals hand the kept root to an enclosing iteration
+        // engine. The complete field read must retain its target instead of
+        // moving that unit away.
+        try f.expectRc(extracted, 1, 0, 0);
+    }
 }
 
 test "RC complete field projection moves a join binding replaced before the back edge" {
