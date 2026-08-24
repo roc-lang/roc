@@ -2277,13 +2277,14 @@ fn renderDocTypeHtml(
                     },
                     .function => |func| {
                         if (item.needs_parens) try frames.append(gpa, .{ .html = ")" });
+                        // A function returning a function needs parens around the
+                        // result: `a -> (b -> c)` and `a, b -> c` are different
+                        // types, and only the parenthesized spelling round-trips
+                        // back through the parser.
+                        const ret_needs_parens = func.ret.* == .function;
                         try frames.append(gpa, .{ .doc_type = .{
                             .value = func.ret,
-                            // A function returning a function needs parens around
-                            // the result: `a -> (b -> c)` and `a, b -> c` are
-                            // different types, and only the parenthesized spelling
-                            // round-trips back through the parser.
-                            .needs_parens = func.ret.* == .function,
+                            .needs_parens = ret_needs_parens,
                             .indent = item.indent,
                         } });
                         try frames.append(gpa, .{ .html = if (func.effectful)
