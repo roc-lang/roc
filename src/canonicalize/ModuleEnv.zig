@@ -1086,10 +1086,19 @@ pub const FileDependencyState = enum(u8) {
 pub const FileDependency = extern struct {
     relative_path: StringLiteral.Idx,
     state: FileDependencyState,
-    _padding: [3]u8,
+    _padding: [3]u8 = .{ 0, 0, 0 },
     content_hash: [32]u8,
+    start_offset: u32,
+    end_offset: u32,
 
     pub const SafeList = collections.SafeList(@This());
+
+    pub fn region(self: @This()) Region {
+        return .{
+            .start = .{ .offset = self.start_offset },
+            .end = .{ .offset = self.end_offset },
+        };
+    }
 };
 
 /// Relocate all pointers in the ModuleEnv by the given offset.
@@ -1367,13 +1376,15 @@ pub fn deinitCachedModule(self: *Self) void {
 }
 
 /// Record a relative file dependency before its final read state is known.
-pub fn recordFileDependency(self: *Self, relative_path: []const u8) Allocator.Error!FileDependency.SafeList.Idx {
+pub fn recordFileDependency(self: *Self, relative_path: []const u8, start_offset: u32, end_offset: u32) Allocator.Error!FileDependency.SafeList.Idx {
     const path_idx = try self.insertString(relative_path);
     return try self.file_dependencies.append(self.gpa, .{
         .relative_path = path_idx,
         .state = .pending,
         ._padding = .{ 0, 0, 0 },
         .content_hash = [_]u8{0} ** 32,
+        .start_offset = start_offset,
+        .end_offset = end_offset,
     });
 }
 
