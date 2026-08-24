@@ -159,15 +159,41 @@ independently verifiable by unchanged snapshot output.
    `childRolesMatch` merges to the exhaustive switch.
    `toInspectCall` merges to the richer `BodyContext` behavior.
 
-7. **Assess the codec pairs before touching them.** The
-   parser/encoder quadruple and the parse-list/parse-dict pair are
-   measured-similar but not verified to be semantically parallel.
-   Step one is confirming they are the same algorithm over different
-   directions/containers; only then extract a shared skeleton with a
-   direction/container policy parameter. If they turn out to be
-   genuinely different algorithms that merely rhyme, record that
-   finding and leave them alone—do not force a shared shape onto
-   them.
+7. **The codec pairs are assessed; most should not merge.** This step
+   asked for confirmation before extraction, and the answer is mostly no.
+
+   - `restoreConstFnTemplateAtNode` and `restoreConstFnTemplate` were one
+     function twice, differing only in whether `fn_def`, `source_fn_ty`,
+     and `source_fn_key` arrived loose or bundled in a `FnTemplate`.
+     Merged as `restoreConstFnTemplateAt`, with all three passed
+     explicitly, because the two call sites read `source_fn_ty` from
+     *different records* and folding that choice into the callee would
+     have been wrong.
+   - `restoreConstUseAtType` and `restoreConstUseAtNode` are not
+     duplicates despite 0.86 similarity. One works in sealed types
+     (`sameType`, `constrainTypeToMono`, `runtimeCrashExpr`), the other
+     in the instantiation graph (`graph.unify`,
+     `relateRequestComponent`, `runtimeCrashExprAtCell`), and they call
+     different downstream families throughout. Two solver phases wearing
+     the same shape. Leave them.
+   - `restoreConstParserRuntimeFnExpr` and
+     `restoreConstEncoderForRuntimeFnExpr` call an identical set of
+     eight helpers with none unique to either side, which is the
+     strongest available evidence that they are one algorithm over two
+     codec roles. This is the real extraction candidate in this cluster
+     and it is still open.
+   - `lowerParseListFromState` and `lowerParseDictFromState` share 21 of
+     23 callees, differing only in the loop body and the container
+     constructor. A merge wants a container policy parameter, not a
+     direction one. Also still open.
+   - The `restoreConstParserRuntimeFn` / `...AtNode` pairs call no
+     helpers at all, so callee overlap says nothing about them; they
+     need reading before any judgement.
+
+   The general lesson, which cost this batch four wrong findings: raw
+   text similarity ranks these pairs almost identically, and it is
+   wrong about which ones are duplicates. Callee-set overlap separates
+   them far better, and reading separates them properly.
 
 ## What success looks like
 

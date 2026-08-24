@@ -29440,9 +29440,11 @@ const BodyContext = struct {
                 static_data_const_locator,
             );
         }
-        const restored_fn = try self.restoreConstFnTemplateAtNode(
+        const restored_fn = try self.restoreConstFnTemplateAt(
             fn_value,
             fn_def,
+            fn_value.source_fn_ty,
+            fn_value.source_fn_key,
             retained_evidence,
             request_fn_node,
         );
@@ -29452,10 +29454,19 @@ const BodyContext = struct {
         );
     }
 
-    fn restoreConstFnTemplateAtNode(
+    /// Restore a compile-time function value's template into a draft target.
+    ///
+    /// The two call sites take their source function type and key from
+    /// different places: one from the stored `ConstFn`, one from the
+    /// `FnTemplate` being specialized. Both travel as explicit arguments
+    /// rather than being read off whichever record the caller happened to
+    /// hold, because that choice is the caller's and not this function's.
+    fn restoreConstFnTemplateAt(
         self: *BodyContext,
         fn_value: check.ConstStore.ConstFn,
         fn_def: Ast.FnDef,
+        source_fn_ty: checked.CheckedTypeId,
+        source_fn_key: names.TypeDigest,
         retained_evidence: EvidenceChain,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnTarget {
@@ -29483,8 +29494,8 @@ const BodyContext = struct {
                     &fn_ctx,
                     checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
                     nested,
-                    fn_value.source_fn_ty,
-                    fn_value.source_fn_key,
+                    source_fn_ty,
+                    source_fn_key,
                     request_fn_node,
                     &.{},
                     fn_ctx.evidence,
@@ -29495,8 +29506,8 @@ const BodyContext = struct {
             .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
                 self,
                 templateForConstFnDef(fn_value.fn_def),
-                fn_value.source_fn_ty,
-                fn_value.source_fn_key,
+                source_fn_ty,
+                source_fn_key,
                 request_fn_node,
                 retained_evidence.vector,
                 .resolved,
@@ -29697,56 +29708,18 @@ const BodyContext = struct {
             return try self.restoreCapturingConstFn(store_view, fn_value, template, ty, retained_evidence, static_data_const_locator);
         }
         const request_fn_node = try self.activeNodeFromType(ty);
-        const restored_fn = try self.restoreConstFnTemplate(fn_value, template, retained_evidence, request_fn_node);
+        const restored_fn = try self.restoreConstFnTemplateAt(
+            fn_value,
+            template.fn_def,
+            template.source_fn_ty,
+            template.source_fn_key,
+            retained_evidence,
+            request_fn_node,
+        );
         return try self.addExprWithTypeCell(
             DraftTypeCell.fromGraphNode(request_fn_node),
             .{ .fn_def = .{ .fn_id = restored_fn } },
         );
-    }
-
-    fn restoreConstFnTemplate(
-        self: *BodyContext,
-        fn_value: check.ConstStore.ConstFn,
-        template: Ast.FnTemplate,
-        retained_evidence: EvidenceChain,
-        request_fn_node: NodeId,
-    ) Allocator.Error!DraftFnTarget {
-        return switch (template.fn_def) {
-            .nested => |nested| {
-                const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
-                var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
-                fn_ctx.evidence = retained_evidence;
-                fn_ctx.inheritFrozenEmissionContext(self);
-                defer fn_ctx.deinit();
-                try fn_ctx.inheritActiveConstBinding(self);
-                try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
-                fn_ctx.current_fn_key = nested.context_fn_key;
-                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
-                defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
-                return try self.builder.lowerDraftNestedFromContext(
-                    &fn_ctx,
-                    checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
-                    nested,
-                    template.source_fn_ty,
-                    template.source_fn_key,
-                    request_fn_node,
-                    &.{},
-                    fn_ctx.evidence,
-                    null,
-                    .exact_graph,
-                );
-            },
-            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
-                self,
-                templateForConstFnDef(fn_value.fn_def),
-                template.source_fn_ty,
-                template.source_fn_key,
-                request_fn_node,
-                retained_evidence.vector,
-                .resolved,
-                .independent_roots,
-            )),
-        };
     }
 
     fn restoreCapturingConstFn(
