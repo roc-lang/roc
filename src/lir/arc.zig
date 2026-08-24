@@ -2216,7 +2216,6 @@ const Inserter = struct {
                             assign.target,
                             root,
                             assign.next,
-                            segment.ctx.loop_keep,
                         );
                         complete_moved_root = !transfer.retain_target;
                     } else {
@@ -3966,12 +3965,14 @@ const Inserter = struct {
         target: LIR.LocalId,
         root: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
         const release_old_target = self.takeRebindTarget(owned, target);
         const unit = self.unitOf(root);
-        const root_used = (loop_keep != null and loop_keep.?.set.contains(unit)) or
-            try self.ownershipPlaceUsedInPath(next, unit);
+        // The path query follows loop edges itself and stops at a rebind of
+        // this exact place definition. A loop keep-set cannot make that
+        // distinction: it intentionally merges the old and next-iteration
+        // bindings under the same LocalId.
+        const root_used = try self.ownershipPlaceUsedInPath(next, unit);
         const has_unit = owned.contains(unit);
         const restitution = if (root_used)
             try self.completeProjectionRestitution(target, unit, next)
@@ -5040,6 +5041,11 @@ const Inserter = struct {
                 },
                 .set_local => |assign| {
                     if (self.isAliasOfOwnershipPlace(assign.value, root)) return true;
+                    // Rebinding the place ends this definition. Uses reached
+                    // through the following jump belong to the newly written
+                    // join value, not to the value whose projection is being
+                    // considered here.
+                    if (assign.target == root) continue;
                     try stack.append(self.emission_allocator, assign.next);
                 },
                 .debug => |stmt| {
@@ -5078,7 +5084,11 @@ const Inserter = struct {
                 },
                 .ret => |stmt| if (self.isAliasOfOwnershipPlace(stmt.value, root)) return true,
                 .crash, .expect_err => return true,
-                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                // An implicit continue edge reaches the next iteration with
+                // this definition still live. A root rebind encountered
+                // earlier stopped this path before it could get here.
+                .loop_continue => return true,
+                .runtime_error, .comptime_exhaustiveness_failed, .loop_break => {},
             }
         }
         return false;
@@ -9771,6 +9781,52 @@ test "RC complete field projection preserves a loop-kept root" {
     // complete field read therefore retains its target instead of moving
     // that loop-kept unit away.
     try f.expectRc(extracted, 1, 0, 0);
+}
+
+test "RC complete field projection moves a join binding replaced before the back edge" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.list_i64 },
+    });
+    const initial_list = try f.local(f.list_i64);
+    const initial_record = try f.local(record_layout);
+    const state = try f.local(record_layout);
+    const extracted = try f.local(f.list_i64);
+    const updated = try f.local(f.list_i64);
+    const next_record = try f.local(record_layout);
+    const elem = try f.local(.i64);
+
+    const join_id = f.freshJoinPointId();
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const set_next = try f.setLocal(state, next_record, .initialize_join_param, jump);
+    const build_next = try f.assignStruct(next_record, &.{updated}, set_next);
+    const consume = try f.assignLowLevel(
+        updated,
+        &.{ extracted, elem },
+        LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(1, 0),
+        build_next,
+    );
+    const take = try f.assignRefField(extracted, state, 0, consume);
+    const enter = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const initialize_state = try f.setLocal(state, initial_record, .initialize_join_param, enter);
+    const assign_elem = try f.assignI64(elem, 1, initialize_state);
+    const assign_record = try f.assignStruct(initial_record, &.{initial_list}, assign_elem);
+    const remainder = try f.assignList(initial_list, &.{}, assign_record);
+    const body = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = take,
+        .remainder = remainder,
+    } });
+
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    // The state cell is explicitly rebound before the back edge. The next
+    // iteration's state is a new definition, so the current record's sole RC
+    // field moves into `extracted` without an incref.
+    try f.expectRc(extracted, 0, 0, 0);
 }
 
 test "RC divergent field takes normalize exact residual places on each switch edge" {

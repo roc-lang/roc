@@ -9543,7 +9543,13 @@ ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
 If the final read result binds owned, that read moves the unit only when the
 root unit is present and the ownership place has no later RC-bearing use on
-that path; otherwise it retains exactly as an ordinary read would. A pure
+that path; otherwise it retains exactly as an ordinary read would. This use
+query is definition-sensitive: a `set_local` that writes the root ends the
+current place definition after its value operand is read. Uses reached through
+the following jump belong to the newly written join value and cannot keep the
+previous definition alive. Conversely, reaching an implicit `loop_continue`
+without such a rebind keeps the current definition live into the next
+iteration. A pure
 same-value alias followed only by non-refcounted field reads is
 representation-only: an inline struct's scalar bytes remain available after
 its stored RC units move or are released, so such reads do not keep the
