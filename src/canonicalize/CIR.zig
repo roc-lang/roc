@@ -539,6 +539,19 @@ pub const Annotation = struct {
 
     anno: TypeAnno.Idx,
     where: ?WhereClause.Span,
+    /// Source region of the annotated *name* — the `foo` in `foo : U64`, not
+    /// the type after the colon and not the whole annotation statement.
+    ///
+    /// Canonicalization merges a named annotation into the def it annotates and
+    /// emits no separate `s_type_anno` statement for it, so without this field
+    /// the name token has no representation in the CIR at all. Tooling that
+    /// must edit or navigate to every occurrence of a binding (rename, document
+    /// highlight, go-to-definition) reads it from here rather than re-deriving
+    /// the annotation-to-def pairing that canonicalization already performed.
+    ///
+    /// Null for annotations the compiler synthesizes, which have no name token
+    /// in source to point at.
+    name_region: ?Region = null,
     /// Whether `anno` mentions any type variable (a fresh `.rigid_var` or a
     /// `.rigid_var_lookup` to an enclosing one). Derived from `anno` by
     /// `addAnnotation` and populated on read by `getAnnotation`; the value passed

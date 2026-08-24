@@ -1116,19 +1116,39 @@ pub const Payload = extern union {
     pub const Annotation = extern struct {
         anno: u32,
         /// Index into span2_data: (where_start, where_len); meaningful only when
-        /// `has_where`.
+        /// `flags.has_where`.
         where_span2_idx: u32,
-        /// Whether the annotation has a `where` clause.
-        has_where: bool,
-        /// Whether the annotation mentions any type variable—a fresh
-        /// `.rigid_var` or a `.rigid_var_lookup` reference to an enclosing one.
-        mentions_type_var: bool,
-        /// Whether the annotation *introduces* a type variable (`.rigid_var`), as
-        /// opposed to only referencing one from an enclosing scope.
-        introduces_type_var: bool,
-        /// Whether the annotation (its type tree or any where-clause method
-        /// signature) contains an `_` inference hole.
-        contains_underscore: bool,
+        /// Index into span2_data: (name_offset, name_byte_len) locating the
+        /// annotated name token in source; meaningful only when
+        /// `flags.has_name_region`.
+        name_region_span2_idx: u32,
+        /// The annotation's boolean properties.
+        flags: Flags,
+
+        /// The annotation's boolean properties, packed into one byte.
+        ///
+        /// A fifth standalone `bool` would grow this payload past the 16-byte
+        /// budget the `Payload` union enforces, so the flags share a backing
+        /// integer instead of each taking their own byte.
+        pub const Flags = packed struct(u8) {
+            /// Whether the annotation has a `where` clause.
+            has_where: bool = false,
+            /// Whether the annotation mentions any type variable—a fresh
+            /// `.rigid_var` or a `.rigid_var_lookup` reference to an enclosing one.
+            mentions_type_var: bool = false,
+            /// Whether the annotation *introduces* a type variable (`.rigid_var`), as
+            /// opposed to only referencing one from an enclosing scope.
+            introduces_type_var: bool = false,
+            /// Whether the annotation (its type tree or any where-clause method
+            /// signature) contains an `_` inference hole.
+            contains_underscore: bool = false,
+            /// Whether `name_region_span2_idx` locates a real name token. False
+            /// for annotations the compiler synthesizes, which have no name in
+            /// source.
+            has_name_region: bool = false,
+            /// Unused bits, kept zero so the byte compares equal across builds.
+            unused: u3 = 0,
+        };
     };
 
     // === Diagnostic payload structs ===
@@ -1248,9 +1268,10 @@ pub const Payload = extern union {
         // payload; flattened field-access paths must not increase the per-node
         // footprint.
         std.debug.assert(@sizeOf(FieldAccessSegment) == 12);
-        // anno + where_span2_idx (2 x u32) + 4 bool flags. The four bools fill
-        // the trailing 4 bytes exactly (no padding); assert the size so a stray
-        // field can't silently grow it.
-        std.debug.assert(@sizeOf(Annotation) == 12);
+        // anno + where_span2_idx + name_region_span2_idx (3 x u32) + a packed
+        // flags byte, rounded up to the struct's 4-byte alignment. That fills
+        // the Payload union exactly; assert the size so a stray field can't
+        // silently grow it past the union budget.
+        std.debug.assert(@sizeOf(Annotation) == 16);
     }
 };

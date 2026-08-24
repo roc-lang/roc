@@ -151,7 +151,9 @@ pub const Constants = struct {
     /// 64: Compile-time root selection rejects values containing callables.
     /// 65: A hosted entry written without a module resolves to the platform
     ///     module's own declaration.
-    pub const CACHE_VERSION = 65;
+    /// 66: Annotation node payload packs its boolean flags into one byte and
+    ///     records the source region of the annotated name.
+    pub const CACHE_VERSION = 66;
 };
 
 /// Configuration for the Roc cache system.

@@ -408,6 +408,31 @@ const CollectReferencesContext = struct {
         }
         return .continue_traversal;
     }
+
+    /// Pre-visit callback for statements, picking up the name written on a
+    /// block-level annotation that binds the target pattern.
+    fn visitStmtPre(ctx: *CollectReferencesContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
+        if (@intFromEnum(pattern_idx) != @intFromEnum(ctx.target_pattern)) return .continue_traversal;
+
+        const anno_idx = statementAnnotation(stmt) orelse return .continue_traversal;
+        ctx.appendAnnotationName(anno_idx) catch |err| {
+            ctx.oom = err;
+            return .stop;
+        };
+        return .continue_traversal;
+    }
+
+    /// Append the source range of an annotation's name, if it has one.
+    ///
+    /// A named annotation is merged into the def it annotates, so its name
+    /// token is reachable only through `Annotation.name_region`.
+    fn appendAnnotationName(ctx: *CollectReferencesContext, anno_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
+        const annotation = ctx.store.getAnnotation(anno_idx);
+        const name_region = annotation.name_region orelse return;
+        const range = regionToRange(ctx.module_env, name_region) orelse return;
+        try ctx.results.append(ctx.allocator, range);
+    }
 };
 
 /// Context for finding a pattern at a specific offset.
@@ -616,12 +641,21 @@ pub fn collectLookupReferences(
 
     var visitor = CirVisitor(CollectReferencesContext).init(&ctx, .{
         .visit_expr_pre = CollectReferencesContext.visitExprPre,
+        .visit_stmt_pre = CollectReferencesContext.visitStmtPre,
     });
 
     // Walk all top-level definitions
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
+
+        // A top-level annotation is merged into its def, so the name written on
+        // the annotation line is only reachable from the def itself.
+        if (@intFromEnum(def.pattern) == @intFromEnum(target_pattern)) {
+            if (def.annotation) |anno_idx| {
+                try ctx.appendAnnotationName(anno_idx);
+            }
+        }
 
         visitor.walkExpr(&module_env.store, def.expr);
         if (visitor.stopped) break;

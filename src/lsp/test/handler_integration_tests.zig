@@ -219,6 +219,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "document symbol handler extracts function declarations", .run = documentSymbolHandlerExtractsFunctionDeclarations },
     .{ .name = "document highlight handler finds variable occurrences", .run = documentHighlightHandlerFindsVariableOccurrences },
     .{ .name = "document highlight handler resolves symbol from a reference site", .run = documentHighlightHandlerResolvesFromReferenceSite },
+    .{ .name = "document highlight handler includes the annotated name", .run = documentHighlightHandlerIncludesAnnotationName },
     .{ .name = "definition handler finds local variable definition", .run = definitionHandlerFindsLocalVariableDefinition },
     .{ .name = "definition handler returns null for undefined symbol", .run = definitionHandlerReturnsNullForUndefinedSymbol },
     .{ .name = "hover handler handles type annotation request", .run = hoverHandlerReturnsTypeInfoForTypeAnnotation },
@@ -548,6 +549,117 @@ pub fn documentHighlightHandlerResolvesFromReferenceSite() integration_spec.Spec
     try std.testing.expectEqual(@as(usize, 2), result.array.items.len);
     try std.testing.expect(try hasHighlightRange(result, 2, 5, 2, 6));
     try std.testing.expect(try hasHighlightRange(result, 2, 8, 2, 9));
+}
+
+/// Verifies that the name written on a type annotation counts as an occurrence
+/// of the binding it annotates.
+///
+/// Canonicalization merges a named annotation into the def it annotates and
+/// emits no separate statement for it, so the name is reachable only through
+/// `CIR.Annotation.name_region`. A rename that missed it would leave the
+/// annotation naming a binding that no longer exists.
+pub fn documentHighlightHandlerIncludesAnnotationName() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "highlight_annotation.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const roc_source = try std.fmt.allocPrint(allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\double : I64 -> I64
+        \\double = |n| n * 2
+        \\
+        \\main = double(21)
+    , .{platform_path});
+    defer allocator.free(roc_source);
+    const escaped_source = try jsonEscape(allocator, roc_source);
+    defer allocator.free(escaped_source);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"{s}"}}}}}}
+    , .{ file_uri, escaped_source });
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    // Cursor on the definition `double` (line 3, character 2).
+    const highlight_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/documentHighlight","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":2}}}}}}
+    , .{file_uri});
+    defer allocator.free(highlight_body);
+    const highlight_msg = try frame(allocator, highlight_body);
+    defer allocator.free(highlight_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, highlight_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    const ReaderType = std.Io.Reader;
+    const WriterType = std.Io.Writer;
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, test_env.io, reader_stream, writer_stream, null, .{});
+    test_env.configureChecker(&server.syntax_checker, tmp_path);
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_buffer[0..server.transport.writer.end]);
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    var response = try responseById(allocator, responses, 2);
+    defer response.deinit();
+    const result = try response.result();
+    try std.testing.expect(result == .array);
+
+    // The annotation name, the definition, and the single call site.
+    try std.testing.expectEqual(@as(usize, 3), result.array.items.len);
+    try std.testing.expect(try hasHighlightRange(result, 2, 0, 2, 6));
+    try std.testing.expect(try hasHighlightRange(result, 3, 0, 3, 6));
+    try std.testing.expect(try hasHighlightRange(result, 5, 7, 5, 13));
 }
 
 /// Verifies goto definition locates a local variable definition.
