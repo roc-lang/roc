@@ -2141,6 +2141,10 @@ const Builder = struct {
     /// Outermost checked-type lowering owns one atomic store transaction;
     /// recursive children only append to its speculative suffix.
     active_type_transaction: ?Type.Store.Transaction = null,
+    /// Cache addresses inserted while `active_type_transaction` is open. The
+    /// owner remaps exactly these entries on commit and evicts exactly these
+    /// on abort, so neither path scales with the whole cache.
+    active_type_transaction_addresses: std.ArrayList(CheckedTypeAddress) = .empty,
     /// Exact inhabitation answers for sealed Monotype types. These types are
     /// immutable, so the structural walk is needed at most once per TypeId.
     uninhabited_type_cache: collections.DenseMap(Type.TypeId, bool),
@@ -2319,6 +2323,7 @@ const Builder = struct {
         self.lowered_templates.deinit();
         self.spec_store.deinit();
         self.uninhabited_type_cache.deinit();
+        self.active_type_transaction_addresses.deinit(self.allocator);
         self.type_cache.deinit();
         self.evidence_arena.deinit();
     }
@@ -4434,16 +4439,23 @@ const Builder = struct {
         defer self.active_type_transaction = null;
         errdefer {
             transaction.abort(&self.program.types);
-            self.type_cache.clearRetainingCapacity();
+            // Evict only this transaction's entries; ids cached by earlier
+            // commits are durable and stay valid.
+            for (self.active_type_transaction_addresses.items) |cached_address| {
+                _ = self.type_cache.remove(cached_address);
+            }
+            self.active_type_transaction_addresses.clearRetainingCapacity();
         }
 
         const speculative = try self.lowerTypeSpeculative(address, view, checked_ty);
         var result = try self.program.types.commitTransaction(&self.program.names, transaction, speculative);
         defer result.deinit();
-        var cached_types = self.type_cache.valueIterator();
-        while (cached_types.next()) |cached| {
+        for (self.active_type_transaction_addresses.items) |cached_address| {
+            const cached = self.type_cache.getPtr(cached_address) orelse
+                Common.compilerBug("checked-type cache entry recorded in a transaction disappeared before commit");
             cached.* = result.remapType(cached.*);
         }
+        self.active_type_transaction_addresses.clearRetainingCapacity();
         return result.root;
     }
 
@@ -4464,6 +4476,11 @@ const Builder = struct {
             checked_ty: checked.CheckedTypeId,
 
             fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
+                // Recorded before the put so a failed put leaves at worst a
+                // recorded address with no cache entry, which eviction
+                // tolerates and commit never sees; the reverse order could
+                // strand a speculative id in the cache past the owner's abort.
+                try context.builder.active_type_transaction_addresses.append(context.builder.allocator, context.address);
                 try context.builder.type_cache.put(context.address, reserved);
                 return try context.builder.lowerTypePayload(context.view, context.checked_ty, context.view.types.payload(context.checked_ty));
             }
@@ -39529,6 +39546,10 @@ const BodyContext = struct {
             .named => |named| named,
             .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("compiler helper expected a named template type"),
         };
+        // The clone owns fresh declared-order rows rather than aliasing the
+        // template's span: digests and equality are content-addressed either
+        // way, but self-contained rows keep the clone's validity independent
+        // of which store region its template's rows happened to live in.
         const declared_order = try GuardedList.dupe(
             self.builder.allocator,
             Type.DeclaredField,

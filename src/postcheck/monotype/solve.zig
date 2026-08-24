@@ -5128,6 +5128,12 @@ pub const GraphTypeFinals = struct {
     sealed: collections.DenseMap(NodeId, Type.TypeId),
     sealed_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     active_transaction: ?Type.Store.Transaction,
+    /// Keys inserted into `sealed`/`sealed_types` while `active_transaction`
+    /// is open. Commit remaps exactly these entries and a failed commit
+    /// evicts exactly these, so neither path scales with everything this
+    /// sealer has sealed before.
+    transaction_sealed_nodes: std.ArrayList(NodeId),
+    transaction_sealed_types: std.ArrayList(Type.TypeId),
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
         graph.requireFrozenRelations();
@@ -5156,10 +5162,14 @@ pub const GraphTypeFinals = struct {
             .sealed = collections.DenseMap(NodeId, Type.TypeId).init(graph.allocator),
             .sealed_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(graph.allocator),
             .active_transaction = null,
+            .transaction_sealed_nodes = .empty,
+            .transaction_sealed_types = .empty,
         };
     }
 
     pub fn deinit(self: *GraphTypeFinals) void {
+        self.transaction_sealed_types.deinit(self.graph.allocator);
+        self.transaction_sealed_nodes.deinit(self.graph.allocator);
         self.sealed_types.deinit();
         self.sealed.deinit();
     }
@@ -5187,7 +5197,10 @@ pub const GraphTypeFinals = struct {
         const transaction = self.graph.types.beginTransaction();
         self.active_transaction = transaction;
         defer self.active_transaction = null;
-        errdefer transaction.abort(self.graph.types);
+        errdefer {
+            transaction.abort(self.graph.types);
+            self.evictTransactionSealed();
+        }
 
         const speculative = try self.sealNodeSpeculative(node);
         var result = try self.graph.types.commitTransaction(self.graph.name_store, transaction, speculative);
@@ -5203,6 +5216,14 @@ pub const GraphTypeFinals = struct {
             node: NodeId,
 
             fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
+                // Recorded before the put so a failed put leaves at worst a
+                // recorded key with no map entry, which eviction tolerates
+                // and commit never sees; the reverse order could strand a
+                // speculative id in the map past a failed commit. Snapshot
+                // modes commit nothing, so they record nothing.
+                if (context.sealer.active_transaction != null) {
+                    try context.sealer.transaction_sealed_nodes.append(context.sealer.graph.allocator, context.node);
+                }
                 try context.sealer.sealed.put(context.node, reserved);
                 return try context.sealer.sealContent(context.node);
             }
@@ -5211,14 +5232,32 @@ pub const GraphTypeFinals = struct {
     }
 
     fn remapSealedTypes(self: *GraphTypeFinals, result: Type.Store.TransactionResult) void {
-        var sealed = self.sealed.valueIterator();
-        while (sealed.next()) |ty| {
-            ty.* = result.remapType(ty.*);
+        for (self.transaction_sealed_nodes.items) |node| {
+            const entry = self.sealed.getPtr(node) orelse
+                Common.compilerBug("transaction-sealed node was missing from the sealed map at commit");
+            entry.* = result.remapType(entry.*);
         }
-        var sealed_types = self.sealed_types.valueIterator();
-        while (sealed_types.next()) |ty| {
-            ty.* = result.remapType(ty.*);
+        self.transaction_sealed_nodes.clearRetainingCapacity();
+        for (self.transaction_sealed_types.items) |ty| {
+            const entry = self.sealed_types.getPtr(ty) orelse
+                Common.compilerBug("transaction-sealed type was missing from the sealed-types map at commit");
+            entry.* = result.remapType(entry.*);
         }
+        self.transaction_sealed_types.clearRetainingCapacity();
+    }
+
+    /// Drop map entries created inside a failed transaction: their sealed ids
+    /// were truncated with the speculative suffix, so retaining them would
+    /// hand out dangling ids if this sealer were used again.
+    fn evictTransactionSealed(self: *GraphTypeFinals) void {
+        for (self.transaction_sealed_nodes.items) |node| {
+            _ = self.sealed.remove(node);
+        }
+        self.transaction_sealed_nodes.clearRetainingCapacity();
+        for (self.transaction_sealed_types.items) |ty| {
+            _ = self.sealed_types.remove(ty);
+        }
+        self.transaction_sealed_types.clearRetainingCapacity();
     }
 
     fn sealContent(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.Content {
@@ -5273,7 +5312,10 @@ pub const GraphTypeFinals = struct {
         const transaction = self.graph.types.beginTransaction();
         self.active_transaction = transaction;
         defer self.active_transaction = null;
-        errdefer transaction.abort(self.graph.types);
+        errdefer {
+            transaction.abort(self.graph.types);
+            self.evictTransactionSealed();
+        }
 
         const speculative = try self.sealStoreTypeSpeculative(ty);
         var result = try self.graph.types.commitTransaction(self.graph.name_store, transaction, speculative);
@@ -5289,6 +5331,10 @@ pub const GraphTypeFinals = struct {
             ty: Type.TypeId,
 
             fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
+                // See `sealNodeSpeculative` for the record-before-put order.
+                if (context.sealer.active_transaction != null) {
+                    try context.sealer.transaction_sealed_types.append(context.sealer.graph.allocator, context.ty);
+                }
                 try context.sealer.sealed_types.put(context.ty, reserved);
                 return try context.sealer.sealStoreContent(context.ty);
             }

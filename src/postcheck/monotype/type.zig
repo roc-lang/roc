@@ -683,15 +683,23 @@ pub const Store = struct {
         self.constructing.restoreLen(mark_.constructing_len);
         self.unfinished_type_count = mark_.unfinished_type_count;
         self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
-        // A surviving reserved slot may have been filled after the mark with
-        // children that are now truncated and whose ids can be reused. Clear
-        // every retained containment answer so those new children are walked.
+        // A reserved slot that survives this restore may have been filled
+        // after the mark with children that are now truncated and whose ids
+        // can be reused, so clear every retained containment answer to force
+        // those new children to be walked. Only a mark taken during recursive
+        // construction can see that: when the mark recorded no unfinished
+        // slot, every surviving node was filled before the mark and reaches
+        // only surviving ids, so retained answers stay valid. Skipping the
+        // wipe then keeps interning hits and transaction seals -- the hot
+        // restore callers -- from discarding the whole cache.
         // Digest caches need no equivalent clearing: a truncated id's cache
         // row goes with it, sealing only ever digests ids inside the suffix,
         // and the unfolding index is content-addressed. Only digesting a
         // *surviving* slot's mid-transaction fill before the rollback decision
         // would defeat that, and no caller does.
-        @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
+        if (mark_.unfinished_type_count != 0) {
+            @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
+        }
         self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
@@ -1649,12 +1657,12 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!bool {
         if (!try self.typeEql(name_store, existing, candidate)) return false;
         if (std.debug.runtime_safety) {
-            // An exhausted allocator skips the check instead of panicking: a
-            // consistency assertion must not be the reason a caller loses an
-            // otherwise recoverable failure.
-            if (self.computeDigest(name_store, existing, .full, null)) |existing_digest| {
-                std.debug.assert(std.mem.eql(u8, &existing_digest.bytes, &key.bytes));
-            } else |_| {}
+            // Allocation failure inside these checks propagates like any
+            // other digest or equality allocation failure; the entry's digest
+            // is already cached from interning, so this does not allocate in
+            // practice.
+            const existing_digest = try self.computeDigest(name_store, existing, .full, null);
+            std.debug.assert(std.mem.eql(u8, &existing_digest.bytes, &key.bytes));
             std.debug.assert(try self.typeEql(name_store, candidate, existing));
         }
         return true;
@@ -3611,6 +3619,37 @@ test "monotype type store aborted transaction leaves no speculative state" {
     transaction.abort(&store);
     try std.testing.expectEqual(types_len, store.types.len());
     try std.testing.expect(store.verify(&name_store) == null);
+}
+
+test "monotype type store restores keep durable iterator containment answers" {
+    // `restore` only wipes retained containment answers when the mark saw an
+    // unfinished slot; interning hits and transaction seals restore to marks
+    // with none, so answers cached for durable types must survive both.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const unit = try store.internZst(&name_store);
+    const unit_index = @intFromEnum(unit);
+    try std.testing.expect(!(try store.containsIteratorInterface(unit)));
+    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+
+    // An interning hit restores the store to its pre-candidate mark.
+    _ = try store.internZst(&name_store);
+    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+
+    const transaction = store.beginTransaction();
+    const recursive = try transaction.reserve(&store);
+    transaction.fill(&store, recursive, .{ .list = recursive });
+    var result = try store.commitTransaction(&name_store, transaction, recursive);
+    defer result.deinit();
+    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+
+    const aborted = store.beginTransaction();
+    _ = try aborted.reserve(&store);
+    aborted.abort(&store);
+    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
 }
 
 test "monotype type store acyclic interning normalizes record and tag rows" {
