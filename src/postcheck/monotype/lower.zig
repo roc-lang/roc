@@ -7694,6 +7694,19 @@ const Builder = struct {
         return try self.exprDependsOnFreeLocalInner(expr, target, &bound, &active_fns);
     }
 
+    /// Drop `locals` from the bound set, innermost first, undoing one
+    /// scope's worth of `bindPatLocals`.
+    fn removeBoundLocals(
+        bound: *collections.DenseMap(Ast.LocalId, void),
+        locals: []const Ast.LocalId,
+    ) void {
+        var index = locals.len;
+        while (index > 0) {
+            index -= 1;
+            _ = bound.remove(locals[index]);
+        }
+    }
+
     fn exprDependsOnFreeLocalInner(
         self: *Builder,
         expr_id: Ast.ExprId,
@@ -8062,17 +8075,6 @@ const Builder = struct {
                     if (step.capture) |capture| try self.bindPatLocals(capture, bound, added);
                 }
             },
-        }
-    }
-
-    fn removeBoundLocals(
-        bound: *collections.DenseMap(Ast.LocalId, void),
-        locals: []const Ast.LocalId,
-    ) void {
-        var index = locals.len;
-        while (index > 0) {
-            index -= 1;
-            _ = bound.remove(locals[index]);
         }
     }
 
@@ -8838,45 +8840,6 @@ const Builder = struct {
 
     fn bindPat(self: *Builder, local: Ast.LocalId, ty: Type.TypeId) Allocator.Error!Ast.PatId {
         return try self.program.addPat(.{ .ty = ty, .data = .{ .bind = local } });
-    }
-
-    fn stringExpr(self: *Builder, text: []const u8, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        return try self.program.addExpr(.{
-            .ty = str_ty,
-            .data = .{ .str_lit = try self.program.addStringLiteral(text) },
-        });
-    }
-
-    fn intLiteralExpr(self: *Builder, value: u64, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        return try self.program.addExpr(.{
-            .ty = ty,
-            .data = .{ .int_lit = unsignedIntLiteral(value) },
-        });
-    }
-
-    fn lowLevelExpr(self: *Builder, op: can.CIR.Expr.LowLevel, args: []const Ast.ExprId, ret_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        return try self.program.addExpr(.{
-            .ty = ret_ty,
-            .data = .{ .low_level = .{
-                .op = op,
-                .args = try self.program.addExprSpan(args),
-            } },
-        });
-    }
-
-    fn concatExpr(self: *Builder, left: Ast.ExprId, right: Ast.ExprId, str_ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        return try self.lowLevelExpr(.str_concat, &.{ left, right }, str_ty);
-    }
-
-    fn ifExpr(self: *Builder, cond: Ast.ExprId, then_expr: Ast.ExprId, else_expr: Ast.ExprId, ty: Type.TypeId) Allocator.Error!Ast.ExprId {
-        const branches = [_]Ast.IfBranch{.{ .cond = cond, .body = then_expr }};
-        return try self.program.addExpr(.{
-            .ty = ty,
-            .data = .{ .if_ = .{
-                .branches = try self.program.addIfBranchSpan(&branches),
-                .final_else = else_expr,
-            } },
-        });
     }
 
     const HostedTryInfo = struct {

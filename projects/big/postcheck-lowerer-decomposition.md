@@ -7,55 +7,55 @@ structs, and each of those files contains a *second* struct that
 duplicates a large slice of the first because there is no free-function
 layer for a helper to live in.
 
-`src/postcheck/monotype/lower.zig` is 52,019 lines. Two of its
-top-level declarations account for 44,174 of them:
+`src/postcheck/monotype/lower.zig` is dominated by two structs:
 
-- `const Builder`: L2124–9652 (7,528 lines, 238 methods)
-- `const BodyContext`: L13096–49742 (**36,646 lines**, 1,154 methods)
+- `const Builder`: ~7,100 lines, 220 methods
+- `const BodyContext`: ~36,200 lines, 1,139 methods
 
-They share 53 method names. Thirty-six of those pairs have ≥0.70
-normalized-body similarity, ~470 lines, in two coherent families:
+They share 38 method names. Normalizing away receiver plumbing
+(`self.program.` versus `self.builder.` versus `self.`), 26 of those
+pairs are ≥0.85 similar, about 254 lines. The coherent cluster is const
+restoration: `restoreConstData` (identical), `restoreConstListData`
+(identical), `restoreConstRecord`, `restoreConstTuple`,
+`restoreConstList`, `restoreConstTagPayloads` (all at or above 0.98).
+Both copies are live: `Builder`'s reaches production through
+`restoreConstNodeAtTypeWithStaticRoot`, which `lowerStaticDataRequest`
+and the codec paths call, so this cluster needs extraction rather than
+deletion. Smaller live pairs: `bindPatLocals` (0.98),
+`stmtDependsOnFreeLocal` (0.85), `lowerCallableEvalBindingValue` (0.88),
+`recordFieldByTextOptional` (0.89), `bindTypedLocalLocals`,
+`constBoxPayloadType`, `constListElemType` (identical).
 
-- **Inspect derivation**: `inspectBody` (`:8769` / `:14738`),
-  `toInspectCall` (`:8808` / `:14777`), `inspectTuple`
-  (`:8859` / `:14869`), `inspectRecord` (`:8876` / `:14886`),
-  `inspectFieldSlot` (`:8903` / `:14908`), `inspectTagUnion`
-  (`:8998` / `:14940`), `inspectList` (`:9070` / `:15012`),
-  `inspectListStep`, `inspectCall`, `inspectDefForType`,
-  `inspectTagBody`, `uninhabitedInspect`.
-- **Const restoration**: `restoreConstData` (`:8547` / `:29646`,
-  0.99 similar), `restoreConstRecord` (0.98), `restoreConstList`
-  (0.98), `restoreConstListData` (0.99), `restoreConstTuple` (0.97),
-  `restoreConstTagPayloads` (0.97).
+These numbers are smaller than this project's first draft because two
+clusters turned out to be dead rather than duplicated, and were deleted:
+`Builder`'s whole inspect family (13 functions, and `toInspectCall` with
+it), then the expression helpers that had served only it (`stringExpr`,
+`concatExpr`, `lowLevelExpr`, `intLiteralExpr`, `ifExpr`). **Check
+reachability before filing a pair as duplicated.** Two of this doc's
+original findings did not survive that check.
 
-Plus scattered singles: `bindPatLocals` (`:7994` / `:15974`, 0.96),
-`stmtDependsOnFreeLocal`, `lowerCallableEvalBindingValue`,
-`recordFieldByTextOptional`, `ifExpr`, `lowLevelExpr`, `stringExpr`,
-`intLiteralExpr`, `constBoxPayloadType`, `constListElemType`,
-`typeHasBuiltinOwner`, `bindTypedLocalLocals`, `removeBoundLocals`.
+One thing that made those clusters hard to see is worth stating,
+because it will hide the next one too: the repo's dead-code lint is
+name-based, so a dead `Builder.stringExpr` looks used as long as a live
+`BodyContext.stringExpr` is called somewhere in the file. Duplicate
+method names across containers defeat the lint that would otherwise
+find the duplication. The compiler is the authority here: deleting a
+candidate and building is the check that works, and it is how
+`removeBoundLocals` was caught still being called (as a bare identifier,
+which a `self.name(` search misses).
 
-Most of these pairs differ only in receiver plumbing—`self.program.addExpr`
-versus `self.addExpr`, `self.symbols` versus `self.builder.symbols`. That
-is precisely the shape that stays byte-identical until one day it
-doesn't: `toInspectCall` has already diverged in capability (see
-[one-value-semantics-layer.md](one-value-semantics-layer.md)).
+The same structure repeats in `src/postcheck/boxy/lower.zig`:
 
-The same structure repeats in `src/postcheck/boxy/lower.zig`
-(47,107 lines):
+- `const ProcedureBuilder`: ~10,700 lines
+- `const ProcBodyBuilder`: ~25,100 lines
 
-- `const ProcedureBuilder`: L994–11713 (10,718 lines, 245 methods)
-- `const ProcBodyBuilder`: L11714–36863 (25,148 lines, 747 methods)
-
-with 17 shared method names, and again the same pattern of one copy
-being modernized while the other is not: `childRolesMatch` is a
-`std.meta.eql`-fallback `if`-chain in `ProcedureBuilder` (`:4084`)
-and an exhaustive switch in `ProcBodyBuilder` (`:36158`).
-`findMatchingTagPayloadInRep` (`:4064` / `:36138`),
-`repSubtreeHasDescriptorInner` (`:3999` / `:36031`),
-`descriptorArgumentIdentityRep` (`:4159` / `:36218`),
-`findMatchingChildBySourceType` (`:4025` / `:36078`),
-`structuralWrapperBackingRep` (`:4144` / `:35467` neighborhood),
-`recordFieldNameMatches`, `tagLabelNameMatches` complete the set.
+Its 17 shared method names were representation queries, and those have
+since moved onto the plan as `Plan.RepQuery` / `Plan.NamedRepQuery` with
+a lint holding them there. The `childRolesMatch` divergence this doc
+originally cited (two `std.meta.eql`-fallback `if` chains against one
+exhaustive switch) was resolved by that move, which kept the exhaustive
+version. What remains in `lower.zig` is emit-side state, which is the
+part the scope split actually justifies.
 
 Beyond the cross-struct doubles, `monotype/lower.zig` carries 109
 function names defined more than once in the file, and ~800 lines of
