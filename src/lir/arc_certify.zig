@@ -1735,7 +1735,7 @@ const Certifier = struct {
         mutations: ?*std.ArrayList(OwnershipMutation),
     ) CertifyError!void {
         if (value == no_value) return;
-        if (state.claimsOf(value) != 0) {
+        if (state.claimsOf(value) != 0 and !self.hasIntactSurplusUnit(state, value)) {
             return self.fail("consumed partially dismantled local {d}", .{@intFromEnum(local)});
         }
         if (state.balanceOf(value) < 1) {
@@ -1892,6 +1892,22 @@ const Certifier = struct {
         };
     }
 
+    /// Whether the value still holds an intact unit beyond the one being
+    /// dismantled. A container's claim bits are unique, so an outstanding
+    /// claim set can only ever describe a single unit's worth of field takes
+    /// and residual releases; any further unit is untouched and may be
+    /// transferred or released whole. ARC relies on this when a value is both
+    /// projected into a sibling and moved whole - `{ level, world:
+    /// World.new(level) }` - which it lowers as an incref of the aggregate
+    /// followed by dismantling the surplus. The claims stay outstanding
+    /// against the remaining unit, so the terminal leak check still proves
+    /// every stored unit was spent exactly once.
+    fn hasIntactSurplusUnit(self: *Certifier, state: *const State, value: ValueId) bool {
+        if (state.claimsOf(value) == 0) return false;
+        if (state.balanceOf(value) < 2) return false;
+        return self.requiredClaimMask(value) != null;
+    }
+
     /// Aggregate consumption: one unit moves into the holder. The emitted
     /// trailing incref restores the operand's own unit, so the balance may go
     /// transiently negative here; the per-path terminal balance check flags a
@@ -1903,7 +1919,7 @@ const Certifier = struct {
         holder_value: ValueId,
     ) CertifyError!void {
         if (value == no_value) return;
-        if (state.claimsOf(value) != 0) {
+        if (state.claimsOf(value) != 0 and !self.hasIntactSurplusUnit(state, value)) {
             return self.fail(
                 "partially dismantled value originating at local {d} moved into an aggregate",
                 .{@intFromEnum(self.values.items[value].origin)},
@@ -4671,7 +4687,7 @@ const Certifier = struct {
             self.diag.context_proc = self.current_proc;
             return self.fail("release of unbound local {d}", .{@intFromEnum(local)});
         }
-        if (state.claimsOf(value) != 0) {
+        if (state.claimsOf(value) != 0 and !self.hasIntactSurplusUnit(state, value)) {
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
             return self.fail("whole release of partially dismantled local {d}", .{@intFromEnum(local)});
@@ -6722,6 +6738,66 @@ test "certify rejects an RC field read through a released struct representation"
     _ = try f.addProc(&.{record}, body, .i64);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "dead refcounted local") != null);
+}
+
+test "certify accepts a retained record moved whole beside a take of its field" {
+    // ARC lowers `{ level, world: World.new(level) }` as an incref of the
+    // whole record, a take of the field the sibling needs, and residual
+    // releases of the rest. The claims describe the dismantled unit only, so
+    // the retained surplus unit is still intact and may move into the holder.
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const holder_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = f.pair_str },
+    });
+    const pair = try f.local(f.pair_str);
+    const taken = try f.local(.str);
+    const dropped = try f.local(.str);
+    const holder = try f.local(holder_layout);
+
+    const ret = try f.ret(holder);
+    const holder_assign = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = holder,
+        .fields = try f.store.addLocalSpan(&.{ taken, pair }),
+        .next = ret,
+    } });
+    const release_dropped = try f.decrefStmt(dropped, .str, holder_assign);
+    const read_dropped = try fieldReadStmt(&f, dropped, pair, 1, release_dropped);
+    const read_taken = try fieldReadStmt(&f, taken, pair, 0, read_dropped);
+    const body = try f.increfStmt(pair, f.pair_str, read_taken);
+    _ = try f.addProc(&.{pair}, body, holder_layout);
+    try f.certify();
+}
+
+test "certify rejects a dismantled record moved whole without a retained surplus" {
+    // The same shape without the incref has one unit only: the field take and
+    // the residual release already spent it, so moving the record whole would
+    // hand out ownership twice.
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const holder_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = f.pair_str },
+    });
+    const pair = try f.local(f.pair_str);
+    const taken = try f.local(.str);
+    const dropped = try f.local(.str);
+    const holder = try f.local(holder_layout);
+
+    const ret = try f.ret(holder);
+    const holder_assign = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = holder,
+        .fields = try f.store.addLocalSpan(&.{ taken, pair }),
+        .next = ret,
+    } });
+    const release_dropped = try f.decrefStmt(dropped, .str, holder_assign);
+    const read_dropped = try fieldReadStmt(&f, dropped, pair, 1, release_dropped);
+    const body = try fieldReadStmt(&f, taken, pair, 0, read_dropped);
+    _ = try f.addProc(&.{pair}, body, holder_layout);
+
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "partially dismantled") != null);
 }
 
 test "certify accepts a fully dismantled record via field takes" {
