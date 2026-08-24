@@ -4688,8 +4688,29 @@ pub const Coordinator = struct {
                 .depth = mod.depth,
                 .imported_modules = imported_modules,
                 .validation = mod.validation,
+                .is_entry_module = self.isEntryModule(pkg, module_id),
             },
         });
+    }
+
+    /// Whether this module is the build's entry module: the root module of the
+    /// app package, which is the file the compiler was pointed at.
+    ///
+    /// Only that module may be classified `default_app`, and so only it
+    /// receives the synthetic `echo!` hosted lambda. Any other headerless
+    /// module with a valid `main!` is an ordinary type module, whichever
+    /// package it lives in.
+    ///
+    /// This is the same shape as the `is_platform_pkg` gate on the hosted
+    /// transform in `handleCanonicalized`, and for the same reason: a
+    /// host-reaching capability must stay tied to the one package entitled to
+    /// it instead of falling out of a file-local property that any dependency
+    /// can satisfy.
+    fn isEntryModule(self: *const Coordinator, pkg: *const PackageState, module_id: ModuleId) bool {
+        const app_package_name = self.app_package_name orelse return false;
+        if (!std.mem.eql(u8, pkg.name, app_package_name)) return false;
+        const root_module_id = pkg.root_module_id orelse return false;
+        return root_module_id == module_id;
     }
 
     /// Schedule an external import in its owning package
@@ -5112,6 +5133,7 @@ pub const Coordinator = struct {
             known_modules.items,
             task.imported_modules,
             task.validation,
+            task.is_entry_module,
         );
 
         const canonicalize_ns = readStageTimer(self.roc_ctx.std_io, &canonicalize_timer);

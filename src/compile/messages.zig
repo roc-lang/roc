@@ -103,6 +103,11 @@ pub const CanonicalizeTask = struct {
     imported_modules: []const CanonicalizeImport,
     /// Post-canonicalization validation this module receives.
     validation: can.Can.Validation,
+    /// True only for the module the compiler was pointed at. Gates the
+    /// `default_app` classification, and with it the synthetic `echo!` hosted
+    /// lambda, so a module inside a package cannot reach the host by defining
+    /// `main!`. See `Can.ModuleInitContext.is_entry_module`.
+    is_entry_module: bool,
 };
 
 /// Task to type-check a canonicalized module

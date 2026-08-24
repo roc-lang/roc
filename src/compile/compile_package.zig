@@ -425,6 +425,7 @@ pub fn canonicalizeModuleWithSiblings(
     additional_known_modules: []const KnownModule,
     pre_resolved_imports: []const messages.CanonicalizeImport,
     validation: Can.Validation,
+    is_entry_module: bool,
 ) Allocator.Error!void {
     const gpa = roc_ctx.gpa;
 
@@ -550,6 +551,7 @@ pub fn canonicalizeModuleWithSiblings(
         .imported_modules = &module_envs_map,
         .compiler_version = build_options.compiler_version,
         .validation = validation,
+        .is_entry_module = is_entry_module,
     });
     czer.source_dir = root_dir;
     try czer.canonicalizeFile();

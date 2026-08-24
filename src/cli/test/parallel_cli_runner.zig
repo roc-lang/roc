@@ -1016,9 +1016,23 @@ const subcommand_cases = [_]CliCase{
     // its target through an import, so no entry can reach the root and the
     // declaration is always missing from the section.
     .{ .id = 0, .suite = .subcommands, .name = "platform root hosted declaration reports without panic", .body = .{ .command = .{ .args = &.{ "build", "--no-cache", "--target=x64musl" }, .roc_file = "test/hosted-section-errors/platform_root_hosted_declaration/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid hosted section" }, .{ .stream = .stderr, .text = "helper" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "did not say why" }, .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // Regression suite for the package/platform effect boundary: a package is
+    // pure, and only a platform may reach the host. The other half lives in
+    // `src/compile/test/package_effect_boundary_test.zig`; keep the two in
+    // sync. What lands here is what the in-process suite cannot reach: routes
+    // refused by package resolution or module discovery, which the coordinator
+    // harness there never runs, plus anything that guards against a panic,
+    // since a panic would take that runner down with it.
     .{ .id = 0, .suite = .subcommands, .name = "package effect boundary: a package cannot depend on a platform", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/package-effect-boundary/platform_dependency/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid package dependency" }, .{ .stream = .stderr, .text = "Only apps may depend on platforms" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "package effect boundary: a package cannot gain builtin privileges by shipping a Builtin module", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/package-effect-boundary/builtin_module/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "reference has no value" }, .{ .stream = .stderr, .text = "declaration has no value" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "package effect boundary: a package header cannot declare a platform dependency", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/package-effect-boundary/platform_keyword_dependency/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid package dependency" }, .{ .stream = .stderr, .text = "HeaderParseFailed" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    // The one entry here that guards a benign package rather than an attack. A
+    // package module that also defines `main!` used to be treated as a
+    // published entrypoint root, and publishing it panicked the *consumer's*
+    // compiler, `roc check` included, so editors and CI took it too. A panic
+    // aborts the process and cannot be caught in-process, which is why this
+    // lives in the subprocess suite rather than alongside the Zig tests.
+    .{ .id = 0, .suite = .subcommands, .name = "package effect boundary: a package with a stray main! does not panic its consumer", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/package-effect-boundary/stray_main_in_package/app.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "no checked procedure template" } } } } },
     // A platform's own hosted declaration is named in its hosted section without
     // a module, since the platform cannot import itself.
     .{ .id = 0, .suite = .subcommands, .name = "platform root hosted declaration binds through an unqualified hosted entry", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/platform_root_hosted_entry/platform/main.roc", .not_contains = &.{ .{ .stream = .stderr, .text = "invalid hosted section" }, .{ .stream = .stderr, .text = "panic" } } } } },
