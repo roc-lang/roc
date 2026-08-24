@@ -145,14 +145,12 @@ independently verifiable by unchanged snapshot output.
    `removeBoundLocals`, `recordFieldByTextOptional`. Each is small
    enough that "move it and delete the copy" is one commit.
 
-5. **Do the same for `boxy/lower.zig`.** The 17 shared
-   `ProcedureBuilder`/`ProcBodyBuilder` helpers are representation
-   queries; they should not become free functions in `lower.zig` at
-   all—they belong on `Plan.ProgramPlan`, which is what
-   [../small/boxy-rep-queries-on-the-plan.md](../small/boxy-rep-queries-on-the-plan.md)
-   does. This project's contribution there is deleting the second
-   copy once the plan owns the first, and making every `ChildRole`
-   switch exhaustive on the way through.
+5. **`boxy/lower.zig`'s shared helpers are already handled.** The 17
+   `ProcedureBuilder`/`ProcBodyBuilder` doubles were representation
+   queries, and they now live on the plan as `Plan.RepQuery` /
+   `Plan.NamedRepQuery` with a lint holding them there. What remains in
+   `lower.zig` for this project is the emit-side state, which is the
+   part the scope split actually justifies.
 
 6. **Reconcile every divergence deliberately as it is merged.** For
    each pair, the merged version is the union of capabilities unless
@@ -239,7 +237,5 @@ file with a 36k-line struct is also a build-throughput cost.
 - [one-value-semantics-layer.md](one-value-semantics-layer.md)—
   removes the inspect family from both scopes by moving it out of the
   file entirely; land whichever is convenient first, they compose.
-- [../small/boxy-rep-queries-on-the-plan.md](../small/boxy-rep-queries-on-the-plan.md)—
-  the destination for step 5's helpers.
 - [unreachable-rationale-comments.md](unreachable-rationale-comments.md)—
   same "CI lint with a shrinking allowlist" enforcement shape.

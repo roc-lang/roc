@@ -156,10 +156,6 @@ already diverged in behavior, not just in text.
 - [small/erased-ownership-as-lir-data.md](small/erased-ownership-as-lir-data.md)—
   the lowerer records erased ownership and the certifier re-derives it
   with a copy of the rule; `.boxy` has no producer at all.
-- [small/boxy-rep-queries-on-the-plan.md](small/boxy-rep-queries-on-the-plan.md)—
-  ~45 representation queries duplicated between boxy planning and boxy
-  lowering; `childRolesMatch` exists three times with two different
-  exhaustiveness postures.
 - [small/lir-call-result-fusion-framework.md](small/lir-call-result-fusion-framework.md)—
   `return_slot` and `str_append` are the same pass twice, sharing a
   byte-identical liveness guard that nothing keeps in sync.
@@ -180,9 +176,19 @@ build if a second definition of any of them appears. None of the copies
 had been forced by a type barrier: `MonoType.Primitive` is a plain alias
 of `checked.CheckedPrimitive`.
 
+Boxy representation queries on the plan have landed: the ~45 queries
+Boxy lowering re-derived are now `Plan.RepQuery` / `Plan.NamedRepQuery`,
+one definition each, and a `structural_test.zig` lint keeps every
+consumer calling them. This closed a live plan/lower disagreement—the
+planner's `repSubtreeHasDescriptorInOtherChildren` skips siblings the
+selected child's subtree already covers, and both lowering copies
+lacked that carve-out, so lowering could refuse an unwrap the planner
+had planned. It also separated two predicates a shared name had blurred:
+exact-role equality and `sameChildRoleKind`, which answers false for
+every role carrying a payload.
+
 Within the rest of this batch, the two `big` projects compose in either
-order. `boxy-rep-queries-on-the-plan` should land before or with
-`one-value-semantics-layer`. The rest are independent.
+order. The rest are independent.
 
 ## Recommended order
 

@@ -1500,6 +1500,62 @@ test "each primitive mapping has exactly one definition" {
     try std.testing.expect(owner_fn.return_type.? == check.StaticDispatchRegistry.BuiltinOwner);
 }
 
+test "boxy representation queries have one definition on the plan" {
+    // Boxy planning decides an unwrap, a descriptor argument, or a dictionary
+    // argument by asking these; Boxy lowering emits that decision by asking the
+    // same ones. A second copy lets the two disagree about the program they are
+    // both describing, which is how the planner's
+    // `repSubtreeHasDescriptorInOtherChildren` carve-out came to be absent from
+    // both lowering copies. Every consumer goes through `Plan.RepQuery` /
+    // `Plan.NamedRepQuery`; none re-derives.
+    const consumers = [_][]const u8{
+        @embedFile("boxy/lower.zig"),
+        @embedFile("boxy/layouts.zig"),
+    };
+    const shared = [_][]const u8{
+        "repSubtreeHasDescriptor",
+        "repSubtreeHasDescriptorInner",
+        "repSubtreeHasDescriptorInOtherChildren",
+        "repSubtreeHasDictionary",
+        "repSubtreeHasDictionaryInner",
+        "repSubtreeHasDictionaryInOtherChildren",
+        "repSubtreeContainsRep",
+        "repSubtreeContainsRepInner",
+        "structuralWrapperBackingRep",
+        "descriptorArgumentIdentityRep",
+        "dictionaryArgumentIdentityRep",
+        "workerChildCanMatchUnwrappedCallRep",
+        "workerChildCanMatchUnwrappedCallRepForDictionaries",
+        "functionChildren",
+        "functionIdentityRep",
+        "requiredSingleChild",
+        "sameChildRoleKind",
+        "childRolesMatch",
+        "findMatchingChildByRole",
+        "findMatchingChildBySourceType",
+        "findMatchingDictionaryChildBySourceType",
+        "findMatchingTagPayloadInRep",
+        "findMatchingTagPayloadInRowExtension",
+        "findMatchingTagPayloadInRowExtensionInner",
+        "recordFieldNameMatches",
+        "tagLabelNameMatches",
+    };
+    const plan_source = @embedFile("boxy/plan.zig");
+    inline for (shared) |name| {
+        const decl = "fn " ++ name ++ "(";
+        for (consumers) |source| {
+            try std.testing.expectEqual(@as(usize, 0), countDefinitions(source, decl));
+        }
+        try std.testing.expectEqual(@as(usize, 1), countDefinitions(plan_source, decl));
+    }
+
+    // The exact-role and same-kind role comparisons are different predicates
+    // and must not collapse into each other: `sameChildRoleKind` answers false
+    // for every role carrying a payload.
+    try expectContains(plan_source, "pub fn sameChildRoleKind(");
+    try expectNotContains(plan_source, "fn sameChildRole(");
+}
+
 test "boxy stage tests share one set of checked-type fixtures" {
     const sources = [_][]const u8{
         @embedFile("boxy/lower.zig"),

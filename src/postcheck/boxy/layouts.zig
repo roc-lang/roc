@@ -178,6 +178,11 @@ const Builder = struct {
     generated_field_names_list_layout: ?layout.Idx = null,
     generated_tag_union_spec_layout: ?layout.Idx = null,
 
+    /// Shared read-only queries over the representation plan.
+    fn repQuery(self: *const Builder) Plan.RepQuery {
+        return .{ .plan = self.program, .allocator = self.allocator };
+    }
+
     fn init(allocator: Allocator, program: *const Plan.ProgramPlan, store: *layout.Store) Builder {
         return .{
             .allocator = allocator,
@@ -262,7 +267,7 @@ const Builder = struct {
             .value = worker_value,
         };
 
-        if (try self.functionChildren(worker.rep)) |function| {
+        if (self.repQuery().functionChildren(worker.rep)) |function| {
             const start = self.layoutValueStart(&self.worker_layout_values);
             try self.appendFunctionLayouts(&self.worker_layout_values, .worker, function);
             worker_layout.args = self.layoutSpanFrom(start, function.arg_count);
@@ -312,7 +317,7 @@ const Builder = struct {
             .worker = root.worker,
         };
 
-        if (try self.functionChildren(root.host_rep)) |function| {
+        if (self.repQuery().functionChildren(root.host_rep)) |function| {
             if (root.wrapper_kind == .host_shaped_wrapper) {
                 const host_start = self.layoutValueStart(&self.root_layout_values);
                 try self.appendFunctionLayouts(&self.root_layout_values, .host, function);
@@ -326,64 +331,11 @@ const Builder = struct {
         try self.root_layouts.append(self.allocator, root_layout);
     }
 
-    const FunctionChildren = struct {
-        rep: Plan.TypeRepId,
-        args_start: u32,
-        arg_count: u32,
-        ret: Plan.TypeRepId,
-    };
-
-    fn functionChildren(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!?FunctionChildren {
-        const identity = try self.functionIdentityRep(rep_id);
-        const rep = self.program.representations.items[@intFromEnum(identity)];
-        if (rep.kind != .erased_callable) return null;
-
-        const children = self.program.childSlice(rep.children);
-        var args_start: ?u32 = null;
-        var arg_count: u32 = 0;
-        var ret: ?Plan.TypeRepId = null;
-        for (children, 0..) |child, i| {
-            if (child.role == .function_arg) {
-                if (args_start == null) args_start = @intCast(i);
-                arg_count += 1;
-            } else if (child.role == .function_ret) {
-                ret = child.rep;
-            }
-        }
-        return .{
-            .rep = identity,
-            .args_start = args_start orelse 0,
-            .arg_count = arg_count,
-            .ret = ret orelse boxyLayoutInvariant("function representation had no return child"),
-        };
-    }
-
-    fn functionIdentityRep(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!Plan.TypeRepId {
-        var current = rep_id;
-        var depth: u16 = 0;
-        while (true) {
-            if (depth == 1024) boxyLayoutInvariant("function root alias chain exceeded boxy layout limit");
-            depth += 1;
-
-            const rep = self.program.representations.items[@intFromEnum(current)];
-            if (rep.kind == .alias) {
-                current = self.requiredSingleChild(current, .alias_backing).rep;
-            } else if (rep.kind == .nominal) {
-                switch (rep.kind.nominal) {
-                    .transparent => current = self.requiredSingleChild(current, .nominal_backing).rep,
-                    .opaque_nominal, .builtin_other => return current,
-                }
-            } else {
-                return current;
-            }
-        }
-    }
-
     fn appendFunctionLayouts(
         self: *Builder,
         values: *std.ArrayList(RuntimeLayout),
         mode: LayoutMode,
-        function: FunctionChildren,
+        function: Plan.FunctionChildren,
     ) Allocator.Error!void {
         const identity_children = self.program.childSlice(self.program.representations.items[@intFromEnum(function.rep)].children);
         for (identity_children[function.args_start..][0..function.arg_count]) |child| {
@@ -524,7 +476,7 @@ const Builder = struct {
     }
 
     fn immediateBoxLayout(self: *Builder, mode: LayoutMode, rep_id: Plan.TypeRepId) Allocator.Error!?RuntimeLayout {
-        const child = self.requiredSingleChild(rep_id, .box_payload);
+        const child = self.repQuery().requiredSingleChild(rep_id, .box_payload);
         // Box payloads reach here behind alias chains (`I64ToI64 : I64 -> I64`);
         // the erased-callable collapse below is a host ABI convention keyed on
         // the underlying value type, so resolve aliases before classifying.
@@ -551,7 +503,7 @@ const Builder = struct {
             depth += 1;
             const rep = self.program.representations.items[@intFromEnum(current)];
             if (rep.kind != .alias) return current;
-            current = self.requiredSingleChild(current, .alias_backing).rep;
+            current = self.repQuery().requiredSingleChild(current, .alias_backing).rep;
         }
     }
 
@@ -559,12 +511,12 @@ const Builder = struct {
         const rep = self.program.representations.items[@intFromEnum(rep_id)];
         if (rep.descriptor == null) return null;
         if (rep.kind == .alias) {
-            return try self.backingDescriptorPayloadLayout(self.requiredSingleChild(rep_id, .alias_backing).rep);
+            return try self.backingDescriptorPayloadLayout(self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep);
         }
         if (rep.kind == .nominal) {
             switch (rep.kind.nominal) {
                 .transparent => if (rep.declared_fields.len == 0) {
-                    return try self.backingDescriptorPayloadLayout(self.requiredSingleChild(rep_id, .nominal_backing).rep);
+                    return try self.backingDescriptorPayloadLayout(self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep);
                 },
                 .builtin_other => if (self.singleChild(rep_id, .nominal_backing)) |child| {
                     return try self.backingDescriptorPayloadLayout(child.rep);
@@ -644,17 +596,12 @@ const Builder = struct {
         var found: ?Plan.RepChild = null;
         const rep = self.program.representations.items[@intFromEnum(rep_id)];
         for (self.program.childSlice(rep.children)) |child| {
-            if (sameChildRole(child.role, role)) {
+            if (Plan.sameChildRoleKind(child.role, role)) {
                 if (found != null) boxyLayoutInvariant("representation had duplicate required child role");
                 found = child;
             }
         }
         return found;
-    }
-
-    fn requiredSingleChild(self: *Builder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) Plan.RepChild {
-        return self.singleChild(rep_id, role) orelse
-            boxyLayoutInvariant("representation was missing required child role");
     }
 };
 
@@ -672,13 +619,13 @@ const GraphBuilder = struct {
         const rep = self.parent.program.representations.items[index];
         if (self.descriptor_payload) {
             if (rep.kind == .alias) {
-                return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .alias_backing).rep);
+                return try self.inputForRep(self.parent.repQuery().requiredSingleChild(rep_id, .alias_backing).rep);
             }
             if (rep.kind == .nominal) {
                 switch (rep.kind.nominal) {
                     .transparent => {
                         if (rep.declared_fields.len == 0) {
-                            return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .nominal_backing).rep);
+                            return try self.inputForRep(self.parent.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep);
                         }
                     },
                     .opaque_nominal, .builtin_other => {},
@@ -707,7 +654,7 @@ const GraphBuilder = struct {
         }
 
         if (rep.kind == .alias) {
-            return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .alias_backing).rep);
+            return try self.inputForRep(self.parent.repQuery().requiredSingleChild(rep_id, .alias_backing).rep);
         }
         if (rep.kind == .nominal) {
             switch (rep.kind.nominal) {
@@ -724,7 +671,7 @@ const GraphBuilder = struct {
                             fields });
                         return .{ .local = node };
                     }
-                    return try self.inputForRep(self.parent.requiredSingleChild(rep_id, .nominal_backing).rep);
+                    return try self.inputForRep(self.parent.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep);
                 },
                 .opaque_nominal, .builtin_other => {},
             }
@@ -741,11 +688,11 @@ const GraphBuilder = struct {
         return switch (rep.kind) {
             .record, .record_unbound => .{ .struct_ = try self.recordFields(rep) },
             .tuple => .{ .struct_ = try self.tupleFields(rep) },
-            .list => .{ .list = try self.inputForRep(self.parent.requiredSingleChild(rep_id, .list_elem).rep) },
-            .box => .{ .box = try self.inputForRep(self.parent.requiredSingleChild(rep_id, .box_payload).rep) },
+            .list => .{ .list = try self.inputForRep(self.parent.repQuery().requiredSingleChild(rep_id, .list_elem).rep) },
+            .box => .{ .box = try self.inputForRep(self.parent.repQuery().requiredSingleChild(rep_id, .box_payload).rep) },
             .tag_union => .{ .tag_union = try self.tagPayloads(rep, .concrete_runtime) },
             .nominal => |kind| switch (kind) {
-                .transparent => .{ .nominal = try self.inputForRep(self.parent.requiredSingleChild(rep_id, .nominal_backing).rep) },
+                .transparent => .{ .nominal = try self.inputForRep(self.parent.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep) },
                 .opaque_nominal, .builtin_other => boxyLayoutInvariant("opaque or unsupported builtin nominal reached graph layout"),
             },
             .alias,
@@ -891,26 +838,6 @@ fn repHasRecordFields(program: *const Plan.ProgramPlan, rep: Plan.TypeRepresenta
         if (child.role == .record_field) return true;
     }
     return false;
-}
-
-fn sameChildRole(a: Plan.ChildRole, b: Plan.ChildRole) bool {
-    return switch (a) {
-        .alias_backing => b == .alias_backing,
-        .nominal_backing => b == .nominal_backing,
-        .record_ext => b == .record_ext,
-        .tag_ext => b == .tag_ext,
-        .list_elem => b == .list_elem,
-        .box_payload => b == .box_payload,
-        .alias_arg,
-        .nominal_arg,
-        .nominal_padding_field,
-        .record_field,
-        .tuple_elem,
-        .function_arg,
-        .function_ret,
-        .tag_payload,
-        => false,
-    };
 }
 
 fn boxyLayoutInvariant(comptime message: []const u8) noreturn {

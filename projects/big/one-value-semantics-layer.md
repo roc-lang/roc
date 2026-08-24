@@ -286,9 +286,6 @@ sharing.
   the god-structs that make helpers uncopyable-without-copying; the
   `Builder`/`BodyContext` inspect double is removed there or here,
   whichever lands first.
-- [../small/boxy-rep-queries-on-the-plan.md](../small/boxy-rep-queries-on-the-plan.md)—
-  the `Ctx` instance for `Plan.TypeRepresentation` wants the plan's
-  queries to already be plan methods.
 - [../small/lambda-mono-oracle-fidelity.md](../small/lambda-mono-oracle-fidelity.md)—
   the differential-oracle pattern step 7 generalizes.
 - [../small/cross-phase-coverage-parity-tests.md](../small/cross-phase-coverage-parity-tests.md)—
