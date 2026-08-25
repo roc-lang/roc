@@ -31,7 +31,6 @@
 //! the matched chain is that local's only use.
 
 const std = @import("std");
-const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -71,22 +70,12 @@ const StrAppendPass = struct {
     variants: std.AutoHashMap(VariantKey, LIR.LirProcSpecId),
 
     fn transformProc(self: *StrAppendPass, proc_id: LIR.LirProcSpecId) ResourceError!void {
-        const proc = self.store.getProcSpec(proc_id);
-        if (proc.body == null or proc.hosted != null or proc.abi != .roc) return;
-        const body = proc.body.?;
+        const body = body_clone.rewritableProcBody(self.store, proc_id) orelse return;
 
-        var work = std.ArrayList(CFStmtId).empty;
-        defer work.deinit(self.store.allocator);
-        var visited = collections.DenseMap(CFStmtId, void).init(self.store.allocator);
-        defer visited.deinit();
-
-        try work.append(self.store.allocator, body);
-        while (work.pop()) |stmt_id| {
-            const entry = try visited.getOrPut(stmt_id);
-            if (entry.found_existing) continue;
-
+        var stmts = try body_clone.ReachableStmts.init(self.store, body);
+        defer stmts.deinit();
+        while (try stmts.next()) |stmt_id| {
             _ = try self.rewriteAt(body, stmt_id);
-            try body_clone.appendSuccessors(self.store, &work, stmt_id);
         }
     }
 
@@ -117,7 +106,7 @@ const StrAppendPass = struct {
 
         if (!isStrLayout(self.store.getLocal(accumulator).layout_idx)) return false;
 
-        if (!try self.chainIsSingleUse(proc_body, chain.items)) return false;
+        if (!try body_clone.chainIsSingleUse(self.store, proc_body, chain.items)) return false;
 
         const variant = try self.appendVariant(call_stmt.proc);
 
@@ -140,19 +129,6 @@ const StrAppendPass = struct {
         return true;
     }
 
-    /// Every local in `chain` must have exactly one read across the proc: the
-    /// call result is aliased or concatenated exactly once, each alias feeds the
-    /// next link exactly once, and the final value is the matched concat's only
-    /// consumer. Any extra read means the fusion would orphan a still-live local.
-    fn chainIsSingleUse(self: *StrAppendPass, proc_body: CFStmtId, chain: []const LocalId) ResourceError!bool {
-        var reads = try body_clone.countReachableReads(self.store, proc_body);
-        defer reads.deinit();
-        for (chain) |local| {
-            if (reads.get(local) != 1) return false;
-        }
-        return true;
-    }
-
     fn appendVariant(self: *StrAppendPass, source: LIR.LirProcSpecId) ResourceError!LIR.LirProcSpecId {
         const key = VariantKey{ .source = source };
         if (self.variants.get(key)) |variant| return variant;
@@ -163,64 +139,20 @@ const StrAppendPass = struct {
     }
 
     fn createAppendVariant(self: *StrAppendPass, source: LIR.LirProcSpecId) ResourceError!LIR.LirProcSpecId {
-        const source_spec = self.store.getProcSpec(source);
-        const source_body = source_spec.body orelse unreachable;
-        const source_args = self.store.getLocalSpan(source_spec.args);
-
         const accumulator = try self.store.addLocal(.{ .layout_idx = .str });
-
-        var variant_args = try std.ArrayList(LocalId).initCapacity(self.store.allocator, source_args.len + 1);
-        defer variant_args.deinit(self.store.allocator);
-        variant_args.appendAssumeCapacity(accumulator);
-
-        for (0..source_args.len) |index| {
-            const source_arg = GuardedList.at(source_args, index);
-            const arg = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(source_arg).layout_idx });
-            variant_args.appendAssumeCapacity(arg);
-        }
-
-        var cloner = try Cloner.init(self.store, .{ .accumulator = accumulator });
-        defer cloner.deinit();
-
-        for (0..source_args.len) |index| {
-            const source_arg = GuardedList.at(source_args, index);
-            const variant_arg = variant_args.items[index + 1];
-            cloner.local_map[@intFromEnum(source_arg)] = variant_arg;
-        }
-
-        const source_frame = self.store.getLocalSpan(source_spec.frame_locals);
-        try cloner.new_locals.appendSlice(self.store.allocator, variant_args.items);
-        for (0..source_frame.len) |index| {
-            _ = try cloner.mapLocal(GuardedList.at(source_frame, index));
-        }
-
-        const body = try cloner.cloneStmt(source_body);
-
-        var frame_locals = try std.ArrayList(LocalId).initCapacity(self.store.allocator, cloner.new_locals.items.len);
-        defer frame_locals.deinit(self.store.allocator);
-        frame_locals.appendSliceAssumeCapacity(cloner.new_locals.items);
-        std.mem.sort(LocalId, frame_locals.items, {}, body_clone.localIdLessThan);
-        const unique_len = body_clone.uniqueSortedLocals(frame_locals.items);
-
-        const variant = try self.store.addProcSpec(.{
-            .name = self.store.freshSyntheticSymbol(),
-            .args = try self.store.addLocalSpan(variant_args.items),
-            .frame_locals = try self.store.addLocalSpan(frame_locals.items[0..unique_len]),
-            .body = body,
-            .ret_layout = .str,
-            .abi = .roc,
-        });
-        try self.store.copyProcDebugInfo(variant, source);
-
-        return variant;
+        return try body_clone.cloneCallVariant(
+            AppendRewriter,
+            self.store,
+            source,
+            .{ .accumulator = accumulator },
+            .{ .leading_args = &.{accumulator}, .ret_layout = .str },
+        );
     }
 };
 
 fn isStrLayout(layout_idx: layout_mod.Idx) bool {
     return layout_idx == .str;
 }
-
-const Cloner = body_clone.BodyCloner(AppendRewriter);
 
 /// Return rewriter that turns each source return into an append onto the
 /// destination accumulator, folding a direct `Str.concat` return into two

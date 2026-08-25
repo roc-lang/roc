@@ -141,6 +141,9 @@ pub const Reporter = struct {
     spin: usize = 0,
     thread: ?ThreadHandle = null,
     stop: bool = false,
+    /// Signaled when the reporter is done, so the background thread's timed
+    /// wait returns at once instead of running its tick out.
+    stop_event: std.Io.Event = .unset,
     finished: bool = false,
 
     /// Initialize a reporter and begin the wall clock. Call `deinit` when done.
@@ -334,21 +337,45 @@ pub const Reporter = struct {
 
     fn stopThread(self: *Reporter) void {
         if (comptime !supports_threads) return;
+        const thread = self.thread orelse return;
         self.mutex.lockUncancelable(self.std_io);
         self.stop = true;
         self.mutex.unlock(self.std_io);
-        if (self.thread) |t| {
-            t.join();
-            self.thread = null;
-        }
+        // Waking the thread is what bounds this join: the flag alone is
+        // invisible to a thread that is partway through a wait interval.
+        self.stop_event.set(self.std_io);
+        thread.join();
+        self.thread = null;
+    }
+
+    /// Wait up to `ns` for the reporter to finish. Returns true when the wait
+    /// ended because the reporter is finishing rather than because the
+    /// interval elapsed.
+    fn waitForStop(self: *Reporter, ns: u64) bool {
+        self.stop_event.waitTimeout(self.std_io, .{ .duration = .{
+            .raw = .fromNanoseconds(ns),
+            .clock = .awake,
+        } }) catch |err| switch (err) {
+            // A spurious wakeup lands here too; the loop below re-checks the
+            // stop flag and the draw threshold, so an early tick is harmless.
+            error.Timeout => return false,
+            error.Canceled => return true,
+        };
+        return true;
     }
 
     fn bgLoop(self: *Reporter) void {
-        const sleep_ns = if (self.always) mem_tick_ns else tick_ns;
+        const interval_ns = if (self.always) mem_tick_ns else tick_ns;
         const draws_every: u64 = if (self.always) tick_ns / mem_tick_ns else 1;
+        // An animation-only reporter draws nothing until the operation crosses
+        // the breakdown threshold, so the first wait runs all the way to it and
+        // only then does the redraw cadence start. `--timings` samples memory
+        // from the outset and keeps its cadence throughout.
+        var wait_ns: u64 = if (self.always) interval_ns else @max(self.threshold_ns, interval_ns);
         var wakeups: u64 = 0;
         while (true) {
-            self.std_io.sleep(std.Io.Duration.fromNanoseconds(sleep_ns), .awake) catch {};
+            if (self.waitForStop(wait_ns)) break;
+            wait_ns = interval_ns;
             self.mutex.lockUncancelable(self.std_io);
             if (self.stop) {
                 self.mutex.unlock(self.std_io);
@@ -846,4 +873,35 @@ test "slow non-terminal run without the timings flag prints nothing" {
     reporter.end();
     reporter.finish();
     try testing.expectEqualStrings("", buf.written());
+}
+
+test "stopping the animation thread does not wait out its interval" {
+    if (comptime !supports_threads) return;
+
+    var io_impl: std.Io.Threaded = .init(testing.allocator, .{});
+    defer io_impl.deinit();
+    const io = io_impl.io();
+
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+
+    var reporter = Reporter.init(.{
+        .std_io = io,
+        .writer = &buf.writer,
+        .op_label = "roc build",
+        .timings_flag = false,
+        // A terminal is what spawns the animation thread.
+        .is_tty = true,
+    });
+    reporter.start();
+    try testing.expect(reporter.thread != null);
+
+    const before = reporter.elapsedNs();
+    reporter.deinit();
+    const shutdown_ns = reporter.elapsedNs() - before;
+
+    // Shutdown must not block on the thread's wait interval. The bound is
+    // generous so a loaded machine cannot fail this, while still catching a
+    // shutdown that waits out a whole tick.
+    try testing.expect(shutdown_ns < tick_ns / 2);
 }

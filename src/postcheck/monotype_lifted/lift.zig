@@ -1567,52 +1567,26 @@ fn bindTypedLocalsTracked(allocator: Allocator, input: *const Ast.Program, bound
     }
 }
 
-fn bindPat(allocator: Allocator, input: *const Ast.Program, pat_id: Mono.PatId, bound: *BoundSet, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
-    switch (input.getPat(pat_id).data) {
-        .bind => |local| {
-            try bound.put(input, local);
-            try added.append(allocator, local);
-        },
-        .wildcard,
-        .int_lit,
-        .dec_lit,
-        .frac_f32_lit,
-        .frac_f64_lit,
-        .str_lit,
-        => {},
-        .str_pattern => |str| {
-            const steps = input.strPatternStepSpan(str.steps);
-            for (0..steps.len) |step_index| {
-                const step = GuardedList.at(steps, step_index);
-                if (step.capture) |capture| {
-                    try bindPat(allocator, input, capture, bound, added);
-                }
-            }
-        },
-        .as => |as| {
-            try bindPat(allocator, input, as.pattern, bound, added);
-            try bound.put(input, as.local);
-            try added.append(allocator, as.local);
-        },
-        .record => |fields| {
-            const destructs = input.recordDestructSpan(fields);
-            for (0..destructs.len) |field_index| try bindPat(allocator, input, GuardedList.at(destructs, field_index).pattern, bound, added);
-        },
-        .tuple => |items| {
-            const children = input.patSpan(items);
-            for (0..children.len) |child_index| try bindPat(allocator, input, GuardedList.at(children, child_index), bound, added);
-        },
-        .list => |list| {
-            const children = input.patSpan(list.patterns);
-            for (0..children.len) |child_index| try bindPat(allocator, input, GuardedList.at(children, child_index), bound, added);
-            if (list.rest) |rest| if (rest.pattern) |rest_pattern| try bindPat(allocator, input, rest_pattern, bound, added);
-        },
-        .tag => |tag| {
-            const payloads = input.patSpan(tag.payloads);
-            for (0..payloads.len) |payload_index| try bindPat(allocator, input, GuardedList.at(payloads, payload_index), bound, added);
-        },
-        .nominal => |backing| try bindPat(allocator, input, backing, bound, added),
+/// Records each bound local into a `BoundSet` and an ordered added-list.
+const BoundSetBinder = struct {
+    allocator: Allocator,
+    input: *const Ast.Program,
+    bound: *BoundSet,
+    added: *std.ArrayList(Mono.LocalId),
+
+    pub fn bindLocal(self: BoundSetBinder, local: Mono.LocalId) Allocator.Error!void {
+        try self.bound.put(self.input, local);
+        try self.added.append(self.allocator, local);
     }
+};
+
+fn bindPat(allocator: Allocator, input: *const Ast.Program, pat_id: Mono.PatId, bound: *BoundSet, added: *std.ArrayList(Mono.LocalId)) Allocator.Error!void {
+    try Ast.forEachBoundLocal(input, pat_id, BoundSetBinder{
+        .allocator = allocator,
+        .input = input,
+        .bound = bound,
+        .added = added,
+    });
 }
 
 fn removeBound(input: *const Ast.Program, bound: *BoundSet, locals: []const Mono.LocalId) void {
@@ -2040,46 +2014,18 @@ const CaptureGraphBuilder = struct {
         for (0..locals.len) |index| try self.bindLocal(GuardedList.at(locals, index).local, added);
     }
 
-    fn bindPat(self: *CaptureGraphBuilder, pat_id: Ast.PatId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
-        const input = self.graph.program;
-        switch (input.getPat(pat_id).data) {
-            .bind => |local| try self.bindLocal(local, added),
-            .wildcard,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            => {},
-            .str_pattern => |str| {
-                const steps = input.strPatternStepSpan(str.steps);
-                for (0..steps.len) |index| {
-                    if (GuardedList.at(steps, index).capture) |capture| try self.bindPat(capture, added);
-                }
-            },
-            .as => |as| {
-                try self.bindPat(as.pattern, added);
-                try self.bindLocal(as.local, added);
-            },
-            .record => |fields| {
-                const destructs = input.recordDestructSpan(fields);
-                for (0..destructs.len) |index| try self.bindPat(GuardedList.at(destructs, index).pattern, added);
-            },
-            .tuple => |items| {
-                const children = input.patSpan(items);
-                for (0..children.len) |index| try self.bindPat(GuardedList.at(children, index), added);
-            },
-            .list => |list| {
-                const children = input.patSpan(list.patterns);
-                for (0..children.len) |index| try self.bindPat(GuardedList.at(children, index), added);
-                if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.bindPat(rest_pattern, added);
-            },
-            .tag => |tag| {
-                const payloads = input.patSpan(tag.payloads);
-                for (0..payloads.len) |index| try self.bindPat(GuardedList.at(payloads, index), added);
-            },
-            .nominal => |backing| try self.bindPat(backing, added),
+    /// Records each bound local into the capture graph's current scope.
+    const CaptureBinder = struct {
+        builder: *CaptureGraphBuilder,
+        added: *std.ArrayList(Ast.LocalId),
+
+        pub fn bindLocal(self: CaptureBinder, local: Ast.LocalId) Allocator.Error!void {
+            try self.builder.bindLocal(local, self.added);
         }
+    };
+
+    fn bindPat(self: *CaptureGraphBuilder, pat_id: Ast.PatId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
+        try Ast.forEachBoundLocal(self.graph.program, pat_id, CaptureBinder{ .builder = self, .added = added });
     }
 
     fn addDirect(self: *CaptureGraphBuilder, node_id: CaptureNodeId, local: Ast.LocalId) Allocator.Error!void {
