@@ -63,10 +63,9 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
 }
 
 fn transformProc(store: *LirStore, layouts: *layout_mod.Store, proc_id: LIR.LirProcSpecId) ResourceError!void {
-    const proc = store.getProcSpec(proc_id);
-    if (proc.body == null or proc.hosted != null or proc.abi != .roc) return;
+    const body = body_clone.rewritableProcBody(store, proc_id) orelse return;
 
-    var reads = try body_clone.countReachableReads(store, proc.body.?);
+    var reads = try body_clone.countReachableReads(store, body);
     defer reads.deinit();
 
     var transform = Transform{
@@ -78,7 +77,7 @@ fn transformProc(store: *LirStore, layouts: *layout_mod.Store, proc_id: LIR.LirP
     };
     defer transform.new_locals.deinit(store.allocator);
 
-    var current = proc.body.?;
+    var current = body;
     while (true) {
         _ = try transform.rewriteAt(current);
         const next = transform.nextOf(current) orelse break;

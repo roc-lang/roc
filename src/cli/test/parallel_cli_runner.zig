@@ -1077,6 +1077,9 @@ const subcommand_cases = [_]CliCase{
     // reports the reference the same way, so a declaration another module never
     // gave a value cannot cross the module boundary as a callable.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10809: importing a declaration with no value reports the reference", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10809_annotation_only_import/Main.roc", .exit = .failure, .occurrences = &.{.{ .stream = .stderr, .text = "there is no value here to use", .count = 1 }}, .contains = &.{.{ .stream = .stderr, .text = "1 error and 1 warning" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation function read had a non-function node" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // Repro for https://github.com/roc-lang/roc/issues/10824: rank-1 platform
+    // inference must retain the complete generated encoder contract after its row closes.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10824: inferred platform model with custom codec checks cleanly", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10824_generated_codec_contract/app.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "checked generated codec contract was missing its subject method call" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // Repro for https://github.com/roc-lang/roc/issues/10832: the list element
     // contains an erased Box allocation even though its unresolved closure
     // layout is otherwise non-refcounted, so list allocation and drop must use

@@ -168,11 +168,11 @@ timeout) on the unmodified tree:
 
 ## Related projects
 
-- [spec-constr-static-match-soundness.md](./spec-constr-static-match-soundness.md)—
+- `spec-constr-static-match-soundness` (landed; doc removed)—
   the same pass's match-verdict soundness; both projects touch
   `bindPatToValue`-adjacent code and can share test scaffolding. Land in
   either order.
-- [store-generation-counters.md](./store-generation-counters.md)—the
+- `store-generation-counters` (landed; doc removed)—the
   landed GuardedList work that already hardened this pass's
   iterate-while-mutate hazards; this project addresses its termination
   hazard.
