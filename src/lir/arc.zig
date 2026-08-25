@@ -3582,20 +3582,31 @@ const Inserter = struct {
     /// in place. Placing such a param owned makes the body release it once
     /// per iteration, so the second iteration releases an already-dead value.
     /// The back-edge meet is a shrinking accumulator seeded from the full
-    /// param set, so filtering by it keeps this placement monotone.
+    /// param set and narrowed by the lattice's exact resource intersection,
+    /// so filtering by it keeps this placement monotone and carries residual
+    /// field masks through.
     fn placeSolveJoinParamsInto(self: *Inserter, summary: *const JoinSummary, keep: *OwnedSet) void {
+        if (!summary.back_edge_seen) {
+            self.placeAllSolveJoinParamsInto(summary, keep);
+            return;
+        }
         const params = self.store.getLocalSpan(summary.params);
         for (0..GuardedList.borrowLen(params)) |index| {
-            const local = GuardedList.at(params, index);
-            if (summary.back_edge_seen and !summary.back_edge_params.contains(local)) continue;
-            self.placeUnit(keep, local);
+            placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(params, index));
         }
         const maybe_params = self.store.getLocalSpan(summary.maybe_uninitialized_params);
         for (0..GuardedList.borrowLen(maybe_params)) |index| {
-            const local = GuardedList.at(maybe_params, index);
-            if (summary.back_edge_seen and !summary.back_edge_params.contains(local)) continue;
-            self.placeConditionalUnit(keep, local);
+            placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(maybe_params, index));
         }
+    }
+
+    /// Copies exactly what the back-edge meet still proves for one param:
+    /// presence plus its surviving residual field mask. Placing full
+    /// ownership here would re-authorize releasing aggregate fields a back
+    /// edge already took, so the mask travels with the bit.
+    fn placeSurvivingParam(keep: *OwnedSet, meet: *const OwnedSet, local: LIR.LocalId) void {
+        if (!meet.contains(local)) return;
+        keep.setWithResidual(local, meet.residualMask(local));
     }
 
     /// Unfiltered param placement: the seed for the back-edge meet.
@@ -3623,13 +3634,10 @@ const Inserter = struct {
             self.placeAllSolveJoinParamsInto(summary, &summary.back_edge_params);
             changed = true;
         }
-        var iter = summary.back_edge_params.bits.iterator(.{});
-        while (iter.next()) |index| {
-            const local = summary.back_edge_params.domain.resourceLocalAt(index);
-            if (owned.contains(local)) continue;
-            summary.back_edge_params.unset(local);
-            changed = true;
-        }
+        // The same exact resource meet the rest of the lattice uses: a param
+        // survives only with the residual field places every back edge still
+        // proves, not merely its presence bit.
+        if (intersectOwnedSetChanged(&summary.back_edge_params, owned)) changed = true;
         return changed;
     }
 
@@ -7012,6 +7020,18 @@ const OwnedSet = struct {
         }
     }
 
+    /// Places `local` carrying exactly `mask` of its committed field places,
+    /// rather than the full ownership `set` grants. Used to copy a resource
+    /// out of a meet that may have narrowed it.
+    fn setWithResidual(self: *OwnedSet, local: LIR.LocalId, mask: u64) void {
+        const bit = self.domain.requiredResourceBitOf(local);
+        if ((mask & ~self.domain.fullResidualMaskAt(bit)) != 0) {
+            arcInvariant("ARC residual placement exceeded the committed field places");
+        }
+        self.bits.set(bit);
+        self.residual_masks[bit] = mask;
+    }
+
     fn residualMask(self: *const OwnedSet, local: LIR.LocalId) u64 {
         const bit = self.domain.resourceBitOf(local) orelse return 0;
         return self.residual_masks[bit];
@@ -10021,6 +10041,66 @@ test "RC join loop jump releases body-only list but keeps carried state" {
     try f.expectRc(scratch, 0, 1, 0);
     // The old state is consumed by the op that produces the next state.
     try f.expectRc(state, 0, 0, 0);
+}
+
+test "RC join loop back edge narrows an aggregate param to its residual fields" {
+    // The first iteration moves field 0 of the carried pair into a call, so
+    // the back edge re-enters the join with the pair present but holding only
+    // field 1. The body keep must carry that exact residual, not the full
+    // ownership the param was placed with: restoring field 0 would authorize
+    // releasing a place the loop already took.
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const source = try f.local(f.pair_str);
+    const pair = try f.local(f.pair_str);
+    const flag = try f.local(.i64);
+    const first_flag = try f.local(.i64);
+    const cleared_flag = try f.local(.i64);
+    const taken = try f.local(.str);
+    const sink = try f.local(.i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // Back edge: clears the flag and jumps without rebinding `pair`.
+    const back_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const set_flag = try f.setLocal(flag, cleared_flag, .initialize_join_param, back_jump);
+    const clear_flag = try f.assignI64(cleared_flag, 0, set_flag);
+    const consume = try f.assignCall(sink, &.{taken}, clear_flag);
+    const take_field = try f.assignRefField(taken, pair, 0, consume);
+
+    // Exit edge.
+    const exit = try f.ret(result);
+    const assign_result = try f.assignI64(result, 7, exit);
+
+    const body = try f.switchStmt(flag, take_field, assign_result, null);
+
+    const entry_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const init_flag = try f.setLocal(flag, first_flag, .initialize_join_param, entry_jump);
+    const init_pair = try f.setLocal(pair, source, .initialize_join_param, init_flag);
+    const assign_flag = try f.assignI64(first_flag, 1, init_pair);
+    const assign_pair = try f.assignStruct(source, &.{ first, second }, assign_flag);
+    const assign_second = try f.assignStr(second, "second", assign_pair);
+    const remainder = try f.assignStr(first, "first", assign_second);
+
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{ pair, flag }),
+        .body = body,
+        .remainder = remainder,
+    } });
+
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+
+    // The projection is retained rather than moved, because the pair is live
+    // across the back edge and the take site is itself a later use of field 0.
+    // That is what keeps the back edge's residual mask full here; the pair is
+    // then released exactly once, and never while partially dismantled.
+    try f.expectRc(taken, 1, 0, 0);
+    try f.expectRc(pair, 0, 1, 0);
+    try testing.expectEqual(@as(usize, 2), f.countAllRc());
 }
 
 test "RC join loop exit releases body-only list and preserves returned state" {
