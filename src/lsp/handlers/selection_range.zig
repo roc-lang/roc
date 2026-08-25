@@ -518,3 +518,24 @@ fn positionAt(offset: u32, line_offsets: *const pos.LineOffsets) Position {
     const converted = pos.offsetToPosition(offset, line_offsets);
     return .{ .line = converted.line, .character = converted.character };
 }
+
+test "selection ranges preserve flat field access prefixes" {
+    const source = "main = root.first.?second.third\n";
+    const selection = try computeSelectionRange(std.testing.allocator, source, 0, 8);
+    defer freeSelectionRange(std.testing.allocator, selection);
+
+    try std.testing.expectEqual(@as(u32, 7), selection.range.start.character);
+    try std.testing.expectEqual(@as(u32, 11), selection.range.end.character);
+
+    const first_prefix = selection.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), first_prefix.range.start.character);
+    try std.testing.expectEqual(@as(u32, 17), first_prefix.range.end.character);
+
+    const second_prefix = first_prefix.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), second_prefix.range.start.character);
+    try std.testing.expectEqual(@as(u32, 25), second_prefix.range.end.character);
+
+    const full_chain = second_prefix.parent.?;
+    try std.testing.expectEqual(@as(u32, 7), full_chain.range.start.character);
+    try std.testing.expectEqual(@as(u32, 31), full_chain.range.end.character);
+}
