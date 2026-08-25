@@ -5535,6 +5535,11 @@ zero-sized payload. Aggregates cache `contains_refcounted = true` when those
 layouts are committed, so
 `layoutContainsRefcounted` remains an O(1) query and list allocation-prefix
 selection never needs to search descriptors or recursively inspect layouts.
+Boxy planning separately computes `TypeRepresentation.contains_dynamic` as the
+exact transitive fact that a representation stores descriptor-defined dynamic
+content. Boxy lowering consumes that plan bit when deciding which locals and
+representation boundaries must carry a descriptor; it does not recover the
+requirement by recursively inspecting committed layouts.
 
 Function values in `.boxy` use the erased callable representation. A function
 value is one Roc refcounted allocation whose data pointer is the function
