@@ -1668,19 +1668,6 @@ fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
         shape.struct_assign_count >= 2;
 }
 
-fn opaqueLetCallWorkerDoesNotDuplicateCall(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.direct_call_count == 0 and
-        shape.low_level_count == 2 and
-        shape.struct_assign_count == 0;
-}
-
-fn opaqueLetCallWorkerDuplicatesCall(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.low_level_count > 2 and
-        shape.struct_assign_count == 0;
-}
-
 fn hasGroupedStrMatchSet(shape: ProcShape) bool {
     return shape.str_match_set_count == 1;
 }
@@ -2684,8 +2671,9 @@ test "spec constr does not duplicate opaque let-bound direct calls" {
     var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
-    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
-    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDuplicatesCall));
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "direct_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "low_level_count", 2);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "struct_assign_count", 0);
 }
 
 test "spec constr does not duplicate opaque known-match payloads" {
@@ -2710,8 +2698,9 @@ test "spec constr does not duplicate opaque known-match payloads" {
     var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
-    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDoesNotDuplicateCall));
-    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, opaqueLetCallWorkerDuplicatesCall));
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "direct_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "low_level_count", 2);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "struct_assign_count", 0);
 }
 
 test "spec constr retains an exact virtual source frame for an inlined procedure" {
@@ -3093,7 +3082,15 @@ test "spec constr specializes record state carried by while loop" {
     var unoptimized = try lowerModule(allocator, source, .none);
     defer unoptimized.deinit(allocator);
 
-    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsSpecialized));
+    // Sealed source-body cloning can inline the specialized worker completely;
+    // pin the scalarized loop in the root rather than an incidental proc split.
+    const optimized_root_shape = try collectProcShape(allocator, &optimized.lowered, try rootProc(&optimized.lowered));
+    try std.testing.expectEqual(@as(usize, 0), optimized_root_shape.arg_count);
+    try std.testing.expectEqual(@as(usize, 0), optimized_root_shape.direct_call_count);
+    try std.testing.expect(optimized_root_shape.join_count >= 1);
+    try std.testing.expectEqual(@as(usize, 2), optimized_root_shape.max_join_param_count);
+    try std.testing.expect(optimized_root_shape.jump_count >= 2);
+    try std.testing.expectEqual(@as(usize, 0), optimized_root_shape.struct_assign_count);
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
 
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
@@ -3720,6 +3717,25 @@ fn reachableProcDebugName(
     return false;
 }
 
+fn procOrInlineScopeDebugName(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    expected_name: []const u8,
+) TestError!bool {
+    if (try reachableProcDebugName(allocator, lowered, expected_name)) return true;
+
+    const store = &lowered.lir_result.store;
+    for (0..store.cf_stmts.len()) |stmt_index| {
+        const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+        const scope_id = store.stmtInlineScope(stmt_id);
+        if (scope_id == LIR.InlineScopeId.none) continue;
+        const source_name = store.inlineScope(scope_id).source_name;
+        if (source_name.isNone()) continue;
+        if (std.mem.eql(u8, store.getString(source_name), expected_name)) return true;
+    }
+    return false;
+}
+
 fn reachableProcShapeFieldTotal(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -3780,8 +3796,9 @@ fn expectReachableProcShapeFieldEqual(
 
 // A producer-authored concrete iterator representation must survive ordinary
 // procedure returns and all supported static-dispatch invocation forms. Each
-// case below must reach `sum_it` (the debug-name sanity probe), avoid the public
-// `Iter.next` boundary, and lower without iterator-state heap or ARC operations.
+// case below must retain `sum_it` as either a reachable proc or an inline scope
+// (the debug-name sanity probe), avoid the public `Iter.next` boundary, and
+// lower without iterator-state heap or ARC operations.
 // List-backed cases retain exactly the one decref required to release their
 // concrete source list; range-backed cases have none.
 test "iterator producers and delegating wrappers fuse into a scalar loop" {
@@ -3981,7 +3998,7 @@ test "iterator producers and delegating wrappers fuse into a scalar loop" {
     for (cases) |c| {
         var opt = try lowerModuleWithProcDebugNames(allocator, c.src, .wrappers, true);
         defer opt.deinit(allocator);
-        if (!try reachableProcDebugName(allocator, &opt.lowered, "sum_it")) {
+        if (!try procOrInlineScopeDebugName(allocator, &opt.lowered, "sum_it")) {
             std.debug.print("debug-name sanity probe missing for case: {s}\n", .{c.name});
             return error.TestUnexpectedResult;
         }
@@ -7397,7 +7414,8 @@ test "iter alloc static: runtime list for-loop has no boxed iterator state" {
 
 // Repro for https://github.com/roc-lang/roc/issues/10340: the fold must
 // scalarize into one self-contained raw-indexed loop in the root proc, without
-// peeling the first step and calling a separate fused worker for the rest.
+// peeling the first step and calling a separate fused worker for the rest. The
+// effectful list producer itself may remain a direct call.
 test "issue 10340 fold over effect-produced list scalarizes in root" {
     const allocator = std.testing.allocator;
     const source =
@@ -7417,7 +7435,9 @@ test "issue 10340 fold over effect-produced list scalarizes in root" {
     const reachable_total = try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count");
     try std.testing.expect(root_shape.list_get_unsafe_count >= 1);
     try std.testing.expect(root_shape.join_count >= 1);
-    try std.testing.expectEqual(@as(usize, 0), root_shape.direct_call_count);
+    try std.testing.expectEqual(@as(usize, 1), root_shape.direct_call_count);
+    // Every indexed read is in the root, so that call cannot be a peeled-loop
+    // worker carrying the remaining iteration.
     try std.testing.expectEqual(root_shape.list_get_unsafe_count, reachable_total);
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
