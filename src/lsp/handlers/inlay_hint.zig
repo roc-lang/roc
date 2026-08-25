@@ -6,7 +6,7 @@
 //! file. Bindings that do carry an annotation are skipped: repeating what is
 //! already on screen is noise.
 //!
-//! The editor asks for a line range — whatever is on screen — and re-asks as
+//! The editor asks for a line range—whatever is on screen—and re-asks as
 //! the view moves, so this only ever renders what is visible.
 
 const std = @import("std");
@@ -114,11 +114,13 @@ pub fn handler(comptime ServerType: type) type {
                 text,
                 start_line,
                 end_line,
-            ) catch |err| {
-                std.log.err("inlayHint failed: {s}", .{@errorName(err)});
-                if (err == error.OutOfMemory) return error.OutOfMemory;
-                try self.sendNullResponse(id);
-                return;
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    std.log.err("inlayHint failed: {s}", .{@errorName(err)});
+                    try self.sendNullResponse(id);
+                    return;
+                },
             };
 
             // A document that does not build has no inferred types to show.

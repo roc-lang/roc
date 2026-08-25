@@ -4100,7 +4100,7 @@ fn rangeContaining(regions: []const cir_queries.LspRange, line: u32, character: 
 ///
 /// A hint is drawn inside the line it annotates, so a long one pushes the code
 /// off screen. Roc's inferred types can be far longer than the code they
-/// describe — a generic function carries its whole `where` clause — so the
+/// describe—a generic function carries its whole `where` clause—so the
 /// label is cut and hovering the same name gives the type in full.
 const max_inlay_label_bytes = 56;
 

@@ -1244,7 +1244,7 @@ const CollectBindingsContext = struct {
 ///
 /// Only plain `assign` patterns qualify: they bind exactly one name, so an
 /// inferred type can be shown against that name. Bindings that already carry a
-/// written annotation are skipped — their type is on screen already.
+/// written annotation are skipped—their type is on screen already.
 ///
 /// Caller owns the returned list.
 pub fn collectUnannotatedBindings(
