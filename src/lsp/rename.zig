@@ -4,7 +4,7 @@
 //! name *means* is spelled in the name itself: a trailing `!` marks a value
 //! effectful, a leading `_` marks it deliberately unused, and a leading `$`
 //! marks it reassignable, while upper and lower case separate types and tags
-//! from values. Rewriting `foo` to `foo!` is therefore not a rename — it is an
+//! from values. Rewriting `foo` to `foo!` is therefore not a rename—it is an
 //! edit the type checker would reject, or worse, silently accept with
 //! different meaning.
 //!
@@ -94,7 +94,7 @@ fn nameShape(allocator: Allocator, text: []const u8) Allocator.Error!?NameShape 
     const regions = output.tokens.tokens.items(.region);
 
     // One identifier and the end of input, and the identifier must span the
-    // whole text — otherwise the editor sent something like `foo bar` or `foo=`.
+    // whole text—otherwise the editor sent something like `foo bar` or `foo=`.
     if (tags.len != 2 or tags[1] != .EndOfFile) return null;
     if (!isIdentifierTag(tags[0])) return null;
     if (regions[0].start.offset != 0 or regions[0].end.offset != text.len) return null;

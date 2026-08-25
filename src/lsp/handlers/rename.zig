@@ -7,7 +7,7 @@
 //!
 //! This handler never guesses. If the document does not build, or the position
 //! names something other than a plain local binding, it refuses instead of
-//! offering a partial rewrite — editing every occurrence but one silently
+//! offering a partial rewrite—editing every occurrence but one silently
 //! breaks the program, which is worse than doing nothing.
 //!
 //! Cross-module rename is not supported: only the requested document is edited,
@@ -91,11 +91,13 @@ pub fn handler(comptime ServerType: type) type {
                 position.line,
                 position.character,
                 new_name,
-            ) catch |err| {
-                std.log.err("rename failed: {s}", .{@errorName(err)});
-                if (err == error.OutOfMemory) return error.OutOfMemory;
-                try self.sendError(id, .request_failed, "rename could not be computed for this document");
-                return;
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    std.log.err("rename failed: {s}", .{@errorName(err)});
+                    try self.sendError(id, .request_failed, "rename could not be computed for this document");
+                    return;
+                },
             };
 
             const resolved = outcome orelse {
@@ -149,11 +151,13 @@ pub fn prepareHandler(comptime ServerType: type) type {
                 text,
                 position.line,
                 position.character,
-            ) catch |err| {
-                std.log.err("prepareRename failed: {s}", .{@errorName(err)});
-                if (err == error.OutOfMemory) return error.OutOfMemory;
-                try self.sendNullResponse(id);
-                return;
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    std.log.err("prepareRename failed: {s}", .{@errorName(err)});
+                    try self.sendNullResponse(id);
+                    return;
+                },
             };
 
             // A null result tells the editor not to offer renaming here, which

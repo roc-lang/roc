@@ -29,14 +29,14 @@ Diagnostics are pushed as `textDocument/publishDiagnostics` when a document is o
 `textDocument/references` reports every place a symbol is written in the requested document.
 Occurrences come from the CIR, so a reference resolves to the binding it actually names rather
 than to matching text, and a same-named binding in another scope is not reported. Unlike rename
-it only reports, so it is not limited to plain bindings — a destructured field can have its uses
+it only reports, so it is not limited to plain bindings—a destructured field can have its uses
 listed even though renaming one is refused.
 
 `includeDeclaration` controls whether the binding site and the name on its type annotation are
 included; both count as the declaration. A client that omits the field gets everything.
 
 Only the requested document is searched, so a short result is not proof that a symbol is unused
-across a project — see the cross-module note below.
+across a project—see the cross-module note below.
 
 ### Rename
 
@@ -47,7 +47,7 @@ is respected.
 It refuses rather than producing a partial rewrite, because editing every occurrence but one
 silently breaks the program. It refuses when:
 - the document does not compile, so there is no CIR to read occurrences from
-- the position names something other than a plain local binding — a type, a tag, a record
+- the position names something other than a plain local binding—a type, a tag, a record
   field, or a destructuring pattern
 - the new name is not a single Roc identifier
 - the new name would change what the name *means*: case separates types from values, and the

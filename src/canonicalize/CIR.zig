@@ -460,8 +460,7 @@ pub const WhereClause = union(enum) {
     /// Applies every constraint named by a where alias to `var_`.
     ///
     /// `alias` is the resolved reference to the where alias declaration—a
-    /// `lookup` when the alias takes no arguments and an `apply` when it does—
-    /// so the checker never has to re-resolve the name.
+    /// `lookup` when the alias takes no arguments and an `apply` when it does—/// so the checker never has to re-resolve the name.
     w_alias: struct {
         var_: TypeAnno.Idx,
         alias: TypeAnno.Idx,
@@ -539,7 +538,7 @@ pub const Annotation = struct {
 
     anno: TypeAnno.Idx,
     where: ?WhereClause.Span,
-    /// Source region of the annotated *name* — the `foo` in `foo : U64`, not
+    /// Source region of the annotated *name*—the `foo` in `foo : U64`, not
     /// the type after the colon and not the whole annotation statement.
     ///
     /// Canonicalization merges a named annotation into the def it annotates and
