@@ -2972,6 +2972,37 @@ pub const CheckedPrimitive = enum(u8) {
     i64x2,
 };
 
+/// The builtin owner a primitive dispatches through. This is the single source
+/// of truth shared by every post-check consumer; call it rather than writing a
+/// second switch over `CheckedPrimitive`.
+pub fn builtinOwnerForPrimitive(primitive: CheckedPrimitive) static_dispatch.BuiltinOwner {
+    return switch (primitive) {
+        .bool => .bool,
+        .str => .str,
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+        .u8x16 => .u8x16,
+        .i8x16 => .i8x16,
+        .u16x8 => .u16x8,
+        .i16x8 => .i16x8,
+        .u32x4 => .u32x4,
+        .i32x4 => .i32x4,
+        .u64x2 => .u64x2,
+        .i64x2 => .i64x2,
+    };
+}
+
 /// Public `CheckedBuiltinRuntimeEncoding` declaration.
 pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     primitive: CheckedPrimitive,
