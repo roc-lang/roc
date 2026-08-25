@@ -10043,12 +10043,21 @@ test "RC join loop jump releases body-only list but keeps carried state" {
     try f.expectRc(state, 0, 0, 0);
 }
 
-test "RC join loop back edge narrows an aggregate param to its residual fields" {
-    // The first iteration moves field 0 of the carried pair into a call, so
-    // the back edge re-enters the join with the pair present but holding only
-    // field 1. The body keep must carry that exact residual, not the full
-    // ownership the param was placed with: restoring field 0 would authorize
-    // releasing a place the loop already took.
+test "RC join loop retains an aggregate param projection across the back edge" {
+    // A loop body projects field 0 of a carried pair into a call, and the back
+    // edge never rebinds the pair. ARC retains the projection rather than
+    // moving it: the take site sits inside the body, so it is itself a later
+    // use of field 0 on the next iteration, and the pair is live across the
+    // back edge. The edge therefore carries the pair's full residual mask, and
+    // the pair is released exactly once, never while partially dismantled.
+    //
+    // This pins that retain-not-move outcome. It does NOT cover the partial
+    // residual mask path in `placeSurvivingParam`/`setWithResidual`: no LIR
+    // built through this fixture reaches a back edge holding a strict subset
+    // of an aggregate's committed field places, because any projection whose
+    // aggregate survives the edge must be retained. The exact resource meet in
+    // `absorbBackEdgeParams` is what keeps that path correct if it is ever
+    // reachable; it is not relied on for the behaviour asserted below.
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
     const first = try f.local(.str);
@@ -10094,10 +10103,6 @@ test "RC join loop back edge narrows an aggregate param to its residual fields" 
     _ = try f.addProc(&.{}, join, .i64);
     try f.run();
 
-    // The projection is retained rather than moved, because the pair is live
-    // across the back edge and the take site is itself a later use of field 0.
-    // That is what keeps the back edge's residual mask full here; the pair is
-    // then released exactly once, and never while partially dismantled.
     try f.expectRc(taken, 1, 0, 0);
     try f.expectRc(pair, 0, 1, 0);
     try testing.expectEqual(@as(usize, 2), f.countAllRc());
