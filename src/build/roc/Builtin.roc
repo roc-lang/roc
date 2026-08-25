@@ -232,16 +232,18 @@ Builtin :: [].{
 			## Names the requirement that a value can be written as JSON, so a
 			## signature can say "JSON-encodable" without naming the encoder's
 			## internal format and output-state types.
-			a.Encodable(err) : where [
-				a.encoder_for : JsonEncoding -> (a, JsonEncodeState -> Try(JsonEncodeState, err)),
-			]
+			a.Encodable(err) :
+				where [
+					a.encoder_for : JsonEncoding -> (a, JsonEncodeState -> Try(JsonEncodeState, err)),
+				]
 
 			## Names the requirement that a value can be read from JSON, so a
 			## signature can say "JSON-parseable" without naming the parser's
 			## internal format and cursor types.
-			a.Parseable(errs) : where [
-				a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, errs)),
-			]
+			a.Parseable(errs) :
+				where [
+					a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, errs)),
+				]
 
 			to_str : a -> Str where [a.Encodable([])]
 			to_str = |value| {
@@ -2100,12 +2102,14 @@ Builtin :: [].{
 		}
 
 		HttpHeader :: {}.{
+
 			## Names the requirement that a value can be read from HTTP headers, so
 			## a signature can say "header-parseable" without naming the parser's
 			## internal format and cursor types.
-			output.Parseable(errs) : where [
-				output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, errs)),
-			]
+			output.Parseable(errs) :
+				where [
+					output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, errs)),
+				]
 
 			parser_for : () -> (Str -> Try(output, [BadHeader, ..errs]))
 				where [output.Parseable([BadHeader, ..errs])]
