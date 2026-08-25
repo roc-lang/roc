@@ -164,6 +164,11 @@ pub const BuiltinTypeLookup = union(enum) {
     qualified: []const u8,
 };
 
+pub const InternalBuiltinTypeKind = enum {
+    json,
+    http_header,
+};
+
 /// Static registry entry describing one builtin type that the compiler needs by index.
 pub const BuiltinTypeSpec = struct {
     display_name: []const u8,
@@ -173,10 +178,10 @@ pub const BuiltinTypeSpec = struct {
     lookup: BuiltinTypeLookup,
     num_kind: ?NumKind = null,
     auto_import: bool = true,
-    /// Whether this type exists only to give the builtin format modules a way to
-    /// talk about their own runtime state. Roc code cannot name an internal type,
-    /// and the generated docs do not list it.
-    internal: bool = false,
+    /// Which builtin format owns this internal runtime-state type. Roc code
+    /// cannot name it, generated docs do not list it, and diagnostics use the
+    /// owner to point at the corresponding public constraint.
+    internal_kind: ?InternalBuiltinTypeKind = null,
 };
 
 /// Whether `name` is an internal builtin type, or a type nested inside one.
@@ -186,14 +191,18 @@ pub const BuiltinTypeSpec = struct {
 /// qualified (`Builtin.Encoding.JsonEncoding`) and module-relative
 /// (`Encoding.JsonEncoding`).
 pub fn builtinTypeIsInternal(name: []const u8) bool {
+    return internalBuiltinTypeKind(name) != null;
+}
+
+pub fn internalBuiltinTypeKind(name: []const u8) ?InternalBuiltinTypeKind {
     const module_prefix = "Builtin.";
     for (builtin_type_specs) |spec| {
-        if (!spec.internal) continue;
+        const kind = spec.internal_kind orelse continue;
         std.debug.assert(std.mem.startsWith(u8, spec.qualified_name, module_prefix));
-        if (nameIsAtOrUnder(name, spec.qualified_name)) return true;
-        if (nameIsAtOrUnder(name, spec.qualified_name[module_prefix.len..])) return true;
+        if (nameIsAtOrUnder(name, spec.qualified_name)) return kind;
+        if (nameIsAtOrUnder(name, spec.qualified_name[module_prefix.len..])) return kind;
     }
-    return false;
+    return null;
 }
 
 /// Whether the type `nested` reached through the container named `container` is
@@ -202,14 +211,25 @@ pub fn builtinTypeIsInternal(name: []const u8) bool {
 /// Takes the two halves separately so callers never have to join them into a
 /// scratch buffer: growing one would invalidate the very slices being compared.
 pub fn builtinTypeIsInternalNested(container: []const u8, nested: []const u8) bool {
+    return internalBuiltinTypeKindNested(container, nested) != null;
+}
+
+pub fn internalBuiltinTypeKindNested(container: []const u8, nested: []const u8) ?InternalBuiltinTypeKind {
+    const module_prefix = "Builtin.";
     for (builtin_type_specs) |spec| {
-        if (!spec.internal) continue;
-        if (!std.mem.startsWith(u8, spec.qualified_name, container)) continue;
-        const after_container = spec.qualified_name[container.len..];
-        if (after_container.len == 0 or after_container[0] != '.') continue;
-        if (nameIsAtOrUnder(nested, after_container[1..])) return true;
+        const kind = spec.internal_kind orelse continue;
+        if (nestedNameIsAtOrUnder(container, nested, spec.qualified_name)) return kind;
+        std.debug.assert(std.mem.startsWith(u8, spec.qualified_name, module_prefix));
+        if (nestedNameIsAtOrUnder(container, nested, spec.qualified_name[module_prefix.len..])) return kind;
     }
-    return false;
+    return null;
+}
+
+fn nestedNameIsAtOrUnder(container: []const u8, nested: []const u8, root: []const u8) bool {
+    if (!std.mem.startsWith(u8, root, container)) return false;
+    const after_container = root[container.len..];
+    if (after_container.len == 0 or after_container[0] != '.') return false;
+    return nameIsAtOrUnder(nested, after_container[1..]);
 }
 
 fn nameIsAtOrUnder(name: []const u8, root: []const u8) bool {
@@ -234,12 +254,12 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "ParseTagUnionSpec", .qualified_name = "Builtin.Encoding.ParseTagUnionSpec", .type_field = "parse_tag_union_spec_type", .ident_field = "parse_tag_union_spec_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "ParseTagUnionSpec" } }, .auto_import = false },
     .{ .display_name = "FieldNames", .qualified_name = "Builtin.Encoding.FieldName.FieldNames", .type_field = "fields_type", .ident_field = "fields_ident", .lookup = .{ .qualified = "Builtin.Encoding.FieldName.FieldNames" }, .auto_import = false },
     .{ .display_name = "FieldName", .qualified_name = "Builtin.Encoding.FieldName", .type_field = "field_type", .ident_field = "field_ident", .lookup = .{ .qualified = "Builtin.Encoding.FieldName" }, .auto_import = false },
-    .{ .display_name = "JsonState", .qualified_name = "Builtin.Encoding.JsonState", .type_field = "json_state_type", .ident_field = "json_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonState" }, .auto_import = false, .internal = true },
-    .{ .display_name = "JsonEncodeState", .qualified_name = "Builtin.Encoding.JsonEncodeState", .type_field = "json_encode_state_type", .ident_field = "json_encode_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonEncodeState" }, .auto_import = false, .internal = true },
-    .{ .display_name = "JsonContainerEncodeState", .qualified_name = "Builtin.Encoding.JsonContainerEncodeState", .type_field = "json_container_encode_state_type", .ident_field = "json_container_encode_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonContainerEncodeState" }, .auto_import = false, .internal = true },
-    .{ .display_name = "JsonEncoding", .qualified_name = "Builtin.Encoding.JsonEncoding", .type_field = "json_encoding_type", .ident_field = "json_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonEncoding" }, .auto_import = false, .internal = true },
-    .{ .display_name = "HttpHeaderState", .qualified_name = "Builtin.Encoding.HttpHeaderState", .type_field = "http_header_state_type", .ident_field = "http_header_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderState" }, .auto_import = false, .internal = true },
-    .{ .display_name = "HttpHeaderEncoding", .qualified_name = "Builtin.Encoding.HttpHeaderEncoding", .type_field = "http_header_encoding_type", .ident_field = "http_header_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderEncoding" }, .auto_import = false, .internal = true },
+    .{ .display_name = "JsonState", .qualified_name = "Builtin.Encoding.JsonState", .type_field = "json_state_type", .ident_field = "json_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonState" }, .auto_import = false, .internal_kind = .json },
+    .{ .display_name = "JsonEncodeState", .qualified_name = "Builtin.Encoding.JsonEncodeState", .type_field = "json_encode_state_type", .ident_field = "json_encode_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonEncodeState" }, .auto_import = false, .internal_kind = .json },
+    .{ .display_name = "JsonContainerEncodeState", .qualified_name = "Builtin.Encoding.JsonContainerEncodeState", .type_field = "json_container_encode_state_type", .ident_field = "json_container_encode_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonContainerEncodeState" }, .auto_import = false, .internal_kind = .json },
+    .{ .display_name = "JsonEncoding", .qualified_name = "Builtin.Encoding.JsonEncoding", .type_field = "json_encoding_type", .ident_field = "json_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.JsonEncoding" }, .auto_import = false, .internal_kind = .json },
+    .{ .display_name = "HttpHeaderState", .qualified_name = "Builtin.Encoding.HttpHeaderState", .type_field = "http_header_state_type", .ident_field = "http_header_state_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderState" }, .auto_import = false, .internal_kind = .http_header },
+    .{ .display_name = "HttpHeaderEncoding", .qualified_name = "Builtin.Encoding.HttpHeaderEncoding", .type_field = "http_header_encoding_type", .ident_field = "http_header_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderEncoding" }, .auto_import = false, .internal_kind = .http_header },
     .{ .display_name = "HttpHeader", .qualified_name = "Builtin.Encoding.HttpHeader", .type_field = "http_header_type", .ident_field = "http_header_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "HttpHeader" } }, .auto_import = false },
     .{ .display_name = "Utf8Problem", .qualified_name = "Builtin.Str.Utf8Problem", .type_field = "utf8_problem_type", .ident_field = "utf8_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf8Problem" } } },
     .{ .display_name = "Range", .qualified_name = "Builtin.Num.Range", .type_field = "range_type", .ident_field = "range_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Range" } } },
@@ -326,6 +346,7 @@ pub const BUILTIN_TYPE_REGISTRY_HASH: u64 = blk: {
         }
         hash = if (spec.num_kind) |num_kind| hashBytes(hash, @tagName(num_kind)) else hashBytes(hash, "-");
         hash = hashBytes(hash, if (spec.auto_import) "auto" else "internal");
+        hash = if (spec.internal_kind) |kind| hashBytes(hash, @tagName(kind)) else hashBytes(hash, "-");
     }
     break :blk hash;
 };

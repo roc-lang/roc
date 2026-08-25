@@ -2802,7 +2802,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             );
 
             try report.document.addReflowingText("It describes how a builtin format tracks its own state while encoding or parsing, which is why it has no spelling in Roc code. To require that a type can be encoded or parsed, name the constraint instead, as in ");
-            try report.document.addInlineCode("where [a.Json.Encodable([])]");
+            const constraint_hint = CIR.internalBuiltinTypeKindNested(parent_bytes, nested_bytes) orelse unreachable;
+            try report.document.addInlineCode(switch (constraint_hint) {
+                .json => "where [a.Json.Encodable([])]",
+                .http_header => "where [a.Encoding.HttpHeader.Parseable([])]",
+            });
             try report.document.addReflowingText(".");
 
             break :blk report;
