@@ -144,5 +144,5 @@ the corpus before/after (should be within noise).
 - [../small/severity-and-report-collection.md](../small/severity-and-report-collection.md)—
   the classification and orchestration seams around the same report
   pipeline; independent, but lands naturally before or after this.
-- [../small/silent-drift-guards.md](../small/silent-drift-guards.md)—
+- `silent-drift-guards` (landed; doc removed)—
   the parity-suite pattern this project applies to renderers.

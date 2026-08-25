@@ -10509,49 +10509,19 @@ const BodyLocalScope = struct {
         }
     }
 
-    fn bindPat(self: *BodyLocalScope, pat_id: Ast.PatId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
-        switch (self.program.getPat(pat_id).data) {
-            .bind => |local| {
-                try self.bind(local);
-                try added.append(self.allocator, local);
-            },
-            .wildcard,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            => {},
-            .str_pattern => |str| {
-                const steps = self.program.strPatternStepSpan(str.steps);
-                for (0..steps.len) |index| {
-                    if (GuardedList.at(steps, index).capture) |capture| try self.bindPat(capture, added);
-                }
-            },
-            .as => |as| {
-                try self.bindPat(as.pattern, added);
-                try self.bind(as.local);
-                try added.append(self.allocator, as.local);
-            },
-            .record => |fields| {
-                const destructs = self.program.recordDestructSpan(fields);
-                for (0..destructs.len) |index| try self.bindPat(GuardedList.at(destructs, index).pattern, added);
-            },
-            .tuple => |items| {
-                const children = self.program.patSpan(items);
-                for (0..children.len) |index| try self.bindPat(GuardedList.at(children, index), added);
-            },
-            .list => |list| {
-                const children = self.program.patSpan(list.patterns);
-                for (0..children.len) |index| try self.bindPat(GuardedList.at(children, index), added);
-                if (list.rest) |rest| if (rest.pattern) |rest_pattern| try self.bindPat(rest_pattern, added);
-            },
-            .tag => |tag| {
-                const payloads = self.program.patSpan(tag.payloads);
-                for (0..payloads.len) |index| try self.bindPat(GuardedList.at(payloads, index), added);
-            },
-            .nominal => |backing| try self.bindPat(backing, added),
+    /// Records each bound local into the body-local scope's bound counts.
+    const ScopeBinder = struct {
+        scope: *BodyLocalScope,
+        added: *std.ArrayList(Ast.LocalId),
+
+        pub fn bindLocal(self: ScopeBinder, local: Ast.LocalId) Allocator.Error!void {
+            try self.scope.bind(local);
+            try self.added.append(self.scope.allocator, local);
         }
+    };
+
+    fn bindPat(self: *BodyLocalScope, pat_id: Ast.PatId, added: *std.ArrayList(Ast.LocalId)) Allocator.Error!void {
+        try Ast.forEachBoundLocal(self.program, pat_id, ScopeBinder{ .scope = self, .added = added });
     }
 
     fn walkExprSpan(self: *BodyLocalScope, span: Ast.Span(Ast.ExprId)) Allocator.Error!void {

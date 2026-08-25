@@ -149,6 +149,6 @@ size/copy win, not a regression risk. Debug corpus time parity.
 
 - [spec-constr-specialization-limits.md](./spec-constr-specialization-limits.md)—
   same pass pairing: spec_constr is why `recomputeCaptures` exists.
-- [store-generation-counters.md](./store-generation-counters.md)—the
+- `store-generation-counters` (landed; doc removed)—the
   landed guarded-store work; L1's refactor must keep using the guarded
   span APIs it introduced.
