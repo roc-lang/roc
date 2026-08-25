@@ -164,6 +164,7 @@ pub const BuiltinTypeLookup = union(enum) {
     qualified: []const u8,
 };
 
+/// Public codec family that owns an otherwise unnameable builtin state type.
 pub const InternalBuiltinTypeKind = enum {
     json,
     http_header,
@@ -194,6 +195,7 @@ pub fn builtinTypeIsInternal(name: []const u8) bool {
     return internalBuiltinTypeKind(name) != null;
 }
 
+/// Return the codec family for an internal builtin type name or nested type.
 pub fn internalBuiltinTypeKind(name: []const u8) ?InternalBuiltinTypeKind {
     const module_prefix = "Builtin.";
     for (builtin_type_specs) |spec| {
@@ -214,6 +216,8 @@ pub fn builtinTypeIsInternalNested(container: []const u8, nested: []const u8) bo
     return internalBuiltinTypeKindNested(container, nested) != null;
 }
 
+/// Return the codec family for an internal type supplied as container and
+/// nested-name slices.
 pub fn internalBuiltinTypeKindNested(container: []const u8, nested: []const u8) ?InternalBuiltinTypeKind {
     const module_prefix = "Builtin.";
     for (builtin_type_specs) |spec| {
