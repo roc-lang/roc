@@ -140,6 +140,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_10724_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10765_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10792_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10831_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10848_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
     std.testing.refAllDecls(@import("test/list_map_target_independent_lir_test.zig"));
     std.testing.refAllDecls(@import("test/platform_box_update_lir_test.zig"));

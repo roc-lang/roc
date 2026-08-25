@@ -85,16 +85,8 @@ pub const PackedListLiteral = struct {
 };
 
 /// Slice descriptor over one of the program side arrays.
-pub fn Span(comptime _: type) type {
-    return extern struct {
-        start: u32,
-        len: u32,
-
-        pub fn empty() @This() {
-            return .{ .start = 0, .len = 0 };
-        }
-    };
-}
+/// Span into one of this IR's flat side tables.
+pub const Span = Common.Span;
 
 /// Checked function definition used by a Monotype function template.
 pub const FnDef = union(enum(u8)) {
@@ -262,26 +254,26 @@ pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *c
     return .{ .bytes = hasher.finalResult() };
 }
 
-/// Compute the stable digest used in specialization identity from the exact
-/// durable evidence nodes and lexical frames carried by a function template.
+/// Compute the stable specialization digest from durable evidence topology,
+/// checked callable type keys, and lexical frames carried by a function template.
 pub fn fnEvidenceDigest(
     evidence: []const check.ConstStore.ConstFnEvidence,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
 ) EvidenceDigest {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v1");
+    writeBytes(&hasher, "roc.monotype.fn_evidence.v2");
     writeU32(&hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(&hasher, @intFromEnum(entry));
         switch (entry) {
             .target => |target| {
                 writeBytes(&hasher, &target.view.bytes);
-                writeMethodTarget(&hasher, target.method);
+                writeMethodTarget(&hasher, target.method, target.method_callable_key);
                 if (target.instantiation) |instantiation| {
                     writeU8(&hasher, 1);
                     writeBytes(&hasher, &instantiation.view.bytes);
-                    writeU32(&hasher, @intFromEnum(instantiation.callable_ty));
+                    writeBytes(&hasher, &instantiation.callable_key.bytes);
                 } else writeU8(&hasher, 0);
                 writeU8(&hasher, @intFromEnum(target.nested));
                 switch (target.nested) {
@@ -311,7 +303,67 @@ pub fn fnEvidenceDigest(
     return .{ .bytes = hasher.finalResult() };
 }
 
-fn writeMethodTarget(hasher: *std.crypto.hash.sha2.Sha256, target: static_dispatch.MethodTarget) void {
+/// Exact checked-identity equality for retained function evidence. Checked
+/// callable ids are replay payload; their type keys are the durable identity.
+pub fn fnEvidenceEql(
+    left_evidence: []const check.ConstStore.ConstFnEvidence,
+    left_frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    left_head: ?u32,
+    right_evidence: []const check.ConstStore.ConstFnEvidence,
+    right_frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    right_head: ?u32,
+) bool {
+    if (left_head != right_head or left_evidence.len != right_evidence.len or left_frames.len != right_frames.len) return false;
+    for (left_evidence, right_evidence) |left, right| {
+        switch (left) {
+            .target => |left_target| switch (right) {
+                .target => |right_target| {
+                    if (!fnEvidenceTargetEql(left_target, right_target)) return false;
+                },
+                .structural, .unreachable_value, .checked_error => return false,
+            },
+            .structural => |left_structural| switch (right) {
+                .structural => |right_structural| if (!std.meta.eql(left_structural, right_structural)) return false,
+                .target, .unreachable_value, .checked_error => return false,
+            },
+            .unreachable_value => if (right != .unreachable_value) return false,
+            .checked_error => if (right != .checked_error) return false,
+        }
+    }
+    for (left_frames, right_frames) |left, right| {
+        if (!std.meta.eql(left, right)) return false;
+    }
+    return true;
+}
+
+fn fnEvidenceTargetEql(left: anytype, right: @TypeOf(left)) bool {
+    if (!std.meta.eql(left.view, right.view)) return false;
+    if (!methodTargetIdentityEql(left.method, left.method_callable_key, right.method, right.method_callable_key)) return false;
+    if (left.instantiation) |left_instantiation| {
+        const right_instantiation = right.instantiation orelse return false;
+        if (!std.meta.eql(left_instantiation.view, right_instantiation.view)) return false;
+        if (!std.meta.eql(left_instantiation.callable_key, right_instantiation.callable_key)) return false;
+    } else if (right.instantiation != null) return false;
+    return std.meta.eql(left.nested, right.nested);
+}
+
+fn methodTargetIdentityEql(
+    left: static_dispatch.MethodTarget,
+    left_callable_key: names.CanonicalTypeKey,
+    right: static_dispatch.MethodTarget,
+    right_callable_key: names.CanonicalTypeKey,
+) bool {
+    return left.module_idx == right.module_idx and
+        left.def_idx == right.def_idx and
+        std.meta.eql(left.kind, right.kind) and
+        std.meta.eql(left_callable_key, right_callable_key);
+}
+
+fn writeMethodTarget(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    target: static_dispatch.MethodTarget,
+    callable_key: names.CanonicalTypeKey,
+) void {
     writeU32(hasher, target.module_idx);
     writeU32(hasher, @intFromEnum(target.def_idx));
     writeU8(hasher, @intFromEnum(target.kind));
@@ -331,7 +383,7 @@ fn writeMethodTarget(hasher: *std.crypto.hash.sha2.Sha256, target: static_dispat
         },
         .structural => |kind| writeU8(hasher, @intFromEnum(kind)),
     }
-    writeU32(hasher, @intFromEnum(target.callable_ty));
+    writeBytes(hasher, &callable_key.bytes);
 }
 
 fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: static_dispatch.StructuralDerivation) void {
@@ -350,6 +402,47 @@ fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
         writeU8(hasher, 1);
         writeU32(hasher, actual);
     } else writeU8(hasher, 0);
+}
+
+test "function evidence identity uses checked callable type keys" {
+    var method_key: names.CanonicalTypeKey = .{};
+    method_key.bytes[0] = 1;
+    var instantiation_key: names.CanonicalTypeKey = .{};
+    instantiation_key.bytes[0] = 2;
+    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
+    };
+    const left = [_]check.ConstStore.ConstFnEvidence{.{ .target = .{
+        .view = .{},
+        .method = .{
+            .module_idx = 3,
+            .def_idx = @enumFromInt(4),
+            .kind = .{ .structural = .parser },
+            .callable_ty = @enumFromInt(5),
+        },
+        .method_callable_key = method_key,
+        .instantiation = .{
+            .view = .{},
+            .callable_key = instantiation_key,
+            .callable_ty = @enumFromInt(6),
+        },
+        .nested = .from_callable,
+    } }};
+    var right = left;
+    right[0].target.method.callable_ty = @enumFromInt(7);
+    right[0].target.instantiation.?.callable_ty = @enumFromInt(8);
+
+    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
+
+    right[0].target.method_callable_key.bytes[0] = 9;
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+
+    right[0].target.method_callable_key = method_key;
+    right[0].target.instantiation.?.callable_key.bytes[0] = 9;
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }
 
 fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
@@ -1890,15 +1983,11 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn addExprSpan(self: *ProgramBuilder, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
-        const start: u32 = @intCast(self.expr_ids.len());
-        try self.expr_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return try Common.appendSpan(ExprId, &self.expr_ids, self.allocator, ids);
     }
 
     pub fn addPatSpan(self: *ProgramBuilder, ids: []const PatId) std.mem.Allocator.Error!Span(PatId) {
-        const start: u32 = @intCast(self.pat_ids.len());
-        try self.pat_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return try Common.appendSpan(PatId, &self.pat_ids, self.allocator, ids);
     }
 
     pub fn addTypedLocalSpan(self: *ProgramBuilder, values: []const TypedLocal) std.mem.Allocator.Error!Span(TypedLocal) {
@@ -1912,52 +2001,35 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn addFieldExprSpan(self: *ProgramBuilder, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
-        const start: u32 = @intCast(self.field_exprs.len());
-        try self.field_exprs.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(FieldExpr, &self.field_exprs, self.allocator, values);
     }
 
     pub fn addFieldAccessSegmentSpan(self: *ProgramBuilder, values: []const FieldAccessSegment) std.mem.Allocator.Error!Span(FieldAccessSegment) {
-        if (values.len == 0) Common.invariant("field access segment span must be nonempty");
-        const start: u32 = @intCast(self.field_access_segments.len());
-        try self.field_access_segments.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendNonemptySpan(FieldAccessSegment, &self.field_access_segments, self.allocator, values, "field access segment span must be nonempty");
     }
 
     pub fn addFnDefCaptureSpan(self: *ProgramBuilder, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
-        const start: u32 = @intCast(self.fn_def_captures.len());
-        try self.fn_def_captures.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(FnDefCapture, &self.fn_def_captures, self.allocator, values);
     }
 
     pub fn addRecordDestructSpan(self: *ProgramBuilder, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
-        const start: u32 = @intCast(self.record_destructs.len());
-        try self.record_destructs.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(RecordDestruct, &self.record_destructs, self.allocator, values);
     }
 
     pub fn addStrPatternStepSpan(self: *ProgramBuilder, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
-        const start: u32 = @intCast(self.str_pattern_steps.len());
-        try self.str_pattern_steps.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(StrPatternStep, &self.str_pattern_steps, self.allocator, values);
     }
 
     pub fn addBranchSpan(self: *ProgramBuilder, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
-        const start: u32 = @intCast(self.branches.len());
-        try self.branches.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(Branch, &self.branches, self.allocator, values);
     }
 
     pub fn addIfBranchSpan(self: *ProgramBuilder, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
-        const start: u32 = @intCast(self.if_branches.len());
-        try self.if_branches.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(IfBranch, &self.if_branches, self.allocator, values);
     }
 
     pub fn addStmtSpan(self: *ProgramBuilder, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        const start: u32 = @intCast(self.stmt_ids.len());
-        try self.stmt_ids.appendSlice(self.allocator, ids);
-        return .{ .start = start, .len = @intCast(ids.len) };
+        return try Common.appendSpan(StmtId, &self.stmt_ids, self.allocator, ids);
     }
 
     pub fn exprSpan(self: *const ProgramBuilder, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
@@ -1994,9 +2066,7 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn addCaptureOperandSpan(self: *ProgramBuilder, values: []const CaptureOperand) std.mem.Allocator.Error!Span(CaptureOperand) {
-        const start: u32 = @intCast(self.capture_operands.len());
-        try self.capture_operands.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+        return try Common.appendSpan(CaptureOperand, &self.capture_operands, self.allocator, values);
     }
 
     pub fn captureOperandSpan(self: *const ProgramBuilder, span_: Span(CaptureOperand)) ProgramSpanBorrow(CaptureOperand, "capture_operands") {

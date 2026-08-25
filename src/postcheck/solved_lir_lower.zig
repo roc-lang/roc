@@ -6992,7 +6992,7 @@ const Lowerer = struct {
                 break :blk try self.lowerEqLocalsInto(target, lhs, rhs, backing.ty, negated, next);
             },
             .record => |fields| try self.lowerRecordEqLocalsInto(target, lhs, rhs, self.types.fieldSpan(fields), negated, next),
-            .capture_record => |fields| try self.lowerCaptureRecordEqLocalsInto(target, lhs, rhs, self.types.captureFieldSpan(fields), negated, next),
+            .capture_record => |fields| try self.lowerRecordEqLocalsInto(target, lhs, rhs, self.types.captureFieldSpan(fields), negated, next),
             .tuple => |items| try self.lowerTupleEqLocalsInto(target, lhs, rhs, self.types.span(items), negated, next),
             .tag_union => |tags| try self.lowerTagUnionEqLocalsInto(target, lhs, rhs, self.types.tagSpan(tags), negated, next),
             .list, .box, .callable, .erased_fn, .erased_capture_ptr => Common.invariant("non-structural equality reached direct LIR structural equality lowering"),
@@ -7087,27 +7087,11 @@ const Lowerer = struct {
         } });
     }
 
+    /// Compare two aggregates field by field, right to left so the AND fold
+    /// nests later fields inside earlier ones. `fields` is any span whose
+    /// entries carry a `ty`, which is why ordinary records and capture records
+    /// share this one lowering.
     fn lowerRecordEqLocalsInto(
-        self: *Lowerer,
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        fields: anytype,
-        negated: bool,
-        next: LIR.CFStmtId,
-    ) Common.LowerError!LIR.CFStmtId {
-        var current = try self.assignBool(target, !negated, next);
-        const failed = try self.assignBool(target, negated, next);
-        var i = fields.len;
-        while (i > 0) {
-            i -= 1;
-            const field = GuardedList.at(fields, i);
-            current = try self.lowerFieldEqStep(lhs, rhs, field.ty, @intCast(i), current, failed);
-        }
-        return current;
-    }
-
-    fn lowerCaptureRecordEqLocalsInto(
         self: *Lowerer,
         target: LIR.LocalId,
         lhs: LIR.LocalId,
@@ -9054,7 +9038,7 @@ const Lowerer = struct {
             if (self.local_nodes.get(ty)) |node| return layout.localGraphInput(node);
 
             switch (self.lowerer.types.get(ty)) {
-                .primitive => |primitive| return layout.committedGraphInput(primitiveLayout(primitive)),
+                .primitive => |primitive| return layout.committedGraphInput(Common.primitiveLayout(primitive)),
                 .zst => return layout.committedGraphInput(.zst),
                 .erased_capture_ptr => return layout.committedGraphInput(.opaque_ptr),
                 .named => |named| if (named.builtin_owner) |owner| {
@@ -9281,34 +9265,6 @@ const Lowerer = struct {
             };
         }
     };
-
-    fn primitiveLayout(primitive: MonoType.Primitive) layout.Idx {
-        return switch (primitive) {
-            .bool => .bool,
-            .str => .str,
-            .u8 => .u8,
-            .i8 => .i8,
-            .u16 => .u16,
-            .i16 => .i16,
-            .u32 => .u32,
-            .i32 => .i32,
-            .u64 => .u64,
-            .i64 => .i64,
-            .u128 => .u128,
-            .i128 => .i128,
-            .f32 => .f32,
-            .f64 => .f64,
-            .dec => .dec,
-            .u8x16 => .u8x16,
-            .i8x16 => .i8x16,
-            .u16x8 => .u16x8,
-            .i16x8 => .i16x8,
-            .u32x4 => .u32x4,
-            .i32x4 => .i32x4,
-            .u64x2 => .u64x2,
-            .i64x2 => .i64x2,
-        };
-    }
 
     fn builtinOwnerLayout(owner: check.StaticDispatchRegistry.BuiltinOwner) ?layout.Idx {
         return switch (owner) {

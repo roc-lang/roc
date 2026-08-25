@@ -14573,7 +14573,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             } else {
                 const box_abi = ls.builtinBoxAbi(ll.ret_layout);
                 const value_size = box_abi.elem_size;
-                const value_vt = try self.procLocalValType(value_expr);
+                const value_repr = try WasmLayout.wasmReprWithStore(self.procLocalLayoutIdx(value_expr), ls);
+                const value_vt: ValType = switch (value_repr) {
+                    .stack_memory => .i32,
+                    .primitive => |val_type| val_type,
+                };
+                const value_is_composite = switch (value_repr) {
+                    .stack_memory => true,
+                    .primitive => false,
+                };
                 if (value_size == 0) {
                     _ = try self.emitProcLocal(value_expr);
                     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
@@ -14587,7 +14595,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
                     try self.emitProcLocal(value_expr);
 
-                    if (value_vt == .i32 and value_size > 4) {
+                    if (value_is_composite) {
                         const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                         try self.emitLocalSet(src_ptr);
 
@@ -14727,9 +14735,17 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 } else {
                     try self.emitProcLocal(box_expr);
 
-                    const result_vt = try self.resolveValType(ll.ret_layout);
+                    const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, ls);
+                    const result_vt: ValType = switch (result_repr) {
+                        .stack_memory => .i32,
+                        .primitive => |val_type| val_type,
+                    };
+                    const result_is_composite = switch (result_repr) {
+                        .stack_memory => true,
+                        .primitive => false,
+                    };
                     const result_size = try self.layoutByteSize(ll.ret_layout);
-                    if (result_vt == .i32 and result_size > 4) {
+                    if (result_is_composite) {
                         const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                         try self.emitLocalSet(src_local);
 
@@ -14954,8 +14970,17 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .ptr_store => {
             // ptr_store: (Ptr(T), T) -> {}. Copy sizeOf(T) bytes into *ptr.
             // Result is unit; leave a dummy i32 0 (zst convention).
-            const value_size = try self.layoutByteSize(self.procLocalLayoutIdx(GuardedList.at(args, 1)));
-            const value_vt = try self.procLocalValType(GuardedList.at(args, 1));
+            const value_expr = GuardedList.at(args, 1);
+            const value_size = try self.layoutByteSize(self.procLocalLayoutIdx(value_expr));
+            const value_repr = try WasmLayout.wasmReprWithStore(self.procLocalLayoutIdx(value_expr), self.getLayoutStore());
+            const value_vt: ValType = switch (value_repr) {
+                .stack_memory => .i32,
+                .primitive => |val_type| val_type,
+            };
+            const value_is_composite = switch (value_repr) {
+                .stack_memory => true,
+                .primitive => false,
+            };
 
             if (value_size == 0) {
                 _ = try self.emitProcLocal(GuardedList.at(args, 0));
@@ -14965,9 +14990,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 const ptr_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.emitLocalSet(ptr_local);
 
-                try self.emitProcLocal(GuardedList.at(args, 1));
-                if (value_vt == .i32 and value_size > 4) {
-                    // Composite value: arg is an i32 pointer into linear memory.
+                try self.emitProcLocal(value_expr);
+                if (value_is_composite) {
                     const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                     try self.emitLocalSet(src_local);
                     try self.emitMemCopy(ptr_local, 0, src_local, value_size);
@@ -14982,7 +15006,15 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // ptr_load: (Ptr(T)) -> T. Copy sizeOf(T) bytes out of *ptr.
             // Same shape as erased_capture_load above.
             const result_size = try self.layoutByteSize(ll.ret_layout);
-            const result_vt = try self.resolveValType(ll.ret_layout);
+            const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, self.getLayoutStore());
+            const result_vt: ValType = switch (result_repr) {
+                .stack_memory => .i32,
+                .primitive => |val_type| val_type,
+            };
+            const result_is_composite = switch (result_repr) {
+                .stack_memory => true,
+                .primitive => false,
+            };
 
             if (result_size == 0) {
                 _ = try self.emitProcLocal(GuardedList.at(args, 0));
@@ -14994,7 +15026,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
                 try self.emitLocalSet(src_ptr);
 
-                if (result_vt == .i32 and result_size > 4) {
+                if (result_is_composite) {
                     const ls = self.getLayoutStore();
                     const result_align: u32 = @intCast(@max(ls.layoutSizeAlign(ls.getLayout(ll.ret_layout)).alignment.toByteUnits(), 1));
                     const dst_offset = try self.allocStackMemory(result_size, result_align);

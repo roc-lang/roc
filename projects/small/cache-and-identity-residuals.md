@@ -129,6 +129,6 @@ unchanged (assert via the existing cache CLI tests).
   requirement solutions in the app's checked artifact and finalization
   consumes them, so the one *large* name-keyed resolution this doc's item 1
   is the small sibling of no longer exists.
-- [../small/silent-drift-guards.md](../small/silent-drift-guards.md)—
+- `silent-drift-guards` (landed; doc removed)—
   same philosophy: every mirrored or composed fact gets a structural
   guard.

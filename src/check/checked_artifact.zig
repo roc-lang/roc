@@ -2972,6 +2972,37 @@ pub const CheckedPrimitive = enum(u8) {
     i64x2,
 };
 
+/// The builtin owner a primitive dispatches through. This is the single source
+/// of truth shared by every post-check consumer; call it rather than writing a
+/// second switch over `CheckedPrimitive`.
+pub fn builtinOwnerForPrimitive(primitive: CheckedPrimitive) static_dispatch.BuiltinOwner {
+    return switch (primitive) {
+        .bool => .bool,
+        .str => .str,
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+        .u8x16 => .u8x16,
+        .i8x16 => .i8x16,
+        .u16x8 => .u16x8,
+        .i16x8 => .i16x8,
+        .u32x4 => .u32x4,
+        .i32x4 => .i32x4,
+        .u64x2 => .u64x2,
+        .i64x2 => .i64x2,
+    };
+}
+
 /// Public `CheckedBuiltinRuntimeEncoding` declaration.
 pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     primitive: CheckedPrimitive,
@@ -29209,7 +29240,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 69 records in the checking-context identity how a module's
     // compile-time roots were established, so an app root checked without its
     // entrypoint contract cannot share a cache entry with one checked under it.
-    const serialized_layout_version: u32 = 69;
+    // Version 70 retains canonical callable type keys in stored function
+    // evidence so specialization identity does not depend on fresh checked ids.
+    const serialized_layout_version: u32 = 70;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35361,8 +35394,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xF7, 0x81, 0xEC, 0xFE, 0xB4, 0x4E, 0xEE, 0xD7, 0x62, 0xAE, 0xC1, 0x92, 0xBB, 0x16, 0xAF, 0xAB,
-        0x31, 0xB7, 0x4F, 0xF9, 0xB6, 0x87, 0x92, 0x31, 0xC2, 0x1D, 0xCF, 0x7E, 0xF5, 0x43, 0x05, 0x89,
+        0xF4, 0x44, 0xBF, 0x73, 0x28, 0x33, 0x3B, 0x3E, 0x4E, 0xD1, 0xF6, 0x56, 0x8D, 0x7E, 0x27, 0x88,
+        0x5A, 0x77, 0x16, 0xA5, 0xA3, 0x94, 0xB2, 0x00, 0xA8, 0xD6, 0xCA, 0xB1, 0x7B, 0x8C, 0x8E, 0x54,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
