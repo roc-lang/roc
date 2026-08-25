@@ -321,6 +321,11 @@ const MergeState = struct {
     /// the values it relates.
     entry_captures: u32,
     entry_facts: std.ArrayList(Fact),
+    /// Value meet of the path environment over the entry edges alone. A
+    /// local the body subtree never assigns holds its entry value at every
+    /// head arrival, so the body can be seeded with it even though the
+    /// fact-free first walk of the back edge could never re-derive it.
+    entry_env: std.ArrayList(EnvMeet),
 };
 
 /// One endpoint of a cross-round persisted fact, in round-stable form.
@@ -390,6 +395,17 @@ const Pass = struct {
     joins_in_order: std.ArrayList(CFStmtId),
     jump_records: std.ArrayList(JumpRecord),
     merge_states: collections.DenseMap(CFStmtId, MergeState),
+    /// Locals assigned anywhere in a join body's statement subtree, cached
+    /// per body head within a round. Statement folds change the subtree, so
+    /// the cache resets with the round.
+    body_assigned: collections.DenseMap(CFStmtId, std.AutoHashMapUnmanaged(u32, void)),
+    body_assigned_scan: std.ArrayList(CFStmtId),
+    body_assigned_seen: std.AutoHashMapUnmanaged(u32, void),
+    /// Region head that was being walked when each region was first
+    /// enqueued: the lexical nesting of join bodies. Edge classification at
+    /// a merge asks whether the arriving walk is nested anywhere inside the
+    /// merge head's own region, not merely whether it is the innermost one.
+    region_parents: collections.DenseMap(CFStmtId, CFStmtId),
     body_joins: collections.DenseMap(CFStmtId, JoinPointId),
     len_roots: collections.DenseMap(NodeId, LocalId),
     value_roots: collections.DenseMap(NodeId, LocalId),
@@ -457,6 +473,10 @@ const Pass = struct {
             .joins_in_order = .empty,
             .jump_records = .empty,
             .merge_states = collections.DenseMap(CFStmtId, MergeState).init(allocator),
+            .body_assigned = collections.DenseMap(CFStmtId, std.AutoHashMapUnmanaged(u32, void)).init(allocator),
+            .body_assigned_scan = .empty,
+            .body_assigned_seen = .empty,
+            .region_parents = collections.DenseMap(CFStmtId, CFStmtId).init(allocator),
             .body_joins = collections.DenseMap(CFStmtId, JoinPointId).init(allocator),
             .len_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
             .value_roots = collections.DenseMap(NodeId, LocalId).init(allocator),
@@ -501,6 +521,11 @@ const Pass = struct {
         self.jump_records.deinit(self.allocator);
         self.clearMergeStates();
         self.merge_states.deinit();
+        self.clearBodyAssigned();
+        self.body_assigned.deinit();
+        self.body_assigned_scan.deinit(self.allocator);
+        self.body_assigned_seen.deinit(self.allocator);
+        self.region_parents.deinit();
         self.body_joins.deinit();
         self.len_roots.deinit();
         self.value_roots.deinit();
@@ -538,6 +563,8 @@ const Pass = struct {
         self.joins_in_order.clearRetainingCapacity();
         self.jump_records.clearRetainingCapacity();
         self.clearMergeStates();
+        self.clearBodyAssigned();
+        self.region_parents.clearRetainingCapacity();
         self.body_joins.clearRetainingCapacity();
         self.len_roots.clearRetainingCapacity();
         self.value_roots.clearRetainingCapacity();
@@ -1046,8 +1073,88 @@ const Pass = struct {
             state.facts.deinit(self.allocator);
             state.env.deinit(self.allocator);
             state.entry_facts.deinit(self.allocator);
+            state.entry_env.deinit(self.allocator);
         }
         self.merge_states.clearRetainingCapacity();
+    }
+
+    fn clearBodyAssigned(self: *Pass) void {
+        var it = self.body_assigned.valueIterator();
+        while (it.next()) |set| set.deinit(self.allocator);
+        self.body_assigned.clearRetainingCapacity();
+    }
+
+    /// Locals assigned anywhere in the statement subtree reachable from
+    /// `head` without following jumps: reassignments a loop iteration could
+    /// perform. Jump targets either re-enter this subtree through their
+    /// declarations (nested joins, already reachable) or leave it entirely.
+    fn bodyAssignedLocals(self: *Pass, head: CFStmtId) ResourceError!*const std.AutoHashMapUnmanaged(u32, void) {
+        if (self.body_assigned.get(head) != null) return self.body_assigned.getPtr(head).?;
+        var set = std.AutoHashMapUnmanaged(u32, void).empty;
+        errdefer set.deinit(self.allocator);
+        self.body_assigned_scan.clearRetainingCapacity();
+        self.body_assigned_seen.clearRetainingCapacity();
+        try self.body_assigned_scan.append(self.allocator, head);
+        while (self.body_assigned_scan.pop()) |current| {
+            const seen = try self.body_assigned_seen.getOrPut(self.allocator, @intFromEnum(current));
+            if (seen.found_existing) continue;
+            switch (self.store.getCFStmt(current)) {
+                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .assign_boxy_adapt, .assign_boxy_box, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_eq, .assign_boxy_inspect, .assign_boxy_reuse_box, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_boxy_unbox, .assign_call_dict, .set_local => |stmt| {
+                    try set.put(self.allocator, @intFromEnum(stmt.target), {});
+                    try self.body_assigned_scan.append(self.allocator, stmt.next);
+                },
+                inline .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| try self.body_assigned_scan.append(self.allocator, stmt.next),
+                .switch_stmt => |stmt| {
+                    const branches = self.store.getCFSwitchBranches(stmt.branches);
+                    for (0..GuardedList.borrowLen(branches)) |i| {
+                        try self.body_assigned_scan.append(self.allocator, GuardedList.at(branches, i).body);
+                    }
+                    try self.body_assigned_scan.append(self.allocator, stmt.default_branch);
+                    if (stmt.continuation) |continuation| try self.body_assigned_scan.append(self.allocator, continuation);
+                },
+                .switch_initialized_payload => |stmt| {
+                    try self.body_assigned_scan.append(self.allocator, stmt.initialized_branch);
+                    try self.body_assigned_scan.append(self.allocator, stmt.uninitialized_branch);
+                },
+                .boxy_tag_match => |stmt| {
+                    try self.body_assigned_scan.append(self.allocator, stmt.on_match);
+                    try self.body_assigned_scan.append(self.allocator, stmt.on_miss);
+                },
+                .str_match => |stmt| {
+                    const steps = self.store.getStrMatchSteps(stmt.steps);
+                    for (0..GuardedList.borrowLen(steps)) |i| {
+                        switch (GuardedList.at(steps, i).capture) {
+                            .discard => {},
+                            .view => |view_local| try set.put(self.allocator, @intFromEnum(view_local), {}),
+                        }
+                    }
+                    try self.body_assigned_scan.append(self.allocator, stmt.on_match);
+                    try self.body_assigned_scan.append(self.allocator, stmt.on_miss);
+                },
+                .str_match_set => |stmt| {
+                    const arms = self.store.getStrMatchArms(stmt.arms);
+                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
+                        const arm = GuardedList.at(arms, arm_index);
+                        const steps = self.store.getStrMatchSteps(arm.steps);
+                        for (0..GuardedList.borrowLen(steps)) |i| {
+                            switch (GuardedList.at(steps, i).capture) {
+                                .discard => {},
+                                .view => |view_local| try set.put(self.allocator, @intFromEnum(view_local), {}),
+                            }
+                        }
+                        try self.body_assigned_scan.append(self.allocator, arm.on_match);
+                    }
+                    try self.body_assigned_scan.append(self.allocator, stmt.on_miss);
+                },
+                .join => |stmt| {
+                    try self.body_assigned_scan.append(self.allocator, stmt.body);
+                    try self.body_assigned_scan.append(self.allocator, stmt.remainder);
+                },
+                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+            }
+        }
+        try self.body_assigned.put(head, set);
+        return self.body_assigned.getPtr(head).?;
     }
 
     /// A binding is worth carrying through a merge when it says something a
@@ -1072,17 +1179,48 @@ const Pass = struct {
     fn captureMergeEdge(self: *Pass, head: CFStmtId) ResourceError!void {
         const entry = try self.merge_states.getOrPut(head);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .env = .empty, .entry_captures = 0, .entry_facts = .empty };
+            entry.value_ptr.* = .{ .captures = 0, .facts = .empty, .env = .empty, .entry_captures = 0, .entry_facts = .empty, .entry_env = .empty };
         }
         const state = entry.value_ptr;
 
-        // An edge arriving from another region is an entry edge; its facts
-        // meet separately so loop-invariant relations survive the back
-        // edge's inability to derive them before its region is seeded.
-        if (self.current_region != head) {
+        // An edge arriving from outside the merge head's region is an entry
+        // edge; its facts meet separately so loop-invariant relations
+        // survive the back edge's inability to derive them before its
+        // region is seeded.
+        if (!self.walkIsWithin(head)) {
             if (state.entry_captures == 0) {
                 try state.entry_facts.appendSlice(self.allocator, self.facts.items);
+                var entry_it = self.path_env.iterator();
+                while (entry_it.next()) |kv| {
+                    if (state.entry_env.items.len >= merge_env_cap) break;
+                    if (!self.captureWorthy(kv.value_ptr.node)) continue;
+                    const node = self.nodes.items[kv.value_ptr.node];
+                    try state.entry_env.append(self.allocator, .{
+                        .local = kv.key_ptr.*,
+                        .root = node.root,
+                        .off_lo = node.off_lo,
+                        .off_hi = node.off_hi,
+                        .valid = true,
+                        .bounds = .{},
+                        .len_bounds = .{},
+                        .len_bounds_any = .{},
+                    });
+                }
             } else {
+                for (state.entry_env.items) |*meet| {
+                    if (!meet.valid) continue;
+                    const binding = self.path_env.get(meet.local) orelse {
+                        meet.valid = false;
+                        continue;
+                    };
+                    const node = self.nodes.items[binding.node];
+                    if (node.root == meet.root) {
+                        meet.off_lo = @min(meet.off_lo, node.off_lo);
+                        meet.off_hi = @max(meet.off_hi, node.off_hi);
+                    } else {
+                        meet.valid = false;
+                    }
+                }
                 var keep_entry: usize = 0;
                 for (state.entry_facts.items) |fact| {
                     for (self.facts.items) |mine| {
@@ -1234,6 +1372,28 @@ const Pass = struct {
                     const params = self.store.getLocalSpan(join.params);
                     for (0..GuardedList.borrowLen(params)) |i| {
                         try self.seedLoopParam(join_id, GuardedList.at(params, i));
+                    }
+                }
+                // A local every entry edge binds compatibly and the body
+                // subtree never assigns holds its entry value at every head
+                // arrival; the back edge could never re-derive it before
+                // its own region is seeded, so seed it from the entry meet.
+                if (state) |st| {
+                    if (st.entry_captures > 0 and st.entry_env.items.len > 0) {
+                        const assigned = try self.bodyAssignedLocals(head);
+                        for (st.entry_env.items) |meet| {
+                            if (!meet.valid) continue;
+                            if (assigned.contains(@intFromEnum(meet.local))) continue;
+                            if (self.lookup(meet.local) != null) continue;
+                            const node = (try self.addNode(.{
+                                .root = meet.root,
+                                .off_lo = meet.off_lo,
+                                .off_hi = meet.off_hi,
+                                .lo = 0,
+                                .hi = 0,
+                            })) orelse continue;
+                            try self.bind(meet.local, .{ .node = node });
+                        }
                     }
                 }
                 return;
@@ -2096,6 +2256,23 @@ const Pass = struct {
         if (self.region_seen.contains(head)) return;
         try self.region_seen.put(head, {});
         try self.regions.append(self.allocator, head);
+        if (self.current_region) |parent| {
+            try self.region_parents.put(head, parent);
+        }
+    }
+
+    /// Whether the walk is currently inside `head`'s region, directly or
+    /// through any chain of nested join-body regions. A loop's back edge
+    /// often sits inside a nested merge region (a `??` default's join, say),
+    /// and it is still a back edge of the enclosing loop.
+    fn walkIsWithin(self: *const Pass, head: CFStmtId) bool {
+        var cursor = self.current_region orelse return false;
+        var remaining = self.regions.items.len + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            if (cursor == head) return true;
+            cursor = self.region_parents.get(cursor) orelse return false;
+        }
+        return false;
     }
 
     fn walkRegions(self: *Pass, body: CFStmtId) ResourceError!void {
@@ -2551,6 +2728,13 @@ const Pass = struct {
                     if (try self.valueOf(list_local)) |list_node| {
                         const root = self.rootOf(list_node);
                         if (self.len_terms.get(root)) |len_node| {
+                            // A term synthesized before any read (a merge
+                            // meet's, say) has no stable base yet; this read
+                            // names one, so facts about the term can persist
+                            // into loop bodies.
+                            if (self.len_roots.get(len_node) == null and self.isSingleAssign(list_local)) {
+                                try self.len_roots.put(len_node, list_local);
+                            }
                             try self.bind(s.target, .{ .node = len_node });
                             return;
                         }
@@ -2772,6 +2956,24 @@ const Pass = struct {
             .num_negate,
             .num_abs,
             .num_abs_diff,
+            .u8_to_u16,
+            .u8_to_u32,
+            .u8_to_u64,
+            .u16_to_u32,
+            .u16_to_u64,
+            .u32_to_u64,
+            => {
+                // A widening between tracked unsigned types is the identity on
+                // the value, so the result is the same term: everything already
+                // proven about the operand keeps holding after the widening.
+                if (arg_count == 1) {
+                    if (try self.valueOf(GuardedList.at(args, 0))) |node| {
+                        try self.bind(s.target, .{ .node = node });
+                        return;
+                    }
+                }
+                try self.bindFresh(s.target);
+            },
             .num_float_add,
             .num_float_sub,
             .num_float_mul,
@@ -2888,9 +3090,6 @@ const Pass = struct {
             .u8_to_i32,
             .u8_to_i64,
             .u8_to_i128,
-            .u8_to_u16,
-            .u8_to_u32,
-            .u8_to_u64,
             .u8_to_u128,
             .u8_to_f32,
             .u8_to_f64,
@@ -2921,8 +3120,6 @@ const Pass = struct {
             .u16_to_i128,
             .u16_to_u8_wrap,
             .u16_to_u8_try,
-            .u16_to_u32,
-            .u16_to_u64,
             .u16_to_u128,
             .u16_to_f32,
             .u16_to_f64,
@@ -2957,7 +3154,6 @@ const Pass = struct {
             .u32_to_u8_try,
             .u32_to_u16_wrap,
             .u32_to_u16_try,
-            .u32_to_u64,
             .u32_to_u128,
             .u32_to_f32,
             .u32_to_f64,
@@ -3429,6 +3625,8 @@ const Pass = struct {
         }
         return null;
     }
+
+    /// Bounded node for a constant multiply proven not to wrap, or null.
 
     fn proveFamilyNoOverflow(
         self: *Pass,

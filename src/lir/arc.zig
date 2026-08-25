@@ -272,8 +272,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     var inserter = Inserter{
         .store = store,
         .layouts = layouts,
-        .unique_diag = UniqueDiag.init(),
-        .seed_diag = SeedDiag.init(),
         .options = options,
     };
     const boxy_rc_descs = try computeBoxyRcDescs(store);
@@ -400,8 +398,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         inserter.current_sig = emit_sig;
         inserter.current_proc_body = body;
         inserter.current_source_proc = source_proc;
-        try inserter.computeImmortalLocals(body);
-        defer inserter.immortal_locals.deinit(store.allocator);
 
         // The ownership-neutral body and emitted LIR outlive this iteration;
         // all solver and materialization state does not. A single per-emission arena
@@ -530,10 +526,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             .outcomes = solution.outcomes,
         }, options.roots);
     }
-
-    inserter.unique_diag.report();
-    inserter.unique_diag.reportGroups(&inserter);
-    inserter.seed_diag.report();
 }
 
 fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
@@ -1282,196 +1274,9 @@ const ArcPlans = struct {
     root: u32 = no_plan,
 };
 
-/// Why a runtime uniqueness check survives at an argument position. The
-/// variants are the conditions `uniqueArgBlock` tests, in order; each name is
-/// the first one that held. Positions reaching `elided` take the in-place path
-/// with no runtime count check.
-const UniqueBlock = enum {
-    elided,
-    /// The argument is the operation's own destination.
-    self_target,
-    /// Nothing in the layout is reference counted, so no check exists to elide.
-    not_refcounted,
-    /// The solver could not prove the value unique at this point.
-    not_proven_unique,
-    /// The operation does not consume this position.
-    not_consumed,
-    /// A later use needs the value, so its count must stay above one.
-    preserved,
-    /// The value is borrowed here rather than owned.
-    not_owned,
-    /// Another operand of the same statement shares the borrow group, so the
-    /// group is still live at the operation.
-    group_shares_operand,
-    /// The allocation stays reachable after the statement under another name:
-    /// the value aliases something whose own group is used later. An owned
-    /// alias leads its own group, so its source has to be asked separately.
-    alias_source_live,
-};
-
-/// Histogram of why runtime uniqueness checks survive, for telling which
-/// solver limitation a program actually hits rather than guessing. Off unless
-/// `ROC_ARC_UNIQUE_DIAG` is set, and absent on targets without an environment.
-const UniqueDiag = if (builtin.os.tag == .freestanding) struct {
-    fn init() @This() {
-        return .{};
-    }
-
-    fn record(_: *@This(), _: UniqueBlock) void {}
-
-    fn reportGroups(_: *const @This(), _: *const Inserter) void {}
-
-    fn report(_: *const @This()) void {}
-} else struct {
-    const slot_count = @typeInfo(UniqueBlock).@"enum".fields.len;
-
-    on: bool = false,
-    counts: [slot_count]u64 = [_]u64{0} ** slot_count,
-
-    fn init() @This() {
-        return .{ .on = std.c.getenv("ROC_ARC_UNIQUE_DIAG") != null };
-    }
-
-    fn record(self: *@This(), reason: UniqueBlock) void {
-        if (!self.on) return;
-        self.counts[@intFromEnum(reason)] += 1;
-    }
-
-    /// Sizes of the borrow groups holding the values at check-eligible
-    /// argument positions. The group is what emission asks its liveness
-    /// question over, so its size decides whether that question can
-    /// discriminate: a value sharing a group with everything always looks
-    /// live.
-    fn reportGroups(self: *const @This(), inserter: *const Inserter) void {
-        if (!self.on) return;
-        const store = inserter.store;
-        const local_count = store.localCount();
-        var sizes = store.allocator.alloc(u32, local_count) catch return;
-        defer store.allocator.free(sizes);
-        @memset(sizes, 0);
-        for (0..local_count) |index| {
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
-            if (!inserter.localContainsRefcounted(local)) continue;
-            sizes[@intFromEnum(inserter.solution.leaderOf(local))] += 1;
-        }
-        var counted: u32 = 0;
-        var alone: u32 = 0;
-        var small: u32 = 0;
-        var largest: u32 = 0;
-        var total_size: u64 = 0;
-        for (0..store.cfStmtCount()) |stmt_index| {
-            const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-            const assign = switch (stmt) {
-                .assign_low_level => |low| low,
-                else => continue,
-            };
-            const mask = assign.rc_effect.may_runtime_uniqueness_check_args & assign.rc_effect.consume_args;
-            if (mask == 0) continue;
-            const args = store.getLocalSpan(assign.args);
-            for (0..GuardedList.borrowLen(args)) |position| {
-                if (position >= 64) break;
-                if ((mask & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
-                const size = sizes[@intFromEnum(inserter.solution.leaderOf(GuardedList.at(args, position)))];
-                counted += 1;
-                total_size += size;
-                if (size <= 1) alone += 1;
-                if (size <= 4) small += 1;
-                if (size > largest) largest = size;
-            }
-        }
-        if (counted == 0) return;
-        std.debug.print(
-            "=== ARC borrow groups at check-eligible positions ({d}) ===\n  alone {d}, at most four {d}, largest {d}, mean {d}\n",
-            .{ counted, alone, small, largest, total_size / counted },
-        );
-    }
-
-    fn report(self: *const @This()) void {
-        if (!self.on) return;
-        var total: u64 = 0;
-        for (self.counts) |count| total += count;
-        std.debug.print("=== ARC uniqueness-check positions ({d}) ===\n", .{total});
-        inline for (@typeInfo(UniqueBlock).@"enum".fields) |field| {
-            const count = self.counts[field.value];
-            if (count != 0) std.debug.print("  {s: <20} {d}\n", .{ field.name, count });
-        }
-    }
-};
-
-/// Why a call site did not ask for a variant whose parameter arrives unique.
-/// Only positions whose callee parameter actually reaches a runtime
-/// uniqueness check are counted, so the histogram measures missed
-/// opportunities rather than every argument.
-const SeedBlock = enum {
-    /// The site asked for the variant.
-    demanded,
-    /// Mode specialization is switched off entirely.
-    specialization_disabled,
-    /// The callee has no body, so there is nothing to specialize.
-    callee_bodyless,
-    /// The callee is a hosted function.
-    callee_hosted,
-    /// The callee is reached through an erased callable.
-    callee_erased,
-    /// The callee is an entry point, or its address is taken somewhere, so
-    /// its signature is fixed.
-    callee_root_or_address_taken,
-    /// The caller does not hold this value's ownership unit here.
-    not_owned_here,
-    /// The value's group is read after the call, so the caller keeps it.
-    used_after_call,
-    /// The caller cannot prove its own argument unique.
-    caller_value_not_unique,
-    /// Another operand of the call shares this value's borrow group.
-    group_shares_operand,
-};
-
-/// Histogram of the above. Off unless `ROC_ARC_UNIQUE_DIAG` is set, and
-/// absent on targets without an environment.
-const SeedDiag = if (builtin.os.tag == .freestanding) struct {
-    fn init() @This() {
-        return .{};
-    }
-
-    fn record(_: *@This(), _: SeedBlock) void {}
-
-    fn report(_: *const @This()) void {}
-} else struct {
-    const slot_count = @typeInfo(SeedBlock).@"enum".fields.len;
-
-    on: bool = false,
-    counts: [slot_count]u64 = [_]u64{0} ** slot_count,
-
-    fn init() @This() {
-        return .{ .on = std.c.getenv("ROC_ARC_UNIQUE_DIAG") != null };
-    }
-
-    fn record(self: *@This(), reason: SeedBlock) void {
-        if (!self.on) return;
-        self.counts[@intFromEnum(reason)] += 1;
-    }
-
-    fn report(self: *const @This()) void {
-        if (!self.on) return;
-        var total: u64 = 0;
-        for (self.counts) |count| total += count;
-        if (total == 0) return;
-        std.debug.print("=== ARC unique-parameter demands ({d}) ===\n", .{total});
-        inline for (@typeInfo(SeedBlock).@"enum".fields) |field| {
-            const count = self.counts[field.value];
-            if (count != 0) std.debug.print("  seed:{s: <22} {d}\n", .{ field.name, count });
-        }
-    }
-};
-
 const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
-    /// Why runtime uniqueness checks survived, when the diagnostic is on.
-    /// Read from the environment in `insert`, which cannot happen at comptime.
-    unique_diag: UniqueDiag = .{},
-    /// Why call sites did not ask for unique-parameter variants.
-    seed_diag: SeedDiag = .{},
     options: InsertOptions,
     local_contains_refcounted: []const bool = &.{},
     boxy_rc_descs: []const ?LIR.BoxyDescRef = &.{},
@@ -1490,10 +1295,6 @@ const Inserter = struct {
     /// Parameter locals the current variant's demand vector seeds as born
     /// unique; consumed by `uniqueArgsMask` through `isLocalUniqueHere`.
     unique_param_override: *OwnedSet = undefined,
-    /// Locals whose every definition names static data. Such a value's
-    /// reference count is an immortal sentinel, so its retains and releases
-    /// are runtime no-ops that still cost a helper call.
-    immortal_locals: std.DynamicBitSetUnmanaged = .{},
     /// Exact resource and liveness bit domain of the proc currently emitted.
     /// It is built directly from that proc's explicit `frame_locals` span.
     current_domain: ?*const ProcArcDomain = null,
@@ -1980,14 +1781,9 @@ const Inserter = struct {
         var cloned: LIR.CFStmtId = switch (stmt) {
             .assign_ref => |assign| blk: {
                 if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, next);
-                // Bake the emission-resolved take decision into the cloned
-                // read: the certifier consumes this stamp instead of
-                // re-deriving take-ness, and a parameter-conditional take
-                // resolves here against this emission's demand vector.
                 break :blk try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = assign.target,
                     .op = assign.op,
-                    .take_kind = if (self.takeApplies(step.stmt)) .take else .none,
                     .residual_shell_absent_fields = try self.materializeResidualShellAbsentFields(
                         assign,
                         step.residual_shell_absent_mask,
@@ -4488,7 +4284,7 @@ const Inserter = struct {
             }
         }
         const unique_args = if (want_unique)
-            try self.uniqueArgsMask(args, rc_effect, target, preserve_consumed_args, owned, next, loop_keep)
+            self.uniqueArgsMask(args, rc_effect, target, preserve_consumed_args, owned)
         else
             0;
         const target_consumed = self.maskedArgsContainLocal(args, rc_effect.consume_args, target);
@@ -4816,9 +4612,7 @@ const Inserter = struct {
         target: LIR.LocalId,
         preserve_consumed_args: u64,
         owned: *const OwnedSet,
-        next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
-    ) ResourceError!u64 {
+    ) u64 {
         const check_mask = rc_effect.may_runtime_uniqueness_check_args;
         if (check_mask == 0) return 0;
         var unique: u64 = 0;
@@ -4828,60 +4622,26 @@ const Inserter = struct {
             if (i >= 64) break;
             const bit = argMaskBit(i);
             if ((check_mask & bit) == 0) continue;
-            const reason = self.uniqueArgBlock(.{
-                .locals = locals,
-                .position = i,
-                .local = local,
-                .rc_effect = rc_effect,
-                .target = target,
-                .bit = bit,
-                .preserve_consumed_args = preserve_consumed_args,
-                .owned = owned,
-                .alias_chain_live = local != target and
-                    try self.aliasChainUsedInPath(next, local, loop_keep),
-            });
-            self.unique_diag.record(reason);
-            if (reason == .elided) unique |= bit;
+            if (local == target) continue;
+            if (!self.localContainsRefcounted(local)) continue;
+            if (!self.isLocalUniqueHere(local)) continue;
+            if ((rc_effect.consume_args & bit) == 0) continue;
+            if ((preserve_consumed_args & bit) != 0) continue;
+            if (!owned.contains(local)) continue;
+            // The preserve scan proved the argument's borrow group dead
+            // after this statement; a group member appearing as another
+            // operand of this same statement is still live at the op.
+            if (self.groupSharesOtherOperand(locals, i, local)) continue;
+            unique |= bit;
         }
         return unique;
-    }
-
-    /// The first condition that forces a runtime uniqueness check at an
-    /// argument position, or `.elided` when none does. The emitted mask and
-    /// the `ROC_ARC_UNIQUE_DIAG` histogram both read this one answer, so they
-    /// cannot disagree about why a check survived.
-    fn uniqueArgBlock(self: *const Inserter, args: anytype) UniqueBlock {
-        if (args.local == args.target) return .self_target;
-        if (!self.localContainsRefcounted(args.local)) return .not_refcounted;
-        if ((args.rc_effect.consume_args & args.bit) == 0) return .not_consumed;
-        if ((args.preserve_consumed_args & args.bit) != 0) return .preserved;
-        if (!args.owned.contains(args.local)) return .not_owned;
-        // The preserve scan proved the argument's borrow group dead
-        // after this statement; a group member appearing as another
-        // operand of this same statement is still live at the op.
-        if (self.groupSharesOtherOperand(args.locals, args.position, args.local)) {
-            return .group_shares_operand;
-        }
-        if (args.alias_chain_live) return .alias_source_live;
-        // Tested last on purpose. Every condition above is specific to this
-        // statement, while this one is a whole-procedure verdict, so ordering
-        // it here reports how many positions the statement-local conditions
-        // already accept and only the flow-insensitive verdict withholds.
-        if (!self.isLocalUniqueHere(args.local)) return .not_proven_unique;
-        return .elided;
     }
 
     /// True when the local's value is statically unique in the current
     /// emission view: solved unique, or a parameter the variant being
     /// emitted seeds born-unique and whose body never adds another holder.
     fn isLocalUniqueHere(self: *const Inserter, local: LIR.LocalId) bool {
-        // Born with a count of one and never given a second owner. The other
-        // way a second reference can exist—a live alias—is not asked here,
-        // because it is a question about this statement rather than about the
-        // whole procedure: the callers of this test also require the value's
-        // borrow group to be dead after the statement and unshared with
-        // another operand of it, which is what rules a live alias out.
-        if (self.solution.isBornUniqueWithoutExtraOwner(local)) return true;
+        if (self.solution.isUnique(local)) return true;
         if (!self.unique_param_override.contains(local)) return false;
         return !self.solution.isUniqueDestroyed(local);
     }
@@ -4903,35 +4663,6 @@ const Inserter = struct {
             if (self.solution.leaderOf(other) == leader) return true;
         }
         return false;
-    }
-
-    /// The first condition that kept a call site from asking for a variant
-    /// whose parameter arrives unique. Mirrors the demand conditions in the
-    /// order they are tested, so the histogram and the emitted demand agree.
-    fn seedBlock(
-        self: *const Inserter,
-        unique_demand: bool,
-        callee: ?LIR.LirProcSpecId,
-        owns_unit: bool,
-        used_after_call: bool,
-        local: LIR.LocalId,
-        locals: anytype,
-        position: usize,
-    ) SeedBlock {
-        if (!unique_demand) {
-            if (!self.variants.enabled) return .specialization_disabled;
-            const direct = callee orelse return .callee_erased;
-            const spec = self.store.getProcSpec(direct);
-            if (spec.body == null) return .callee_bodyless;
-            if (spec.hosted != null) return .callee_hosted;
-            if (spec.abi == .erased_callable) return .callee_erased;
-            return .callee_root_or_address_taken;
-        }
-        if (!owns_unit) return .not_owned_here;
-        if (used_after_call) return .used_after_call;
-        if (!self.isLocalUniqueHere(local)) return .caller_value_not_unique;
-        if (self.groupSharesOtherOperand(locals, position, local)) return .group_shares_operand;
-        return .demanded;
     }
 
     fn procParamCanUseUniqueSeed(
@@ -5507,12 +5238,9 @@ const Inserter = struct {
                 const projected_alias_conflict = self.dismantles.projectionUnitOf(local) != null and
                     self.groupSharesOtherOperand(locals, position, local);
                 const can_transfer = owned.contains(owner) and !used_after_call and !projected_alias_conflict;
-                // Hoisted above the transfer test so a position whose callee
-                // parameter could use a unique seed is classified even when
-                // the caller cannot hand its ownership over.
-                const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
                 if (!can_transfer) continue;
                 const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
+                const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
                 const seeds_unique_param = unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local);
                 if (!return_borrows_param and !seeds_unique_param and !enables_field_take) continue;
@@ -5580,15 +5308,6 @@ const Inserter = struct {
                     const direct = callee orelse break :blk false;
                     break :blk self.procParamCanUseUniqueSeed(direct, position);
                 } else false;
-                if (seed_can_reach_check) self.seed_diag.record(self.seedBlock(
-                    unique_demand,
-                    callee,
-                    true,
-                    false,
-                    local,
-                    locals,
-                    position,
-                ));
                 if (unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local) and
                     !self.groupSharesOtherOperand(locals, position, local))
                 {
@@ -6841,27 +6560,6 @@ const Inserter = struct {
         return self.computeReadsBeforeRebind(start, keep, keep.id);
     }
 
-    /// Whether the allocation behind `local` is still reachable after `start`
-    /// under any name. An owned alias leads its own group, so checking that
-    /// group alone would miss a later use of the value it aliases; the chain
-    /// is followed to the origin and every group along it asked.
-    fn aliasChainUsedInPath(
-        self: *Inserter,
-        start: LIR.CFStmtId,
-        local: LIR.LocalId,
-        loop_keep: ?LoopKeep,
-    ) ResourceError!bool {
-        var cursor = local;
-        var hops: u32 = 0;
-        while (hops < 64) : (hops += 1) {
-            if (try self.groupUsedInPath(start, cursor, loop_keep)) return true;
-            const source = self.solution.aliasSourceOf(cursor) orelse return false;
-            if (source == cursor) return false;
-            cursor = source;
-        }
-        return true;
-    }
-
     fn groupUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
@@ -6923,7 +6621,6 @@ const Inserter = struct {
     fn retainLocalIfRcCount(self: *Inserter, local: LIR.LocalId, count: u16, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (count == 0) return next;
         if (!self.localContainsRefcounted(local)) return next;
-        if (self.isImmortal(local)) return next;
         const rc = self.rcHelperForLocal(.incref, local);
         const atomicity = self.rcAtomicity(local);
         return try addCanonicalRetain(self.store, local, rc, atomicity, count, next);
@@ -6978,117 +6675,8 @@ const Inserter = struct {
         return null;
     }
 
-    fn isImmortal(self: *const Inserter, local: LIR.LocalId) bool {
-        const raw = @intFromEnum(local);
-        if (raw >= self.immortal_locals.bit_length) return false;
-        return self.immortal_locals.isSet(raw);
-    }
-
-    /// Locals every definition of which names static data, found by walking
-    /// the body once for definition counts and static-data and pure-alias
-    /// definitions, then closing the alias edges to a fixpoint. A local with
-    /// any other definition is left out, so no path can reach a mortal value
-    /// through an immortal name.
-    fn computeImmortalLocals(self: *Inserter, body: LIR.CFStmtId) ResourceError!void {
-        const allocator = self.store.allocator;
-        const local_count = self.store.localCount();
-        self.immortal_locals = try std.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
-        errdefer self.immortal_locals.deinit(allocator);
-
-        var def_counts = try allocator.alloc(u8, local_count);
-        defer allocator.free(def_counts);
-        @memset(def_counts, 0);
-        var immortal_defs = try allocator.alloc(u8, local_count);
-        defer allocator.free(immortal_defs);
-        @memset(immortal_defs, 0);
-
-        const AliasEdge = struct { target: LIR.LocalId, source: LIR.LocalId, counted: bool = false };
-        var aliases = std.ArrayList(AliasEdge).empty;
-        defer aliases.deinit(allocator);
-
-        var visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
-        defer visited.deinit();
-        var stack = std.ArrayList(LIR.CFStmtId).empty;
-        defer stack.deinit(allocator);
-        try stack.append(allocator, body);
-        while (stack.pop()) |current| {
-            if (visited.contains(current)) continue;
-            try visited.put(current, {});
-            const stmt = self.store.getCFStmt(current);
-            switch (stmt) {
-                .assign_literal => |assign| {
-                    def_counts[@intFromEnum(assign.target)] +|= 1;
-                    if (assign.value == .static_data) immortal_defs[@intFromEnum(assign.target)] +|= 1;
-                },
-                .assign_ref => |assign| {
-                    def_counts[@intFromEnum(assign.target)] +|= 1;
-                    switch (assign.op) {
-                        .local => |source| try aliases.append(allocator, .{ .target = assign.target, .source = source }),
-                        .nominal => |op| try aliases.append(allocator, .{ .target = assign.target, .source = op.backing_ref }),
-                        .list_reinterpret => |op| try aliases.append(allocator, .{ .target = assign.target, .source = op.backing_ref }),
-                        else => {},
-                    }
-                },
-                .set_local => |assign| def_counts[@intFromEnum(assign.target)] +|= 1,
-                inline .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |assign| def_counts[@intFromEnum(assign.target)] +|= 1,
-                else => {},
-            }
-            switch (stmt) {
-                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |walk| try stack.append(allocator, walk.next),
-                .switch_stmt => |walk| {
-                    const branches = self.store.getCFSwitchBranches(walk.branches);
-                    for (0..GuardedList.borrowLen(branches)) |i| {
-                        try stack.append(allocator, GuardedList.at(branches, i).body);
-                    }
-                    try stack.append(allocator, walk.default_branch);
-                    if (walk.continuation) |continuation| try stack.append(allocator, continuation);
-                },
-                .switch_initialized_payload => |walk| {
-                    try stack.append(allocator, walk.initialized_branch);
-                    try stack.append(allocator, walk.uninitialized_branch);
-                },
-                .str_match => |walk| {
-                    try stack.append(allocator, walk.on_match);
-                    try stack.append(allocator, walk.on_miss);
-                },
-                .str_match_set => |walk| {
-                    const arms = self.store.getStrMatchArms(walk.arms);
-                    for (0..GuardedList.borrowLen(arms)) |i| {
-                        try stack.append(allocator, GuardedList.at(arms, i).on_match);
-                    }
-                    try stack.append(allocator, walk.on_miss);
-                },
-                .join => |walk| {
-                    try stack.append(allocator, walk.body);
-                    try stack.append(allocator, walk.remainder);
-                },
-                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            }
-        }
-
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (aliases.items) |*edge| {
-                if (edge.counted) continue;
-                const source = @intFromEnum(edge.source);
-                if (def_counts[source] == 0 or immortal_defs[source] < def_counts[source]) continue;
-                edge.counted = true;
-                immortal_defs[@intFromEnum(edge.target)] +|= 1;
-                changed = true;
-            }
-        }
-
-        for (0..local_count) |index| {
-            if (def_counts[index] != 0 and immortal_defs[index] >= def_counts[index]) {
-                self.immortal_locals.set(index);
-            }
-        }
-    }
-
     fn releaseLocalIfRc(self: *Inserter, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (!self.localContainsRefcounted(local)) return next;
-        if (self.isImmortal(local)) return next;
         if (self.dismantleFor(local)) |container| {
             return try self.dismantleContainer(local, container, container.full_mask, next);
         }
@@ -7135,132 +6723,10 @@ const Inserter = struct {
                     .source = local,
                     .field_idx = @intCast(field.field_idx),
                 } },
-                .take_kind = .take,
                 .next = tail,
             } });
         }
         return tail;
-    }
-
-    /// Release a dismantled tag union: the death point switches on the
-    /// runtime discriminant, each taken variant's arm releases only its
-    /// residual payload fields, and every other variant falls to a default
-    /// arm holding the ordinary whole release. At a death point inside a
-    /// matched arm the discriminant is a known constant, so the backend
-    /// folds the dispatch away and the residual releases run straight-line.
-    fn dismantleUnionContainer(self: *Inserter, local: LIR.LocalId, container: arc_dismantle.Container, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        const atomicity = self.rcAtomicity(local);
-        const disc_layout = container.disc_layout orelse {
-            arcInvariant("ARC union dismantle was recorded without a discriminant layout");
-        };
-
-        const whole_rc = self.rcHelperForLocal(.decref, local);
-        const default_branch = try self.store.addCFStmt(.{ .decref = .{
-            .value = local,
-            .rc = whole_rc,
-            .atomicity = atomicity,
-            .next = next,
-        } });
-
-        var branch_storage: [8]LIR.CFSwitchBranch = undefined;
-        var branch_overflow = std.ArrayList(LIR.CFSwitchBranch).empty;
-        defer branch_overflow.deinit(self.emission_allocator);
-        const use_overflow = container.variant_plans.len > branch_storage.len;
-        if (use_overflow) {
-            try branch_overflow.ensureTotalCapacity(self.emission_allocator, container.variant_plans.len);
-        }
-
-        for (container.variant_plans, 0..) |plan, plan_index| {
-            var tail = next;
-            if (plan.residual.len != 0) {
-                if (plan.payload_is_struct) {
-                    const view = try self.store.addLocal(.{ .layout_idx = plan.payload_layout });
-                    try self.dismantle_temps.append(self.emission_allocator, view);
-                    var index = plan.residual.len;
-                    while (index > 0) {
-                        index -= 1;
-                        const field = plan.residual[index];
-                        const rc = self.rcHelperForLayout(.decref, field.layout_idx);
-                        if (self.layouts.rcHelperPlan(rc) == .noop) {
-                            arcInvariant("ARC union dismantle selected a noop RC helper for a refcounted residual field");
-                        }
-                        const temp = try self.store.addLocal(.{ .layout_idx = field.layout_idx });
-                        try self.dismantle_temps.append(self.emission_allocator, temp);
-                        tail = try self.store.addCFStmt(.{ .decref = .{
-                            .value = temp,
-                            .rc = rc,
-                            .atomicity = atomicity,
-                            .next = tail,
-                        } });
-                        tail = try self.store.addCFStmt(.{ .assign_ref = .{
-                            .target = temp,
-                            .op = .{ .field = .{
-                                .source = view,
-                                .field_idx = @intCast(field.field_idx),
-                            } },
-                            .take_kind = .take,
-                            .next = tail,
-                        } });
-                    }
-                    tail = try self.store.addCFStmt(.{ .assign_ref = .{
-                        .target = view,
-                        .op = .{ .tag_payload_struct = .{
-                            .source = local,
-                            .variant_index = plan.variant_index,
-                            .tag_discriminant = plan.tag_discriminant,
-                        } },
-                        .next = tail,
-                    } });
-                } else {
-                    const field = plan.residual[0];
-                    const rc = self.rcHelperForLayout(.decref, field.layout_idx);
-                    if (self.layouts.rcHelperPlan(rc) == .noop) {
-                        arcInvariant("ARC union dismantle selected a noop RC helper for a refcounted residual payload");
-                    }
-                    const temp = try self.store.addLocal(.{ .layout_idx = field.layout_idx });
-                    try self.dismantle_temps.append(self.emission_allocator, temp);
-                    tail = try self.store.addCFStmt(.{ .decref = .{
-                        .value = temp,
-                        .rc = rc,
-                        .atomicity = atomicity,
-                        .next = tail,
-                    } });
-                    tail = try self.store.addCFStmt(.{ .assign_ref = .{
-                        .target = temp,
-                        .op = .{ .tag_payload_struct = .{
-                            .source = local,
-                            .variant_index = plan.variant_index,
-                            .tag_discriminant = plan.tag_discriminant,
-                        } },
-                        .take_kind = .take,
-                        .next = tail,
-                    } });
-                }
-            }
-            const branch = LIR.CFSwitchBranch{ .value = plan.tag_discriminant, .body = tail };
-            if (use_overflow) {
-                branch_overflow.appendAssumeCapacity(branch);
-            } else {
-                branch_storage[plan_index] = branch;
-            }
-        }
-
-        const branches = try self.store.addCFSwitchBranches(
-            if (use_overflow) branch_overflow.items else branch_storage[0..container.variant_plans.len],
-        );
-        const disc_temp = try self.store.addLocal(.{ .layout_idx = disc_layout });
-        try self.dismantle_temps.append(self.emission_allocator, disc_temp);
-        const switch_stmt = try self.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = disc_temp,
-            .branches = branches,
-            .default_branch = default_branch,
-            .continuation = next,
-        } });
-        return try self.store.addCFStmt(.{ .assign_ref = .{
-            .target = disc_temp,
-            .op = .{ .discriminant = .{ .source = local } },
-            .next = switch_stmt,
-        } });
     }
 
     fn releaseMaybeInitializedLocal(self: *Inserter, condition: LIR.LocalId, condition_mask: u64, local: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {

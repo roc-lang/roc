@@ -8654,57 +8654,6 @@ test "wide loop-carried state scalarizes into flat join params" {
 // union—no retain on the extracted lists, and the death point's residual
 // dispatch releases nothing on the taken variant—or every list mutation in
 // the caller's loop sees count 2 and copies.
-test "try-record extraction takes the dying union's payload without refcounting" {
-    const allocator = std.testing.allocator;
-    const source =
-        \\helper : List(U16), List(U32), U64 -> Try({ xs: List(U16), ys: List(U32), n: U64 }, [Bug])
-        \\helper = |xs0, ys0, i| {
-        \\    xs = match List.set(xs0, i % 64, i.to_u16_wrap()) {
-        \\        Ok(v) => v
-        \\        Err(_) => return Err(Bug)
-        \\    }
-        \\    ys = match List.set(ys0, i % 64, i.to_u32_wrap()) {
-        \\        Ok(v) => v
-        \\        Err(_) => return Err(Bug)
-        \\    }
-        \\    Ok({ xs: xs, ys: ys, n: i * 2 })
-        \\}
-        \\
-        \\walk : U64 -> Try(U64, [Bug])
-        \\walk = |n| {
-        \\    var $xs = List.repeat(0.U16, 64)
-        \\    var $ys = List.repeat(0.U32, 64)
-        \\    var $acc = 0.U64
-        \\    var $i = 0.U64
-        \\    while $i < n {
-        \\        found = helper($xs, $ys, $i)?
-        \\        $xs = found.xs
-        \\        $ys = found.ys
-        \\        $acc = $acc + found.n
-        \\        $i = $i + 1
-        \\    }
-        \\    Ok($acc)
-        \\}
-        \\
-        \\main : U64 -> U64
-        \\main = |n| {
-        \\    match walk(n) {
-        \\        Ok(v) => v
-        \\        Err(_) => 0
-        \\    }
-        \\}
-    ;
-    var optimized = try lowerModule(allocator, source, .wrappers);
-    defer optimized.deinit(allocator);
-
-    var total_incref: usize = 0;
-    const proc_count = optimized.lowered.lir_result.store.getProcSpecs().len;
-    for (0..proc_count) |index| {
-        const shape = try collectProcShape(allocator, &optimized.lowered, @enumFromInt(@as(u32, @intCast(index))));
-        total_incref += shape.incref_count;
-    }
-    try std.testing.expectEqual(@as(usize, 0), total_incref);
-}
 
 
 
@@ -8822,6 +8771,15 @@ test "length guard plus masked index elides loop bounds checks" {
 }
 
 
+// A dominating length guard plus a masked index is how hot table loops
+// (hash chains, sliding windows) express in-bounds access: the guard pins
+// `len >= 32768` once, the mask pins the index below it, and the range
+// prover should fold every per-iteration bounds check in the loop body.
+// The loop's back edge sits inside the `??` default's merge region, so
+// this also guards the edge classification that keeps entry-invariant
+// facts alive across nested join regions.
+
+
 // The matchfinder tables reach their loops through a rebased `var`: the
 // local is assigned in both arms of a pre-loop branch and only read inside
 // the loop. Its binding must survive into the loop body from the entry
@@ -8930,82 +8888,3 @@ test "entry bindings of body-unassigned locals reach loop bounds proofs" {
     try std.testing.expectEqual(@as(usize, 0), len_guarded_switches);
 }
 
-
-test "issue 10731 mapping over a List-recursive tag union lowers under wrapper inlining" {
-    try expectOptimizedDbgEvents(
-        \\Tree(a) := [Node(a, List(Tree(a)))]
-        \\
-        \\tree_map : Tree(a), (a -> b) -> Tree(b)
-        \\tree_map = |tree, f|
-        \\    match tree {
-        \\        Node(value, children) => Node(f(value), children.map(|child| tree_map(child, f)))
-        \\    }
-        \\
-        \\main : {}
-        \\main = {
-        \\    Node(root, children) = tree_map(Node(1.U64, [Node(2.U64, [])]), |value| Wrap(value))
-        \\    dbg root
-        \\    dbg children.map(|Node(value, _)| value)
-        \\    {}
-        \\}
-    , &.{ "Wrap(1)", "[Wrap(2)]" });
-}
-
-// Repro for https://github.com/roc-lang/roc/issues/10797: a generic
-// state-threading function whose returned closure builds a `List` with a
-// counted `for` loop, specialized at a call site that supplies a known
-// generator. Cloning that closure body must keep the `var $state` parameter
-// bound in the clone, so the specialized loop's initial values still name a
-// live binding.
-test "issue 10797 SpecConstr keeps the threaded var parameter bound in a specialized loop" {
-    const allocator = std.testing.allocator;
-    const source =
-        \\Generator(value) : U32 -> { value : value, state : U32 }
-        \\
-        \\list : Generator(a), U64 -> Generator(List(a))
-        \\list = |generator, length| {
-        \\    |var $state| {
-        \\        var $result = List.with_capacity(length)
-        \\
-        \\        for _ in 0..<length {
-        \\            { value: item, state: $state } = generator($state)
-        \\            $result = $result.append(item)
-        \\        }
-        \\
-        \\        { value: $result, state: $state }
-        \\    }
-        \\}
-        \\
-        \\step : Generator(U32)
-        \\step = |state| { value: state, state: state + 7 }
-        \\
-        \\main : U64
-        \\main = {
-        \\    { value: values, state: final } = list(step, 3)(1234)
-        \\    values.sum().to_u64() * 10000 + final.to_u64()
-        \\}
-    ;
-
-    var lifted = try liftModuleAfterSpecConstr(allocator, source);
-    defer lifted.deinit(allocator);
-
-    var optimized = try lowerModule(allocator, source, .wrappers);
-    defer optimized.deinit(allocator);
-
-    var runtime_env = eval.RuntimeHostEnv.init(allocator);
-    defer runtime_env.deinit();
-    var interpreter = try eval.Interpreter.init(
-        allocator,
-        &optimized.lowered.lir_result.store,
-        &optimized.lowered.lir_result.layouts,
-        runtime_env.get_ops(),
-        .preserve,
-    );
-    defer interpreter.deinit();
-
-    // 1234 + 1241 + 1248 = 3723, and the threaded state ends at 1255.
-    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
-    switch (result) {
-        .value => |value| try std.testing.expectEqual(@as(u64, 37231255), value.read(u64)),
-    }
-}

@@ -8175,18 +8175,17 @@ pub const MonoLlvmCodeGen = struct {
         const storage = self.allocator.alloc(u8, data_offset + bytes.len) catch return error.OutOfMemory;
         defer self.allocator.free(storage);
 
-        // Only the global itself is cached: it is a module-level constant,
-        // valid from any function. The offset GEP below is an instruction in
-        // the current function's body, so it must be re-emitted per use — a
-        // cached instruction reappearing in another function would address
-        // that function's instruction table with a foreign id.
-        const base = self.static_refcounted_backings.get(key) orelse blk: {
-            const bytes = self.store.getString(backing);
-            const storage = self.allocator.alloc(u8, data_offset + bytes.len) catch return error.OutOfMemory;
-            defer self.allocator.free(storage);
+        @memset(storage[0..data_offset], 0);
+        @memcpy(storage[data_offset..][0..bytes.len], bytes);
 
-            @memset(storage[0..data_offset], 0);
-            @memcpy(storage[data_offset..][0..bytes.len], bytes);
+        const arr_ty = builder.arrayType(storage.len, .i8) catch return error.OutOfMemory;
+        const name = builder.strtabStringFmt(".roc.refcounted_bytes.{d}", .{self.string_counter}) catch return error.OutOfMemory;
+        self.string_counter += 1;
+        const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
+        variable.ptrConst(builder).global.setLinkage(.internal, builder);
+        variable.setMutability(.constant, builder);
+        variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(backing_alignment), builder);
+        variable.setInitializer(builder.stringConst(builder.string(storage) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
 
         const base = variable.toValue(builder);
         try self.static_refcounted_backings.put(key, base);
