@@ -2155,6 +2155,13 @@ const Builder = struct {
     symbols: Common.SymbolGen = .{},
     next_instantiation_scope: u64 = 0,
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
+    /// Outermost checked-type lowering owns one atomic store transaction;
+    /// recursive children only append to its speculative suffix.
+    active_type_transaction: ?Type.Store.Transaction = null,
+    /// Cache addresses inserted while `active_type_transaction` is open. The
+    /// owner remaps exactly these entries on commit and evicts exactly these
+    /// on abort, so neither path scales with the whole cache.
+    active_type_transaction_addresses: std.ArrayList(CheckedTypeAddress) = .empty,
     /// Exact constructor-keyed interning for parser result types synthesized
     /// after graph sealing. These types never mutate, so the reused ids are
     /// valid for the lifetime of the program builder.
@@ -2362,6 +2369,7 @@ const Builder = struct {
         self.lowered_templates.deinit();
         self.spec_store.deinit();
         self.uninhabited_type_cache.deinit();
+        self.active_type_transaction_addresses.deinit(self.allocator);
         self.generated_try_types.deinit();
         self.parse_result_ok_types.deinit();
         self.type_cache.deinit();
@@ -4470,7 +4478,42 @@ const Builder = struct {
     fn lowerType(self: *Builder, view: ModuleView, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
         const address = checkedTypeAddress(view, checked_ty);
         if (self.type_cache.get(address)) |cached| return cached;
+        if (self.active_type_transaction != null) {
+            return try self.lowerTypeSpeculative(address, view, checked_ty);
+        }
 
+        const transaction = self.program.types.beginTransaction();
+        self.active_type_transaction = transaction;
+        defer self.active_type_transaction = null;
+        errdefer {
+            transaction.abort(&self.program.types);
+            // Evict only this transaction's entries; ids cached by earlier
+            // commits are durable and stay valid.
+            for (self.active_type_transaction_addresses.items) |cached_address| {
+                _ = self.type_cache.remove(cached_address);
+            }
+            self.active_type_transaction_addresses.clearRetainingCapacity();
+        }
+
+        const speculative = try self.lowerTypeSpeculative(address, view, checked_ty);
+        var result = try self.program.types.commitTransaction(&self.program.names, transaction, speculative);
+        defer result.deinit();
+        for (self.active_type_transaction_addresses.items) |cached_address| {
+            const cached = self.type_cache.getPtr(cached_address) orelse
+                Common.compilerBug("checked-type cache entry recorded in a transaction disappeared before commit");
+            cached.* = result.remapType(cached.*);
+        }
+        self.active_type_transaction_addresses.clearRetainingCapacity();
+        return result.root;
+    }
+
+    fn lowerTypeSpeculative(
+        self: *Builder,
+        address: CheckedTypeAddress,
+        view: ModuleView,
+        checked_ty: checked.CheckedTypeId,
+    ) Allocator.Error!Type.TypeId {
+        if (self.type_cache.get(address)) |cached| return cached;
         const raw = @intFromEnum(checked_ty);
         if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
 
@@ -4481,6 +4524,11 @@ const Builder = struct {
             checked_ty: checked.CheckedTypeId,
 
             fn fill(context: @This(), reserved: Type.TypeId) Allocator.Error!Type.Content {
+                // Recorded before the put so a failed put leaves at worst a
+                // recorded address with no cache entry, which eviction
+                // tolerates and commit never sees; the reverse order could
+                // strand a speculative id in the cache past the owner's abort.
+                try context.builder.active_type_transaction_addresses.append(context.builder.allocator, context.address);
                 try context.builder.type_cache.put(context.address, reserved);
                 return try context.builder.lowerTypePayload(context.view, context.checked_ty, context.view.types.payload(context.checked_ty));
             }
@@ -4878,11 +4926,11 @@ const Builder = struct {
     fn optionalSlotType(self: *Builder, payload_ty: Type.TypeId) Allocator.Error!Type.TypeId {
         const missing = try self.program.names.internTagLabel(optional_slot_missing_tag);
         const present = try self.program.names.internTagLabel(optional_slot_present_tag);
-        const tags = [_]Type.Tag{
-            .{ .name = missing, .checked_name = missing, .payloads = Type.Span.empty() },
-            .{ .name = present, .checked_name = present, .payloads = try self.program.types.addSpan(&[_]Type.TypeId{payload_ty}) },
+        const tags = [_]Type.Store.TagInput{
+            .{ .name = missing, .checked_name = missing, .payloads = &.{} },
+            .{ .name = present, .checked_name = present, .payloads = &.{payload_ty} },
         };
-        return try self.program.types.add(.{ .tag_union = try self.program.types.addTagVariants(&self.program.names, &tags) });
+        return try self.program.types.internTagUnion(&self.program.names, &tags);
     }
 
     /// The tags and payload type of an optional field's Monotype tagged slot.
@@ -8679,17 +8727,17 @@ const Builder = struct {
         return switch (primitive) {
             .u64 => blk: {
                 if (self.u64_ty) |ty| break :blk ty;
-                const ty = try self.program.types.add(.{ .primitive = .u64 });
-                self.u64_ty = ty;
+                const ty = try self.program.types.internPrimitive(&self.program.names, .u64);
+                if (!self.program.types.hasSpeculativeConstruction()) self.u64_ty = ty;
                 break :blk ty;
             },
             .bool => blk: {
                 if (self.bool_ty) |ty| break :blk ty;
-                const ty = try self.program.types.add(.{ .primitive = .bool });
-                self.bool_ty = ty;
+                const ty = try self.program.types.internPrimitive(&self.program.names, .bool);
+                if (!self.program.types.hasSpeculativeConstruction()) self.bool_ty = ty;
                 break :blk ty;
             },
-            .str, .u8, .i8, .u16, .i16, .u32, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => try self.program.types.add(.{ .primitive = primitive }),
+            .str, .u8, .i8, .u16, .i16, .u32, .i32, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => try self.program.types.internPrimitive(&self.program.names, primitive),
         };
     }
 
@@ -8697,10 +8745,7 @@ const Builder = struct {
     /// used during draft finalization, where the active graph remains present
     /// but the supplied TypeIds are durable rather than active snapshots.
     fn closedFunctionType(self: *Builder, arg_tys: []const Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        return try self.program.types.add(.{ .func = .{
-            .args = try self.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
+        return try self.program.types.internFunc(&self.program.names, arg_tys, ret_ty);
     }
 
     fn singleTypeArg(self: *Builder, span: Type.Span, comptime owner: []const u8) Type.TypeId {
@@ -8785,9 +8830,18 @@ const Builder = struct {
         }
         if (requested_err_tags.len == declared_err_tags.len) return null;
 
-        const narrowed_err_ty = try self.program.types.add(.{
+        const transaction = self.program.types.beginTransaction();
+        errdefer transaction.abort(&self.program.types);
+        const speculative_err_ty = try self.program.types.add(.{
             .tag_union = try self.program.types.addTagVariants(&self.program.names, narrowed_tags),
         });
+        var transaction_result = try self.program.types.commitTransaction(
+            &self.program.names,
+            transaction,
+            speculative_err_ty,
+        );
+        defer transaction_result.deinit();
+        const narrowed_err_ty = transaction_result.root;
         const narrowed_try_ty = try self.hostedTryTypeLike(hosted_try, requested.ret, requested_try.ok_ty, narrowed_err_ty);
         const source_args = try GuardedList.dupe(self.allocator, Type.TypeId, requested_args);
         defer self.allocator.free(source_args);
@@ -9028,6 +9082,8 @@ const Builder = struct {
             .tag_union => |span| self.program.types.tagSpan(span),
             .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("Try template backing type was not a tag union"),
         };
+        const transaction = self.program.types.beginTransaction();
+        errdefer transaction.abort(&self.program.types);
         const tags = try self.allocator.alloc(Type.Tag, template_tags.len);
         defer self.allocator.free(tags);
         var found_ok = false;
@@ -9061,7 +9117,7 @@ const Builder = struct {
         defer self.allocator.free(args);
         args[capability.ok_type_arg_index] = ok_ty;
         args[capability.err_type_arg_index] = err_ty;
-        return try self.program.types.add(.{ .named = .{
+        const speculative = try self.program.types.add(.{ .named = .{
             .named_type = template.named_type,
             .def = template.def,
             .kind = template.kind,
@@ -9074,6 +9130,13 @@ const Builder = struct {
             },
             .declared_order = template.declared_order,
         } });
+        var result = try self.program.types.commitTransaction(
+            &self.program.names,
+            transaction,
+            speculative,
+        );
+        defer result.deinit();
+        return result.root;
     }
 
     fn errorRowIsIncludedIn(self: *Builder, source_err_ty: Type.TypeId, target_err_ty: Type.TypeId) bool {
@@ -14192,7 +14255,7 @@ const BodyContext = struct {
 
         const def_id = try self.inspectDefForType(value_ty, str_ty);
         const callee = try self.addExprWithTypeCell(
-            .{ .sealed = try self.builder.closedFunctionType(&.{value_ty}, str_ty) },
+            .{ .sealed = try self.functionType(&.{value_ty}, str_ty) },
             .{ .def_ref = .{ .draft = def_id } },
         );
         const args = [_]DraftExprId{value};
@@ -19060,11 +19123,7 @@ const BodyContext = struct {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
 
-        const wrapper_args = try self.builder.program.types.addSpan(&.{});
-        const wrapper_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = wrapper_args,
-            .ret = mono_fn_ty,
-        } });
+        const wrapper_fn_ty = try self.functionType(&.{}, mono_fn_ty);
         const wrapper_template = self.builder.fnDefForTemplate(
             view,
             wrapper.template,
@@ -22641,7 +22700,7 @@ const BodyContext = struct {
             .{ .name = init_cursor_name, .ty = state_ty, .default = null },
             .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
         };
-        const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
+        const init_ty = try self.recordType(&init_field_tys);
 
         const counted_tag = self.monoTagByText(start_event_ty, "Counted");
         const counted_payload_ty = self.singleTagPayloadType(counted_tag, "record parse Counted start event");
@@ -23956,7 +24015,7 @@ const BodyContext = struct {
             .{ .name = init_cursor_name, .ty = state_ty, .default = null },
             .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
         };
-        const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
+        const init_ty = try self.recordType(&init_field_tys);
 
         const counted_tag = self.monoTagByText(start_event_ty, "Counted");
         const counted_payload_ty = self.singleTagPayloadType(counted_tag, "list parse Counted start event");
@@ -24120,7 +24179,7 @@ const BodyContext = struct {
             .{ .name = init_cursor_name, .ty = state_ty, .default = null },
             .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
         };
-        const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
+        const init_ty = try self.recordType(&init_field_tys);
 
         const counted_tag = self.monoTagByText(start_event_ty, "Counted");
         const counted_payload_ty = self.singleTagPayloadType(counted_tag, "dict parse Counted start event");
@@ -25160,7 +25219,7 @@ const BodyContext = struct {
             .{ .name = rest_name, .ty = rest_ty, .default = null },
             .{ .name = value_name, .ty = value_ty, .default = null },
         };
-        const ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields) });
+        const ty = try self.recordType(&fields);
         try self.builder.parse_result_ok_types.put(address, ty);
         return ty;
     }
@@ -25223,24 +25282,23 @@ const BodyContext = struct {
             .{ .name = len_name, .ty = u64_ty, .default = null },
             .{ .name = rest_name, .ty = state_ty, .default = null },
         };
-        const counted_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &counted_fields) });
+        const counted_payload_ty = try self.recordType(&counted_fields);
 
         const counted_name = try self.builder.program.names.internTagLabel("Counted");
         const uncounted_name = try self.builder.program.names.internTagLabel("Uncounted");
-        var tags = [_]Type.Tag{
+        const tags = [_]Type.Store.TagInput{
             .{
                 .name = counted_name,
                 .checked_name = counted_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{counted_payload_ty}),
+                .payloads = &.{counted_payload_ty},
             },
             .{
                 .name = uncounted_name,
                 .checked_name = uncounted_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{state_ty}),
+                .payloads = &.{state_ty},
             },
         };
-        std.mem.sort(Type.Tag, tags[0..], &self.builder.program.names, solve.tagLessThan);
-        return try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTags(&tags) });
+        return try self.tagUnionType(&tags);
     }
 
     fn parseArrayEventType(
@@ -25251,20 +25309,19 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         const first_name = try self.builder.program.names.internTagLabel(first_tag_text);
         const second_name = try self.builder.program.names.internTagLabel(second_tag_text);
-        var tags = [_]Type.Tag{
+        const tags = [_]Type.Store.TagInput{
             .{
                 .name = first_name,
                 .checked_name = first_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{state_ty}),
+                .payloads = &.{state_ty},
             },
             .{
                 .name = second_name,
                 .checked_name = second_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{state_ty}),
+                .payloads = &.{state_ty},
             },
         };
-        std.mem.sort(Type.Tag, tags[0..], &self.builder.program.names, solve.tagLessThan);
-        return try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTags(&tags) });
+        return try self.tagUnionType(&tags);
     }
 
     fn appendListElement(
@@ -29175,7 +29232,20 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         var map = collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId).init(self.allocator);
         defer map.deinit();
-        return try self.lowerConstCaptureTypeInner(store_view, ty, &map);
+        const transaction = self.builder.program.types.beginTransaction();
+        errdefer transaction.abort(&self.builder.program.types);
+        const speculative = try self.lowerConstCaptureTypeInner(store_view, ty, &map);
+        var result = try self.builder.program.types.commitTransaction(
+            &self.builder.program.names,
+            transaction,
+            speculative,
+        );
+        defer result.deinit();
+        var lowered_types = map.valueIterator();
+        while (lowered_types.next()) |lowered| {
+            lowered.* = result.remapType(lowered.*);
+        }
+        return result.root;
     }
 
     fn lowerConstCaptureTypeInner(
@@ -34466,7 +34536,30 @@ const BodyContext = struct {
     }
 
     fn tupleType(self: *BodyContext, item_tys: []const Type.TypeId) Allocator.Error!Type.TypeId {
-        return try self.builder.program.types.add(.{ .tuple = try self.builder.program.types.addSpan(item_tys) });
+        return try self.builder.program.types.add(.{
+            .tuple = try self.builder.program.types.addSpan(item_tys),
+        });
+    }
+
+    fn recordType(self: *BodyContext, fields: []const Type.Field) Allocator.Error!Type.TypeId {
+        return try self.builder.program.types.add(.{
+            .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, fields),
+        });
+    }
+
+    fn tagUnionType(self: *BodyContext, inputs: []const Type.Store.TagInput) Allocator.Error!Type.TypeId {
+        const tags = try self.allocator.alloc(Type.Tag, inputs.len);
+        defer self.allocator.free(tags);
+        for (inputs, tags) |input, *tag| {
+            tag.* = .{
+                .name = input.name,
+                .checked_name = input.checked_name,
+                .payloads = try self.builder.program.types.addSpan(input.payloads),
+            };
+        }
+        return try self.builder.program.types.add(.{
+            .tag_union = try self.builder.program.types.addTagVariants(&self.builder.program.names, tags),
+        });
     }
 
     fn lowerSetFromList(
@@ -35620,7 +35713,7 @@ const BodyContext = struct {
         param: static_dispatch.EvidenceParamRecord,
     ) Allocator.Error!Type.TypeId {
         const primitive = defaultedEvidenceParamPrimitive(param);
-        return try self.builder.program.types.add(.{ .primitive = primitive });
+        return try self.builder.program.types.internPrimitive(&self.builder.program.names, primitive);
     }
 
     fn defaultedEvidenceParamNode(
@@ -38672,10 +38765,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const prepared = self.frozenCustomCodecCall(.encoder, shape_ty, lookup);
-        const runtime_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(&.{ shape_ty, state_ty }),
-            .ret = ret_ty,
-        } });
+        const runtime_fn_ty = try self.functionType(&.{ shape_ty, state_ty }, ret_ty);
         const callable_mono_ty = prepared.callable_ty;
         const encode_fn = self.builder.functionShape(callable_mono_ty, "custom encoder_for target was not a function");
         const encode_arg_tys = self.builder.program.types.span(encode_fn.args);
@@ -38787,6 +38877,16 @@ const BodyContext = struct {
             .named => |named| named,
             .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("compiler helper expected a named template type"),
         };
+        // The clone owns fresh declared-order rows rather than aliasing the
+        // template's span: digests and equality are content-addressed either
+        // way, but self-contained rows keep the clone's validity independent
+        // of which store region its template's rows happened to live in.
+        const declared_order = try GuardedList.dupe(
+            self.builder.allocator,
+            Type.DeclaredField,
+            self.builder.program.types.declaredFieldSpan(template.declared_order),
+        );
+        defer self.builder.allocator.free(declared_order);
         return try self.builder.program.types.add(.{ .named = .{
             .named_type = template.named_type,
             .def = template.def,
@@ -38794,7 +38894,7 @@ const BodyContext = struct {
             .builtin_owner = template.builtin_owner,
             .args = try self.builder.program.types.addSpan(args),
             .backing = .{ .ty = backing_ty, .use = template.backing.?.use, .authority = authority },
-            .declared_order = template.declared_order,
+            .declared_order = try self.builder.program.types.addDeclaredFields(declared_order),
         } });
     }
 
@@ -38955,8 +39055,10 @@ const BodyContext = struct {
             .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("Try template backing type was not a tag union"),
         };
         defer self.allocator.free(template_tags);
-        const tags = try self.allocator.alloc(Type.Tag, template_tags.len);
+        const tags = try self.allocator.alloc(Type.Store.TagInput, template_tags.len);
         defer self.allocator.free(tags);
+        const payloads = try self.allocator.alloc(Type.TypeId, template_tags.len);
+        defer self.allocator.free(payloads);
 
         var found_ok = false;
         var found_err = false;
@@ -38971,15 +39073,16 @@ const BodyContext = struct {
             } else {
                 Common.invariant("Try backing type contained an unexpected tag");
             };
+            payloads[index] = payload_ty;
             tags[index] = .{
                 .name = tag.name,
                 .checked_name = tag.checked_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{payload_ty}),
+                .payloads = payloads[index..][0..1],
             };
         }
         if (!found_ok or !found_err) Common.invariant("Try backing type did not contain Ok and Err tags");
 
-        const backing_ty = try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTagVariants(&self.builder.program.names, tags) });
+        const backing_ty = try self.tagUnionType(tags);
         const args = [_]Type.TypeId{ ok_ty, err_ty };
         const ty = try self.cloneNamedTypeWithArgs(template_try_ty, &args, backing_ty);
         try self.builder.generated_try_types.put(address, ty);
@@ -43566,7 +43669,7 @@ const BodyContext = struct {
             .{ .name = len_name, .ty = u64_ty, .default = null },
             .{ .name = start_name, .ty = u64_ty, .default = null },
         };
-        const ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields) });
+        const ty = try self.builder.program.types.internRecord(&self.builder.program.names, &fields);
         const exprs = [_]DraftFieldExpr{
             .{ .name = len_name, .value = len },
             .{ .name = start_name, .value = start },
@@ -46793,7 +46896,7 @@ const BodyContext = struct {
     }
 
     fn unitType(self: *BodyContext) Allocator.Error!Type.TypeId {
-        return try self.builder.program.types.add(.{ .record = .empty() });
+        return try self.builder.program.types.internRecord(&self.builder.program.names, &.{});
     }
 
     fn prepareLoopCarries(self: *BodyContext, binders: []const checked.PatternBinderId) Allocator.Error![]LoopCarry {
