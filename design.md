@@ -10457,6 +10457,10 @@ which is explicit data the dependency-discovery stage already produced:
   `roc test` of every consumer is work no consumer asked for.
 - A compiler-owned platform is not, for the same reason.
 
+The explicitly requested root remains the root when the source argument is a
+bundle URL or installed shorthand. Its recorded URL is package identity, not a
+reason to classify its own roots as fetched dependency tests.
+
 The reachability walk stops at the first downloaded package, so a path
 dependency declared inside downloaded content stays downloaded content and does
 not inherit the root's ownership. Test planning consumes this classification

@@ -7402,7 +7402,7 @@ fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseE
         return customInfraFailure(allocator, timer, "failed to create app dir: {}", .{err});
     const app_main = std.fs.path.join(allocator, &.{ app_dir, "main.roc" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_main, .data = "main! = |_args| {\n    echo!(\"installed tool ran\")\n    Ok({})\n}\n" }) catch |err|
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_main, .data = "main! = |_args| {\n    echo!(\"installed tool ran\")\n    Ok({})\n}\n\nexpect True\n" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to write app main.roc: {}", .{err});
 
     const serve_dir = createWorkSubdir(io, allocator, env, "install-serve") catch |err|
@@ -7462,13 +7462,19 @@ fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseE
     }
     server_thread.join();
 
-    // 2. Run the installed shorthand.
+    // 2. Test the installed shorthand's explicitly requested root.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", "hello_tool", "--no-cache" },
+        .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }},
+    })) |failure| return failure;
+
+    // 3. Run the installed shorthand.
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "run", "hello_tool" },
         .contains = &.{.{ .stream = .stdout, .text = "installed tool ran" }},
     })) |failure| return failure;
 
-    // 3. Desert island: delete the package cache; the installed tool must
+    // 4. Desert island: delete the package cache; the installed tool must
     //    still run (and must not touch the network—the server is gone).
     std.Io.Dir.cwd().deleteTree(io, env.dirs.roc_cache_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to delete cache dir: {}", .{err});
@@ -7477,13 +7483,13 @@ fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseE
         .contains = &.{.{ .stream = .stdout, .text = "installed tool ran" }},
     })) |failure| return failure;
 
-    // 4. Same name + same URL is an idempotent no-op (no download).
+    // 5. Same name + same URL is an idempotent no-op (no download).
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "install", "hello_tool", url },
         .contains = &.{.{ .stream = .stdout, .text = "already installed" }},
     })) |failure| return failure;
 
-    // 5. Same name + different URL fails without touching the entry
+    // 6. Same name + different URL fails without touching the entry
     //    (detected before any download).
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "install", "hello_tool", "https://example.com/other/1.2.3/AQmoxbAY7eQfXMbi9XUxBvBGZcxZCs1tdNeFriRRkwSc.tar.zst" },
@@ -7495,7 +7501,7 @@ fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseE
         .contains = &.{.{ .stream = .stdout, .text = "installed tool ran" }},
     })) |failure| return failure;
 
-    // 6. Build flags that cannot apply to a prebuilt binary are rejected.
+    // 7. Build flags that cannot apply to a prebuilt binary are rejected.
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "run", "hello_tool", "--opt=speed" },
         .exit = .failure,
@@ -8646,9 +8652,13 @@ fn customRocTestSkipsUrlDependencyExpects(
         \\
     )) |failure| return failure;
 
+    const dep_url = std.fmt.allocPrint(allocator, "https://example.com/greeting/releases/download/0.1.0/{s}.tar.zst", .{dep_hash}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to render downloaded dependency URL: {}", .{err});
+    defer allocator.free(dep_url);
+
     const app_source = std.fmt.allocPrint(allocator,
         \\app [main!] {{
-        \\    dep: "https://example.com/greeting/releases/download/0.1.0/{s}.tar.zst",
+        \\    dep: "{s}",
         \\}}
         \\
         \\import dep.Greeting
@@ -8657,7 +8667,7 @@ fn customRocTestSkipsUrlDependencyExpects(
         \\
         \\main! = |_| Ok({{}})
         \\
-    , .{dep_hash}) catch |err|
+    , .{dep_url}) catch |err|
         return customInfraFailure(allocator, timer, "failed to render downloaded-dependency app source: {}", .{err});
     defer allocator.free(app_source);
 
@@ -8667,12 +8677,36 @@ fn customRocTestSkipsUrlDependencyExpects(
         return customInfraFailure(allocator, timer, "failed to allocate downloaded-dependency app path: {}", .{err});
     defer allocator.free(app_path);
 
-    return runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "test", "--no-cache" },
         .roc_file = app_path,
         .exit = .success,
         // Exactly the app's own expect: the dependency contributes none.
         .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }},
+        .not_contains = &.{
+            .{ .stream = .stdout, .text = "failed" },
+            .{ .stream = .stderr, .text = "failed" },
+            .{ .stream = .stderr, .text = "panic" },
+        },
+    })) |failure| return failure;
+
+    // The same bundle is developer-selected when it is the command's root, so
+    // its own expects must run even though its package identity remains a URL.
+    if (writeCaseFile(io, allocator, timer, cache_package_dir, "Greeting.roc",
+        \\Greeting := [].{
+        \\    greet : Str -> Str
+        \\    greet = |name| "Hello, ${name}!"
+        \\}
+        \\
+        \\expect Greeting.greet("Roc") == "Hello, Roc!"
+        \\expect Greeting.greet("") == "Hello, !"
+        \\
+    )) |failure| return failure;
+
+    return runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", "--no-cache", dep_url },
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }},
         .not_contains = &.{
             .{ .stream = .stdout, .text = "failed" },
             .{ .stream = .stderr, .text = "failed" },

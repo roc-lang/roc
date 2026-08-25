@@ -2401,10 +2401,12 @@ pub const BuildEnv = struct {
     /// the `expect`s the developer wrote and skips the ones that arrived with
     /// a dependency, so the origin has to travel alongside each module.
     pub const PackageOrigin = enum {
-        /// The root package, or a dependency the root reaches through
-        /// filesystem paths alone.
-        local_path,
-        /// Downloaded from a URL, or reached only by way of a package that was.
+        /// The package the `roc test` source argument explicitly selected,
+        /// including a bundle URL or installed shorthand.
+        root,
+        /// A dependency the root reaches through filesystem paths alone.
+        local_path_dependency,
+        /// Downloaded from a URL, or reached only by way of a fetched package.
         fetched,
         /// Embedded in the compiler, such as the default platform.
         compiler_owned,
@@ -2515,14 +2517,16 @@ pub const BuildEnv = struct {
         return true;
     }
 
-    /// The packages the developer reaches from their own root package through
-    /// filesystem paths alone, keyed by package identity. Keys borrow the
-    /// names stored in `self.packages`.
+    /// The explicitly requested root package and the dependencies it reaches
+    /// through filesystem paths alone, keyed by package identity. Keys borrow
+    /// the names stored in `self.packages`.
     ///
-    /// The walk stops at every downloaded package and every compiler-owned
-    /// platform, because a path dependency declared inside downloaded content
-    /// arrived by download too and must not inherit the root's ownership.
-    fn collectLocallyReachedPackages(
+    /// The requested root is included even when its identity is a bundle URL.
+    /// After that root, the walk stops at every downloaded package and every
+    /// compiler-owned platform, because a path dependency declared inside a
+    /// fetched dependency arrived by download too and must not inherit the
+    /// root's ownership.
+    fn collectTestOwnedPackages(
         self: *BuildEnv,
         allocator: Allocator,
     ) Allocator.Error!std.StringHashMapUnmanaged(void) {
@@ -2530,7 +2534,7 @@ pub const BuildEnv = struct {
         errdefer reached.deinit(allocator);
 
         const root_name = self.discovered_pkg_name orelse return reached;
-        if (!self.isLocalPathPackage(root_name)) return reached;
+        if (compiler_platforms.fromIdentity(root_name) != null) return reached;
 
         var frontier: std.ArrayList([]const u8) = .empty;
         defer frontier.deinit(allocator);
@@ -2571,8 +2575,9 @@ pub const BuildEnv = struct {
         var modules = std.ArrayList(CompiledModuleInfo).empty;
         errdefer modules.deinit(allocator);
 
-        var locally_reached = try self.collectLocallyReachedPackages(allocator);
-        defer locally_reached.deinit(allocator);
+        var test_owned_packages = try self.collectTestOwnedPackages(allocator);
+        defer test_owned_packages.deinit(allocator);
+        const root_name = self.discovered_pkg_name;
 
         var pkg_it = coord.packages.iterator();
         while (pkg_it.next()) |entry| {
@@ -2585,8 +2590,10 @@ pub const BuildEnv = struct {
             const is_app_pkg = pkg_ptr != null and (pkg_ptr.?.kind == .app or pkg_ptr.?.kind == .default_app);
             const package_origin: PackageOrigin = if (compiler_platforms.fromIdentity(pkg_name) != null)
                 .compiler_owned
-            else if (locally_reached.contains(pkg_name))
-                .local_path
+            else if (root_name != null and std.mem.eql(u8, pkg_name, root_name.?))
+                .root
+            else if (test_owned_packages.contains(pkg_name))
+                .local_path_dependency
             else
                 .fetched;
 
