@@ -946,7 +946,11 @@ const ExactBitSet = struct {
 //   to units read in the shared body, then join params placed owned and
 //   maybe-initialized params placed conditionally, exactly like the
 //   emission-side keep construction. Seeded from above (all body-read units
-//   plus params) so descent stays monotone.
+//   plus params) so descent stays monotone. Params are placed only when the
+//   back edges also rebind them (`back_edge_params`): a param a back edge
+//   leaves alone re-enters the body holding the value the previous iteration
+//   already released, so treating it as freshly owned would release it once
+//   per iteration.
 // - body_reachable(J): whether any eligible jump contributed.
 // - switch common: intersection of branch exit states that reach the
 //   continuation statement without crossing a join frame.
@@ -969,6 +973,13 @@ const JoinSummary = struct {
     /// site. When one site shrinks, intersecting only that new state produces
     /// the exact new all-site meet.
     jump_common: OwnedSet,
+    /// Monotone meet of join-param ownership over the back edges (jumps that
+    /// sit inside this join's own body). A param that a back edge does not
+    /// re-initialize arrives at the body carrying the same value the previous
+    /// iteration already released, so it must not be placed owned in
+    /// `body_keep`; see `placeSolveJoinParamsInto`.
+    back_edge_params: OwnedSet,
+    back_edge_seen: bool = false,
     body_keep_seeded: bool = false,
     body_reachable: bool = false,
     loop_keep_id: u32,
@@ -3562,7 +3573,33 @@ const Inserter = struct {
         self.placeSolveJoinParamsInto(summary, &summary.body_keep);
     }
 
+    /// Places a join's params owned, skipping any the back edges leave
+    /// loop-invariant.
+    ///
+    /// A join param is only freshly owned in the body when every arrival
+    /// hands it a new unit. An entry edge always does, but a back edge that
+    /// does not re-initialize the param leaves the previous iteration's value
+    /// in place. Placing such a param owned makes the body release it once
+    /// per iteration, so the second iteration releases an already-dead value.
+    /// The back-edge meet is a shrinking accumulator seeded from the full
+    /// param set, so filtering by it keeps this placement monotone.
     fn placeSolveJoinParamsInto(self: *Inserter, summary: *const JoinSummary, keep: *OwnedSet) void {
+        const params = self.store.getLocalSpan(summary.params);
+        for (0..GuardedList.borrowLen(params)) |index| {
+            const local = GuardedList.at(params, index);
+            if (summary.back_edge_seen and !summary.back_edge_params.contains(local)) continue;
+            self.placeUnit(keep, local);
+        }
+        const maybe_params = self.store.getLocalSpan(summary.maybe_uninitialized_params);
+        for (0..GuardedList.borrowLen(maybe_params)) |index| {
+            const local = GuardedList.at(maybe_params, index);
+            if (summary.back_edge_seen and !summary.back_edge_params.contains(local)) continue;
+            self.placeConditionalUnit(keep, local);
+        }
+    }
+
+    /// Unfiltered param placement: the seed for the back-edge meet.
+    fn placeAllSolveJoinParamsInto(self: *Inserter, summary: *const JoinSummary, keep: *OwnedSet) void {
         const params = self.store.getLocalSpan(summary.params);
         for (0..GuardedList.borrowLen(params)) |index| {
             self.placeUnit(keep, GuardedList.at(params, index));
@@ -3571,6 +3608,29 @@ const Inserter = struct {
         for (0..GuardedList.borrowLen(maybe_params)) |index| {
             self.placeConditionalUnit(keep, GuardedList.at(maybe_params, index));
         }
+    }
+
+    /// Folds one back edge's state into `back_edge_params`. Returns whether
+    /// the meet shrank, which invalidates the body keep placed from it.
+    fn absorbBackEdgeParams(
+        self: *Inserter,
+        summary: *JoinSummary,
+        owned: *const OwnedSet,
+    ) bool {
+        var changed = false;
+        if (!summary.back_edge_seen) {
+            summary.back_edge_seen = true;
+            self.placeAllSolveJoinParamsInto(summary, &summary.back_edge_params);
+            changed = true;
+        }
+        var iter = summary.back_edge_params.bits.iterator(.{});
+        while (iter.next()) |index| {
+            const local = summary.back_edge_params.domain.resourceLocalAt(index);
+            if (owned.contains(local)) continue;
+            summary.back_edge_params.unset(local);
+            changed = true;
+        }
+        return changed;
     }
 
     const BodyKeepUpdate = struct {
@@ -3723,6 +3783,7 @@ const Inserter = struct {
                 .entry_keep = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .body_keep = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .jump_common = try OwnedSet.init(self.solve_allocator, self.domain()),
+                .back_edge_params = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .loop_keep_id = self.next_loop_keep_id,
                 .remainder_plan = remainder_plan,
                 .body_plan = body_plan,
@@ -3762,7 +3823,17 @@ const Inserter = struct {
         try self.updateJumpPlan(summary, segment.plan_index, segment.cursor, &segment.owned);
         var scope = segment.ctx.body_scope;
         while (scope) |entry| {
-            if (entry.join_index == target_index) return;
+            if (entry.join_index == target_index) {
+                // A back edge does not feed the body keep's general
+                // intersection—it conforms at emission by releasing down to
+                // the keep—but it does constrain which params the body may
+                // treat as freshly owned, because a param it leaves alone
+                // still holds the value the body already released.
+                if (self.absorbBackEdgeParams(summary, &segment.owned)) {
+                    try self.applySolveBodyKeepUpdate(tasks, summary);
+                }
+                return;
+            }
             scope = entry.parent;
         }
         const site_index = self.solution.jumpSiteIndexOf(segment.cursor);
@@ -3784,6 +3855,17 @@ const Inserter = struct {
             break :blk true;
         } else intersectOwnedSetChanged(&summary.jump_common, site);
         if (!common_changed) return;
+        try self.applySolveBodyKeepUpdate(tasks, summary);
+        if (first_reach) try self.scheduleSolveBodyWalk(tasks, summary);
+    }
+
+    /// Recomputes a join's body keep and schedules whatever the shrink
+    /// invalidated.
+    fn applySolveBodyKeepUpdate(
+        self: *Inserter,
+        tasks: *std.ArrayList(SolveTask),
+        summary: *JoinSummary,
+    ) ResourceError!void {
         const update = try self.recomputeSolveBodyKeep(summary);
         if (update.purged) {
             // Liveness rows under this join's keep changed, so states
@@ -3800,9 +3882,7 @@ const Inserter = struct {
             } else {
                 try self.scheduleSolveBodyWalk(tasks, summary);
             }
-            return;
         }
-        if (first_reach) try self.scheduleSolveBodyWalk(tasks, summary);
     }
 
     fn isBindingBorrowed(self: *const Inserter, local: LIR.LocalId) bool {

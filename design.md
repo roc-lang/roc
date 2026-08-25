@@ -9351,7 +9351,13 @@ statement scan.
 Join ownership is a must-property. Each reachable jump site contributes a
 state that can only shrink; a join summary maintains their running
 intersection incrementally, and recomputes the body keep-set from that exact
-meet plus the join parameters. A site contribution that shrinks without
+meet plus the join parameters the back edges rebind. A parameter counts as
+freshly owned in the body only when every arrival hands it a new unit: back
+edges are excluded from the general meet because they conform at emission by
+releasing down to the keep, but a parameter a back edge leaves alone re-enters
+the body still holding the value the previous iteration released, so the back
+edges maintain their own shrinking meet over the parameters and the body keep
+places only what survives it. A site contribution that shrinks without
 changing the global meet cannot schedule downstream work. Each loop identity
 records whether its solved rows consumed any keep bits. A keep change that
 supplied no boundary bits schedules no liveness work.
