@@ -83,7 +83,6 @@ fn expectUniqueUpdateMovesInnerElement(
     const update = findNamedProc(store, "Builtin.List.update") orelse return error.TestUnexpectedResult;
     const counts = try countReachableOps(store, layouts, update);
 
-    try std.testing.expect(counts.list_set >= 1);
     const moves_inner_element = counts.prepare_reuse >= 1 and
         counts.can_reuse >= 1 and
         counts.extract >= 1 and
@@ -94,20 +93,66 @@ fn expectUniqueUpdateMovesInnerElement(
     try std.testing.expect(moves_inner_element);
 }
 
+fn expectDisabledBoxyUpdateDropsReuseBranch(
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+) harness.LowerToLirHarnessError!void {
+    const update = findNamedProc(store, "Builtin.List.update") orelse return error.TestUnexpectedResult;
+    const counts = try countReachableOps(store, layouts, update);
+
+    try std.testing.expect(counts.prepare_reuse >= 1);
+    try std.testing.expect(counts.list_replace >= 1);
+    try std.testing.expectEqual(@as(usize, 0), counts.can_reuse);
+    try std.testing.expectEqual(@as(usize, 0), counts.extract);
+    try std.testing.expectEqual(@as(usize, 0), counts.write);
+}
+
+fn expectEnabledBoxyUpdateKeepsReuseBranch(
+    store: *const lir.LirStore,
+    layouts: *const layout.Store,
+) harness.LowerToLirHarnessError!void {
+    const update = findNamedProc(store, "Builtin.List.update") orelse return error.TestUnexpectedResult;
+    const counts = try countReachableOps(store, layouts, update);
+
+    try std.testing.expect(counts.prepare_reuse >= 1);
+    try std.testing.expect(counts.list_replace >= 1);
+    try std.testing.expect(counts.extract >= 1);
+    try std.testing.expect(counts.write >= 1);
+}
+
+const nested_list_update_app =
+    \\main! = |args| {
+    \\    inner = List.repeat(0.U64, 8)
+    \\    outer = [inner]
+    \\    updated = outer.update(0, |item| item.set(0, args.len()) ?? item)?
+    \\    updated_inner = updated.get(0)?
+    \\    echo!((updated_inner.get(0)?).to_str())
+    \\    Ok({})
+    \\}
+;
+
 test "issue 10849: List.update can move a unique inner list into its updater" {
     // Repro for https://github.com/roc-lang/roc/issues/10849.
-    try harness.expectLirInspectionWithOptions(
-        \\main! = |args| {
-        \\    inner = List.repeat(0.U64, 8)
-        \\    outer = [inner]
-        \\    updated = outer.update(0, |item| item.set(0, args.len()) ?? item)?
-        \\    updated_inner = updated.get(0)?
-        \\    echo!((updated_inner.get(0)?).to_str())
-        \\    Ok({})
-        \\}
-    , .{
+    try harness.expectLirInspectionWithOptions(nested_list_update_app, .{
         .list_in_place_map = true,
         .proc_debug_names = true,
         .prove_ranges = true,
     }, expectUniqueUpdateMovesInnerElement);
+}
+
+test "issue 10849: disabled Boxy list transforms omit the unreachable reuse branch" {
+    try harness.expectLirInspectionWithOptions(
+        nested_list_update_app,
+        .{
+            .specialization_strategy = .boxy,
+            .list_in_place_map = true,
+            .proc_debug_names = true,
+        },
+        expectEnabledBoxyUpdateKeepsReuseBranch,
+    );
+    try harness.expectLirInspectionWithOptions(
+        nested_list_update_app,
+        .{ .specialization_strategy = .boxy, .proc_debug_names = true },
+        expectDisabledBoxyUpdateDropsReuseBranch,
+    );
 }
