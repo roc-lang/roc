@@ -4210,6 +4210,34 @@ test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
 rejected—test/cli/ParserOpenTagUnion.roc (a parser whose result annotation
 has a named rigid extension remains a missing-method error).
 
+### Derived Structural Codec Record-Row Closure
+
+A compiler-derived structural record codec owns the exact set of fields it
+reads or writes. A record inferred only from use sites can retain an
+unconstrained flexible extension after all of those uses have been checked.
+Once codec dispatch has deferred that record through constraint quiescence and
+no pending literal can add information, the checker closes that flexible
+extension to the empty record through ordinary unification and validates the
+codec against the complete closed row. Parser and encoder derivation use the
+same rule.
+
+Eligibility follows every concrete record extension and remains unresolved at
+a flexible tail, so generated-codec evidence is never frozen against a partial
+row. The rule does not close a bare flexible shape before a record exists, an
+extension with a pending literal, or a rigid named extension. A polymorphic
+open record can contain fields for which no codec was checked, so its derived
+codec dispatch is rejected.
+
+Both sides are pinned by tests: accepted—
+test/cli/JsonParseInferredRecord.roc (a parser record inferred from field uses
+closes at quiescence), the issue #10824 tests in
+src/check/test/issue_10824_test.zig (an inferred encoder row closes after its
+known field use), and test/cli/issue_10824_generated_codec_contract/app.roc (an
+encoder contract waits for a platform model row to close before freezing all
+of its field calls); rejected—the issue #10824 tests in
+src/check/test/issue_10824_test.zig (parser and encoder dispatch both reject a
+named rigid record extension).
+
 ### Derived Parser Required-Field Error Composition
 
 A compiler-derived structural record parser, rather than its input-format
@@ -5222,6 +5250,11 @@ Other solved-graph mutations:
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
   ordinary unification; rigid extensions remain rejected.
+- `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
+  Derived Structural Codec Record-Row Closure (above). After derived codec
+  dispatch reaches quiescence, a record inferred from use sites closes its
+  unconstrained flexible extension to the empty record through ordinary
+  unification; rigid extensions remain rejected.
 - `constrainDerivedParserRequiredFieldError`—policy: Derived Parser
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
