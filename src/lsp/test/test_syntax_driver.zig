@@ -44,6 +44,7 @@ pub const TestSyntaxDriver = struct {
     pub const DefinitionResult = struct {
         uri: []const u8,
         range: LspRange,
+        origin_selection_range: ?LspRange = null,
 
         pub fn deinit(self: DefinitionResult, allocator: std.mem.Allocator) void {
             allocator.free(self.uri);

@@ -62,6 +62,9 @@ pub const BuiltinTypeContext = struct {
 pub const ModuleInitContext = struct {
     builtin_types: BuiltinTypeContext,
     imported_modules: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType) = null,
+    /// Skip reading file-import contents when canonicalizing for inspection only.
+    /// Ordinary compilation keeps the default and validates the imported file.
+    skip_file_import_contents: bool = false,
     /// Version string of the compiler that is running, used to check a
     /// header's `roc` version pin against it. Null skips that check.
     ///
@@ -431,6 +434,8 @@ pattern_reused_existing_var: bool = false,
 enclosing_lambda: ?Expr.Idx = null,
 /// Directory containing the source file, used to resolve file imports.
 source_dir: ?[]const u8 = null,
+/// Whether file imports should be represented without reading their contents.
+skip_file_import_contents: bool = false,
 /// I/O for file operations (e.g., file imports).
 /// Required—callers must provide a real CoreCtx (use a testing one if file imports are not needed).
 roc_ctx: CoreCtx,
@@ -722,6 +727,7 @@ fn initInternal(
         .used_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .globally_resolvable_patterns = std.AutoHashMapUnmanaged(Pattern.Idx, void){},
         .explicit_module_envs = if (maybe_context) |context| context.imported_modules else null,
+        .skip_file_import_contents = if (maybe_context) |context| context.skip_file_import_contents else false,
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
         .validation = if (maybe_context) |context| context.validation else .checking,
         .import_indices = std.AutoHashMapUnmanaged(Ident.Idx, Import.Idx){},
@@ -6813,7 +6819,24 @@ fn canonicalizeFileImport(self: *Self, fi: @TypeOf(@as(AST.Statement, undefined)
         return;
     }
 
-    const dependency_idx = try self.env.recordFileDependency(path_text);
+    const path_token_region = self.parse_ir.tokens.resolve(fi.path_tok);
+    const has_leading_quote = path_token_region.start.offset > 0 and self.parse_ir.env.source[path_token_region.start.offset - 1] == '"';
+    const has_trailing_quote = path_token_region.end.offset < self.parse_ir.env.source.len and self.parse_ir.env.source[path_token_region.end.offset] == '"';
+    const start_offset = if (has_leading_quote) path_token_region.start.offset - 1 else path_token_region.start.offset;
+    const end_offset = if (has_trailing_quote) path_token_region.end.offset + 1 else path_token_region.end.offset;
+
+    const dependency_idx = try self.env.recordFileDependency(path_text, start_offset, end_offset);
+
+    if (self.skip_file_import_contents) {
+        self.env.setFileDependencyUnreadable(dependency_idx);
+        const path_string = try self.env.insertString(path_text);
+        const err_expr = try self.env.pushMalformed(Expr.Idx, .{ .file_import_io_error = .{
+            .path = path_string,
+            .region = region,
+        } });
+        try self.createFileImportDef(name_ident, err_expr, region);
+        return;
+    }
 
     // File imports require filesystem access, which is not available on wasm32.
     if (comptime builtin.cpu.arch == .wasm32) {

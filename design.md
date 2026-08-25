@@ -4210,6 +4210,34 @@ test/cli/JsonTagUnionProtocol.roc (issue #10418's unannotated
 rejected—test/cli/ParserOpenTagUnion.roc (a parser whose result annotation
 has a named rigid extension remains a missing-method error).
 
+### Derived Structural Codec Record-Row Closure
+
+A compiler-derived structural record codec owns the exact set of fields it
+reads or writes. A record inferred only from use sites can retain an
+unconstrained flexible extension after all of those uses have been checked.
+Once codec dispatch has deferred that record through constraint quiescence and
+no pending literal can add information, the checker closes that flexible
+extension to the empty record through ordinary unification and validates the
+codec against the complete closed row. Parser and encoder derivation use the
+same rule.
+
+Eligibility follows every concrete record extension and remains unresolved at
+a flexible tail, so generated-codec evidence is never frozen against a partial
+row. The rule does not close a bare flexible shape before a record exists, an
+extension with a pending literal, or a rigid named extension. A polymorphic
+open record can contain fields for which no codec was checked, so its derived
+codec dispatch is rejected.
+
+Both sides are pinned by tests: accepted—
+test/cli/JsonParseInferredRecord.roc (a parser record inferred from field uses
+closes at quiescence), the issue #10824 tests in
+src/check/test/issue_10824_test.zig (an inferred encoder row closes after its
+known field use), and test/cli/issue_10824_generated_codec_contract/app.roc (an
+encoder contract waits for a platform model row to close before freezing all
+of its field calls); rejected—the issue #10824 tests in
+src/check/test/issue_10824_test.zig (parser and encoder dispatch both reject a
+named rigid record extension).
+
 ### Derived Parser Required-Field Error Composition
 
 A compiler-derived structural record parser, rather than its input-format
@@ -5222,6 +5250,11 @@ Other solved-graph mutations:
   (above). Once structural parser eligibility has selected a known tag union,
   its unconstrained flexible extension closes to the empty tag union through
   ordinary unification; rigid extensions remain rejected.
+- `closeRecordRowForDerivedParse` / `closeRecordRowForDerivedEncode`—policy:
+  Derived Structural Codec Record-Row Closure (above). After derived codec
+  dispatch reaches quiescence, a record inferred from use sites closes its
+  unconstrained flexible extension to the empty record through ordinary
+  unification; rigid extensions remain rejected.
 - `constrainDerivedParserRequiredFieldError`—policy: Derived Parser
   Required-Field Error Composition (above). A structural probe of derived
   record fields gates ordinary unification of the parser's shared error row
@@ -10455,6 +10488,33 @@ Roots that finish before the slow threshold therefore pay only monitor setup and
 signaling overhead, not the reporting period. Roots that exceed the threshold
 are reported, then the worker waits interruptibly until the next per-root report
 deadline or finalization stop.
+
+## Test Root Ownership
+
+`roc test` runs the `expect`s the developer wrote. Whether a module's roots
+qualify is decided by how the build reached the package that module belongs to,
+which is explicit data the dependency-discovery stage already produced:
+
+- The root package, and every dependency reachable from it through filesystem
+  paths alone, are the developer's own sources. Their roots are planned.
+- A package downloaded from a URL is not. Its `expect`s are its author's tests,
+  they passed before the release went out, and re-running them on every
+  `roc test` of every consumer is work no consumer asked for.
+- A compiler-owned platform is not, for the same reason.
+
+The explicitly requested root remains the root when the source argument is a
+bundle URL or installed shorthand. Its recorded URL is package identity, not a
+reason to classify its own roots as fetched dependency tests.
+
+The reachability walk stops at the first downloaded package, so a path
+dependency declared inside downloaded content stays downloaded content and does
+not inherit the root's ownership. Test planning consumes this classification
+from `CompiledModuleInfo.package_origin`; it must not re-derive ownership from
+module paths, package cache directories, or package names.
+
+Skipping a package's roots is a planning decision, not an execution one. The
+package is still resolved, checked, and lowered exactly as before, so code a
+tested root reaches into a dependency is compiled and linked the same way.
 
 ## Optimized Test Execution
 
