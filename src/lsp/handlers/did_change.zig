@@ -46,7 +46,7 @@ pub fn handler(comptime ServerType: type) type {
                 var change = DocumentStore.ContentChange{ .text = text };
                 if (change_obj.get("range")) |range_value| {
                     change.range = parseRange(range_value) catch |err| {
-                        std.log.warn("invalid range for {s}: {s}", .{ uri, @errorName(err) });
+                        std.log.debug("invalid range for {s}: {s}", .{ uri, @errorName(err) });
                         return;
                     };
                 }
