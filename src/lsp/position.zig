@@ -17,8 +17,8 @@ pub const LineOffsets = struct {
 
     /// Which line contains the given byte offset.
     ///
-    /// Callers convert many offsets against one table — every occurrence of a
-    /// symbol, every foldable region — so this binary searches rather than
+    /// Callers convert many offsets against one table—every occurrence of a
+    /// symbol, every foldable region—so this binary searches rather than
     /// scanning from the top of the file for each one.
     pub fn lineAt(self: *const LineOffsets, offset: u32) u32 {
         var low: usize = 0;
