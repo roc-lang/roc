@@ -65,13 +65,11 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Process each position
-            var results: std.ArrayList(?SelectionRange) = .empty;
+            var results: std.ArrayList(SelectionRange) = .empty;
             defer {
                 // Free the linked list nodes
-                for (results.items) |maybe_range| {
-                    if (maybe_range) |range| {
-                        freeSelectionRange(self.allocator, range);
-                    }
+                for (results.items) |range| {
+                    freeSelectionRange(self.allocator, range);
                 }
                 results.deinit(self.allocator);
             }
@@ -114,7 +112,13 @@ pub fn handler(comptime ServerType: type) type {
                     error.InvalidPosition,
                     error.NoRangeFound,
                     error.ParseFailed,
-                    => null,
+                    => SelectionRange{
+                        .range = .{
+                            .start = .{ .line = line, .character = character },
+                            .end = .{ .line = line, .character = character },
+                        },
+                        .parent = null,
+                    },
                 };
                 try results.append(self.allocator, selection_range);
             }
