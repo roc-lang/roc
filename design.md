@@ -10148,13 +10148,13 @@ on the original, unconsumed argument would allow ARC to move a preservation
 retain after that observation and incorrectly report a shared buffer as unique.
 
 `List.update` uses the same ownership-transfer protocol for its single selected
-element. After checking the index, it prepares the outer list and tests whether
-the allocation is reusable. A reusable list moves the selected element out of
+item. After checking the index, it prepares the outer list and tests whether
+the allocation is reusable. A reusable list moves the selected item out of
 its slot, calls the updater with that owned value, and moves the result back
 into the vacated slot. This is what lets an updater mutate a uniquely owned
-refcounted element, such as an inner list, without a defensive copy. A shared
+refcounted item, such as an inner list, without a defensive copy. A shared
 outer list takes the ordinary checked replace path, which keeps the original
-list and selected element unchanged. Since `List.update` has the same item type
+list and selected item unchanged. Since `List.update` has the same item type
 on both sides, it needs no in-place representation cast.
 
 The runtime meaning of `list_map_can_reuse` is "uniquely owned and not a
