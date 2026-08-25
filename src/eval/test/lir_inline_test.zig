@@ -3871,6 +3871,54 @@ fn expectReachableProcShapeFieldEqual(
     try std.testing.expectEqual(expected, actual);
 }
 
+fn containsJumpTo(
+    store: *lir.LirStore,
+    body: LIR.CFStmtId,
+    target: LIR.JoinPointId,
+) TestError!bool {
+    var walk = try lir.BodyClone.ReachableStmts.init(store, body);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .jump and stmt.jump.target == target) return true;
+    }
+    return false;
+}
+
+fn findSingleLoopJoin(
+    store: *lir.LirStore,
+    body: LIR.CFStmtId,
+) TestError!@FieldType(LIR.CFStmt, "join") {
+    var walk = try lir.BodyClone.ReachableStmts.init(store, body);
+    defer walk.deinit();
+
+    var found: ?@FieldType(LIR.CFStmt, "join") = null;
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt != .join) continue;
+        if (!try containsJumpTo(store, stmt.join.body, stmt.join.id)) continue;
+        if (found != null) return error.TestUnexpectedResult;
+        found = stmt.join;
+    }
+    return found orelse error.TestUnexpectedResult;
+}
+
+fn countLocalDecrefs(
+    store: *lir.LirStore,
+    body: LIR.CFStmtId,
+    target: LIR.LocalId,
+) TestError!usize {
+    var walk = try lir.BodyClone.ReachableStmts.init(store, body);
+    defer walk.deinit();
+
+    var count: usize = 0;
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .decref and stmt.decref.value == target) count += 1;
+    }
+    return count;
+}
+
 // A loop-carried join param is only freshly owned inside the loop body when
 // every arrival to the join hands it a new unit. A record whose fields are
 // carried through a loop leaves the fields the back edge never rebinds holding
@@ -3899,10 +3947,19 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
     var lowered = try lowerModule(allocator, source, .wrappers);
     defer lowered.deinit(allocator);
 
-    // Both lists and the accumulator are released exactly once each. Before the
-    // fix the invariant field's release sat inside the loop body instead.
-    const decrefs = try reachableProcShapeFieldTotal(allocator, &lowered.lowered, "decref_count");
-    try std.testing.expectEqual(@as(usize, 3), decrefs);
+    const store = &lowered.lowered.lir_result.store;
+    const root_body = store.getProcSpec(try rootProc(&lowered.lowered)).body orelse return error.MissingRootProcedure;
+    const loop_join = try findSingleLoopJoin(store, root_body);
+    const loop_params = store.getLocalSpan(loop_join.params);
+    try std.testing.expect(loop_params.len >= 2);
+
+    // Scalarized record fields preserve source order, so the second loop param
+    // is `state.b`. It must be released once on the entry path and never from
+    // the self-looping body. Counting this exact local remains valid when
+    // inlining introduces additional exit paths for the other owned lists.
+    const invariant_b = GuardedList.at(loop_params, 1);
+    try std.testing.expectEqual(@as(usize, 1), try countLocalDecrefs(store, root_body, invariant_b));
+    try std.testing.expectEqual(@as(usize, 0), try countLocalDecrefs(store, loop_join.body, invariant_b));
 }
 
 // A producer-authored concrete iterator representation must survive ordinary
